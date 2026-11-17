@@ -1,53 +1,3 @@
-//! The Codex backend, which is where a ChatGPT subscription can be spent.
-//!
-//! Guaca speaks one shape of model API everywhere else: OpenAI-compatible
-//! `/chat/completions`, a list of messages in and a stream of deltas out. The
-//! subscription backend does not offer that endpoint. It speaks the Responses
-//! API, which is a different request body, a different item model and a
-//! different set of stream events for the same conversation. So this file is a
-//! translation, and it is the only place in the app that knows there are two
-//! protocols.
-//!
-//! Translating rather than teaching the runtime a second protocol is a
-//! deliberate trade. It costs this file, which has to be right about both
-//! shapes. It saves every other file: `runtime/mod.rs` assembles one kind of
-//! request, `prompt.rs` writes one kind of history, tool results come back one
-//! way, and none of them gain a branch for how the operator is paying.
-//!
-//! ## What the two protocols disagree about
-//!
-//! - **The system prompt is not a message.** It is `instructions`, a field
-//!   beside the input, and the endpoint returns 400 without one.
-//! - **A tool result is not a role.** Chat completions send `role: "tool"`
-//!   carrying a `tool_call_id`. Responses send a `function_call_output` item
-//!   carrying a `call_id`, as a sibling of the `function_call` item it answers.
-//! - **A tool definition is flat.** `{type, name, description, parameters}`,
-//!   not `{type, function: {...}}`. The nested form is accepted and then the
-//!   model is never offered the tool, which presents as an agent that has
-//!   forgotten how to do its job.
-//! - **There is no temperature.** The endpoint rejects the parameter outright
-//!   rather than ignoring it, so a request carrying one fails in full.
-//! - **Nothing says `[DONE]`.** The stream ends on `response.completed`, and
-//!   the usage arrives inside it rather than in a frame of its own.
-//!
-//! ## What a subscription does not report
-//!
-//! A price. Every other endpoint Guaca talks to either charges per token and
-//! says what it charged, or is local and charges nothing. A subscription has
-//! already been paid for, so the tokens are counted and the cost is `None`,
-//! which is the same thing a local model reports and reads correctly everywhere
-//! downstream.
-//!
-//! ## Reasoning is asked for and not kept
-//!
-//! Summaries are requested, streamed to the operator as they arrive, and
-//! dropped. The encrypted reasoning blobs that would let a later round resume
-//! the model's own working are deliberately *not* requested: keeping them would
-//! mean persisting reasoning and sending it back, which the rest of this app
-//! promises never to do. The cost is that a multi-round turn re-reasons from its
-//! tool results instead of continuing. The alternative is breaking the one
-//! promise `Token::Reasoning` exists to keep.
-
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -62,46 +12,14 @@ use crate::llm::openrouter::{
 use crate::llm::sse::SseDecoder;
 use crate::subscription::{SigninError, Subscription};
 
-/// The backend a subscription's calls go to.
-///
-/// Not the public API base. `api.openai.com` bills a key; this bills a plan,
-/// and the two are different products at different hosts that happen to share a
-/// request shape.
 pub const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 
-/// What the backend is told is calling it.
-///
-/// Sent because the backend expects a Codex-family client on this endpoint and
-/// answers differently without it. It is not a claim to be the CLI: Guaca's own
-/// name is in the `User-Agent` beside it, which is the header that identifies
-/// the software.
 const ORIGINATOR: &str = "codex_cli_rs";
 
-/// The client version the catalog is asked for, which is a floor the service
-/// filters on and not a protocol Guaca speaks.
-///
-/// Each model carries the oldest Codex CLI that can drive it, and the service
-/// leaves out any model newer than the version asked for. What that protects is
-/// the CLI's own tooling. Guaca sends its own tools over plain Responses and no
-/// version on a model call, so none of it applies here. A real release number
-/// pinned here is a compiled model list by another name: `0.153.3` hid
-/// `gpt-6-sol` and `gpt-6-luna` while `gpt-6-astra` beside them showed, and
-/// nothing on screen said why. Measured on 2026-09-28: every version from
-/// `0.155.0` to `999.0.0` returns the same list, and one that does not parse is
-/// refused with 400. A model Guaca cannot drive is refused by name on the first
-/// turn, which costs a turn. A model left out costs every turn, unexplained.
 const CATALOG_CLIENT_VERSION: &str = "999.0.0";
 
-/// The model a fresh sign-in starts on.
-///
-/// The middle of the current family rather than the top of it: a subscription
-/// has a quota measured in hours, and a crew of agents talking to each other
-/// will find the ceiling faster than one person typing.
 pub const DEFAULT_MODEL: &str = "gpt-5.6-luna";
 
-/// Ask the signed-in account's catalog whenever its selector opens. Keeping
-/// this out of settings loading means an unavailable catalog cannot hold up
-/// the workspace, and keeping no cache avoids carrying offers across accounts.
 pub async fn models(subscription: &Subscription) -> Result<Vec<SubscriptionModel>, LlmError> {
     tokio::time::timeout(Duration::from_secs(10), async {
         let mut access = subscription.access().await.map_err(auth_error)?;
@@ -205,33 +123,19 @@ impl ModelCatalog {
     }
 }
 
-// ---- request -------------------------------------------------------------
-
 #[derive(Debug, Serialize)]
 struct Request<'a> {
     model: &'a str,
-    /// Required. The endpoint answers 400 without it, and "instructions" is not
-    /// a word that appears in the error.
     instructions: String,
     input: Vec<Item>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tools: Vec<Function<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<&'static str>,
-    /// One at a time. Guaca's guard counts tool rounds per turn and its fanout
-    /// limit is enforced inside a single `send_message`, so a model that fired
-    /// three tools at once would be spending against limits that were written
-    /// for a sequence.
     parallel_tool_calls: bool,
-    /// Nothing is kept server-side. A conversation lives in Guaca's SQLite and
-    /// is replayed in full on every call, so a stored copy is a second history
-    /// that can disagree with the one on screen.
     store: bool,
     stream: bool,
     reasoning: Reasoning,
-    /// Which agent's turns these are. The backend routes requests that share a
-    /// key to the same machine, which is the one already holding that agent's
-    /// prefix; without one it guesses from the start of the prompt.
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt_cache_key: Option<&'a str>,
 }
@@ -240,12 +144,9 @@ struct Request<'a> {
 struct Reasoning {
     #[serde(skip_serializing_if = "Option::is_none")]
     effort: Option<crate::domain::effort::ReasoningEffort>,
-    /// A readable summary of the model's working, for the Thinking line. The
-    /// encrypted full reasoning is not requested: see the note at the top.
     summary: &'static str,
 }
 
-/// A tool, in the flat shape this endpoint wants.
 #[derive(Debug, Serialize)]
 struct Function<'a> {
     #[serde(rename = "type")]
@@ -253,18 +154,9 @@ struct Function<'a> {
     name: &'a str,
     description: &'a str,
     parameters: &'a serde_json::Value,
-    /// Off deliberately. Strict mode requires every property to be required and
-    /// `additionalProperties: false` throughout, and Guaca's tool schemas have
-    /// optional arguments. On, the endpoint rejects the schema; the tool is then
-    /// missing rather than lenient.
     strict: bool,
 }
 
-/// One entry in the input list.
-///
-/// Untagged in the sense that each variant writes its own `type`, because the
-/// three are not variants of one shape: a message has a role and content parts,
-/// a call has a name and an argument string, and an output has neither.
 #[derive(Debug, Serialize, PartialEq)]
 #[serde(untagged)]
 enum Item {
@@ -295,33 +187,14 @@ impl Item {
     }
 }
 
-/// A piece of one message.
-///
-/// The spellings differ from the chat-completions ones by more than a prefix:
-/// text a model wrote back is `output_text` and text going to it is
-/// `input_text`, and sending the wrong one in an assistant turn is a 400 about
-/// the content type rather than about the role.
 #[derive(Debug, Serialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Part {
-    InputText {
-        text: String,
-    },
-    OutputText {
-        text: String,
-    },
-    /// A `data:` URL, exactly as a screenshot arrives. Flat here, unlike chat
-    /// completions where the same field is an object with a `url` inside it.
-    InputImage {
-        image_url: String,
-    },
+    InputText { text: String },
+    OutputText { text: String },
+    InputImage { image_url: String },
 }
 
-/// Turns a Guaca request into a Responses one.
-///
-/// Split out from the call so it can be tested directly. Most of the ways this
-/// can be wrong produce a 400 from somebody else's server, and reading the
-/// assembled body is far cheaper than reading that.
 fn build<'a>(
     request: &'a ChatRequest,
     model: &'a str,
@@ -333,9 +206,6 @@ fn build<'a>(
 
     for message in &request.messages {
         match message {
-            // Hoisted out of the conversation and joined, in order. Guaca sends
-            // one system message today, but a second one appended later would
-            // otherwise be silently dropped rather than appended here.
             ChatMessage::System { content } => {
                 instructions.push(content);
                 owner = owner.or(content.owner());
@@ -358,8 +228,6 @@ fn build<'a>(
             }
 
             ChatMessage::Assistant { content, tool_calls } => {
-                // An assistant turn that said nothing and only called a tool is
-                // normal, and an empty content list is not a valid message.
                 if let Some(text) = content.as_deref().filter(|t| !t.is_empty()) {
                     input.push(Item::message(
                         "assistant",
@@ -408,20 +276,11 @@ fn build<'a>(
     }
 }
 
-// ---- stream --------------------------------------------------------------
-
-/// One frame of the response stream.
-///
-/// Only the events Guaca acts on are named; everything else is `Other` and
-/// ignored. The endpoint adds events over time, and a decoder that errors on an
-/// unfamiliar one breaks on a Tuesday for reasons nobody changed.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 enum Event {
     #[serde(rename = "response.output_text.delta")]
     TextDelta { delta: String },
-    /// The summary is published in parts, and each delta says which one it
-    /// belongs to. Nothing in the text says where a part ends.
     #[serde(rename = "response.reasoning_summary_text.delta")]
     ReasoningDelta {
         delta: String,
@@ -430,9 +289,6 @@ enum Event {
         #[serde(default)]
         summary_index: u32,
     },
-    /// The completed form of one output item. Authoritative for a tool call:
-    /// it carries the id, the name and the whole argument string, so the
-    /// argument deltas do not have to be reassembled.
     #[serde(rename = "response.output_item.done")]
     ItemDone { item: OutputItem },
     #[serde(rename = "response.completed")]
@@ -441,7 +297,6 @@ enum Event {
     Failed { response: Envelope },
     #[serde(rename = "response.incomplete")]
     Incomplete { response: Envelope },
-    /// A top-level error, which can arrive after a 200 has been sent.
     #[serde(rename = "error")]
     Error {
         #[serde(default)]
@@ -470,11 +325,6 @@ enum OutputItem {
     Other,
 }
 
-/// The response object, as carried by whichever event settles the turn.
-///
-/// The `status` field it also carries is deliberately not read: which of
-/// `completed`, `failed` and `incomplete` happened is already the event's own
-/// type, and consulting both invites the two disagreeing.
 #[derive(Debug, Default, Deserialize)]
 struct Envelope {
     #[serde(default)]
@@ -497,7 +347,6 @@ struct IncompleteDetails {
     reason: Option<String>,
 }
 
-/// Token counts, in this protocol's spelling.
 #[derive(Debug, Default, Deserialize)]
 struct ResponseUsage {
     #[serde(default)]
@@ -508,8 +357,6 @@ struct ResponseUsage {
     input_tokens_details: Option<InputDetails>,
 }
 
-/// Of `input_tokens`, how many came out of the cache. Already a share of the
-/// input count in this protocol, which is the reading `Usage` keeps.
 #[derive(Debug, Default, Deserialize)]
 struct InputDetails {
     #[serde(default)]
@@ -522,18 +369,11 @@ impl From<ResponseUsage> for Usage {
             prompt_tokens: counted.input_tokens,
             completion_tokens: counted.output_tokens,
             cached_tokens: counted.input_tokens_details.map_or(0, |d| d.cached_tokens),
-            // A subscription has already been paid for. Reporting zero would
-            // read as a free call in the usage view; `None` reads as "not
-            // priced", which is the truth and what a local model reports too.
             cost: None,
         }
     }
 }
 
-/// Streams one turn against the subscription backend.
-///
-/// Mirrors `LlmClient::stream_chat`, including the contract on `on_token`: it
-/// runs on this task and must not block.
 pub async fn stream<F>(
     http: &reqwest::Client,
     subscription: &Subscription,
@@ -546,20 +386,10 @@ where
 {
     let mut access = subscription.access().await.map_err(auth_error)?;
 
-    // From the credential rather than from the constant: the account and the
-    // backend that will accept it are one fact, and it is what lets the
-    // end-to-end suite drive this transport against a stub.
     let url = format!("{}/responses", subscription.backend().trim_end_matches('/'));
     let timeout = Duration::from_secs(cfg.request_timeout_secs.clamp(5, 900));
     let body = build(request, &request.model, cfg.reasoning_effort);
 
-    // At most twice, and the second time only after a refresh. The backend is
-    // the authority on whether a token still works and it disagrees with the
-    // token's own `exp`, so a 401 is not "sign in again" until the refresh
-    // token has been offered: `Subscription::renew`. Retrying here is safe
-    // because nothing has been streamed yet: a refusal is decided on the status
-    // line, before `consume` is reached, so no `on_token` has run and there is
-    // no half a sentence on screen to be written twice.
     let mut renewed = false;
     loop {
         let mut send = http
@@ -570,9 +400,6 @@ where
             .timeout(timeout)
             .json(&body);
 
-        // Which workspace the call is billed to. Omitted rather than sent empty
-        // for a personal account that has never had one: the backend rejects a
-        // blank value and accepts an absent one.
         if !access.account_id.is_empty() {
             send = send.header("ChatGPT-Account-Id", &access.account_id);
         }
@@ -590,9 +417,6 @@ where
             return consume(response, &url, timeout, on_token).await;
         }
 
-        // Only a 401, and only once. A 403 is a plan or a workspace saying no,
-        // which a fresh token spells exactly the same way, and a second 401
-        // after a refresh is a sign-in that is genuinely finished.
         if status == reqwest::StatusCode::UNAUTHORIZED && !renewed {
             renewed = true;
             access = subscription.renew(&access.token).await.map_err(auth_error)?;
@@ -620,13 +444,9 @@ where
 {
     let mut decoder = SseDecoder::new();
     let mut content = String::new();
-    // Keyed by the id the endpoint gives each call, so a turn that calls two
-    // tools keeps them in the order they were emitted rather than in hash order.
     let mut calls: BTreeMap<usize, ToolCall> = BTreeMap::new();
     let mut usage = None;
     let mut settled = false;
-    // Which summary part the last thought belonged to, so the next part starts
-    // on a line of its own.
     let mut part: Option<(String, u32)> = None;
 
     let mut stream = response.bytes_stream();
@@ -647,8 +467,6 @@ where
 
             let event: Event = match serde_json::from_str(&payload) {
                 Ok(event) => event,
-                // One unreadable frame must not discard a response that is
-                // otherwise fine, exactly as on the other transport.
                 Err(err) => {
                     tracing::warn!(
                         %err,
@@ -666,8 +484,6 @@ where
                         content.push_str(&delta);
                     }
                 }
-                // Shown as it happens and accumulated nowhere, which is the
-                // same rule the other transport follows.
                 Event::ReasoningDelta { delta, item_id, summary_index } => {
                     if !delta.is_empty() {
                         let this = (item_id, summary_index);
@@ -681,10 +497,6 @@ where
                 Event::ItemDone { item } => {
                     if let OutputItem::FunctionCall { call_id, id, name, arguments } = item {
                         let next = calls.len();
-                        // `call_id` is what a result has to be filed under.
-                        // Falling back to the item id keeps a call usable if
-                        // only one of the two is sent, because a tool call
-                        // dropped here is a turn that silently did nothing.
                         let id = if call_id.is_empty() { id } else { call_id };
                         calls.insert(
                             next,
@@ -711,10 +523,6 @@ where
                             .unwrap_or_else(|| "the model call failed mid-stream".to_string()),
                     });
                 }
-                // Not a failure of the request: the model ran into a ceiling
-                // partway. Whatever it produced first is kept, because a turn
-                // that reached its limit having said something useful is worth
-                // more than an error.
                 Event::Incomplete { response } => {
                     let reason = response
                         .incomplete_details
@@ -741,29 +549,18 @@ where
 
     let tool_calls: Vec<ToolCall> = calls.into_values().collect();
 
-    // Nothing said, nothing called, and no completion event: the stream was cut
-    // off. Reporting that beats handing back an empty turn, which the runtime
-    // would file as an agent choosing to say nothing.
     if !settled && content.is_empty() && tool_calls.is_empty() {
         return Err(LlmError::Truncated);
     }
 
     Ok(Completion {
         content,
-        // Nothing downstream reads this beyond "the turn produced something",
-        // so it is reported in the vocabulary the rest of the app already uses
-        // rather than in this protocol's.
         finish_reason: Some(if tool_calls.is_empty() { "stop" } else { "tool_calls" }.to_string()),
         tool_calls,
         usage,
     })
 }
 
-/// Turns a sign-in problem into a model-call problem.
-///
-/// The distinction matters to the caller: `stream_with_retries` retries what is
-/// transient and gives up immediately on what is not, and a sign-in that has
-/// expired answers the same way every time.
 fn auth_error(err: SigninError) -> LlmError {
     match err {
         SigninError::Transport { url, source } => LlmError::Transport { url, source },
@@ -771,20 +568,11 @@ fn auth_error(err: SigninError) -> LlmError {
     }
 }
 
-/// Maps a backend status onto the error the operator or the agent will read.
-///
-/// Separate from the other transport's classifier because the same status means
-/// something different here. A 401 on a pasted key means the key is wrong; a 401
-/// here means a sign-in has to be repeated, and telling the operator to check
-/// their API key sends them to a field they have not used.
 fn classify(status: u16, body: &str, model: &str, retry_after: Option<u64>) -> LlmError {
     let message = detail(body);
     match status {
         401 | 403 => LlmError::SubscriptionRejected { message },
         429 => LlmError::RateLimited { message, retry_after_secs: retry_after },
-        // The backend refuses an unsupported model by name, and that sentence
-        // is the most useful thing an operator can be shown, so it is passed
-        // through rather than replaced.
         400 | 404 if message.to_lowercase().contains("model") => {
             LlmError::ModelRejected { model: model.to_string(), message }
         }
@@ -792,12 +580,6 @@ fn classify(status: u16, body: &str, model: &str, retry_after: Option<u64>) -> L
     }
 }
 
-/// Pulls the readable part out of an error body.
-///
-/// This endpoint reports a rejected request as a bare `{"detail": "..."}` and a
-/// rejected parameter as the usual `{"error": {"message": ...}}`. Reading only
-/// one of the two leaves the most common failure, a model the plan cannot use,
-/// showing as a wall of JSON.
 fn detail(body: &str) -> String {
     let parsed: Option<serde_json::Value> = serde_json::from_str(body).ok();
     let found = parsed.as_ref().and_then(|v| {
@@ -910,8 +692,6 @@ mod tests {
 
     #[test]
     fn a_temperature_is_never_sent() {
-        // The endpoint rejects the parameter rather than ignoring it, so one
-        // leaking through fails every turn of every agent.
         let request = ChatRequest {
             model: "m".into(),
             messages: vec![ChatMessage::system("s"), ChatMessage::user("u")],
@@ -942,8 +722,6 @@ mod tests {
             assert_eq!(explicit["reasoning"]["effort"], effort);
             assert_eq!(explicit["reasoning"]["summary"], "auto");
         }
-        // The encrypted reasoning would have to be sent back to be worth
-        // asking for, and this app does not keep reasoning.
         assert!(json.get("include").is_none(), "{json}");
     }
 
@@ -1067,7 +845,6 @@ mod tests {
 
         assert_eq!(content[0]["type"], "input_text", "the text goes first");
         assert_eq!(content[1]["type"], "input_image");
-        // Flat, unlike chat completions where this is `{ url: ... }`.
         assert_eq!(content[1]["image_url"], "data:image/png;base64,AA");
     }
 
@@ -1087,13 +864,6 @@ mod tests {
         assert_eq!(json["input"][0]["content"][0]["image_url"], "data:image/jpeg;base64,BB");
     }
 
-    // ---- stream decoding -------------------------------------------------
-
-    /// Feeds frames through the real decoder, as one body split at `at` bytes.
-    ///
-    /// Split deliberately: the bugs worth catching in a stream decoder live at
-    /// chunk boundaries, and a test that hands it one whole string never sees
-    /// them.
     async fn decode(frames: &[&str], at: usize) -> (Result<Completion, LlmError>, Vec<String>) {
         let body: String = frames.iter().map(|f| format!("{f}\n\n")).collect();
         let (head, tail) = body.split_at(at.min(body.len()));
@@ -1156,8 +926,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_split_frame_is_still_decoded() {
-        // Every byte boundary, so a frame cut inside its JSON, inside its
-        // `data:` prefix and between its newlines are all covered.
         for at in 0..240 {
             let (result, _) = decode(TEXT_TURN, at).await;
             assert_eq!(result.unwrap().content, "Hello there", "split at {at}");
@@ -1171,8 +939,6 @@ mod tests {
 
         assert_eq!(usage.prompt_tokens, 12);
         assert_eq!(usage.completion_tokens, 3);
-        // Not zero: a subscription call is not a free call, it is an unpriced
-        // one, and zero would read as free in the usage view.
         assert_eq!(usage.cost, None);
         assert_eq!(usage.cached_tokens, 0, "the frame says nothing about a cache");
     }
@@ -1265,9 +1031,6 @@ mod tests {
 
     #[tokio::test]
     async fn each_summary_part_starts_on_a_line_of_its_own() {
-        // What an operator was shown: one heading per part, joined into
-        // `**Updating skill memory****Checking suppression and site**`, which
-        // nothing reads as two headings.
         let (result, seen) = decode(
             &[
                 r#"data: {"type":"response.reasoning_summary_text.delta","item_id":"rs_1","summary_index":0,"delta":"**Updating skill "}"#,
@@ -1367,8 +1130,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_turn_cut_off_after_saying_something_keeps_it() {
-        // No completion event, but there is text: the operator should see what
-        // arrived rather than an error about a stream they cannot inspect.
         let (result, _) = decode(
             &[r#"data: {"type":"response.output_text.delta","delta":"half a"}"#],
             usize::MAX,
@@ -1377,8 +1138,6 @@ mod tests {
         assert_eq!(result.unwrap().content, "half a");
     }
 
-    // ---- error classification --------------------------------------------
-
     #[test]
     fn a_rejected_sign_in_is_not_reported_as_a_bad_api_key() {
         let err = classify(401, r#"{"detail":"invalid token"}"#, "m", None);
@@ -1386,7 +1145,6 @@ mod tests {
             LlmError::SubscriptionRejected { message } => assert_eq!(message, "invalid token"),
             other => panic!("a 401 here means sign in again, got {other:?}"),
         }
-        // And it is not worth retrying: it answers the same way every time.
         assert!(!LlmError::SubscriptionRejected { message: "x".into() }.is_transient());
     }
 
@@ -1419,26 +1177,20 @@ mod tests {
 
     #[test]
     fn both_error_body_shapes_are_read() {
-        // What this endpoint sends for a refused request.
         assert_eq!(
             detail(r#"{"detail":"Unsupported parameter: temperature"}"#),
             "Unsupported parameter: temperature"
         );
-        // And what it sends for a refused parameter.
         assert_eq!(
             detail(r#"{"error":{"message":"bad image","type":"invalid_request_error"}}"#),
             "bad image"
         );
-        // Anything else is shown as it arrived, truncated.
         assert_eq!(detail("<html>gateway</html>"), "<html>gateway</html>");
         assert_eq!(detail("   "), "empty error body");
     }
 
     #[test]
     fn a_sign_in_that_cannot_be_reached_stays_transient() {
-        // A network problem reaching the sign-in service is worth retrying; a
-        // refused sign-in is not, and collapsing the two makes a turn retry
-        // three times against a credential that will never work.
         let refused = auth_error(SigninError::TimedOut);
         assert!(!refused.is_transient());
     }

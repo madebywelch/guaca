@@ -1,25 +1,3 @@
-//! The local viewer for an agent's computer.
-//!
-//! Sandboxes are created with `allow_public_traffic: false`, so every request
-//! to their public URLs must carry an `e2b-traffic-access-token` header. That
-//! is exactly what an embedded viewer cannot do: an iframe cannot set a header,
-//! and neither can a browser WebSocket. Leaving the traffic open instead would
-//! put an agent's desktop, logged-in sessions and all, behind nothing but an
-//! unguessable id.
-//!
-//! So the webview points at `http://127.0.0.1:{port}/{sandbox}/{sandboxPort}/…`
-//! and this relays it, attaching the token on the way out.
-//!
-//! The relay is byte-level rather than a request parser. Only the head is read
-//! and rewritten; after that both directions are spliced until one side closes.
-//! That is what lets one implementation carry the HTML, the assets and noVNC's
-//! RFB socket, which is a WebSocket upgrade and cannot be handled by an ordinary
-//! HTTP client.
-//!
-//! Paths keep the `/{sandbox}/{port}` prefix because noVNC references its own
-//! files relatively: from `/{sandbox}/6080/vnc.html`, `app/ui.js` resolves back
-//! through the same prefix without anything having to rewrite the HTML.
-
 use std::sync::Arc;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -30,34 +8,12 @@ use tokio_rustls::TlsConnector;
 
 use crate::db::Store;
 
-/// Where a sandbox's public ports live.
 const UPSTREAM_SUFFIX: &str = "e2b.app";
 
-/// Head must arrive within this. A connection that opens and says nothing is
-/// either a probe or a mistake, and it should not hold a task forever.
 const HEAD_LIMIT: usize = 32 * 1024;
 
-/// The page the app points its frame at.
-///
-/// Served from here rather than fetched from the machine, which is what lets a
-/// stylesheet reach noVNC without this relay ever having to interpret a
-/// response body. `e2b.rs` builds the address from this same constant, so the
-/// two cannot drift apart.
 pub const VIEWER_DOCUMENT: &str = "/viewer.html";
 
-/// That page.
-///
-/// noVNC is framed from the same origin, which is what lets this reach into it
-/// and turn off the one piece of its chrome an operator should never see: the
-/// bar it slides across the top of the picture on every connect, announcing the
-/// transport. A panel opening is not news, and "unencrypted" is not even true
-/// of the hop that matters: this relay reaches the machine over TLS.
-///
-/// A warning or an error still shows. A desktop that dies quietly is worse than
-/// one that says so.
-///
-/// The options stay in the address so the app keeps deciding them, which is why
-/// the frame's `src` is set here rather than written into the markup.
 const VIEWER_PAGE: &str = r##"<!doctype html>
 <html lang="en">
 <head>
@@ -85,10 +41,6 @@ const VIEWER_PAGE: &str = r##"<!doctype html>
 </html>
 "##;
 
-/// Starts the viewer on a loopback port chosen by the OS.
-///
-/// Bound to 127.0.0.1 deliberately: this holds tokens that reach an agent's
-/// machine, and nothing outside this computer has any business reaching it.
 pub async fn start(store: Store) -> std::io::Result<u16> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
     let port = listener.local_addr()?.port();
@@ -130,8 +82,6 @@ async fn serve(
         return refuse(&mut client, "400 Bad Request", "Not a computer address.").await;
     };
 
-    // The token is looked up here rather than traveling in the URL, so it
-    // never reaches the webview and never appears in a page's address.
     let token = match store.sandbox_traffic_token(&request.sandbox) {
         Ok(Some(token)) if !token.is_empty() => token,
         _ => {
@@ -144,9 +94,6 @@ async fn serve(
         }
     };
 
-    // This app's own page rather than anything on the machine, so it is answered
-    // here. After the token lookup, not before: an address with no machine
-    // behind it should say so rather than paint a frame that never connects.
     if request.wants_viewer() {
         return answer(&mut client, VIEWER_PAGE).await;
     }
@@ -161,8 +108,6 @@ async fn serve(
     upstream.write_all(&request.body).await?;
     upstream.flush().await?;
 
-    // From here neither side is interpreted. An upgraded connection carries VNC
-    // frames, and an ordinary one carries a response body; both are just bytes.
     tokio::io::copy_bidirectional(&mut client, &mut upstream).await.map(|_| ())
 }
 
@@ -185,8 +130,6 @@ async fn read_head(client: &mut TcpStream) -> Result<Vec<u8>, std::io::Error> {
 }
 
 async fn refuse(client: &mut TcpStream, status: &str, message: &str) -> Result<(), std::io::Error> {
-    // Answered rather than dropped: an iframe given nothing shows a blank
-    // rectangle, which reads the same as a computer that is simply asleep.
     let body = format!(
         "HTTP/1.1 {status}\r\ncontent-type: text/plain; charset=utf-8\r\n\
          content-length: {}\r\nconnection: close\r\n\r\n{message}",
@@ -196,8 +139,6 @@ async fn refuse(client: &mut TcpStream, status: &str, message: &str) -> Result<(
 }
 
 async fn answer(client: &mut TcpStream, page: &str) -> Result<(), std::io::Error> {
-    // Not cached: the page ships with the app, and a stale one from an older
-    // build would frame the desktop with last version's rules.
     let head = format!(
         "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\n\
          content-length: {}\r\ncache-control: no-store\r\nconnection: close\r\n\r\n",
@@ -207,26 +148,18 @@ async fn answer(client: &mut TcpStream, page: &str) -> Result<(), std::io::Error
     client.write_all(page.as_bytes()).await
 }
 
-/// The part of a request this needs to understand: which sandbox, which port,
-/// and the head to pass on with two lines changed.
 #[derive(Debug, PartialEq)]
 struct Request {
     sandbox: String,
     port: u16,
-    /// Everything after `/{sandbox}/{port}`, including the query.
     path: String,
     method: String,
-    /// Header lines, minus the ones this rewrites.
     headers: Vec<String>,
-    /// A WebSocket upgrade, which must keep its connection open. Everything
-    /// else is answered one request per connection.
     upgrade: bool,
     body: Vec<u8>,
 }
 
 impl Request {
-    /// Whether this asks for the viewer's own page rather than for something on
-    /// the machine.
     fn wants_viewer(&self) -> bool {
         let path = self.path.split('?').next().unwrap_or_default();
         path == VIEWER_DOCUMENT
@@ -253,9 +186,6 @@ impl Request {
             if lower.starts_with("upgrade:") {
                 upgrade = true;
             }
-            // Host is replaced and the token is added, so anything already
-            // claiming to be either is dropped rather than forwarded. The
-            // connection headers are decided below, not by the caller.
             let rewritten = lower.starts_with("host:")
                 || lower.starts_with("e2b-traffic-access-token:")
                 || lower.starts_with("connection:")
@@ -282,12 +212,6 @@ impl Request {
         out.push_str(&format!("host: {host}\r\n"));
         out.push_str(&format!("e2b-traffic-access-token: {token}\r\n"));
 
-        // One request per connection, because only the first one on a
-        // connection is ever read and rewritten here: everything after the head
-        // is spliced through untouched. A browser reuses a connection for every
-        // asset on a page, so keep-alive sent the second request upstream with
-        // the proxy's own path still on it and noVNC's scripts never loaded.
-        // An upgrade is the exception; that connection has to stay open.
         if self.upgrade {
             out.push_str("connection: Upgrade\r\n");
         } else {
@@ -315,11 +239,6 @@ mod tests {
 
     #[test]
     fn an_ordinary_request_is_answered_one_per_connection() {
-        // Only the first request on a connection is read and rewritten; the
-        // rest of the bytes are spliced through. A browser reuses a connection
-        // for every asset, so keep-alive sent later requests upstream with the
-        // proxy's own path still attached and they came back as errors, which
-        // is a page whose scripts never load.
         let req =
             Request::parse(&head("/sbx/6080/app/ui.js", "connection: keep-alive\r\n")).unwrap();
         assert!(!req.upgrade);
@@ -351,8 +270,6 @@ mod tests {
 
     #[test]
     fn a_query_survives_the_rewrite() {
-        // noVNC passes its options in the query, so losing it silently would
-        // connect the viewer in the wrong mode.
         let req =
             Request::parse(&head("/sbx/6080/vnc.html?autoconnect=1&view_only=1", "\r\n")).unwrap();
         assert_eq!(req.path, "/vnc.html?autoconnect=1&view_only=1");
@@ -380,8 +297,6 @@ mod tests {
 
     #[test]
     fn a_token_supplied_by_the_page_is_dropped_rather_than_forwarded() {
-        // The webview never holds the real token, so anything claiming to be
-        // one came from inside the frame and is not trusted.
         let req =
             Request::parse(&head("/sbx/6080/x", "e2b-traffic-access-token: forged\r\n")).unwrap();
         let out = req.rewritten("6080-sbx.e2b.app", "real");
@@ -391,9 +306,6 @@ mod tests {
 
     #[test]
     fn the_page_the_app_frames_is_this_app_s_own() {
-        // Answered here rather than fetched from the machine, which is what lets
-        // noVNC's own chrome be turned off without this relay ever having to
-        // edit a response body.
         assert!(Request::parse(&head("/sbx/6080/viewer.html?autoconnect=1", "\r\n"))
             .unwrap()
             .wants_viewer());
@@ -406,11 +318,7 @@ mod tests {
 
     #[test]
     fn the_viewer_page_passes_its_options_on_and_silences_only_the_chatter() {
-        // The app decides autoconnect, scaling and reconnection in the address,
-        // so the page has to hand the query on rather than hold a copy of it.
         assert!(VIEWER_PAGE.contains(r#""./vnc.html" + location.search"#));
-        // And only noVNC's normal status goes. The same bar carries the only
-        // notice an operator gets that a desktop stopped answering.
         assert!(VIEWER_PAGE.contains("#noVNC_status.noVNC_status_normal{display:none!important}"));
         assert!(
             !VIEWER_PAGE.contains("#noVNC_status{"),

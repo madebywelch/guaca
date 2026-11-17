@@ -1,27 +1,5 @@
-//! Whether macOS will show a notification Guaca raises, and asking it.
-//!
-//! The notification plugin answers "granted" on every desktop without asking
-//! anyone, and on macOS that was never true: the system keeps a switch per app,
-//! and with it off a banner is accepted and then dropped. So a window asks here
-//! instead, through the same `UNUserNotificationCenter` the plugin now raises
-//! banners with (notify-rust's `preview-macos-un`, turned on in Cargo.toml).
-//!
-//! Everywhere else there is no per-app answer to read, and every reading is
-//! `None`, which tells the window to keep asking the plugin as before.
-//!
-//! On macOS a banner is also raised here rather than through the plugin. The
-//! plugin hands it over with `mac-usernotifications`' blocking send, which
-//! refuses ("main thread is not pumping") unless the main run loop happens to
-//! be idle at that instant, and drops the error: a delivery the window had
-//! already claimed was lost whenever the app was busy, and so was the click on
-//! a banner that did appear. The send runs on that crate's own thread and
-//! needs nothing from the main one, so here it is awaited, and the window
-//! hears whether macOS took it.
-
 use serde::Serialize;
 
-/// The event a click on a banner raised by [`show`] arrives as, carrying the
-/// number the window raised it with.
 pub const CLICKED: &str = "notification-clicked";
 
 pub fn install(app: &tauri::AppHandle) -> Result<(), String> {
@@ -32,42 +10,27 @@ pub fn shutdown(app: &tauri::AppHandle) {
     imp::shutdown(app);
 }
 
-/// What macOS will do with a banner from this app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Permission {
-    /// Banners are on for Guaca.
     Allowed,
-    /// Never asked. macOS asks once, and its answer stands until the operator
-    /// changes it in System Settings.
     NotAsked,
-    /// Anything that ends in no banner: refused, switched off, or kept quietly
-    /// in Notification Center. A window that claims a delivery it can only
-    /// file there has taken it from a window that could interrupt someone.
     Denied,
-    /// Not running from an app bundle, which `UNUserNotificationCenter` needs
-    /// and throws without. A build run straight from the checkout is not one.
     Unavailable,
 }
 
-/// The current answer, without asking.
 pub async fn current() -> Option<Permission> {
     imp::current().await
 }
 
-/// The answer, asking first if macOS never has.
 pub async fn ask() -> Option<Permission> {
     imp::ask().await
 }
 
-/// Opens the pane where the operator turns them back on.
 pub async fn open_settings() -> Result<(), String> {
     imp::open_settings().await
 }
 
-/// Hands a banner to macOS and returns once macOS has accepted or refused it.
-/// With `click`, a click on it is announced as [`CLICKED`] with that number.
-/// `None` off macOS, where the window raises it through the plugin as before.
 pub async fn show(
     app: tauri::AppHandle,
     title: String,
@@ -148,8 +111,6 @@ mod imp {
         }
     }
 
-    /// The click number of a default action on a banner this session raised.
-    /// Banners carry no buttons, so macOS never reports their dismissal.
     fn clicked(
         prefix: &str,
         response: &mac_usernotifications::NotificationResponse,
@@ -164,9 +125,6 @@ mod imp {
     #[cfg(feature = "probe")]
     const RESPONSE_SESSION: u64 = 2;
 
-    /// The probe's row for any response the delegate hands over: the click
-    /// number when it is one of this session's, and bits for a default action
-    /// and for this session. Nothing else of the response is kept.
     #[cfg(feature = "probe")]
     fn response_row(
         prefix: &str,
@@ -181,12 +139,10 @@ mod imp {
         (click, default | if session { RESPONSE_SESSION } else { 0 })
     }
 
-    /// Without the observer a banner is still shown, only without click-through.
     fn request_id(actions: Option<&Actions>, click: Option<u32>) -> Option<String> {
         Some(format!("{}{}", actions?.namespace, click?))
     }
 
-    /// System Settings, Notifications. The list of apps is one click from it.
     const PANE: &str = "x-apple.systempreferences:com.apple.Notifications-Settings.extension";
 
     pub async fn current() -> Option<Permission> {
@@ -203,8 +159,6 @@ mod imp {
     }
 
     pub async fn ask() -> Option<Permission> {
-        // One question at a time: two banners raised together would otherwise
-        // both find "not asked" and both put the question.
         static ONE: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(Default::default);
         let _one = ONE.lock().await;
         let now = current().await;
@@ -251,7 +205,6 @@ mod imp {
         }
     }
 
-    /// Whether the executable is `Something.app/Contents/MacOS/binary`.
     fn inside_app(exe: &Path) -> bool {
         exe.parent()
             .filter(|dir| dir.ends_with("Contents/MacOS"))
@@ -260,9 +213,6 @@ mod imp {
             .is_some_and(|ext| ext == "app")
     }
 
-    /// Allowed only when a banner will actually appear. Provisional delivery
-    /// and an alert style of None are both a yes from macOS that files the
-    /// notification in Notification Center and interrupts nobody.
     fn judge(settings: &NotificationSettings) -> Permission {
         match settings.authorization_status {
             AuthorizationStatus::NotDetermined => Permission::NotAsked,

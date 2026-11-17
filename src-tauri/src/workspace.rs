@@ -1,42 +1,3 @@
-//! Per-agent memory on disk.
-//!
-//! Each agent owns one small markdown file that it can rewrite, and that is
-//! shown to it at the start of every turn. This is the smallest thing that
-//! deserves the name memory, and the shape is deliberate.
-//!
-//! It is called memory everywhere now, in the code as well as in the app. It
-//! was `notes` internally for a year, on the argument that renaming would
-//! rewrite the IPC contract to no effect. That stopped being true the moment
-//! there was a second store: with working notes beside it, `notes` named two
-//! things with opposite lifetimes, and the one word nobody could use without
-//! saying which one they meant was the word the code used everywhere.
-//! `update_notes` survives as a parse alias and nothing else.
-//!
-//! What lives here is only half of what an agent carries. The other half is
-//! `domain::worknote`, and the line between them is what each is for: this file
-//! holds what the agent knows, and could not look up again; a working note
-//! holds where its work stands, and expires. The two shapes are opposites on
-//! purpose, and the reasoning for that is in `worknote.rs` rather than repeated
-//! here.
-//!
-//! The 2026 survey of agent memory (arXiv 2603.07670) frames memory as a
-//! write-manage-read loop and names the engineering realities that decide
-//! whether it works: write-path filtering, contradiction handling, continual
-//! consolidation, and learned forgetting. Three design choices here follow
-//! directly from that:
-//!
-//! - **Always resident, never retrieved.** The file is small enough to sit in
-//!   the prompt, so there is no retrieval step to get wrong and no relevance
-//!   model to tune. Retrieval machinery earns its place at a scale this does
-//!   not reach.
-//! - **Replace, never append.** The only write is a full rewrite, which forces
-//!   the agent to reconcile what it already believed against what it just
-//!   learned. Append-only turns into the transcript it was supposed to
-//!   summarize.
-//! - **A hard cap.** Forgetting has to be someone's decision. A ceiling makes
-//!   the agent choose what survives rather than letting the file grow until it
-//!   crowds out the conversation.
-
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -52,34 +13,6 @@ pub fn version(content: &str) -> String {
     format!("{:x}", Sha256::digest(content.as_bytes()))
 }
 
-/// Memory longer than this is cut. Four pages: enough for a persona, standing
-/// preferences, durable facts, and pointers to the documents worth reopening.
-///
-/// It was 4,000, which is one page, and every agent doing real work was jammed
-/// against it. Measured across a workspace of twenty-one: the ten busiest were
-/// all above 3,800, four were within a hundred characters of the ceiling, and
-/// **more than half of every turn that wrote to memory had to write twice**,
-/// because the first attempt came back cut. That is a whole extra model call,
-/// paid on half of the memory writes in the workspace, and memory was the most
-/// used tool in it.
-///
-/// Naming the number in the tool description did not help, which is the
-/// evidence that mattered: the models were not guessing the cap, they had more
-/// state than the cap held.
-///
-/// That measurement predates the split, and some of what it measured was
-/// pressure this file should never have been under. A fifth of the same
-/// workspace's memory was progress, which now goes to `domain::worknote`, and
-/// more again was documents restated rather than pointed at. Whether four pages
-/// is still the right size is a question for the next measurement rather than
-/// this one, and it is deliberately not lowered on a prediction: being wrong
-/// upward costs prompt tokens, and being wrong downward costs back the extra
-/// model call on half of all writes that this bought.
-///
-/// Mirrored in `Memory.tsx` as `CAP`, which the suite pins to this by reading
-/// this file. The two drifted to 4,000 against 16,000 once, and the panel spent
-/// that release telling operators their memory was about to be cut by a runtime
-/// that was storing it whole.
 pub const MAX_MEMORY: usize = 16_000;
 
 #[derive(Debug, thiserror::Error)]
@@ -92,7 +25,6 @@ pub enum WorkspaceError {
     },
 }
 
-/// Turns an agent name into something safe and recognizable in a file listing.
 fn slug(name: &str) -> String {
     let mut out = String::new();
     let mut last_dash = true;
@@ -130,15 +62,10 @@ impl Workspace {
         &self.root
     }
 
-    /// Where an agent's memory should live, given its current name.
     pub fn preferred_path(&self, id: AgentId, name: &str) -> PathBuf {
         self.root.join(format!("{}-{}.md", slug(name), id.short()))
     }
 
-    /// Finds an agent's file wherever it currently is.
-    ///
-    /// Located by the id suffix rather than by name, so renaming an agent can
-    /// never orphan its memory even if the file move fails.
     fn existing_path(&self, id: AgentId) -> Option<PathBuf> {
         let suffix = format!("-{}.md", id.short());
         let entries = fs::read_dir(&self.root).ok()?;
@@ -151,7 +78,6 @@ impl Workspace {
         None
     }
 
-    /// An agent's memory, or an empty string if it has never written any.
     pub fn read(&self, id: AgentId) -> String {
         let _guard = MEMORY_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         self.read_unlocked(id)
@@ -167,21 +93,6 @@ impl Workspace {
         self.existing_path(id).and_then(|path| fs::read_to_string(path).ok()).unwrap_or_default()
     }
 
-    /// Replaces an agent's memory.
-    ///
-    /// Returns what was actually stored, which is the input trimmed and, if it
-    /// ran over the cap, cut to `MAX_MEMORY` characters, back to the last line
-    /// break when one falls in the second half. Nothing is written into the page
-    /// to mark the cut; `truncated` says so, and the caller tells the agent.
-    /// Silently storing a truncated file would let an agent believe it had
-    /// recorded something it had not.
-    ///
-    /// It also returns what was there first. Replacing is the only write this
-    /// interface has, so the version it replaced exists nowhere else a moment
-    /// later, and this is the only place it can be read without a race: the
-    /// same memory is written from every thread an agent holds and edited by
-    /// the operator by hand, so anything that reads the file afterward is
-    /// reading somebody else's write.
     pub fn write(&self, id: AgentId, name: &str, content: &str) -> Result<Stored, WorkspaceError> {
         match self.write_versioned(id, name, content, None)? {
             WriteResult::Stored(stored) => Ok(stored),
@@ -199,8 +110,6 @@ impl Workspace {
         self.write_through(id, name, content, expected, |from, to| fs::rename(from, to))
     }
 
-    /// `write_versioned`, with the last step of putting the page in place
-    /// handed in, so a test can make it fail where a crash would.
     fn write_through(
         &self,
         id: AgentId,
@@ -222,7 +131,6 @@ impl Workspace {
             (trimmed.to_string(), false)
         } else {
             let mut kept: String = trimmed.chars().take(MAX_MEMORY).collect();
-            // Cut at a line boundary so the file never ends mid-sentence.
             if let Some(last_break) = kept.rfind('\n') {
                 if last_break > MAX_MEMORY / 2 {
                     kept.truncate(last_break);
@@ -233,7 +141,6 @@ impl Workspace {
 
         let target = self.preferred_path(id, name);
         let current = self.existing_path(id);
-        // Renaming is cosmetic: lookup is by id, so a failure here is harmless.
         if let Some(current) = current {
             if current != target {
                 let _ = fs::rename(&current, &target);
@@ -252,7 +159,6 @@ impl Workspace {
         }))
     }
 
-    /// Deletes an agent's memory. Called when the agent is deleted.
     pub fn remove(&self, id: AgentId) {
         let _guard = MEMORY_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(path) = self.existing_path(id) {
@@ -261,15 +167,6 @@ impl Workspace {
     }
 }
 
-/// Puts a page at `target` by writing it beside it and renaming it over.
-///
-/// The file is the only copy of what an agent knows. Written in place, it is
-/// emptied the moment it is opened and refilled after, so a crash or a full
-/// disk in between left an agent with a page cut short or no page at all. A
-/// rename is the one step that either happens whole or not at all, so until it
-/// does the old page is still there to read. The temporary name does not end in
-/// the id suffix `existing_path` looks for, so a leftover one is never read as
-/// memory, and the next write reuses it: every write holds `MEMORY_LOCK`.
 fn replace(
     target: &Path,
     body: &str,
@@ -287,7 +184,6 @@ fn replace(
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Stored {
-    /// The version this write replaced, empty where there was none.
     pub before: String,
     pub content: String,
     pub characters: usize,
@@ -328,8 +224,6 @@ mod tests {
 
     #[test]
     fn a_rewrite_replaces_rather_than_appends() {
-        // The whole interface: replacing forces the agent to reconcile instead
-        // of accumulating a transcript.
         let (ws, _dir) = workspace();
         let id = AgentId::new();
         ws.write(id, "Manager", "first belief").unwrap();
@@ -339,8 +233,6 @@ mod tests {
 
     #[test]
     fn a_write_hands_back_the_version_it_replaced() {
-        // The transcript shows the operator what an agent changed about itself,
-        // and this is the only moment the version before it still exists.
         let (ws, _dir) = workspace();
         let id = AgentId::new();
 
@@ -353,9 +245,6 @@ mod tests {
 
     #[test]
     fn the_replaced_version_survives_a_rename() {
-        // Lookup is by id, and so is this: an agent renamed between two writes
-        // must not read as one that has just written its memory for the first
-        // time.
         let (ws, _dir) = workspace();
         let id = AgentId::new();
         ws.write(id, "Manager", "kept").unwrap();
@@ -383,13 +272,11 @@ mod tests {
 
         assert!(stored.path.file_name().unwrap().to_str().unwrap().starts_with("coordinator-"));
         assert_eq!(ws.read(id), "remembered");
-        // And exactly one file exists: the old one was moved, not copied.
         assert_eq!(fs::read_dir(ws.root()).unwrap().count(), 1);
     }
 
     #[test]
     fn memory_is_found_by_id_even_if_the_filename_is_stale() {
-        // Lookup by id is what makes a failed rename harmless.
         let (ws, _dir) = workspace();
         let id = AgentId::new();
         ws.write(id, "Manager", "kept").unwrap();
@@ -403,7 +290,6 @@ mod tests {
     fn two_agents_never_share_a_file() {
         let (ws, _dir) = workspace();
         let (a, b) = (AgentId::new(), AgentId::new());
-        // Same name, which the app allows once one of them is deleted.
         ws.write(a, "Manager", "mine").unwrap();
         ws.write(b, "Manager", "also mine").unwrap();
 
@@ -413,13 +299,8 @@ mod tests {
 
     #[test]
     fn oversized_memory_is_cut_and_reported() {
-        // Silently storing a truncated file would let an agent believe it had
-        // recorded something it had not.
         let (ws, _dir) = workspace();
         let id = AgentId::new();
-        // Sized off the cap rather than a fixed repeat count, so this still
-        // tests truncation the next time the ceiling moves. It did not, and a
-        // raise turned it into a test that the input happened to fit.
         let huge = "a line of notes\n".repeat(MAX_MEMORY / 8);
 
         let stored = ws.write(id, "Manager", &huge).unwrap();
@@ -448,9 +329,6 @@ mod tests {
 
     #[test]
     fn a_write_that_fails_before_its_rename_leaves_the_old_page() {
-        // Where a crash or a full disk lands: the new page is written, or half
-        // written, and never put in place. Written straight onto the file, that
-        // moment had already emptied the only copy of what the agent knew.
         let (ws, _dir) = workspace();
         let id = AgentId::new();
         ws.write(id, "Manager", "what it knew").unwrap();
@@ -472,8 +350,6 @@ mod tests {
 
     #[test]
     fn a_page_left_half_written_by_a_crash_is_never_read_as_memory() {
-        // A process that dies after the temporary file and before the rename
-        // never gets to tidy up, so what it leaves has to be harmless on disk.
         let (ws, _dir) = workspace();
         let id = AgentId::new();
         let stored = ws.write(id, "Manager", "what it knew").unwrap();

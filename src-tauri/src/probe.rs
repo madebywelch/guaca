@@ -1,20 +1,3 @@
-//! The probe: a control channel into a test build of the app, and the shape of
-//! what crosses it.
-//!
-//! Most of what is Mac-only in Guaca happens where no test reaches: what the
-//! window shows, whether macOS lets a banner through, where the menu bar panel
-//! stands and who has the keyboard when it closes. The probe lets a script ask
-//! the running app those questions and act in it the way a person would, so a
-//! scenario can be run by a machine, three times, and come out the same.
-//!
-//! This file is the half with no Tauri in it: the requests, the answers, and
-//! the checks on who may connect. It is compiled into the unit tests on every
-//! platform, so the gate argues it on Linux too. The half that opens the
-//! socket is [`channel`], and it exists only in a build made with the `probe`
-//! feature, which refuses to compile with optimizations on. A shipped app has
-//! neither. `docs/PROBE.md` is how the pieces fit, and `scripts/probe.py` is
-//! the command that drives them.
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -25,11 +8,8 @@ pub mod trace;
 #[cfg(feature = "probe")]
 pub mod channel;
 
-/// Where the channel listens. Unset, a probe build opens nothing, so the
-/// socket exists only for a launch that asked for it.
 pub const SOCKET_ENV: &str = "GUACA_PROBE_SOCKET";
 
-/// One request, one line of JSON, carrying the id its answer echoes.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Envelope {
     pub id: u64,
@@ -37,39 +17,20 @@ pub struct Envelope {
     pub request: Request,
 }
 
-/// Everything a client can ask. Each one is either a reading of state the app
-/// already holds or something a person could do with a pointer.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Request {
-    /// Which process this is and what it calls itself. The first thing a
-    /// client asks, and what it waits on after a launch.
     Hello,
-    /// Windows, the notification permission as the app reads it, and the
-    /// menu bar.
     State,
-    /// A call into the page a window draws, answered by the page's bridge
-    /// (`src/lib/probe.ts`). The channel carries it without reading it.
     Page { window: String, call: Value },
-    /// A left click on the menu bar icon, through the same path a click takes.
     ClickIcon,
-    /// A window's close button: what the app does with that is its own
-    /// business, and for the main window it is to hide rather than quit.
     Close { window: String },
-    /// The app hidden, which hands the keyboard to whatever is next in line.
     Hide,
-    /// The app quits, as Quit Guaca in the icon's menu would.
     Quit,
-    /// The main thread kept busy for `ms` milliseconds, in slices short
-    /// enough that the window still answers, so its run loop is almost never
-    /// idle: what a window drawing a long reply does to it. Answered at once.
     Busy { ms: u64 },
-    /// The next banner handed to the system is refused as macOS refuses one,
-    /// so the window gives back what it claimed. Answered at once.
     RefuseNextBanner,
 }
 
-/// The answer to one request.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Reply {
@@ -89,7 +50,6 @@ impl Reply {
         }
     }
 
-    /// One line, newline included, ready to write.
     pub fn line(&self) -> String {
         let mut line = serde_json::to_string(self).expect("a reply serializes");
         line.push('\n');
@@ -97,10 +57,6 @@ impl Reply {
     }
 }
 
-/// Reads one line into a request, or the answer that says why it is not one.
-///
-/// A line with no readable id is answered with id 0, which no client sends,
-/// so a client that sent garbage still hears that it did.
 pub fn parse(line: &str) -> Result<Envelope, Reply> {
     serde_json::from_str(line).map_err(|err| {
         let id = serde_json::from_str::<Value>(line)
@@ -111,17 +67,13 @@ pub fn parse(line: &str) -> Result<Envelope, Reply> {
     })
 }
 
-/// What the app reports about itself.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct State {
     pub identifier: String,
     pub pid: u32,
     pub windows: Vec<Window>,
-    /// `notifications::Permission` as the app reads it, or null where the
-    /// platform has no per-app answer.
     pub notifications: Value,
-    /// Null when the app runs without a menu bar icon.
     pub menubar: Option<Menubar>,
 }
 
@@ -134,38 +86,23 @@ pub struct Window {
     pub minimized: bool,
 }
 
-/// The icon as it is drawn, and the panel under it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Menubar {
     pub glyph: String,
     pub title: Option<String>,
     pub tooltip: String,
-    /// Whether the window has said which host the panel is to show, and the
-    /// panel has loaded it. Until then a click opens the window instead.
     pub attached: bool,
     pub panel: bool,
     pub panel_visible: bool,
 }
 
-/// The script a page is asked to run, and how to read what comes back.
-///
-/// The page answers a call synchronously and as a JSON string, because the
-/// webview hands back the value of the expression it evaluated and nothing
-/// that arrives later. A page without the bridge answers that it has none,
-/// rather than throwing, so a client waiting for the page to load can tell
-/// "not yet" from "broken".
 pub fn page_script(call: &Value) -> String {
     format!(
         "(function(){{var p=window.__guacaProbe;return JSON.stringify(p?p.run({call}):{{ok:false,error:'no probe bridge on this page'}});}})()"
     )
 }
 
-/// The page's answer, from what the webview reported.
-///
-/// The webview serializes the expression's value as JSON, and the value is
-/// itself a JSON string, so the answer is decoded twice. The bridge's own
-/// `{ ok, value | error }` becomes the channel's.
 pub fn page_answer(reported: &str) -> Result<Value, String> {
     let inner: String = serde_json::from_str(reported)
         .map_err(|err| format!("the page answered something unreadable: {err}"))?;
@@ -182,15 +119,10 @@ pub fn page_answer(reported: &str) -> Result<Value, String> {
     }
 }
 
-/// Whether a connection may talk to the channel: only the account the app
-/// runs as. The socket's directory already shuts everyone else out, and this
-/// is the same rule asked of the kernel a second time.
 pub fn admits(peer: u32, owner: u32) -> bool {
     peer == owner
 }
 
-/// Whether a directory is fit to hold the socket: a directory, owned by the
-/// account the app runs as, that nobody else can enter or list.
 #[cfg(unix)]
 pub fn private_dir(path: &std::path::Path, owner: u32) -> Result<(), String> {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -307,12 +239,6 @@ mod tests {
         assert!(private_dir(&file, owner).unwrap_err().contains("not a directory"));
     }
 
-    /// The promise that matters most: no build anyone ships has the channel.
-    ///
-    /// Asked of Cargo rather than of the manifest's text, so a feature added
-    /// later that pulls `probe` in through another feature is caught too. The
-    /// other half of the promise is in `channel.rs`: a build with `probe`
-    /// and optimizations on does not compile.
     #[test]
     fn no_feature_but_probe_itself_turns_the_channel_on() {
         let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());

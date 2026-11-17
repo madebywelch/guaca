@@ -1,4 +1,3 @@
-//! Durable questions through the real actor and wire, with a scripted model.
 mod harness;
 use guac_lib::db::Store;
 use guac_lib::domain::decision::{DecisionRequest, DecisionStatus};
@@ -88,8 +87,6 @@ async fn an_answer_arriving_during_other_work_is_read_at_the_next_round() {
     assert_eq!(h.runtime.store().decisions(None).unwrap()[0].status, DecisionStatus::Completed);
 }
 
-// ---- across a restart ------------------------------------------------------
-
 fn time_question() -> DecisionRequest {
     DecisionRequest {
         question: "10 AM or 11 AM?".into(),
@@ -109,9 +106,6 @@ fn file_time_question(h: &Harness) -> DecisionId {
         .id
 }
 
-/// Ends this host the way a crash ends it: no drain, every actor stopped
-/// wherever it was, and the same workspace opened by a new host through the
-/// recovery and the pickup boot runs.
 fn crash(h: Harness) -> Harness {
     let Harness { runtime: old, ids, _dir, .. } = h;
     for id in ids.values() {
@@ -144,9 +138,6 @@ fn deliveries(h: &Harness, id: DecisionId) -> Vec<Envelope> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn follow_through_that_finished_before_a_restart_can_still_be_completed() {
-    // The answer was acted on and the turn ended, but the work it started is
-    // not done: the agent is waiting on Alex. A restart in between cut nothing
-    // off, so when Alex confirms, completing the decision is not refused.
     let id = Arc::new(OnceLock::<DecisionId>::new());
     let target = id.clone();
     let stub = serve(move |body| {
@@ -180,8 +171,6 @@ async fn follow_through_that_finished_before_a_restart_can_still_be_completed() 
     assert_eq!(done.outcome.as_deref(), Some("Meeting confirmed for 11 AM."));
 }
 
-/// A stub that holds the follow-through of an answer open until the test
-/// ends, and answers a delivery that says it was interrupted.
 async fn hangs_on_the_answer() -> Stub {
     serve(|body| {
         if anyone_said(body, "This work was interrupted") {
@@ -195,8 +184,6 @@ async fn hangs_on_the_answer() -> Stub {
     .await
 }
 
-/// A decision answered, and the process gone while its follow-through was
-/// inside a model call.
 async fn cut_off_during_follow_through(stub: &Stub) -> (Harness, DecisionId, Envelope) {
     let h = harness(stub, &["Assistant"], GuardLimits::default());
     let id = file_time_question(&h);
@@ -228,14 +215,11 @@ async fn try_again_on_an_interrupted_delivery_is_the_decisions_resume_and_happen
     let stub = hangs_on_the_answer().await;
     let (h, id, delivery) = cut_off_during_follow_through(&stub).await;
 
-    // Try again on the restart notice, which is anchored on the delivery.
     let run = h.runtime.retry_turn(h.id("Assistant"), delivery.id).unwrap();
     let decision = h.runtime.store().decisions(None).unwrap().remove(0);
     assert_eq!(decision.delivery_run, Some(run), "the retry is the decision's delivery now");
     assert!(!decision.interrupted, "and it is no longer waiting to be resumed");
 
-    // So For you's Resume has nothing left to resume, and a second press of
-    // Try again on the same notice delivers nothing either.
     assert!(h.runtime.answer_decision(id, "", true, None).is_err());
     assert!(h.runtime.retry_turn(h.id("Assistant"), delivery.id).is_err());
     h.settle(run).await;

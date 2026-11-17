@@ -1,49 +1,25 @@
-//! A file traveling between the operator, the agents, and their machines.
-//!
-//! The bytes are not here and never travel in an envelope. A transcript is read
-//! in bulk (forty messages into every prompt, hundreds into the activity view),
-//! so a document inlined into a message would be dragged through both every
-//! time anybody looked at a channel. What an envelope carries is this: enough
-//! to name the file, decide how to hand it to a model, and find the one copy of
-//! the bytes on disk.
-
 use serde::{Deserialize, Serialize};
 
-/// The largest file this app will take in. Bigger than any brief or proposal,
-/// small enough that a copy per recipient is not a memory event.
 pub const MAX_FILE_BYTES: u64 = 25 * 1024 * 1024;
 
-/// One file, as a message refers to it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Attachment {
-    /// SHA-256 of the contents, and the only address the bytes have. Two agents
-    /// sending the same document store it once.
     pub digest: String,
-    /// What a person calls it. Never a path: where a file came from on the
-    /// operator's disk is nobody else's business, and where it lands on an
-    /// agent's machine is decided by the runtime.
     pub name: String,
     pub mime: String,
     pub bytes: u64,
 }
 
 impl Attachment {
-    /// Whether a model can be shown this directly, as a picture.
     pub fn is_image(&self) -> bool {
         self.mime.starts_with("image/")
     }
 
-    /// Whether this can be read into a prompt as text.
-    ///
-    /// By type rather than by sniffing the bytes: a file that is only mostly
-    /// text arrives in a prompt as a screenful of replacement characters, and
-    /// the agent has a machine that can open it properly.
     pub fn is_text(&self) -> bool {
         self.mime.starts_with("text/") || matches!(self.mime.as_str(), "application/json")
     }
 
-    /// Human size, for a line a model or an operator reads.
     pub fn size(&self) -> String {
         const KB: u64 = 1024;
         const MB: u64 = 1024 * KB;
@@ -55,12 +31,6 @@ impl Attachment {
     }
 }
 
-/// The type of a file, from its name.
-///
-/// Extension only. Content sniffing would let a file claim to be text and
-/// arrive in a prompt as binary, and the list below is exactly the set this app
-/// does something different with: shows a picture, inlines a document, or hands
-/// it to a machine that knows more file types than this ever will.
 pub fn mime_for(name: &str) -> String {
     let extension =
         name.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase()).unwrap_or_default();
@@ -116,8 +86,6 @@ mod tests {
 
     #[test]
     fn an_unknown_extension_is_something_only_a_machine_can_open() {
-        // Not text. A prompt full of replacement characters is worse than a
-        // file the agent opens on its own computer.
         assert_eq!(mime_for("model.safetensors"), "application/octet-stream");
         assert_eq!(mime_for("noextension"), "application/octet-stream");
         assert!(!attachment("model.safetensors", 1).is_text());

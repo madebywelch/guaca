@@ -1,53 +1,21 @@
-//! What reaches a person, and why most of what happens does not.
-//!
-//! Guaca works while nobody is looking, so the question is never whether
-//! something happened but whether it is worth an interruption. The answer used
-//! to be worked out in each window, from events that are dropped when no
-//! window listens: a reminder due while every window was closed was spent and
-//! never shown, and two windows raised every banner twice. Now the Host keeps
-//! one row per thing to deliver, written in the commit that caused it, and
-//! [`decide`] is the one place that says what earns a banner.
-//!
-//! Start quiet. What needs the operator and what failed
-//! interrupts them. Finished work interrupts only an operator who is away,
-//! gathered over [`GATHER_MS`] into one item, and is otherwise only listed in
-//! For you. A run the operator stopped, or a check that found nothing, is
-//! never a row at all: nobody needs to be told about either.
-//!
-//! Pure: no clock and no store. The dispatcher in `runtime/outbox.rs` reads
-//! the rows and the operator's presence and applies the verdict.
-
 use serde::{Deserialize, Serialize};
 
 use super::ids::{AgentId, ApprovalId, EscalationId, GroupId, RunId};
 use super::outcome::{Outcome, Status as Ended};
 use super::view::Presence;
 
-/// How long finished work is gathered before it is offered as one item.
-///
-/// Long enough that a morning's routines, which tend to finish together,
-/// become one banner rather than four; short enough that the banner still
-/// describes the morning.
 pub const GATHER_MS: i64 = 10 * 60 * 1000;
 
-/// How long an offered item waits for a window to claim it. After that it is
-/// news about yesterday, and For you already lists what it said.
 pub const EXPIRE_MS: i64 = 24 * 60 * 60 * 1000;
 
-/// The most lines a gathered item lists before it says how many more.
 const GATHERED_LINES: usize = 5;
 
-/// What a row is about. Snake case in SQLite, camel case over IPC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Kind {
-    /// A run finished, and it is not a failure.
     Outcome,
-    /// A turn is parked on the operator, or an agent cannot go on without them.
     NeedsYou,
-    /// Decisions are waiting, at a briefing hour or before a deadline.
     Reminder,
-    /// A run ended in a failed call, or a restart cut it off.
     Failure,
 }
 
@@ -72,17 +40,10 @@ impl Kind {
     }
 }
 
-/// Where a row goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Destination {
-    /// Every connected window is offered it, and the first to claim it shows it.
     Clients,
-    /// The address in the Host's `delivery` setting, which is how a person is
-    /// reached with every window closed. Written beside a window's row when
-    /// that row is offered while the operator is away, and sent rather than
-    /// offered: tried, and tried again, until the address takes it or a day
-    /// has gone by. See `push.rs`.
     Endpoint,
 }
 
@@ -95,21 +56,13 @@ impl Destination {
     }
 }
 
-/// Where a row stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Status {
-    /// Not yet decided, held, gathering, or offered and not yet claimed.
     Pending,
-    /// A window claimed it and showed it.
     Delivered,
-    /// Decided against. `last_error` says why, in a word or two.
     Suppressed,
-    /// Offered for a day and claimed by nobody.
     Expired,
-    /// Could not be delivered. Nothing writes this for windows, which are
-    /// offered a row rather than sent one; it is where an address that keeps
-    /// refusing ends.
     Failed,
 }
 
@@ -136,27 +89,18 @@ impl Status {
     }
 }
 
-/// What a click on the banner opens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Target {
-    /// The agent's channel, where the note, the notice or the card is.
     Channel { agent_id: AgentId },
-    /// For you, where the decisions and the list of finished work are.
     ForYou,
 }
 
-/// The three things an operator can be interrupted for. One setting on the
-/// Host for every window, where it used to be six switches per browser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Attention {
-    /// Permission requests, questions, an agent that is stuck, and the
-    /// reminders about decisions.
     pub needs_you: bool,
-    /// A run that failed or was cut off by a restart.
     pub failures: bool,
-    /// Finished work, gathered into one item, while the operator is away.
     pub finished: bool,
 }
 
@@ -166,7 +110,6 @@ impl Default for Attention {
     }
 }
 
-/// One item as a window is offered it and asked to claim it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Delivery {
@@ -178,31 +121,19 @@ pub struct Delivery {
     pub created_at: i64,
 }
 
-/// A row a producer writes, in the commit of the thing it is about.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Draft {
     pub kind: Kind,
-    /// One row per key and destination: settling twice, raising an
-    /// escalation twice in a day or claiming one reminder slot twice writes
-    /// nothing the second time.
     pub dedup_key: String,
     pub group_id: Option<GroupId>,
     pub agent_id: Option<AgentId>,
     pub run_id: Option<RunId>,
-    /// The approval or escalation it is about, so answering or clearing it
-    /// withdraws what was waiting to announce it.
     pub ref_id: Option<String>,
     pub title: String,
     pub body: String,
     pub target: Target,
 }
 
-/// The row a finished run gives, or none.
-///
-/// Stopped is the operator's own act and nothing new is a check that found
-/// nothing, so neither is news to anyone. Every other ending is written, and
-/// [`decide`] says later whether it interrupts. The headline is the body: it is
-/// the agent's own first line, and the one thing a banner about a run is for.
 pub fn for_outcome(outcome: &Outcome, agent: &str) -> Option<Draft> {
     let (kind, title) = match outcome.status {
         Ended::Stopped | Ended::NothingNew => return None,
@@ -223,11 +154,6 @@ pub fn for_outcome(outcome: &Outcome, agent: &str) -> Option<Draft> {
     })
 }
 
-/// The row a parked turn gives.
-///
-/// Nothing the agent wrote is on it: the request is the agent's words, and a
-/// banner is read on a lock screen. A question is not called a permission,
-/// which is what the window used to say for both.
 pub fn for_request(
     approval: ApprovalId,
     question: bool,
@@ -254,10 +180,6 @@ pub fn for_request(
     }
 }
 
-/// The row an escalation gives on `day`, the operator's local date.
-///
-/// Keyed by day, so a wall an agent walks into six times this afternoon is
-/// one interruption, and the same wall still standing tomorrow is one more.
 pub fn for_escalation(
     escalation: EscalationId,
     agent: AgentId,
@@ -279,9 +201,6 @@ pub fn for_escalation(
     }
 }
 
-/// The row a claimed batch of decision reminders gives. `slot` is the
-/// earliest reminder time in the batch, which no later claim can share,
-/// because a claim moves every reminder it takes past now.
 pub fn for_reminder(count: usize, slot: i64) -> Draft {
     let needs = if count == 1 { "decision needs" } else { "decisions need" };
     Draft {
@@ -297,31 +216,20 @@ pub fn for_reminder(count: usize, slot: i64) -> Draft {
     }
 }
 
-/// Where a row is in its life when the dispatcher looks at it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Look {
-    /// Written since the last pass.
     New,
-    /// Held for the operator to be away, and the time has come.
     Held,
-    /// Gathered with others, and the gathering is over.
     Closing,
 }
 
-/// Why a row was not delivered, as `last_error` keeps it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Why {
-    /// The operator turned this kind off.
     Setting,
-    /// The channel it is about has the operator's focus.
     OnScreen,
-    /// The operator was here when it finished, and was still here later.
     Present,
-    /// The operator saw it before it was offered.
     Seen,
-    /// What it asked about was answered, cleared or closed first.
     Answered,
-    /// An ending that never interrupts anyone.
     Never,
 }
 
@@ -338,25 +246,14 @@ impl Why {
     }
 }
 
-/// What to do with one row now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
-    /// Offer it to every window now.
     Deliver,
-    /// Look again at `until`, when the operator will count as away if nothing
-    /// changes.
     Hold { until: i64 },
-    /// Gather it with other finished work, and offer them as one.
     Gather,
-    /// Never offer it.
     Suppress(Why),
 }
 
-/// The one rule about interrupting. The table in docs/ATTENTION.md is this
-/// function in words, and the tests below are the table.
-///
-/// `agent` is the agent a row is about, which is what "on screen" is measured
-/// against, and `ended` is how the run ended for a row about a run.
 pub fn decide(
     kind: Kind,
     agent: Option<AgentId>,
@@ -384,9 +281,6 @@ pub fn decide(
     if on_screen {
         return Verdict::Suppress(Why::OnScreen);
     }
-    // Finished while the operator was here: they may have left without
-    // looking, so it is looked at again once they would count as away. If
-    // they are still here then, it waits in For you and interrupts nobody.
     match (look, presence.away_at()) {
         (Look::New, Some(until)) => Verdict::Hold { until },
         (Look::Held | Look::Closing, Some(_)) => Verdict::Suppress(Why::Present),
@@ -395,7 +289,6 @@ pub fn decide(
     }
 }
 
-/// One gathered row, as the item that carries them all reads it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Gathered {
     pub title: String,
@@ -403,8 +296,6 @@ pub struct Gathered {
     pub target: Target,
 }
 
-/// One item made of every gathered row, oldest first. A gathering of one is
-/// that row unchanged: "4 finished" is for four.
 pub fn gather(rows: &[Gathered]) -> Option<Gathered> {
     match rows {
         [] => None,
@@ -496,11 +387,9 @@ mod tests {
             assert_eq!(at(Look::New, &here(None)), Verdict::Hold { until: AWAY_AT });
             assert_eq!(at(Look::New, &here(Some(agent))), Verdict::Suppress(Why::OnScreen));
 
-            // Held while the operator was here: it goes out only if they left.
             assert_eq!(at(Look::Held, &away()), Verdict::Gather);
             assert_eq!(at(Look::Held, &here(None)), Verdict::Suppress(Why::Present));
 
-            // A gathering closes: offered only to an operator who is still away.
             assert_eq!(at(Look::Closing, &away()), Verdict::Deliver);
             assert_eq!(at(Look::Closing, &here(None)), Verdict::Suppress(Why::Present));
             assert_eq!(at(Look::Closing, &here(Some(agent))), Verdict::Suppress(Why::OnScreen));
@@ -549,8 +438,6 @@ mod tests {
 
     #[test]
     fn the_defaults_start_quiet() {
-        // Every switch on means what needs you, failures, and finished
-        // work only while away: being here is what keeps finished work quiet.
         let attention = Attention::default();
         assert!(attention.needs_you && attention.failures && attention.finished);
         let parsed: Attention = serde_json::from_str("{}").unwrap();

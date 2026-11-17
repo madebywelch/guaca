@@ -1,5 +1,3 @@
-//! Versioned group copies. Explicit field allowlists keep stored credentials out.
-//! Imports never execute SQL from an archive, reach a service, or start a routine.
 use crate::{
     db::Store,
     domain::ids::{AgentId, GroupId},
@@ -16,8 +14,6 @@ type Row = Map<String, Value>;
 type Result<T> = std::result::Result<T, String>;
 pub const MAX_ARCHIVE: usize = 64 * 1024 * 1024;
 
-// Order is also insertion order. Nothing from plugin credential stores, and no grant:
-// a computer and a browser are given again on the host a crew lands on.
 const TABLES: &[(&str, &str, &str)] = &[
     ("groups", "id,name,created_at,base_url,default_model,provider,subscription_model,reasoning_effort,request_timeout_secs,max_hops,max_steps_per_run,max_fanout_per_call,max_sends_per_pair,max_tool_rounds", "id = ?1"),
     ("agents", "id,group_id,name,avatar,color,model,subscription_model,reasoning_effort,system_prompt,skills,lifecycle,version,created_at,updated_at,pinned,rail_order,discarded_at,browser_consent", "group_id = ?1"),
@@ -25,8 +21,6 @@ const TABLES: &[(&str, &str, &str)] = &[
     ("messages", "id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,cause,created_at,intent", "channel_id IN (SELECT id FROM agents WHERE group_id = ?1)"),
     ("occasions", "id,group_id,agent_id,title,detail,place,starts_at,minutes,all_day,created_at,updated_at", "group_id = ?1"),
     ("artifacts", "id,group_id,owner_id,title,version,created_at,updated_at", "group_id = ?1"),
-    // Without `allowed_sources`: which reads a page may make is the operator's
-    // decision on this machine, and a copy asks again once its connectors are.
     ("artifact_history", "artifact_id,seq,at,change,agent_id,actor,version,owner,note,page,sources,condensed", "artifact_id IN (SELECT id FROM artifacts WHERE group_id = ?1)"),
     ("working_notes", "agent_id,at,body", "agent_id IN (SELECT id FROM agents WHERE group_id = ?1)"),
     ("usage", "agent_id,group_id,run_id,model,prompt,completion,cost,created_at", "group_id = ?1"),
@@ -137,8 +131,6 @@ fn clean_reconnect(item: &mut Reconnect) {
     }
 }
 
-/// A read transaction keeps all database tables at the same point in time.
-/// The source can be opened read-only, including by the new desktop shell.
 pub fn export(
     conn: &mut Connection,
     group: GroupId,
@@ -176,7 +168,6 @@ pub fn export(
             workspace.read(id.parse().map_err(|_| "Invalid agent identifier.")?),
         );
     }
-    // Preserve references to services, not their grants, cookies or running machines.
     for (table, fields, kind) in [
         ("plugins", "id,kind,endpoint,access", "plugin"),
         ("connectors", "id,service,account,env_var,note", "credential"),
@@ -232,8 +223,6 @@ pub fn export(
 }
 
 fn collect_files(value: &Value, digests: &mut HashSet<String>) {
-    // Only attachment parts address this store. A tool's arguments may contain
-    // an unrelated hash under the same key and must not make export fail.
     if let Some(parts) = value.as_array() {
         for part in parts {
             if part.get("type").and_then(Value::as_str) == Some("file") {
@@ -392,9 +381,6 @@ pub fn import(
             .split(',')
             .collect::<HashSet<_>>();
         for row in rows {
-            // A copy made while agents still had a coding harness and a push
-            // gate carries both. Neither means anything here, and a crew is
-            // not refused for having been exported last month.
             let allowed = |key: &str| {
                 allowed.contains(key) || (table == "agents" && matches!(key, "harness" | "gate"))
             };
@@ -417,12 +403,6 @@ pub fn import(
     let belongs = |table: &str, value: &str| members.get(table).is_some_and(|s| s.contains(value));
     for (table, rows) in &archive.tables {
         for row in rows {
-            // An artifact's log names whoever acted, and some of them may have
-            // left the crew before it was exported. That is a record of what
-            // happened rather than a reference into this crew, so such an agent
-            // is given an id of its own that points at nothing here, and the
-            // log keeps its name. Refusing the file would lose the crew over
-            // one colleague who moved.
             if table == "artifact_history" {
                 if let Some(agent) = row.get("agent_id").and_then(Value::as_str) {
                     if !belongs("agents", agent) {
@@ -458,7 +438,6 @@ pub fn import(
             return Err("A memory belongs to an unknown agent.".into());
         }
     }
-    // Owned, because the insert below needs it after the archive is edited.
     let exported_agents = members.get("agents").cloned().unwrap_or_default();
     let crew_provider = archive.tables["groups"][0]
         .get("provider")
@@ -496,18 +475,12 @@ pub fn import(
             if *table == "routines" {
                 row.insert("active".into(), 0.into());
             }
-            // A copy made before agents had a subscription model of their own
-            // carries one field for both providers.
             if *table == "agents" && !row.contains_key("subscription_model") {
                 let (model, subscription) =
                     crate::domain::agent::split_legacy_model(text(&row, "model")?, crew_provider);
                 row.insert("model".into(), model.into());
                 row.insert("subscription_model".into(), subscription.into());
             }
-            // An owner who had moved to another crew is not in this file, and
-            // the copy has nobody by that id to point at. Nobody owns it here,
-            // which is the true state of the copied crew, and an agent in it
-            // takes it over by deciding to.
             if *table == "artifacts"
                 && original
                     .get("owner_id")
@@ -537,9 +510,6 @@ pub fn import(
             ))?;
         }
     }
-    // At the bottom of the column, like any crew made here. Where it stood on
-    // the machine it came from is not in the file, because it is about that
-    // machine's other crews.
     sql(tx.execute(
         "UPDATE groups SET rail_order =
              (SELECT coalesce(max(rail_order), -1) + 1 FROM groups WHERE id <> ?1)
@@ -553,7 +523,6 @@ pub fn import(
             serde_json::to_string(&archive.reconnect).map_err(|e| e.to_string())?
         ],
     ))?;
-    // Validate attachment hashes before any file is installed. The content store cannot overwrite unrelated files.
     let mut decoded = Vec::new();
     for (digest, encoded) in archive.files {
         use sha2::{Digest, Sha256};
@@ -697,8 +666,6 @@ mod tests {
     }
     #[test]
     fn a_copy_from_when_agents_had_a_coding_harness_still_arrives() {
-        // Exported last month, imported today: the two fields that were on the
-        // agent then are dropped on the way in rather than refused.
         let f = Fixture::new();
         let mut archive = f.export();
         let agent = &mut archive.tables.get_mut("agents").unwrap()[0];
@@ -709,9 +676,6 @@ mod tests {
     }
     #[test]
     fn an_imported_crew_arrives_at_the_bottom_of_the_column() {
-        // The archive carries the original's creation time and no place, so a
-        // copy left to the default would be filed among circles the operator
-        // arranged, wherever that old timestamp happened to sort.
         let f = Fixture::new();
         let everyone = f.store.list_groups().unwrap()[0].id;
         f.store.move_group(f.group, Some(everyone)).unwrap();
@@ -806,10 +770,6 @@ mod tests {
     }
     #[test]
     fn a_crews_artifacts_travel_with_it_and_an_owner_who_left_does_not() {
-        // The log names whoever acted, including an agent that has since moved
-        // to another crew and so is not in the file. The copy keeps the name,
-        // points the id at nothing here, and has nobody as the owner, rather
-        // than refusing the whole crew over one colleague.
         let f = Fixture::new();
         let visitor = f
             .store
@@ -883,8 +843,6 @@ mod tests {
         assert_ne!(*id, visitor.id, "and does not point at the agent in the other crew");
         assert_eq!(log[1].by.agent_id(), Some(copied.id), "a member's edits are its copy's");
         assert_eq!(f.store.artifact_page(copy.id, Some(1)).unwrap().unwrap(), "<p>v1</p>");
-        // The strip travels with its version, or a copy pinned to a bar draws
-        // nothing where the original drew a number.
         assert!(copy.condensed);
         assert_eq!(f.store.artifact_condensed(copy.id).unwrap().as_deref(), Some("<b>2 open</b>"));
     }
@@ -971,8 +929,6 @@ mod tests {
     }
     #[test]
     fn a_copy_from_before_the_subscription_model_splits_it_the_way_the_migration_did() {
-        // One field for both providers, on a crew the subscription paid for:
-        // the name is the subscription's, and a slash is never one.
         let f = Fixture::new();
         for (model, expected) in [
             ("gpt-6-astra", (String::new(), "gpt-6-astra".to_string())),
@@ -989,7 +945,6 @@ mod tests {
             assert_eq!((copied.model, copied.subscription_model), expected, "{model}");
         }
 
-        // A copy made now carries both, and they arrive as they left.
         f.store
             .conn()
             .unwrap()

@@ -1,16 +1,3 @@
-//! The tools an agent can call.
-//!
-//! Two, deliberately. `directory` is A2A's Agent Card discovery reduced to what
-//! a local app can use; `send_message` is the whole point of the product. Every
-//! additional tool is surface a model can get wrong, so the bar for a third one
-//! is high.
-//!
-//! Schemas are tight (`additionalProperties: false`, `minItems`, explicit
-//! enums) because a precise interface is what makes correct usage the default.
-//! Parsing is deliberately looser than the schema: models routinely send a bare
-//! string where an array is specified, and refusing that produces a retry loop
-//! rather than a working app.
-
 use serde::{Deserialize, Serialize};
 
 use crate::domain::envelope::Intent;
@@ -43,35 +30,13 @@ pub const WRITE_DOCUMENT: &str = "write_document";
 pub const READ_FILE: &str = "read_file";
 pub const ERRAND: &str = "errand";
 
-/// Which of the two places an agent has been given, which decides which tools
-/// it is offered.
-///
-/// A tool for something that does not exist is worse than a missing tool. An
-/// agent offered `browse` with no browser provider configured calls it, is told
-/// no key is set, and reports to the operator that the web is unavailable,
-/// having spent a model call and a turn discovering something the app knew
-/// before the turn started.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Surfaces {
     pub computer: bool,
     pub browser: bool,
-    /// Whether this agent may send errands.
-    ///
-    /// Not a place at all, and here anyway, because
-    /// this struct is the one decision a turn's tool list and its prompt are
-    /// both read from, and a grant decided anywhere else is a tool offered by
-    /// one of them and not the other.
     pub errands: bool,
 }
 
-/// Which machine a tool call is spent on, by the tool's name, or none for a
-/// tool that reaches no machine.
-///
-/// The one place the four machine tools are listed as machine tools. The
-/// runtime marks an agent as on its computer or in its browser for exactly as
-/// long as one of these is in flight, and the rail and the menu bar say so:
-/// "typing" is what a model does, and an operator who sees "on its computer"
-/// knows there is a screen to go and watch.
 pub fn surface_of(name: &str) -> Option<crate::domain::signin::Surface> {
     use crate::domain::signin::Surface;
     match name {
@@ -90,15 +55,6 @@ impl Surfaces {
         Surfaces { computer: false, browser: false, errands: false }
     }
 
-    /// What one agent has, out of what the workspace could hand out.
-    ///
-    /// Both halves are load-bearing and neither is enough alone: a provider
-    /// that is not configured cannot be given to anybody, and a provider that
-    /// is configured is still not everybody's. Taken from the card rather than
-    /// from what the agent is holding, because a machine is reclaimed on the
-    /// provider's clock and a browser is deleted minutes after it is used.
-    /// Deciding from possession would take the tools away from a working agent
-    /// the moment its machine went to sleep.
     pub fn given_to(self, card: &crate::domain::agent::AgentCard) -> Self {
         Surfaces {
             computer: self.computer && card.has_computer,
@@ -107,13 +63,6 @@ impl Surfaces {
         }
     }
 
-    /// Whether one named place is one this agent has.
-    ///
-    /// A sign-in is recorded against the surface it was found on, so this is
-    /// what keeps an account on a place the agent no longer has out of its
-    /// prompt and out of what peers are told it reaches. An overclaim there is
-    /// worse than saying nothing: it is a crew routing work to an agent that
-    /// will find it cannot do it.
     pub fn has(self, surface: crate::domain::signin::Surface) -> bool {
         match surface {
             crate::domain::signin::Surface::Computer => self.computer,
@@ -122,51 +71,13 @@ impl Surfaces {
     }
 }
 
-/// Tool definitions offered on one agent turn.
-///
-/// Filtered by what that agent actually has. Messaging, memory, scheduling and
-/// handing over a document work with no provider configured at all, so they are
-/// offered always.
-///
-/// `request_permission` is not one of those. It authorizes an action the agent
-/// is about to take outside this workspace, and a computer or a browser is the
-/// only way out of it, so with neither there is nothing the answer could be
-/// spent on. Offered anyway it becomes how an agent asks for access it does not
-/// have, which is a question no button can answer: one asked the operator to
-/// approve reading a calendar the workspace had no account for.
-/// What separates a plugin from its tool in a name a model calls.
-///
-/// Two underscores rather than one, because MCP servers use one inside tool
-/// names constantly. `/` and `.` would read better and are both refused by
-/// providers, which validate a function name against `[A-Za-z0-9_-]{1,64}`.
 pub const PLUGIN_SEPARATOR: &str = "__";
 
-/// The most choices a question may offer, and how long each may be.
-///
-/// Six because the operator is reading them in a card in the corner of a
-/// window: past that it is a form and the agent should be narrowing the
-/// question rather than widening the list. The length cap is what keeps a
-/// button a button; an option is a label, not the argument for it, which is
-/// what the question itself is for.
 pub const MAX_OPTIONS: usize = 6;
 pub const MAX_OPTION_CHARS: usize = 60;
 
-/// The longest name a provider will accept for a function.
 const MAX_TOOL_NAME: usize = 64;
 
-/// One group's plugin tools, as definitions the model is offered.
-///
-/// Kept out of [`specs`] rather than passed into it, because these are not a
-/// filter over a fixed list: they are whatever three servers said they could do
-/// on the day they were connected, and they change without this build changing.
-///
-/// A tool whose prefixed name a provider would refuse is dropped rather than
-/// renamed. Renaming would need a mapping back at call time, and a mapping
-/// nothing can see is how a tool call lands on the wrong tool.
-/// The switched-off half of each set is not here and is not a filter applied
-/// later either: it never becomes a definition. A model offered a tool the
-/// operator switched off would call it, be refused, and spend the turn
-/// rewording the arguments.
 pub fn plugin_specs(connected: &[PluginToolset]) -> Vec<ToolSpec> {
     let mut out = Vec::new();
     for PluginToolset { kind, offered, .. } in connected {
@@ -184,17 +95,11 @@ pub fn plugin_specs(connected: &[PluginToolset]) -> Vec<ToolSpec> {
             }
             out.push(ToolSpec {
                 name,
-                // Prefixed with where it comes from. A model reading twenty
-                // tool descriptions has no other signal that `run_sql` reaches
-                // the operator's real database rather than a local one.
                 description: if tool.description.trim().is_empty() {
                     format!("From the {} connector.", kind.label())
                 } else {
                     format!("{} connector. {}", kind.label(), tool.description.trim())
                 },
-                // Passed through untouched. It is the server's schema, the
-                // server validates against it, and anything Guaca did to it
-                // here would be a second opinion the server never sees.
                 parameters: tool.input_schema.clone(),
             });
         }
@@ -202,17 +107,6 @@ pub fn plugin_specs(connected: &[PluginToolset]) -> Vec<ToolSpec> {
     out
 }
 
-/// The tools one agent is offered: what it has been given, narrowed to what the
-/// model behind it can be shown.
-///
-/// The second question only reaches one tool. `use_screen` answers every action
-/// with a picture of the screen, and that picture is the whole of what it
-/// returns: the coordinates to click next are in it and nowhere else. Offered
-/// to a model that cannot be sent one, it is a tool that costs a round trip to
-/// hand back nothing, and the model's next click is a guess at a position it
-/// has never seen. The rest of the computer is unaffected: `run_command` reads
-/// back as text, and `open_on_desktop` puts a program where the *operator* can
-/// watch it, which is a thing worth doing whether or not the agent can see.
 pub fn specs(surfaces: Surfaces, modalities: Modalities) -> Vec<ToolSpec> {
     all_specs(surfaces)
         .into_iter()
@@ -220,7 +114,6 @@ pub fn specs(surfaces: Surfaces, modalities: Modalities) -> Vec<ToolSpec> {
         .collect()
 }
 
-/// Whether one tool is offered to an agent with these places and this model.
 fn offered(name: &str, surfaces: Surfaces, modalities: Modalities) -> bool {
     match name {
         USE_SCREEN => surfaces.computer && modalities.image,
@@ -232,8 +125,6 @@ fn offered(name: &str, surfaces: Surfaces, modalities: Modalities) -> bool {
     }
 }
 
-/// What an agent needs before a tool is offered, in the operator's words.
-/// `offered` decides; this says it, and a test holds the two together.
 fn needs(name: &str) -> Option<&'static str> {
     match name {
         USE_SCREEN => Some("a computer, and a model that can see"),
@@ -245,20 +136,14 @@ fn needs(name: &str) -> Option<&'static str> {
     }
 }
 
-/// One of Guaca's own tools, as the operator reads about it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolSummary {
     pub name: String,
-    /// The first sentence of what the agent is told, in the agent's words.
     pub summary: String,
-    /// What an agent has to be given before it is offered this one.
     pub needs: Option<&'static str>,
 }
 
-/// Every tool Guaca itself offers, described from the definitions agents get,
-/// so the list an operator reads cannot drift from the list a model is sent.
-/// A connector's tools are its own and are listed with the connector.
 pub fn catalog() -> Vec<ToolSummary> {
     let every = Surfaces::both();
     all_specs(every)
@@ -284,9 +169,6 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: DIRECTORY.to_string(),
-            // Framed as the routing decision, not a spelling check. Described
-            // as a name lookup, it got used as one: a coordinator called it,
-            // read three names, and sent the same research task to all three.
             description: "List the agents you can reach, with what each one is for and its \
                           current status. Call this to decide who should do a piece of work: \
                           the skills are how you tell which agent the task belongs to, not \
@@ -300,16 +182,6 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: UPDATE_MEMORY.to_string(),
-            // The description is the whole design. It has to make selective
-            // writing and consolidation the obvious reading, because the model
-            // has no other signal about what belongs in a durable file.
-            // The cap is named rather than hinted at. "Space is limited, so
-            // choose" is not a number a model can write against: one tracking a
-            // board of eight agents wrote four thousand characters over, was
-            // cut, rewrote, was cut again, and spent four calls of one turn on
-            // it. Every truncation takes the end, which is where a model puts
-            // the state it just changed, so the loop was also eating exactly
-            // the facts it had opened the turn to record.
             description: format!(
                 "Replace your memory. Your memory is a short markdown file shown to you at the \
                  start of every turn, so anything kept there you will always know. This is the \
@@ -344,21 +216,6 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: NOTE_PROGRESS.to_string(),
-            // Still the smaller thing to do than `update_memory`, which is what
-            // it has to be: the two compete for one impulse, and if writing a
-            // note made an agent stop and think the thought would go back into
-            // memory, which is where it used to go and the whole reason this
-            // store exists. Cheap is about the shape of the write — one line,
-            // no rewrite, nothing to reconcile — and this said so by inviting
-            // volume: "it is cheap, so note freely". Agents took the invitation
-            // and noted what they were about to do, what they had just said and
-            // each step of a task they finished in the same turn, which fills a
-            // list of sixteen with a turn's narration and pushes the four lines
-            // that were state off the end of it. So the invitation is replaced
-            // by a test the model can actually apply, which is about the next
-            // turn rather than about this one, and the cases that produced the
-            // volume are named as exclusions: a model given only a positive
-            // rule reads every borderline call as inside it.
             description: "Note one line about where your work stands: what you handed over, what \
                           you are waiting on and from whom, what you decided, what is still \
                           open. These are your working notes, and you are shown them at the \
@@ -444,9 +301,6 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: SCHEDULE.to_string(),
-            // The prohibition is here because a fired routine is a fresh run
-            // with a fresh budget: polling for a reply is the one use of this
-            // tool that routes around every limit on what a run may spend.
             description: "Keep your own schedule. Use this to do something later, or to keep \
                           doing it: `add` with `repeat` or `every_secs` keeps happening, `add` \
                           with only `in_secs` happens once. When it fires you get the \
@@ -523,10 +377,6 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
-            // Named as a place rather than as a mode of the computer, because
-            // it is one. An agent told this was "the browser on your computer"
-            // took a screenshot to find out what it had done, saw its desktop,
-            // and reported that the page had not loaded.
             name: BROWSE.to_string(),
             description: "Use your browser: a Chrome of your own, separate from your computer and \
                           its screen. This is the right tool for anything on the web, because the \
@@ -566,11 +416,6 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: USE_SCREEN.to_string(),
-            // The last sentence is the one that changed behavior most. Every
-            // action answers with a fresh picture, so the instruction is no
-            // longer "remember to look again": there is nothing to remember,
-            // and a model working from a screenshot two actions old was the
-            // commonest way this tool went wrong.
             description: "Look at your computer's screen and use it: click, type, press keys, \
                           scroll and drag, exactly as a person would. Coordinates are in the \
                           pixels of the picture you were last shown, measured from its top left. \
@@ -629,10 +474,6 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: CREATE_AGENT.to_string(),
-            // Three failures this description exists to prevent: an agent made
-            // for one afternoon's task, a refusal treated as an obstacle to
-            // route around, and a crew created and then left waiting because
-            // nobody realized a new agent does nothing until it is spoken to.
             description: "Add an agent to this workspace: a new colleague with its own \
                           instructions, its own computer and its own memory, which you and \
                           everyone else can then reach by name with `send_message`. It joins your \
@@ -681,13 +522,6 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: REQUEST_PERMISSION.to_string(),
-            // The description has to make the difference between this and
-            // refusing obvious, because refusing feels like the safe option and
-            // is not: it hands an operator a task they already asked for. It
-            // also has to make the difference between this and asking for
-            // access, because both feel like asking for help. An agent that
-            // cannot reach an account has nothing to be authorized for, so the
-            // operator is shown a question their yes does not answer.
             description: "Ask the operator to approve something you are about to do in their \
                           name, and wait for their answer. Use this for an external action \
                           that the operator has not already authorized: sending mail as them, \
@@ -766,13 +600,6 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: ASK_OPERATOR.to_string(),
-            // The whole job of this description is to separate it from the two
-            // things an agent already does when it is unsure: ask a peer, or
-            // pick one and say so in the reply. Both are usually right, which
-            // is why the cost of stopping a person has to be stated here rather
-            // than left to judgment. It also has to be told apart from
-            // `request_permission`, and the line is what a yes does: that one
-            // authorizes an action, and this one does not authorize anything.
             description: "Only for a live conversation with the operator. Prefer decision for requests that can wait, including email follow-ups. Ask the operator a question you cannot answer yourself, and wait for \
                           their answer. Use this when the work genuinely forks on something only \
                           they can settle: which of two directions they want, a number or a name \
@@ -815,16 +642,6 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: ESCALATE.to_string(),
-            // The description has one job that the other two operator tools do
-            // not: it has to be reached for by a turn that is *ending*. Both of
-            // those stop a turn mid-flight to get something back, so a model
-            // that has run out of road reads them as the wrong shape and does
-            // the only other thing it has, which is to write a good clear
-            // paragraph into a channel nobody is reading. So the line drawn
-            // here is about waiting rather than about severity, the cost is
-            // stated in what it puts on a screen rather than in what it spends,
-            // and the thing it replaces is named: models do not infer that a
-            // message they addressed to the operator did not reach them.
             description: "Put something on the operator's desk that has stopped your work, and \
                           carry on without waiting for them. Use this when you cannot make \
                           progress and they are the only one who can change that: a program or \
@@ -919,13 +736,6 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: ERRAND.to_string(),
-            // Offered only to an agent the operator switched errands on for.
-            // The description carries the whole of when to reach for one,
-            // because the two ways this goes wrong are both about when: an
-            // errand for a single lookup spends a model call to save none, and
-            // a brief that leans on this conversation is a brief nobody can do.
-            // Anthropic's research system saw both, the second as three
-            // subagents researching the same thing.
             description: format!(
                 "Send up to {} errands at once: second calls to your own model that each work \
                  one brief with your tools, in your name, while you wait, and hand you back \
@@ -966,18 +776,6 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: CALENDAR.to_string(),
-            // Every sentence about what does *not* happen is load-bearing. Told
-            // it had a calendar, a model treats writing a date on it as having
-            // arranged the thing: one added "Call Priya, Tue 3pm" and reported
-            // to the operator that the call was booked. Nobody outside this
-            // machine can see this, so the tool has to say so before it says
-            // anything else.
-            //
-            // The distinction from `schedule` is the other half, and it is the
-            // one an agent gets wrong in the expensive direction. A routine
-            // wakes it up; this does not. An agent that wants both writes both,
-            // and it is told that here rather than left to work it out from two
-            // tool names that sound alike.
             description: format!(
                 "Your group's calendar: what is coming that you and the operator are answerable \
                  for. Meetings, deadlines, filings, renewals, launches, anything with a date on \
@@ -1046,16 +844,6 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: ARTIFACT.to_string(),
-            // The fence is the thing a model reaches for first, because it is
-            // in the prompt and costs nothing. So the description opens on the
-            // difference between the two, and says which one is the default:
-            // a page for this reply stays a fence.
-            //
-            // The ownership paragraph is the one that stops a cascade. An agent
-            // told a colleague owns the page it just edited will, left to
-            // itself, write to that colleague to say so; the owner is woken,
-            // edits back, and wakes the editor. It reads the edit from its own
-            // list instead, and this says so before the agent thinks of it.
             description: format!(
                 "Your group's kept pages. An artifact is an HTML page like an ```html fence, \
                  except that it is kept: it lives in your group's Artifacts, where the operator \
@@ -1197,9 +985,6 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: SKILL.to_string(),
-            // Read before write, in the description as in the design: the
-            // point of a skill is the agent that loads one before a task, and
-            // a model shown `write` first treats the tool as a notebook.
             description: format!(
                 "Skills are documents of instructions for one kind of task, kept by Guaca, the \
                  operator and your group. Your system prompt names the ones you can read and \
@@ -1250,9 +1035,6 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: NOTEBOOK.to_string(),
-            // Placed against memory in its first sentence, because the two are
-            // what a model confuses: one is in front of it every turn and one
-            // is read when needed, and which to use is the whole decision.
             description: format!(
                 "Your notebook: a private folder of your own files that lasts between \
                  conversations. Memory is the page in front of you on every turn; the notebook \
@@ -1292,10 +1074,6 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: SETTINGS.to_string(),
-            // Approval is said before the keys, because it is what decides how
-            // a model should use the tool: to propose, not to fiddle. The
-            // endpoint and the keys are named as untouchable so a model asked
-            // to "switch us to Groq" says so rather than trying three spellings.
             description: "The workspace's settings, and what the operator is looking at right \
                           now. `read` shows the settings every agent runs on, your group's own \
                           overrides, this host's version and the operator's current screen: \
@@ -1377,28 +1155,6 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: WRITE_DOCUMENT.to_string(),
-            // The twelfth, and it exists because the eleventh had a hole under
-            // it. `attach_file` hands over a file; until this, the only way an
-            // agent could *make* one was to write it on a sandbox with
-            // `run_command`. So an agent with no computer could never produce a
-            // document at all, which is most agents: it had the whole report in
-            // hand, in the turn, and no way to turn it into something the
-            // operator could open. One spent four turns trying, twice invented
-            // a `/home/user` path for a machine it did not have, and delivered
-            // eight pages as chat text.
-            //
-            // Nothing about writing a document needs a machine. The bytes are
-            // already in the model's own output, and `Files::put` addresses
-            // them by digest like every other attachment. So this is offered to
-            // every agent, with a computer or without one: an agent that has a
-            // sandbox should still not be spending a shell command and a round
-            // trip on `cat > brief.md`.
-            //
-            // It attaches rather than only writing, and the two are one call on
-            // purpose. The failure `attach_file` was built to fix was an agent
-            // writing a document and then typing its path instead of handing it
-            // over; a `write` that had to be followed by an `attach` is the
-            // same forgetting with an extra step in front of it.
             description: "Write a document and hand it over, attached to your answer. Use this \
                           whenever you are asked to produce something that should arrive as a \
                           file rather than as chat: a brief, a report, a spec, a runbook, a \
@@ -1456,134 +1212,31 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToolInvocation {
     Directory,
-    SendMessage {
-        to: Vec<String>,
-        text: String,
-        intent: Intent,
-        files: Vec<String>,
-    },
-    /// Hand files to whoever this turn is answering, on the answer itself.
-    AttachFile {
-        files: Vec<String>,
-    },
-    ReadFile {
-        name: String,
-        offset: usize,
-    },
-    /// Write a document out of the turn's own words and hand it over.
-    ///
-    /// The one way to produce a file that needs no machine, which is why it is
-    /// its own invocation rather than a shape of [`ToolInvocation::AttachFile`]:
-    /// that one resolves a name against things that already exist, and this one
-    /// is where a thing starts existing.
-    WriteDocument {
-        name: String,
-        content: String,
-    },
-    /// Stop and ask the operator whether to go ahead.
-    RequestPermission {
-        action: String,
-        because: String,
-    },
-    /// Put something the operator has to deal with on their desk, and carry on.
-    ///
-    /// The one way to an operator that does not park the turn, which is what
-    /// makes it a third variant rather than a shape of the two above: those are
-    /// a turn waiting for something back, and this is a turn that has run out
-    /// of road saying so on the way out.
+    SendMessage { to: Vec<String>, text: String, intent: Intent, files: Vec<String> },
+    AttachFile { files: Vec<String> },
+    ReadFile { name: String, offset: usize },
+    WriteDocument { name: String, content: String },
+    RequestPermission { action: String, because: String },
     Decision(crate::domain::decision::DecisionAction),
-    Escalate {
-        summary: String,
-    },
-    /// Stop and ask the operator which way to go. Grants nothing.
-    AskOperator {
-        question: String,
-        /// What they may pick. Empty is a written answer.
-        options: Vec<String>,
-    },
-    UpdateMemory {
-        content: String,
-    },
-    /// One line about what the agent is in the middle of. Appended, never
-    /// revised: there is deliberately no tool to edit or remove one.
-    NoteProgress {
-        note: String,
-    },
-    RunCommand {
-        command: String,
-    },
-    OpenOnDesktop {
-        command: String,
-    },
-    UseScreen {
-        action: ScreenAction,
-    },
-    Browse {
-        action: String,
-        args: serde_json::Value,
-    },
-    Schedule {
-        action: ScheduleAction,
-    },
-    /// A write to the crew's calendar. The group is never in here: it is read
-    /// off the calling agent's own card at dispatch, which is the wall.
-    Calendar {
-        action: CalendarAction,
-    },
-    /// A read or write of the crew's kept pages. The crew is read off the
-    /// calling agent's card at dispatch, like the calendar's.
-    Artifact {
-        action: ArtifactAction,
-    },
-    /// A read or write of a skill. The crew is read off the calling agent's
-    /// card at dispatch, like the calendar's, so a call cannot name another.
-    Skill {
-        action: SkillAction,
-    },
-    /// Reading the settings, or asking the operator to approve a change to them.
-    Settings {
-        action: SettingsAction,
-    },
-    /// A read or write of the calling agent's own notebook. Whose is read off
-    /// the card at dispatch, never from the call.
-    Notebook {
-        action: NotebookAction,
-    },
-    CreateAgent {
-        draft: NewAgent,
-    },
-    /// Send errands: the agent's own model, once per brief, with its tools.
-    ///
-    /// Parsed like any other call and never dispatched like one. A turn that
-    /// may send errands runs them itself, because only the turn holds what an
-    /// errand needs (the model, the budget, the tool list); anything that
-    /// reaches the ordinary dispatch with this is either not allowed errands
-    /// or is an errand trying to send its own.
-    Errand {
-        briefs: Vec<String>,
-    },
-    /// A tool belonging to one of the group's connected plugins.
-    ///
-    /// Unlike every other variant, what this can be is not known at compile
-    /// time: the server said, when the plugin was connected. Parsing splits the
-    /// name and resolves the half in front of it, and the two halves of that
-    /// resolution answer to different things. One of the eight is recognized
-    /// whether or not the crew has it, so an agent that calls a plugin nobody
-    /// connected is refused by the runtime with a reason rather than here with
-    /// "unknown tool", which is a different and less useful thing to be told.
-    /// A server the operator added is recognized only if this crew has it,
-    /// because there is nowhere else its name or its address could come from.
-    Plugin {
-        kind: PluginKind,
-        tool: String,
-        arguments: serde_json::Value,
-    },
+    Escalate { summary: String },
+    AskOperator { question: String, options: Vec<String> },
+    UpdateMemory { content: String },
+    NoteProgress { note: String },
+    RunCommand { command: String },
+    OpenOnDesktop { command: String },
+    UseScreen { action: ScreenAction },
+    Browse { action: String, args: serde_json::Value },
+    Schedule { action: ScheduleAction },
+    Calendar { action: CalendarAction },
+    Artifact { action: ArtifactAction },
+    Skill { action: SkillAction },
+    Settings { action: SettingsAction },
+    Notebook { action: NotebookAction },
+    CreateAgent { draft: NewAgent },
+    Errand { briefs: Vec<String> },
+    Plugin { kind: PluginKind, tool: String, arguments: serde_json::Value },
 }
 
-/// The agent an agent asked for. Not yet validated, and not yet approved.
-///
-/// No model field: what a new agent costs to run is the operator's decision,
-/// so it inherits its group's model the way an agent created in the UI does.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewAgent {
     pub name: String,
@@ -1592,30 +1245,16 @@ pub struct NewAgent {
     pub notes: String,
 }
 
-/// What an agent can do to its own schedule.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScheduleAction {
     List,
-    /// `in_secs` moves the first firing; without it a repeat waits one whole
-    /// interval and a one-shot happens now.
     Add {
-        /// What to call it in the operator's list. Blank is legal: a routine
-        /// with no name is titled by what it does.
         name: String,
         what: String,
         trigger: Trigger,
         in_secs: Option<u32>,
-        /// Drop a firing that comes due while this agent is already working,
-        /// rather than queueing it. Refused on a one-off, which has no next
-        /// firing to fall back on.
         skip_if_working: bool,
     },
-    /// Changes a routine that already stands.
-    ///
-    /// Every field is optional, and an absent one is left as it was. The
-    /// commonest edit is a new time on an instruction that has not changed,
-    /// and making an agent restate the instruction to move the clock is how a
-    /// second routine for the same job gets written.
     Update {
         id: String,
         name: Option<String>,
@@ -1629,12 +1268,6 @@ pub enum ScheduleAction {
     },
 }
 
-/// What an agent can do to its crew's calendar.
-///
-/// Shaped like [`ScheduleAction`] on purpose. They are different things — one
-/// fires and one does not — but they are the two lists an agent keeps, and an
-/// agent that has learned `list`/`add`/`update`/`cancel` on one should not have
-/// to learn a second vocabulary for the other.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NotebookAction {
     List,
@@ -1648,29 +1281,15 @@ pub enum NotebookAction {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SettingsAction {
     Read,
-    /// The changes as the model sent them. Read against the settings in force
-    /// at dispatch, where what may be changed is decided.
-    Update {
-        changes: serde_json::Value,
-    },
+    Update { changes: serde_json::Value },
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SkillAction {
     List,
-    /// The skill, or with `file` one of the files it carries.
-    View {
-        name: String,
-        file: Option<String>,
-    },
-    Write {
-        name: String,
-        description: String,
-        content: String,
-    },
-    Delete {
-        name: String,
-    },
+    View { name: String, file: Option<String> },
+    Write { name: String, description: String, content: String },
+    Delete { name: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1680,21 +1299,9 @@ pub enum CalendarAction {
         title: String,
         detail: String,
         place: String,
-        /// The date exactly as it was written, unparsed. Read where the error
-        /// can be handed back with the two shapes that work in it, which is the
-        /// runtime rather than here: a parse failure at this level would come
-        /// back as "unknown tool"-shaped noise instead of as a date the model
-        /// can correct.
         starts_at: String,
         minutes: Option<u32>,
     },
-    /// Changes one that is already on it.
-    ///
-    /// Every field is optional and an absent one is left alone, for the reason
-    /// [`ScheduleAction::Update`] does the same: the commonest edit is a new
-    /// time on a meeting nobody renamed, and making an agent restate the title
-    /// to move the clock is how a second occasion for the same meeting gets
-    /// written.
     Update {
         id: String,
         title: Option<String>,
@@ -1708,13 +1315,6 @@ pub enum CalendarAction {
     },
 }
 
-/// What an agent can do to its crew's artifacts.
-///
-/// No delete: what the operator keeps is the operator's to throw away, and an
-/// agent that has written something wrong has `update`, which keeps the version
-/// it replaced. The note is carried unchecked, because whether one is required
-/// depends on the action and is answered in `domain::artifact`, where the
-/// refusal can say what to send.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ArtifactAction {
     List,
@@ -1728,8 +1328,6 @@ pub enum ArtifactAction {
         sources: Vec<crate::domain::artifact::Source>,
         condensed: Option<String>,
     },
-    /// A new version. At least one of `title`, `page`, `sources` and
-    /// `condensed` is present; an absent one keeps what the current version has.
     Update {
         id: String,
         title: Option<String>,
@@ -1742,9 +1340,6 @@ pub enum ArtifactAction {
         id: String,
         note: Option<String>,
     },
-    /// A request to put it on the operator's status bar. Carried unchecked:
-    /// `domain::widget` says what a width and an interval may be, where the
-    /// refusal can say what to send instead.
     Pin {
         id: String,
         width: Option<String>,
@@ -1752,7 +1347,6 @@ pub enum ArtifactAction {
     },
 }
 
-/// What an agent can do to the screen it is looking at.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScreenAction {
     Look,
@@ -1830,8 +1424,6 @@ pub enum ToolParseError {
 }
 
 impl ToolParseError {
-    /// What gets handed back to the model. Says what was wrong and what a
-    /// correct call looks like, so the next attempt can succeed.
     pub fn guidance(&self) -> String {
         match self {
             ToolParseError::InvalidFileRead => format!(
@@ -1965,10 +1557,6 @@ impl ToolParseError {
                  {\"name\": \"readiness.md\", \"content\": \"# Readiness\\n…\"}."
                     .to_string()
             }
-            // Named rather than generic, because the mistake it catches is a
-            // model that called the tool intending to fill it in on a later
-            // round. There is no later round: the document is whatever is in
-            // this call.
             ToolParseError::EmptyDocument { name } => format!(
                 "Error: `content` must be the whole of {name}, written out here. Nothing was \
                  written and nothing is attached. There is no second call that fills it in: \
@@ -1996,29 +1584,18 @@ struct SendArgs {
     to: Option<serde_json::Value>,
     #[serde(default)]
     text: Option<String>,
-    /// Accepted because models reach for it by analogy with other APIs.
     #[serde(default)]
     message: Option<String>,
     #[serde(default)]
     agent: Option<String>,
-    /// Absent, misspelled or invented values all read as `courtesy`: the
-    /// permissive half of the schema must not be the half that opens a door.
     #[serde(default)]
     intent: Option<serde_json::Value>,
     #[serde(default)]
     files: Option<serde_json::Value>,
-    /// Reached for by analogy, and meaning the same thing.
     #[serde(default)]
     attachments: Option<serde_json::Value>,
 }
 
-/// The briefs in an errand call, however they were sent.
-///
-/// Looser than the schema, for the reason every parser here is: a model asked
-/// for a list of strings sends one string, or a list of objects with the brief
-/// under some other key, often enough that refusing would be a retry loop
-/// rather than a working tool. A blank brief is dropped rather than sent: an
-/// errand handed nothing spends a model call finding that out.
 fn briefs_in(value: &serde_json::Value) -> Vec<String> {
     const KEYS: [&str; 6] = ["brief", "goal", "task", "prompt", "text", "description"];
     let one = |item: &serde_json::Value| match item {
@@ -2037,15 +1614,6 @@ fn briefs_in(value: &serde_json::Value) -> Vec<String> {
     listed.into_iter().map(|brief| brief.trim().to_string()).filter(|b| !b.is_empty()).collect()
 }
 
-/// Which of the sending agent's tools an errand does not get, by what the call
-/// turned out to be rather than by the name it used, so an alias cannot walk
-/// round it.
-///
-/// Three, each for a reason that holds however well the errand behaves.
-/// Another errand multiplies the spend at every level. A message to a peer is
-/// answered after the errand is gone, into a turn that never asked. And a
-/// memory is rewritten whole, so two errands writing it at once lose one of
-/// the writes, and a third starts from what the agent believed before either.
 pub fn withheld_from_errands(invocation: &ToolInvocation) -> Option<&'static str> {
     match invocation {
         ToolInvocation::Errand { .. } => Some(ERRAND),
@@ -2055,8 +1623,6 @@ pub fn withheld_from_errands(invocation: &ToolInvocation) -> Option<&'static str
     }
 }
 
-/// The tools an errand is offered: the sending turn's own, less the three
-/// [`withheld_from_errands`] names.
 pub fn for_errands(offered: impl IntoIterator<Item = ToolSpec>) -> Vec<ToolSpec> {
     offered
         .into_iter()
@@ -2064,21 +1630,12 @@ pub fn for_errands(offered: impl IntoIterator<Item = ToolSpec>) -> Vec<ToolSpec>
         .collect()
 }
 
-/// The only tools an overnight tidy is offered: its memory, its notebook and
-/// its working notes, which are the three things a tidy is for. Nothing that
-/// reaches a person, a peer, a machine or the web, because a tidy runs with
-/// nobody watching and on nobody's request.
 pub const TIDY_TOOLS: [&str; 3] = [UPDATE_MEMORY, NOTEBOOK, NOTE_PROGRESS];
 
-/// The tools a tidy is offered: the turn's own, narrowed to [`TIDY_TOOLS`], with
-/// their descriptions as every other turn reads them.
 pub fn for_tidy(offered: impl IntoIterator<Item = ToolSpec>) -> Vec<ToolSpec> {
     offered.into_iter().filter(|spec| TIDY_TOOLS.contains(&spec.name.as_str())).collect()
 }
 
-/// Whether a tidy may run this call, by what the call turned out to be rather
-/// than the name it used, so an alias cannot walk round it. A model is
-/// offered three tools and may still name a fourth.
 pub fn tidies(invocation: &ToolInvocation) -> bool {
     matches!(
         invocation,
@@ -2088,12 +1645,6 @@ pub fn tidies(invocation: &ToolInvocation) -> bool {
     )
 }
 
-/// Whether a call reaches one of the agent's two places, which an errand
-/// holds for the rest of its life once it has touched either of them.
-///
-/// Both behind one lock rather than one each. Separate locks taken in the
-/// order an errand happens to need them are two errands each holding one and
-/// waiting on the other's, forever.
 pub fn reaches_a_place(invocation: &ToolInvocation) -> bool {
     matches!(
         invocation,
@@ -2104,11 +1655,6 @@ pub fn reaches_a_place(invocation: &ToolInvocation) -> bool {
     )
 }
 
-/// Reads one screen action, with the coordinates it needs.
-///
-/// A missing coordinate is reported as a missing coordinate rather than being
-/// defaulted to zero: a click at the top-left corner is a real click on
-/// something, and silently making one is worse than saying no.
 fn parse_screen_action(value: &serde_json::Value) -> Result<ScreenAction, ToolParseError> {
     let action = value.get("action").and_then(|v| v.as_str()).unwrap_or_default();
     let coord = |name: &str| value.get(name).and_then(|v| v.as_i64()).map(|n| n as i32);
@@ -2167,9 +1713,6 @@ fn parse_screen_action(value: &serde_json::Value) -> Result<ScreenAction, ToolPa
                 }),
             }
         }
-        // Aimed where the model was already looking when it did not say. The
-        // middle of the screen is almost always the page rather than a panel,
-        // which is what a model that omitted the point meant by "scroll down".
         "scroll" => Ok(ScreenAction::Scroll {
             x: coord("x").unwrap_or(SCREEN_MIDDLE.0),
             y: coord("y").unwrap_or(SCREEN_MIDDLE.1),
@@ -2188,27 +1731,10 @@ fn parse_screen_action(value: &serde_json::Value) -> Result<ScreenAction, ToolPa
     }
 }
 
-/// Where an unaimed scroll lands: the middle of the screen a machine has.
-///
-/// Spelled as a coordinate rather than read off the last screenshot, because a
-/// scroll can be the first thing an agent does and there may not have been one.
 const SCREEN_MIDDLE: (i32, i32) = (512, 384);
 
-/// Reads a key chord out of whatever shape a model sent it in, in xdotool's
-/// spelling.
-///
-/// Three things happen here, and each is a real call this used to refuse.
-/// Models send an array, because that is the shape both vendors' own
-/// computer-use tools take; they send vendor spellings like `ENTER` and `CTRL`;
-/// and they send `cmd`, because half of them are trained on a Mac. None of
-/// those is a mistake worth a refusal the model has to guess its way out of,
-/// and the machine is Linux, so there is exactly one right answer to translate
-/// them to.
 fn as_chord(value: &serde_json::Value) -> Option<String> {
     let parts: Vec<String> = match value {
-        // Split on `+` alone. `-` looks like the other chord separator and is
-        // also a key on the keyboard, so splitting on it would turn a request
-        // for the minus key into nothing at all.
         serde_json::Value::String(text) => {
             text.split('+').map(|part| part.trim().to_string()).collect()
         }
@@ -2222,13 +1748,9 @@ fn as_chord(value: &serde_json::Value) -> Option<String> {
         .iter()
         .filter(|part| !part.is_empty())
         .map(|part| match part.to_ascii_lowercase().as_str() {
-            // Modifiers, including the one that does not exist on this machine.
-            // A model reaching for `cmd+a` means "select all", and the machine
-            // it is aimed at spells that `ctrl`.
             "ctrl" | "control" | "cmd" | "command" | "meta" | "super" => "ctrl".to_string(),
             "alt" | "option" => "alt".to_string(),
             "shift" => "shift".to_string(),
-            // Keys whose vendor spelling is not X11's.
             "enter" | "return" => "Return".to_string(),
             "esc" | "escape" => "Escape".to_string(),
             "tab" => "Tab".to_string(),
@@ -2243,10 +1765,6 @@ fn as_chord(value: &serde_json::Value) -> Option<String> {
             "pagedown" | "page_down" => "Page_Down".to_string(),
             "home" => "Home".to_string(),
             "end" => "End".to_string(),
-            // Anything else is passed through as written. xdotool's own names
-            // are the largest part of this space and a table of them would go
-            // stale; a name it does not know fails with its own message, which
-            // is more use to a model than a refusal from here.
             _ => part.to_string(),
         })
         .collect();
@@ -2254,20 +1772,6 @@ fn as_chord(value: &serde_json::Value) -> Option<String> {
     (!named.is_empty()).then(|| named.join("+"))
 }
 
-/// What a model called, as something the runtime can act on.
-///
-/// `connected` is the *crew's* servers, not this agent's, and it is here for
-/// one arm: a server the operator added is named and addressed by its row, so a
-/// call to one can only be resolved against what this group actually has.
-/// Everything else in this function is a fixed name and ignores it.
-///
-/// The crew's rather than the agent's, because resolving a name and being
-/// allowed to call it are two questions and this is the first one. An agent the
-/// operator did not choose for a plugin has to be told "connected, but not for
-/// you, ask a peer", which is what the runtime says when the name resolves and
-/// the reach check refuses it. Given only its own plugins, the name would not
-/// resolve at all and the answer would be "unknown tool", which names no way
-/// forward and is a different answer from the one the eight give.
 pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation, ToolParseError> {
     match call.name.as_str() {
         DIRECTORY => Ok(ToolInvocation::Directory),
@@ -2279,16 +1783,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
             let secs = |name: &str| {
                 value.get(name).and_then(|v| v.as_i64()).filter(|n| *n > 0).map(|n| n as u32)
             };
-            // One reading of a repeat, for `add` and `update` both. A named
-            // repeat beats a gap in seconds when both arrive: it is the more
-            // specific of the two, and a model that sends "weekdays" alongside
-            // 86400 means the weekdays.
-            //
-            // Read as a cadence rather than as any trigger: this tool sets a
-            // clock. An event routine fires when something posts to the
-            // receiver, and only the operator can wire that; a model that
-            // improvised `event:...` here would be handed a routine waiting
-            // on a post nobody has arranged.
             let clock = |repeat: Option<&str>, every: Option<u32>| match (repeat, every) {
                 (Some(named), _) => {
                     Cadence::parse(named).map(Trigger::Clock).map(Some).ok_or_else(|| {
@@ -2301,10 +1795,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 (None, Some(gap)) => Ok(Some(Trigger::Clock(Cadence::Every(gap)))),
                 (None, None) => Ok(None),
             };
-            // Absent is "leave it alone", so a missing flag and a false one are
-            // not the same thing on an update. Read as a string too, because a
-            // model asked for a boolean sends `"true"` often enough that
-            // dropping it would silently ignore the field it was setting.
             let flag = |key: &str| {
                 value.get(key).and_then(|v| match v {
                     serde_json::Value::Bool(on) => Some(*on),
@@ -2312,10 +1802,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                     _ => None,
                 })
             };
-            // A blank string is a model padding out the arguments, not an
-            // instruction to blank the field: on an update it would wipe the
-            // label or the instruction of a routine that was only being
-            // retimed.
             let words = |key: &str| {
                 value
                     .get(key)
@@ -2331,8 +1817,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                             needs: "a `what` to do".to_string(),
                         });
                     };
-                    // Blank is legal here, unlike on an update: a routine an
-                    // agent did not name is titled by what it does.
                     let name = words("name").unwrap_or_default();
                     let repeat = value.get("repeat").and_then(|v| v.as_str());
                     let delay = secs("in_secs");
@@ -2371,9 +1855,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                     let what = words("what").or_else(|| words("prompt"));
                     let name = words("name");
                     let skip_if_working = flag("skip_if_working");
-                    // Nothing to change is a call that would report success and
-                    // do nothing, which reads to the agent as the edit having
-                    // landed.
                     if what.is_none()
                         && name.is_none()
                         && trigger.is_none()
@@ -2452,19 +1933,11 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 _ => Err(ToolParseError::MissingCommand),
             }
         }
-        // Memory is what this file is called everywhere a person reads about
-        // it, and notes is what the tool is called. An agent told to update its
-        // memory reaches for the word it was given, and the name it lands on is
-        // the same file either way, so refusing one spends a turn on spelling.
-        // `update_notes` is what this tool was called for a year, and it is
-        // still what a model that learned Guaca from an older transcript will
-        // reach for. It costs one match arm and saves that turn.
         UPDATE_MEMORY | "update_notes" | "save_memory" => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
                 name: UPDATE_MEMORY.to_string(),
                 detail: e.to_string(),
             })?;
-            // An empty string is a legitimate instruction: clear the memory.
             match value
                 .get("content")
                 .or_else(|| value.get("notes"))
@@ -2476,9 +1949,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 _ => Err(ToolParseError::MissingContent),
             }
         }
-        // `note` is the field, and the two near misses are what a model
-        // reaches for when it has just been told to write down where things
-        // stand. Refusing one costs a whole turn to learn a synonym.
         NOTE_PROGRESS | "log_progress" | "note_status" => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
                 name: NOTE_PROGRESS.to_string(),
@@ -2492,10 +1962,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 .map(str::trim)
                 .filter(|note| !note.is_empty())
             {
-                // Unlike a memory, an empty note is not an instruction. There
-                // is nothing it could mean: clearing is not an operation this
-                // store has, and a blank line in the list is one the agent
-                // will read back next turn and try to interpret.
                 Some(note) => Ok(ToolInvocation::NoteProgress { note: note.to_string() }),
                 None => Err(ToolParseError::MissingNote),
             }
@@ -2505,11 +1971,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 name: CREATE_AGENT.to_string(),
                 detail: e.to_string(),
             })?;
-            // Aliases for the same two ideas, because a model that has just been
-            // told to write a colleague's brief reaches for whichever word its
-            // training used. Rejecting a near miss costs a whole turn, and this
-            // is the one tool where the retry also costs the operator a second
-            // permission prompt for the same request.
             let field = |names: &[&str]| {
                 names
                     .iter()
@@ -2550,8 +2011,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty())
             };
-            // A request with nothing in it is the one thing that cannot be put
-            // to a person: they would be deciding on a blank line.
             let action = field(&["action", "what", "request", "summary"])
                 .ok_or(ToolParseError::MissingText)?;
             Ok(ToolInvocation::RequestPermission {
@@ -2578,15 +2037,8 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 .find_map(|key| value.get(*key).and_then(|v| v.as_str()))
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
-                // A question with nothing in it is the one thing that cannot be
-                // put to a person: they would be answering a blank line.
                 .ok_or(ToolParseError::MissingText)?;
 
-            // Cut here rather than refused. A seventh option or a paragraph on
-            // a button is a model being expansive, not a model being wrong, and
-            // turning that into a failed turn costs the operator an answer they
-            // were about to be asked for. One option left standing is not a
-            // choice, so it is dropped and the question takes a written answer.
             let mut options: Vec<String> = normalize_list(value.get("options"))
                 .into_iter()
                 .map(|option| as_label(&option, MAX_OPTION_CHARS))
@@ -2598,9 +2050,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
 
             Ok(ToolInvocation::AskOperator { question, options })
         }
-        // The aliases are the words a model reaches for when it has run out of
-        // road, and every one of them costs a whole turn to learn if it is
-        // refused -- on the one call where the turn was already going nowhere.
         ESCALATE | "escalate_to_operator" | "flag_operator" | "report_blocked" => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
                 name: ESCALATE.to_string(),
@@ -2611,9 +2060,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 .find_map(|key| value.get(*key).and_then(|v| v.as_str()))
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
-                // An escalation with nothing in it is a row on the operator's
-                // desk that says an agent is stuck and cannot say at what,
-                // which is worse than the message in the channel it replaces.
                 .ok_or(ToolParseError::MissingText)?;
 
             Ok(ToolInvocation::Escalate { summary })
@@ -2623,10 +2069,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 name: CALENDAR.to_string(),
                 detail: e.to_string(),
             })?;
-            // A blank string is a model padding out its arguments rather than
-            // an instruction to blank the field: on an update it would wipe the
-            // title of a meeting that was only being moved. Same rule
-            // `schedule` follows one tool up, and for the same reason.
             let words = |key: &str| {
                 value
                     .get(key)
@@ -2634,23 +2076,12 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                     .map(|text| text.trim().to_string())
                     .filter(|text| !text.is_empty())
             };
-            // Read as a string as well, because a model asked for an integer
-            // sends `"60"` often enough that dropping it would silently lose
-            // the length it was setting. Zero is a moment, settled in
-            // `occasion::Clean`, so it does not have to be caught twice.
             let minutes = value.get("minutes").and_then(|v| match v {
                 serde_json::Value::Number(n) => n.as_i64(),
                 serde_json::Value::String(text) => text.trim().parse::<i64>().ok(),
                 _ => None,
             });
-            // Saturated rather than dropped, so an absurd number still reaches
-            // `occasion::Clean`, which refuses it as too long and says so. A
-            // dropped one would read back as an occasion with no length, which
-            // is the model's mistake made invisible.
             let minutes = minutes.filter(|n| *n >= 0).map(|n| u32::try_from(n).unwrap_or(u32::MAX));
-            // `when` and `date` are what a model reaches for when it has not
-            // read the schema, and both mean this. Refusing them costs a whole
-            // round trip to learn a synonym.
             let starts = || words("starts_at").or_else(|| words("when")).or_else(|| words("date"));
 
             match value.get("action").and_then(|v| v.as_str()).unwrap_or("list") {
@@ -2711,10 +2142,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 name: ARTIFACT.to_string(),
                 detail: e.to_string(),
             })?;
-            // Blank is absent, for the reason it is on the calendar: an update
-            // padded with `"title": ""` means "keep the title", not "erase it".
-            // The page is not trimmed here; `domain::artifact::page` does that
-            // once, where its size is also checked.
             let text = |keys: &[&str]| {
                 keys.iter().find_map(|key| {
                     value
@@ -2725,8 +2152,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 })
             };
             let title = || text(&["title", "name"]).map(|t| t.trim().to_string());
-            // `html` and `content` are what a model reaches for when it has not
-            // read the schema, and both mean the page.
             let page = || text(&["page", "html", "content", "body"]);
             let condensed = || text(&["condensed", "condensed_view", "compact"]);
             let note = || text(&["note", "reason", "why", "summary", "message"]);
@@ -2742,10 +2167,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 )
             };
 
-            // Read loosely, as every argument here is: `args` and `input` are
-            // what a model calls a tool's arguments when it has not read the
-            // schema. Whether the list means anything is `domain::artifact`'s
-            // and the runtime's to say, where the refusal can say what to do.
             let sources =
                 || -> Result<Option<Vec<crate::domain::artifact::Source>>, ToolParseError> {
                     let Some(raw) = value.get("sources").filter(|v| !v.is_null()) else {
@@ -2806,7 +2227,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 "pin" | "pin_to_status_bar" | "add_to_status_bar" => ArtifactAction::Pin {
                     id: id("pin")?,
                     width: text(&["width", "size"]),
-                    // A number, or a number a model wrote as a string.
                     every_minutes: ["every_minutes", "every", "refresh_minutes"]
                         .iter()
                         .find_map(|key| value.get(*key))
@@ -2831,8 +2251,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                     .filter(|path| !path.trim().is_empty())
                     .ok_or_else(|| needs("a `path`, such as `leads/acme.md`"))
             };
-            // Content may be empty on purpose only when clearing a file, which
-            // is `write` with nothing; a missing field is a model that forgot.
             let content =
                 || text(&["content", "text", "body"]).ok_or_else(|| needs("the `content`"));
             let action = match value.get("action").and_then(|v| v.as_str()).unwrap_or("list") {
@@ -2863,9 +2281,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
             let action = match value.get("action").and_then(|v| v.as_str()).unwrap_or("read") {
                 "read" | "get" | "show" | "list" => SettingsAction::Read,
                 "update" | "change" | "set" | "write" => {
-                    // A model that forgets the wrapper sends the keys beside
-                    // `action`. What it meant is not in doubt, and a refusal
-                    // would cost a round trip to learn a nesting.
                     let changes = match value.get("changes") {
                         Some(changes) => changes.clone(),
                         None => {
@@ -2902,7 +2317,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
             };
             let action = match value.get("action").and_then(|v| v.as_str()).unwrap_or("list") {
                 "list" => SkillAction::List,
-                // What a model reaches for when it has not read the enum.
                 "view" | "read" | "open" | "load" | "get" => {
                     SkillAction::View { name: named("view")?, file: words(&["file", "path"]) }
                 }
@@ -2935,7 +2349,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
 
             let mut to = normalize_list(args.to.as_ref());
             if to.is_empty() {
-                // `agent: "Chef"` is a common near-miss worth accepting.
                 if let Some(single) =
                     args.agent.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty())
                 {
@@ -2981,9 +2394,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
             };
             Ok(ToolInvocation::ReadFile { name: name.trim().to_string(), offset })
         }
-        // The aliases are the words a model reaches for when it has just been
-        // told to give the operator a document. Each names this and nothing
-        // else, so refusing one buys a retry and a turn spent on spelling.
         ATTACH_FILE | "attach" | "attach_files" | "share_file" | "show_file" | "send_file" => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
                 name: ATTACH_FILE.to_string(),
@@ -3002,8 +2412,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
             }
             Ok(ToolInvocation::AttachFile { files })
         }
-        // The aliases are what other harnesses call the same thing, and a model
-        // trained on their transcripts reaches for them by name.
         ERRAND | "errands" | "run_errand" | "send_errand" | "delegate_task" | "subagent" => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
                 name: ERRAND.to_string(),
@@ -3015,10 +2423,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
             }
             Ok(ToolInvocation::Errand { briefs })
         }
-        // The aliases are the words a model reaches for when it has been asked
-        // for a document and has one written. `create_file` and `write_file`
-        // both describe a filesystem this may not have, and both are what a
-        // model says anyway.
         WRITE_DOCUMENT | "write_file" | "create_file" | "make_file" | "create_document"
         | "save_file" => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
@@ -3049,20 +2453,6 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
     }
 }
 
-/// Splits `neon__run_sql` into the plugin and the tool it belongs to.
-///
-/// The separator is two underscores because MCP servers use one inside tool
-/// names constantly and none of the eight uses two. Split on the first
-/// occurrence, not the last: a server with `run__sql` would otherwise have its
-/// own name torn in half. A custom server's name cannot contain a pair at all,
-/// because runs of them collapse when it is normalized.
-///
-/// The catalog is tried first and this crew's own servers second, and the order
-/// is not an optimization: it is what keeps "Neon is not connected" reachable
-/// for a crew that has not connected Neon. A name that is neither is not a
-/// plugin call, which is what stops a model composing `use_screen__click` from
-/// being reported as a plugin nobody has ever heard of rather than as a tool
-/// that does not exist.
 pub fn split_plugin_tool(name: &str, connected: &[PluginKind]) -> Option<(PluginKind, String)> {
     let (prefix, tool) = name.split_once(PLUGIN_SEPARATOR)?;
     if tool.is_empty() {
@@ -3073,16 +2463,6 @@ pub fn split_plugin_tool(name: &str, connected: &[PluginKind]) -> Option<(Plugin
     Some((kind, tool.to_string()))
 }
 
-/// Coerces the several shapes models actually emit into a list of strings.
-///
-/// Specified as an array of strings. Observed in the wild: a bare string, a
-/// comma-separated string, an array containing objects with a `name` field.
-/// Each is unambiguous, so rejecting them buys nothing but a retry.
-/// One line, at most `max` characters, for something that will be a button.
-///
-/// A label is drawn on one line whatever it is given, so a newline in it draws
-/// as far as the newline and silently loses the rest. This is a model's own
-/// text, so the whitespace is collapsed rather than trusted.
 fn as_label(text: &str, max: usize) -> String {
     let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if flat.chars().count() <= max {
@@ -3092,11 +2472,6 @@ fn as_label(text: &str, max: usize) -> String {
     format!("{}…", kept.trim_end())
 }
 
-/// The first of several keys that carries a string.
-///
-/// Models spell one field several ways and each spelling names this and nothing
-/// else, so refusing one buys a retry and a turn spent on vocabulary. The same
-/// argument [`normalize_list`] is built on.
 fn first_string(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|key| value.get(*key).and_then(|v| v.as_str()).map(str::to_string))
 }
@@ -3122,10 +2497,6 @@ fn normalize_list(value: Option<&serde_json::Value>) -> Vec<String> {
                         }
                     }
                     serde_json::Value::Object(map) => {
-                        // `path` and `file` for an attachment, the other two
-                        // for a recipient. One list serves both callers, and a
-                        // key that means nothing to one of them cannot collide
-                        // with anything the other sends.
                         if let Some(serde_json::Value::String(name)) = map
                             .get("name")
                             .or_else(|| map.get("agent"))
@@ -3145,15 +2516,12 @@ fn normalize_list(value: Option<&serde_json::Value>) -> Vec<String> {
         _ => {}
     }
 
-    // A model asked to message everyone sometimes lists a name twice. Sending
-    // twice would waste a turn and trip the dedup guard for no reason.
     out.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
     let mut seen = std::collections::HashSet::new();
     out.retain(|name| seen.insert(name.to_lowercase()));
     out
 }
 
-/// What `send_message` reports back per recipient.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "status")]
 pub enum Delivery {
@@ -3161,7 +2529,6 @@ pub enum Delivery {
     Refused { to: String, reason: String },
 }
 
-/// Renders delivery results as the tool result string the model reads.
 pub fn render_deliveries(results: &[Delivery]) -> String {
     let mut lines = Vec::new();
     let queued: Vec<&str> = results
@@ -3193,10 +2560,6 @@ pub fn render_deliveries(results: &[Delivery]) -> String {
 mod tests {
     use super::*;
 
-    // What an agent is told about its tools reaches it as one line of prose. A
-    // run of spaces is a line break the source forgot to continue, and an em
-    // dash is a habit the operator reads straight through an agent that copies
-    // it. Every string under the parameters counts: a model reads those too.
     #[test]
     fn every_tool_definition_is_plain_prose() {
         fn strings<'a>(value: &'a serde_json::Value, out: &mut Vec<&'a str>) {
@@ -3238,12 +2601,6 @@ mod tests {
         ToolCall { id: "call_1".into(), name: name.into(), arguments: arguments.into() }
     }
 
-    /// The parser, for an agent whose crew has connected nothing.
-    ///
-    /// Which is what every test below is about but three. The crew's own list
-    /// only decides one thing — whether a name it has never heard of is a
-    /// server the operator added — so the tests that care pass one and the rest
-    /// are not made to say they do not.
     fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
         super::parse(call, &[])
     }
@@ -3291,8 +2648,6 @@ mod tests {
             parse(&call(SETTINGS, r#"{"action": "reset"}"#)),
             Err(ToolParseError::UnknownSettingsAction)
         );
-        // The button an agent used to ask for is a widget now. A model that
-        // learned the old action is pointed at the new one, not just refused.
         let old = parse(&call(SETTINGS, r#"{"action": "add_quick_action"}"#)).unwrap_err();
         assert_eq!(old, ToolParseError::UnknownSettingsAction);
         assert!(old.guidance().contains("`pin`"), "{}", old.guidance());
@@ -3312,7 +2667,6 @@ mod tests {
                 action: SkillAction::View { name: "pdf".into(), file: Some("forms.md".into()) }
             })
         );
-        // `load` and `read` are what a model says when it has not read the enum.
         assert!(matches!(
             parse(&call(SKILL, r#"{"action": "load", "skill": "deploy"}"#)),
             Ok(ToolInvocation::Skill { action: SkillAction::View { .. } })
@@ -3351,8 +2705,6 @@ mod tests {
 
     #[test]
     fn a_command_is_parsed_from_either_spelling() {
-        // Models reach for `cmd` about as often as `command`, and refusing one
-        // of them wastes a whole turn on a rejection.
         for field in ["command", "cmd"] {
             let parsed = parse(&call(RUN_COMMAND, &format!("{{\"{field}\": \"echo hi\"}}")));
             assert_eq!(parsed, Ok(ToolInvocation::RunCommand { command: "echo hi".into() }));
@@ -3368,8 +2720,6 @@ mod tests {
 
     #[test]
     fn a_desktop_program_is_parsed_from_any_of_the_obvious_spellings() {
-        // Asked to visit a site, a model reaches for `url` as often as
-        // `command`, and refusing one of them wastes a whole turn.
         for field in ["command", "app", "url"] {
             let parsed =
                 parse(&call(OPEN_ON_DESKTOP, &format!("{{\"{field}\": \"google-chrome x\"}}")));
@@ -3382,8 +2732,6 @@ mod tests {
 
     #[test]
     fn the_desktop_tool_names_a_browser_so_the_agent_knows_it_has_one() {
-        // The failure this exists to stop: an agent with a working desktop
-        // replying that it has no graphical browser.
         let spec = specs(Surfaces::both(), Modalities::seeing())
             .into_iter()
             .find(|s| s.name == OPEN_ON_DESKTOP)
@@ -3391,7 +2739,6 @@ mod tests {
         assert!(spec.description.contains("google-chrome"), "{}", spec.description);
     }
 
-    /// The one description under test, by name.
     fn description(name: &str) -> String {
         specs(Surfaces::both(), Modalities::seeing())
             .into_iter()
@@ -3402,10 +2749,6 @@ mod tests {
 
     #[test]
     fn the_directory_reads_as_a_routing_decision() {
-        // Described as a name lookup, it was used as one: a coordinator asked
-        // for research called it, read three names back, and sent the task to
-        // all three. The schema cannot express "pick the right one", so this
-        // sentence is the only place the decision can live.
         let spec = description(DIRECTORY);
         assert!(spec.contains("decide who should do a piece of work"), "{spec}");
         assert!(
@@ -3416,9 +2759,6 @@ mod tests {
 
     #[test]
     fn send_message_tells_the_model_to_choose_its_recipients() {
-        // `to` is an array with minItems 1 and no maximum, so one call to every
-        // agent costs the model exactly what one call to the right agent costs.
-        // Nothing in the schema can charge for breadth; the description has to.
         let spec = description(SEND_MESSAGE);
         assert!(spec.contains("Choose them by fit"), "{spec}");
         assert!(spec.contains("no others"), "{spec}");
@@ -3443,9 +2783,6 @@ mod tests {
 
     #[test]
     fn schedule_forbids_polling_for_something_that_will_arrive_by_itself() {
-        // A fired routine is a fresh run with a fresh step budget. Scheduling a
-        // check for a reply is therefore the one use of this tool that spends
-        // outside every limit the guard applies to the run that made it.
         let spec = description(SCHEDULE);
         assert!(spec.contains("Never schedule a check for a reply"), "{spec}");
         assert!(
@@ -3456,8 +2793,6 @@ mod tests {
 
     #[test]
     fn browsing_defaults_to_reading_the_page() {
-        // A model that calls `browse` with nothing useful should be shown the
-        // page rather than told off.
         assert_eq!(
             parse(&call(BROWSE, "{}")),
             Ok(ToolInvocation::Browse { action: "read".into(), args: serde_json::json!({}) })
@@ -3473,8 +2808,6 @@ mod tests {
 
     #[test]
     fn a_routine_needs_a_time_as_well_as_a_task() {
-        // Without either it would be a routine that never fires, which reads as
-        // having worked.
         let err = parse(&call(SCHEDULE, "{\"action\":\"add\",\"what\":\"check\"}")).unwrap_err();
         assert!(matches!(err, ToolParseError::IncompleteSchedule { .. }));
         assert!(err.guidance().contains("repeat"), "the way out has to be in the message");
@@ -3495,8 +2828,6 @@ mod tests {
 
     #[test]
     fn changing_a_routine_is_an_update_that_leaves_the_rest_of_it_alone() {
-        // The verb that was missing. Without it, an agent asked for a routine
-        // at a different time can only add a second one, and both fire.
         assert_eq!(
             parse(&call(SCHEDULE, "{\"action\":\"update\",\"id\":\"r7\",\"repeat\":\"daily\"}")),
             Ok(ToolInvocation::Schedule {
@@ -3511,7 +2842,6 @@ mod tests {
             }),
             "an absent field is a field to leave as it is, not one to blank"
         );
-        // And the spellings a model reaches for instead.
         for verb in ["edit", "change", "modify"] {
             let parsed = parse(&call(
                 SCHEDULE,
@@ -3526,9 +2856,6 @@ mod tests {
 
     #[test]
     fn a_blank_field_on_an_update_is_padding_rather_than_an_erasure() {
-        // Models fill out every field in a schema. A routine being retimed must
-        // not lose the name and the instruction it already had because the call
-        // carried empty strings for them.
         assert_eq!(
             parse(&call(
                 SCHEDULE,
@@ -3550,15 +2877,10 @@ mod tests {
 
     #[test]
     fn an_update_that_would_change_nothing_is_refused_rather_than_reporting_success() {
-        // It would answer "updated" and do nothing, which the agent reads as
-        // the change having landed.
         let err = parse(&call(SCHEDULE, "{\"action\":\"update\",\"id\":\"r7\"}")).unwrap_err();
         assert!(matches!(err, ToolParseError::IncompleteSchedule { .. }));
         assert!(err.guidance().contains("update"), "the way out has to be in the message");
 
-        // Switching the skip on is a change like any other. Counted out of the
-        // "nothing to change" test, this call is refused and the agent is told
-        // to send a field it already sent.
         assert!(matches!(
             parse(&call(
                 SCHEDULE,
@@ -3572,9 +2894,6 @@ mod tests {
 
     #[test]
     fn a_routine_can_be_asked_to_drop_a_firing_it_would_land_on_top_of() {
-        // Off unless it is asked for: a routine that has to happen even if it
-        // has to wait is the ordinary one, and the agent that says nothing
-        // means that one.
         assert!(matches!(
             parse(&call(SCHEDULE, "{\"action\":\"add\",\"what\":\"sweep\",\"repeat\":\"daily\"}")),
             Ok(ToolInvocation::Schedule {
@@ -3592,8 +2911,6 @@ mod tests {
             })
         ));
 
-        // Asked for a boolean, models send the word often enough that reading
-        // only the JSON type would silently ignore the field being set.
         assert!(matches!(
             parse(&call(
                 SCHEDULE,
@@ -3605,8 +2922,6 @@ mod tests {
             })
         ));
 
-        // On an update, absent is "leave it as it is" and false is a decision:
-        // a routine being retimed must not lose the skip it was set with.
         assert!(matches!(
             parse(&call(SCHEDULE, "{\"action\":\"update\",\"id\":\"r7\",\"in_secs\":600}")),
             Ok(ToolInvocation::Schedule {
@@ -3634,9 +2949,6 @@ mod tests {
 
     #[test]
     fn the_schedule_tool_says_what_a_second_routine_for_one_job_costs() {
-        // The tool schema is read at the moment of the decision, which is where
-        // the consequence has to be: an agent that thinks adding replaces has
-        // no reason to look for `update`.
         let spec = description(SCHEDULE);
         assert!(spec.contains("`update`"), "{spec}");
         assert!(spec.contains("both fire"), "a rule without its consequence: {spec}");
@@ -3648,9 +2960,6 @@ mod tests {
 
     #[test]
     fn a_named_repeat_is_taken_over_a_gap_in_seconds() {
-        // Both arriving is the ordinary case for a model that has been told
-        // "every weekday": it says weekdays and then says the day in seconds
-        // as well. Reading the gap would put it back on Saturday.
         assert_eq!(
             parse(&call(
                 SCHEDULE,
@@ -3671,8 +2980,6 @@ mod tests {
 
     #[test]
     fn an_invented_repeat_is_refused_rather_than_quietly_becoming_a_one_shot() {
-        // Storing it as "once" would silently drop the repeat the agent asked
-        // for, and it would look like it had worked.
         let err = parse(&call(
             SCHEDULE,
             "{\"action\":\"add\",\"what\":\"check\",\"repeat\":\"fortnightly\"}",
@@ -3708,10 +3015,6 @@ mod tests {
 
     #[test]
     fn the_desktop_tool_offers_one_browser_because_only_one_is_wired_up() {
-        // Observed: an agent asked to send mail opened firefox, drove it with
-        // `use_screen`, and looked for the account somewhere else. Only one
-        // browser on that machine is on the profile the accounts live on, and
-        // it is the only one worth naming.
         let desktop = spec(OPEN_ON_DESKTOP);
         assert!(!desktop.description.contains("firefox"), "{}", desktop.description);
         assert!(desktop.description.contains("google-chrome"), "{}", desktop.description);
@@ -3720,9 +3023,6 @@ mod tests {
             "the reason has to travel with the rule: {}",
             desktop.description
         );
-        // And what the machine does about it. The rule is enforced there now,
-        // so a description that only forbade the other browser would leave an
-        // agent that named one reading a result it could not account for.
         assert!(
             desktop.description.contains("Any other browser you name opens it instead"),
             "{}",
@@ -3732,12 +3032,6 @@ mod tests {
 
     #[test]
     fn the_browser_and_the_screen_say_they_are_not_the_same_place() {
-        // The failure this exists to stop, and it is new: a computer and a
-        // browser used to be one machine, and now they are two. An agent that
-        // reads them as one calls `browse`, takes a screenshot to see what
-        // happened, is shown a desktop, and reports that the page did not load.
-        // Each description has to disclaim the other, because a model reads one
-        // tool at a time.
         let browse = spec(BROWSE);
         assert!(
             browse.description.contains("separate from your computer"),
@@ -3760,11 +3054,6 @@ mod tests {
 
     #[test]
     fn every_screen_action_answers_with_a_picture_and_says_so() {
-        // The tool used to tell the model to look again after anything that
-        // changed the screen, and models did not: they clicked, were told
-        // "clicked at 412, 300", and typed into a form they had last seen two
-        // actions ago. Now there is nothing to remember, and the description has
-        // to say that or a model keeps spending a call on a redundant `look`.
         let screen = spec(USE_SCREEN);
         assert!(
             screen.description.contains("Every action answers with a new picture"),
@@ -3782,9 +3071,6 @@ mod tests {
 
     #[test]
     fn a_tool_is_not_offered_for_a_place_the_agent_does_not_have() {
-        // A tool for something that does not exist costs a model call and a
-        // turn to discover, and the agent reports the capability as broken
-        // rather than absent.
         let names = |surfaces: Surfaces| -> Vec<String> {
             specs(surfaces, Modalities::seeing()).into_iter().map(|spec| spec.name).collect()
         };
@@ -3799,16 +3085,11 @@ mod tests {
         assert!(!browser_only.contains(&USE_SCREEN.to_string()));
         assert!(!browser_only.contains(&OPEN_ON_DESKTOP.to_string()));
 
-        // And everything that needs neither is still there, because messaging
-        // and memory work with no provider configured at all.
         let neither = names(Surfaces::none());
         for always in [DIRECTORY, SEND_MESSAGE, UPDATE_MEMORY, SCHEDULE, CREATE_AGENT] {
             assert!(neither.contains(&always.to_string()), "{always} needs no provider");
         }
 
-        // Asking to act in the operator's name needs a way out of the
-        // workspace. Either place is enough; with neither, a yes buys nothing
-        // and the tool becomes how an agent asks for the access it is missing.
         assert!(computer_only.contains(&REQUEST_PERMISSION.to_string()));
         assert!(browser_only.contains(&REQUEST_PERMISSION.to_string()));
         assert!(
@@ -3819,13 +3100,6 @@ mod tests {
         assert_eq!(names(Surfaces::both()).len(), all_specs(Surfaces::both()).len());
     }
 
-    /// The one tool the model's own modalities decide.
-    ///
-    /// `use_screen` hands back a picture and nothing else: what to click next
-    /// is in it, and a model that cannot be sent one would be clicking at
-    /// coordinates it has never seen. The rest of the machine is untouched,
-    /// because a shell reads back as text and a program opened on the desktop
-    /// is there for the operator to watch.
     #[test]
     fn a_screen_is_not_offered_to_a_model_that_cannot_be_shown_one() {
         let blind: Vec<String> = specs(Surfaces::both(), Modalities::text_only())
@@ -3844,18 +3118,12 @@ mod tests {
 
     #[test]
     fn attaching_is_offered_with_no_computer_and_stops_describing_one() {
-        // The tool stays, because a file already in the channel is attachable
-        // with no machine anywhere. What has to go is the half of its
-        // description that is about a machine this agent does not have.
         let without = specs(Surfaces::none(), Modalities::seeing())
             .into_iter()
             .find(|spec| spec.name == ATTACH_FILE)
             .expect("a channel file needs no computer, so the tool stays");
         let words = format!("{} {}", without.description, without.parameters);
 
-        // The exact sentence and the exact example that sent one agent to
-        // `/home/user/vision_backend_coreloop_monitor.md`, twice, on a machine
-        // it had never been given.
         assert!(!words.contains("/home/user"), "an invented path is what this teaches: {words}");
         assert!(!words.contains("your own computer"), "it has no computer: {words}");
         assert!(
@@ -3863,47 +3131,30 @@ mod tests {
             "and it has to be told so, or it will go looking: {words}"
         );
 
-        // With one, the path half is the whole point and stays.
         let with = description(ATTACH_FILE);
         assert!(with.contains("/home/user/brief.md"), "{with}");
     }
 
     #[test]
     fn a_key_arrives_in_whatever_spelling_the_model_used() {
-        // All of these are real shapes models send. Each was previously either
-        // refused or passed to xdotool as a name it does not know, which fails
-        // on the machine and reads to the model as a broken keyboard.
         let keys = |json: &str| match parse(&call(USE_SCREEN, json)) {
             Ok(ToolInvocation::UseScreen { action: ScreenAction::Key { keys }, .. }) => keys,
             other => panic!("{json} parsed as {other:?}"),
         };
 
         assert_eq!(keys("{\"action\":\"key\",\"keys\":\"Return\"}"), "Return");
-        // Vendor spellings.
         assert_eq!(keys("{\"action\":\"key\",\"keys\":\"ENTER\"}"), "Return");
         assert_eq!(keys("{\"action\":\"keypress\",\"keys\":\"Escape\"}"), "Escape");
-        // The array form, which is what both vendors' own computer-use tools
-        // take, so it is what a model trained on them reaches for.
         assert_eq!(keys("{\"action\":\"key\",\"keys\":[\"ctrl\",\"a\"]}"), "ctrl+a");
-        // And the modifier that does not exist on a Linux machine. A model
-        // asking for `cmd+a` means select all.
         assert_eq!(keys("{\"action\":\"key\",\"keys\":\"cmd+a\"}"), "ctrl+a");
         assert_eq!(keys("{\"action\":\"key\",\"keys\":\"Control+Shift+Tab\"}"), "ctrl+shift+Tab");
-        // A key that is only a name to xdotool is passed through untouched: a
-        // table of every one of them would go stale, and xdotool's own error is
-        // more use to a model than a refusal from here.
         assert_eq!(keys("{\"action\":\"key\",\"keys\":\"F11\"}"), "F11");
         assert_eq!(keys("{\"action\":\"key\",\"keys\":\"ctrl+F5\"}"), "ctrl+F5");
-        // `-` is a key, not a separator. Splitting on it turned a request for
-        // the minus key into nothing at all.
         assert_eq!(keys("{\"action\":\"key\",\"keys\":\"minus\"}"), "minus");
     }
 
     #[test]
     fn a_scroll_lands_on_the_page_when_the_model_did_not_aim() {
-        // A wheel event goes to whatever is under the pointer, which is
-        // wherever the last click left it: a model reading an article scrolled
-        // the sidebar it had clicked a link in.
         match parse(&call(USE_SCREEN, "{\"action\":\"scroll\",\"direction\":\"down\"}")) {
             Ok(ToolInvocation::UseScreen {
                 action: ScreenAction::Scroll { x, y, down, .. },
@@ -3925,12 +3176,9 @@ mod tests {
         assert_eq!(ms("{\"action\":\"wait\"}"), 1000);
         assert_eq!(ms("{\"action\":\"wait\",\"ms\":2500}"), 2500);
         assert_eq!(ms("{\"action\":\"wait\",\"seconds\":2}"), 2000);
-        // A model asked to be patient will ask for a minute, and the turn it is
-        // spending is the operator's.
         assert_eq!(ms("{\"action\":\"wait\",\"seconds\":120}"), 10_000);
     }
 
-    /// One tool's definition, with both places available.
     fn spec(name: &str) -> ToolSpec {
         specs(Surfaces::both(), Modalities::seeing())
             .into_iter()
@@ -3940,12 +3188,6 @@ mod tests {
 
     #[test]
     fn the_permission_tool_says_who_should_be_asking() {
-        // Observed: pressed by the operator to get an email sent, a coordinator
-        // asked for permission to send it. It holds no mail account and could
-        // not have sent anything, so the operator was deciding on an action the
-        // asker could not take, and the grant landed on the wrong agent. A
-        // permission obtained and then relayed is a peer's claim again, which
-        // is the thing the agent holding the account was right to refuse.
         let spec = specs(Surfaces::both(), Modalities::seeing())
             .into_iter()
             .find(|s| s.name == REQUEST_PERMISSION)
@@ -3960,11 +3202,6 @@ mod tests {
 
     #[test]
     fn the_permission_tool_says_that_a_yes_cannot_grant_access() {
-        // Observed: asked for something that needed a calendar this workspace
-        // holds no account for, an agent put a permission prompt in front of
-        // the operator. The mechanism worked; nothing they could press would
-        // have helped. What was missing was access, and the only answer worth
-        // giving was to say so and say what it would take.
         let spec = spec(REQUEST_PERMISSION);
         assert!(spec.description.contains("Permission is not access"), "{}", spec.description);
         assert!(
@@ -3976,9 +3213,6 @@ mod tests {
 
     #[test]
     fn a_question_keeps_its_choices_and_a_lone_choice_becomes_a_written_answer() {
-        // One option is not a choice. Drawn as a single button it is a request
-        // to press the only thing on screen, which tells the agent nothing it
-        // did not already assume, so the question falls back to being written.
         let one = parse(&call(ASK_OPERATOR, r#"{"question":"Which?","options":["A"]}"#));
         assert!(matches!(
             one,
@@ -3994,9 +3228,6 @@ mod tests {
 
     #[test]
     fn a_question_with_too_many_choices_is_cut_rather_than_refused() {
-        // A seventh option is a model being expansive, not a model being wrong.
-        // Failing the turn over it costs the operator the answer they were
-        // about to be asked for.
         let args = serde_json::json!({
             "question": "Which?",
             "options": ["A", "B", "C", "D", "E", "F", "G", "H"],
@@ -4011,9 +3242,6 @@ mod tests {
 
     #[test]
     fn a_choice_is_cut_to_a_label_and_never_carries_a_newline() {
-        // These are drawn on buttons. A label with a newline in it draws as far
-        // as the newline and silently loses the rest, and a paragraph on a
-        // button is not a label.
         let args = serde_json::json!({
             "question": "Which?",
             "options": ["short", format!("line one\nline two {}", "x".repeat(100))],
@@ -4038,10 +3266,6 @@ mod tests {
 
     #[test]
     fn the_question_tool_says_that_an_answer_permits_nothing() {
-        // Two tools stop the operator mid-turn and they are answered by
-        // different surfaces for different reasons. An agent that reached for
-        // this one to be allowed to send mail would be asking for a yes that
-        // authorizes nothing, and would send anyway.
         let spec = spec(ASK_OPERATOR);
         assert!(spec.description.contains("permits nothing"), "{}", spec.description);
         assert!(
@@ -4053,12 +3277,6 @@ mod tests {
 
     #[test]
     fn escalating_is_told_apart_from_the_two_tools_that_wait() {
-        // The one job of this description. Both of the others stop a turn
-        // mid-flight to get something back, so a model that has run out of road
-        // reads them as the wrong shape and writes a paragraph into a channel
-        // instead. The line drawn here is about waiting rather than about how
-        // bad the problem is, and what it replaces has to be named: models do
-        // not infer that a message addressed to the operator never reached one.
         let spec = spec(ESCALATE);
         assert!(spec.description.contains("does not wait"), "{}", spec.description);
         assert!(spec.description.contains(ASK_OPERATOR), "{}", spec.description);
@@ -4068,8 +3286,6 @@ mod tests {
 
     #[test]
     fn an_escalation_is_parsed_from_the_words_a_stuck_model_reaches_for() {
-        // Every alias costs a whole turn to learn if it is refused, on the one
-        // call where the turn was already going nowhere.
         for (name, field) in [
             (ESCALATE, "summary"),
             ("escalate_to_operator", "what"),
@@ -4087,8 +3303,6 @@ mod tests {
 
     #[test]
     fn an_escalation_with_nothing_in_it_is_refused() {
-        // A row on the operator's desk saying an agent is stuck and unable to
-        // say at what is worse than the message in a channel it replaces.
         assert!(matches!(
             parse(&call(ESCALATE, "{\"summary\": \"   \"}")),
             Err(ToolParseError::MissingText)
@@ -4098,8 +3312,6 @@ mod tests {
 
     #[test]
     fn an_artifact_update_with_nothing_to_change_is_refused_with_both_shapes() {
-        // A note on its own changes nothing, and taking it as a version would
-        // put a row in the log for an edit that did not happen.
         let err =
             parse(&call(ARTIFACT, "{\"action\": \"update\", \"id\": \"a\", \"note\": \"x\"}"))
                 .unwrap_err();
@@ -4127,9 +3339,6 @@ mod tests {
 
     #[test]
     fn an_artifact_create_takes_the_words_a_model_reaches_for() {
-        // `html` for the page and `name` for the title are what a model sends
-        // when it has not read the schema. Refusing them costs a round trip to
-        // learn a synonym.
         let parsed = parse(&call(
             ARTIFACT,
             "{\"action\": \"make\", \"name\": \" Board \", \"html\": \"<p>hi</p>\"}",
@@ -4189,9 +3398,6 @@ mod tests {
                 action: ArtifactAction::Update { condensed: Some(ref c), page: None, .. }
             } if c == "<b>3</b>"
         ));
-        // The interval is a number, or a number a model wrote as a string.
-        // Whether either is a width or an interval the bar allows is the
-        // runtime's to say.
         assert_eq!(
             parse(&call(
                 ARTIFACT,
@@ -4238,9 +3444,6 @@ mod tests {
 
     #[test]
     fn the_artifact_tool_says_how_it_differs_from_a_fence_and_not_to_message_the_owner() {
-        // The two sentences that carry the design. Without the first a model
-        // keeps writing fences; without the second an edit becomes a message
-        // to the owner, which is a turn somebody pays for.
         let spec = spec(ARTIFACT);
         assert!(spec.description.contains("stays a fence"), "{}", spec.description);
         assert!(spec.description.contains("do not message it"), "{}", spec.description);
@@ -4248,9 +3451,6 @@ mod tests {
 
     #[test]
     fn a_calendar_add_carries_the_date_exactly_as_it_was_written() {
-        // Unparsed on purpose. A date the runtime cannot read has to come back
-        // to the model as a date with the two working shapes beside it, and a
-        // failure at this level would arrive as unknown-tool-shaped noise.
         let parsed = parse(&call(
             CALENDAR,
             "{\"action\": \"add\", \"title\": \"  Board call  \", \
@@ -4274,8 +3474,6 @@ mod tests {
 
     #[test]
     fn the_words_a_model_reaches_for_are_read_as_the_fields_they_mean() {
-        // `when`, `date`, `what`, `notes` and `location` all cost a round trip
-        // to be refused over, on a call that was otherwise correct.
         let parsed = parse(&call(
             CALENDAR,
             "{\"action\": \"create\", \"what\": \"Filing due\", \"date\": \"2026-04-15\", \
@@ -4298,8 +3496,6 @@ mod tests {
 
     #[test]
     fn a_length_sent_as_a_string_is_still_a_length() {
-        // A model asked for an integer sends `"60"` often enough that dropping
-        // it would silently lose the field it was setting.
         let parsed = parse(&call(
             CALENDAR,
             "{\"action\": \"add\", \"title\": \"Standup\", \
@@ -4315,9 +3511,6 @@ mod tests {
 
     #[test]
     fn an_absurd_length_reaches_the_runtime_rather_than_being_dropped_here() {
-        // 90000 is "an hour and a half" in seconds. Dropped, it reads back as
-        // an occasion with no length and the model never learns; saturated, it
-        // is refused with a reason.
         let parsed = parse(&call(
             CALENDAR,
             "{\"action\": \"add\", \"title\": \"Standup\", \
@@ -4333,9 +3526,6 @@ mod tests {
 
     #[test]
     fn an_update_leaves_out_what_it_is_not_changing() {
-        // The commonest edit is a new time on a meeting nobody renamed. Making
-        // an agent restate the title to move the clock is how a second occasion
-        // for one meeting gets written.
         let parsed = parse(&call(
             CALENDAR,
             "{\"action\": \"reschedule\", \"id\": \"abc\", \
@@ -4359,8 +3549,6 @@ mod tests {
 
     #[test]
     fn a_blank_calendar_field_is_padding_rather_than_an_erasure() {
-        // A model filling out every property it was shown must not wipe the
-        // title of a meeting it was only moving.
         let parsed = parse(&call(
             CALENDAR,
             "{\"action\": \"update\", \"id\": \"abc\", \"title\": \"  \", \
@@ -4377,8 +3565,6 @@ mod tests {
 
     #[test]
     fn a_calendar_call_with_no_action_lists() {
-        // The safe reading. Every other action changes something, and a model
-        // that forgot the field is far more likely to have meant "show me".
         assert_eq!(
             parse(&call(CALENDAR, "{}")).unwrap(),
             ToolInvocation::Calendar { action: CalendarAction::List }
@@ -4407,9 +3593,6 @@ mod tests {
 
     #[test]
     fn the_calendar_says_what_it_does_not_do() {
-        // The two sentences that stop a model reporting a booking it never
-        // made, and stop it reaching for this when it meant `schedule`. Both
-        // are failures the tool name invites.
         let spec = spec(CALENDAR);
         assert!(spec.description.contains("books nothing"), "{}", spec.description);
         assert!(spec.description.contains("wakes nobody"), "{}", spec.description);
@@ -4423,7 +3606,6 @@ mod tests {
         for tool in &listed {
             assert!(tool.summary.len() > 10 && tool.summary.ends_with('.'), "{tool:?}");
             assert!(!tool.summary.contains("  "), "{tool:?}");
-            // A tool that needs nothing is offered to an agent given nothing.
             assert_eq!(
                 tool.needs.is_none(),
                 offered(&tool.name, bare, Modalities::seeing()),
@@ -4479,9 +3661,6 @@ mod tests {
         }
         assert_eq!(kept.len(), offered.len() - 3, "everything else is the sender's: {kept:?}");
 
-        // The list an errand is offered and the calls it is refused are one
-        // rule. Every name taken off the list parses to something refused, so
-        // an errand that calls one anyway, under any spelling, is stopped.
         for (name, arguments) in [
             (ERRAND, r#"{"briefs":["again"]}"#),
             ("delegate_task", r#"{"tasks":[{"goal":"again"}]}"#),
@@ -4556,14 +3735,10 @@ mod tests {
 
     #[test]
     fn intent_is_read_from_the_declared_word_and_nothing_else() {
-        // The word is the whole mechanism: it decides whether the guard lets a
-        // message through to a peer that has already answered.
         let cases = [
             (r#""work""#, Intent::Work),
             (r#"" WORK ""#, Intent::Work),
             (r#""courtesy""#, Intent::Courtesy),
-            // Improvised, so it does not count. The refusal that follows names
-            // the word to use, and the model can send it again in the same turn.
             (r#""instruct""#, Intent::Courtesy),
             (r#""urgent""#, Intent::Courtesy),
             (r#""""#, Intent::Courtesy),
@@ -4581,9 +3756,6 @@ mod tests {
 
     #[test]
     fn a_message_that_declares_no_intent_is_a_courtesy() {
-        // The conservative default. A model that says nothing gets the
-        // behavior that held before the field existed, so a field left unset
-        // cannot quietly open the door the guard is holding shut.
         match parse(&call(SEND_MESSAGE, r#"{"to":["Chef"],"text":"hi"}"#)).unwrap() {
             ToolInvocation::SendMessage { intent, .. } => assert_eq!(intent, Intent::Courtesy),
             other => panic!("unexpected {other:?}"),
@@ -4592,8 +3764,6 @@ mod tests {
 
     #[test]
     fn an_invented_intent_still_delivers_the_message() {
-        // Rejecting the call outright would cost the recipient a message over a
-        // word, which is the retry loop this parser exists to avoid.
         let parsed =
             parse(&call(SEND_MESSAGE, r#"{"to":["Chef"],"text":"hi","intent":{"kind":"work"}}"#));
         assert!(parsed.is_ok(), "{parsed:?}");
@@ -4744,15 +3914,12 @@ mod tests {
 
     #[test]
     fn update_memory_takes_the_complete_new_contents() {
-        // Doubled hashes: a markdown heading inside the JSON would otherwise
-        // close an `r#"..."#` literal early.
         let parsed = parse(&call(UPDATE_MEMORY, r##"{"content":"# Style\nTerse."}"##)).unwrap();
         assert_eq!(parsed, ToolInvocation::UpdateMemory { content: "# Style\nTerse.".into() });
     }
 
     #[test]
     fn clearing_notes_is_allowed() {
-        // An empty string is an instruction, not a mistake.
         assert_eq!(
             parse(&call(UPDATE_MEMORY, r#"{"content":""}"#)).unwrap(),
             ToolInvocation::UpdateMemory { content: String::new() }
@@ -4761,10 +3928,6 @@ mod tests {
 
     #[test]
     fn the_memory_file_answers_to_both_of_its_names() {
-        // The operator's word for this file is memory; the tool is called
-        // `update_notes`. An agent told to update its memory writes the same
-        // file whichever word it reaches for, so a rejection here would cost a
-        // whole turn to say only that the two words mean one thing.
         for name in [UPDATE_MEMORY, "update_notes", "save_memory"] {
             assert_eq!(
                 parse(&call(name, r#"{"content":"kept"}"#)).unwrap(),
@@ -4806,73 +3969,40 @@ mod tests {
 
     #[test]
     fn the_memory_tool_asks_for_durable_things_and_sends_progress_elsewhere() {
-        // The description is the only control over what an agent writes, so
-        // every clause it turns on has to survive an edit.
         let text = spec(UPDATE_MEMORY).description.to_lowercase();
         assert!(text.contains("memory"), "{text}");
         assert!(text.contains("replaces the file"), "consolidation must be explicit");
-        // The number, not a hint at one. "Space is limited, so choose" is not
-        // something a model can write against: one tracking eight agents went
-        // four thousand characters over, was cut, rewrote, was cut again, and
-        // spent four calls of one turn on it.
         assert!(
             text.contains(&crate::workspace::MAX_MEMORY.to_string()),
             "the cap has to be a number it can budget against: {text}"
         );
-        // And which end goes, because that is where a model puts what it has
-        // just decided, so the loop above was eating the newest facts each time.
         assert!(text.contains("cut off the end"), "{text}");
 
-        // The index rule, which is what stops a memory becoming a second copy
-        // of documents the agent can already open. Without it an assistant
-        // spent 900 characters of a five-thousand character memory summarizing a report
-        // whose filename was three lines further up.
         assert!(text.contains("do not copy it"), "the index rule has gone: {text}");
 
-        // And where progress goes instead. Naming the other tool is the whole
-        // mechanism: an agent told only "not here" still has to put what it is
-        // waiting on somewhere, and with one store that somewhere was here.
         assert!(text.contains("note_progress"), "memory must name its counterpart: {text}");
     }
 
     #[test]
     fn the_progress_tool_says_when_a_note_is_worth_writing() {
         let text = spec(NOTE_PROGRESS).description.to_lowercase();
-        // The test is about the next turn, which is the only version of "is
-        // this worth a note" a model can actually answer while it is mid-turn.
         assert!(text.contains("later turn would go wrong"), "{text}");
         assert!(text.contains("one line"), "{text}");
 
-        // And the cases that filled the list, named as exclusions. A model
-        // given only a positive rule reads every borderline call as inside it,
-        // and these three are what a narrating turn reaches for.
         assert!(text.contains("already in the conversation"), "{text}");
         assert!(text.contains("not progress"), "{text}");
         assert!(text.contains("before this turn ends"), "{text}");
 
-        // The invitation this replaced. It is true about the cost of one note
-        // and was read as a reason to write one, and a crew took it: sixteen
-        // slots of a turn narrating itself, with what the agent was waiting on
-        // pushed off the end. Pinned so it cannot come back as a tidy-up.
         assert!(!text.contains("note freely"), "the invitation is back: {text}");
 
-        // That it forgets on its own is the sentence that stops an agent trying
-        // to curate the list, which is the operation this store exists to avoid
-        // asking for. It has to be told it cannot revise, and told why that is
-        // fine.
         assert!(text.contains("cannot edit"), "{text}");
         assert!(text.contains("drop off"), "{text}");
 
-        // And the line back, so a durable fact noted here gets moved rather
-        // than aging out of a memory it should have been in.
         assert!(text.contains("update_memory"), "progress must name its counterpart: {text}");
     }
 
     #[test]
     fn a_progress_note_takes_the_line_under_any_of_three_names() {
-        // A model that has just been told to write down where things stand
-        // reaches for whichever of these its training used. Refusing a near
-        // miss costs the whole turn.
         for name in [NOTE_PROGRESS, "log_progress", "note_status"] {
             assert_eq!(
                 parse(&call(name, r#"{"note":"waiting on the legal read"}"#)).unwrap(),
@@ -4891,23 +4021,15 @@ mod tests {
 
     #[test]
     fn an_empty_progress_note_is_refused_rather_than_stored() {
-        // Unlike a memory, where empty means clear. There is no clearing here
-        // and a blank row is one the agent reads back next turn and tries to
-        // interpret.
         for body in [r#"{"note":""}"#, r#"{"note":"   "}"#, "{}"] {
             let err = parse(&call(NOTE_PROGRESS, body)).unwrap_err();
             assert_eq!(err, ToolParseError::MissingNote, "{body}");
-            // And the way forward, which is not "try again with content": the
-            // agent usually wants the old note gone, and has to be told that
-            // noting the new state is how that happens.
             assert!(err.guidance().contains("note the new state"), "{}", err.guidance());
         }
     }
 
     #[test]
     fn creating_an_agent_takes_a_name_and_a_brief() {
-        // Doubled hashes: the markdown heading in `notes` would otherwise close
-        // an `r#"..."#` literal early.
         let parsed = parse(&call(
             CREATE_AGENT,
             r##"{"name":"  Chief of Product  ","instructions":"You own the roadmap.",
@@ -4929,8 +4051,6 @@ mod tests {
 
     #[test]
     fn the_brief_is_accepted_under_the_names_a_model_reaches_for() {
-        // A wrong guess here is not just a wasted turn: the retry asks the
-        // operator to approve the same agent a second time.
         for field in ["instructions", "system_prompt", "prompt", "role"] {
             let parsed =
                 parse(&call(CREATE_AGENT, &format!(r#"{{"name":"Scout","{field}":"You look."}}"#)));
@@ -4945,8 +4065,6 @@ mod tests {
 
     #[test]
     fn an_agent_with_no_brief_is_refused_with_a_usable_example() {
-        // A nameless or briefless agent would reach the operator as a request
-        // to approve nothing in particular.
         for arguments in [r#"{"instructions":"You look."}"#, r#"{"name":"Scout"}"#, "{}"] {
             let err = parse(&call(CREATE_AGENT, arguments)).unwrap_err();
             assert!(matches!(err, ToolParseError::IncompleteAgent { .. }), "{arguments}");
@@ -4976,9 +4094,6 @@ mod tests {
 
     #[test]
     fn creating_an_agent_says_it_needs_permission_and_starts_idle() {
-        // Both were real failures in the conversation this tool came from: an
-        // agent that reported it could not create anyone, and a crew created
-        // and then left waiting for work that was never sent.
         let spec = description(CREATE_AGENT);
         assert!(spec.contains("operator has to approve"), "{spec}");
         assert!(spec.contains("does nothing at all until somebody messages it"), "{spec}");
@@ -4990,8 +4105,6 @@ mod tests {
 
     #[test]
     fn creating_an_agent_offers_no_choice_of_model() {
-        // What a new agent costs to run is the operator's call, not a field a
-        // model can set on its own behalf.
         let spec = specs(Surfaces::both(), Modalities::seeing())
             .into_iter()
             .find(|s| s.name == CREATE_AGENT)
@@ -5068,9 +4181,6 @@ mod tests {
 
     #[test]
     fn a_file_is_attached_whichever_word_the_model_reached_for() {
-        // An agent that has just been told to give the operator a document
-        // reaches for whatever its training used. Each of these names this and
-        // nothing else, so refusing one costs a turn on spelling.
         for name in
             ["attach_file", "attach", "attach_files", "share_file", "show_file", "send_file"]
         {
@@ -5085,9 +4195,6 @@ mod tests {
 
     #[test]
     fn one_file_arrives_however_a_model_spells_the_argument() {
-        // The schema says an array under `files`. A single path under `path` is
-        // the near miss a model makes when it has exactly one document, and it
-        // is unambiguous.
         for arguments in [
             r#"{"files":["brief.md"]}"#,
             r#"{"files":"brief.md"}"#,
@@ -5110,16 +4217,12 @@ mod tests {
         for arguments in ["{}", r#"{"files":[]}"#, r#"{"files":""}"#] {
             let err = parse(&call(ATTACH_FILE, arguments)).unwrap_err();
             assert_eq!(err, ToolParseError::MissingFiles, "{arguments}");
-            // A refusal that only says no gets reworded and retried.
             assert!(err.guidance().contains("/home/user/brief.md"), "{}", err.guidance());
         }
     }
 
     #[test]
     fn attaching_is_offered_with_no_computer_and_no_browser() {
-        // Forwarding a file already in the channel is host-side and needs no
-        // machine at all, and an operator with no provider configured is
-        // exactly the person who still wants the document.
         let offered: Vec<String> = specs(Surfaces::none(), Modalities::seeing())
             .into_iter()
             .map(|spec| spec.name)
@@ -5135,8 +4238,6 @@ mod tests {
         }
     }
 
-    /// One connected plugin with every tool switched on, which is where every
-    /// plugin starts.
     fn toolset(kind: PluginKind, offered: Vec<PluginTool>) -> PluginToolset {
         PluginToolset { kind, offered, withheld: Vec::new(), elsewhere: Vec::new() }
     }
@@ -5146,17 +4247,11 @@ mod tests {
         let specs = plugin_specs(&[toolset(PluginKind::Neon, vec![plugin_tool("run_sql")])]);
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].name, "neon__run_sql");
-        // The description says where the call reaches. A model reading twenty
-        // of these has no other signal that `run_sql` is somebody's real
-        // database rather than a scratch one.
         assert!(specs[0].description.starts_with("Neon connector."), "{}", specs[0].description);
     }
 
     #[test]
     fn a_plugin_tool_a_provider_would_refuse_is_dropped_rather_than_renamed() {
-        // Providers validate a function name against `[A-Za-z0-9_-]{1,64}`.
-        // Renaming to fit would need a mapping back at call time, and a mapping
-        // nothing can see is how a call lands on the wrong tool.
         let offered = plugin_specs(&[toolset(
             PluginKind::Neon,
             vec![
@@ -5172,11 +4267,6 @@ mod tests {
 
     #[test]
     fn a_tool_this_agent_cannot_call_never_becomes_a_definition() {
-        // Not filtered out of the definitions later: it never becomes one. A
-        // model offered a tool it cannot call calls it, is refused on the call
-        // path, and spends the rest of the turn rewording the arguments it was
-        // refused for. Both lists, because both are refused: one because
-        // nobody has it and one because a peer does.
         let offered = plugin_specs(&[PluginToolset {
             kind: PluginKind::Stripe,
             offered: vec![plugin_tool("list_charges")],
@@ -5202,9 +4292,6 @@ mod tests {
 
     #[test]
     fn a_tool_name_containing_the_separator_keeps_its_own_name_whole() {
-        // Split on the first separator, not the last. A server with `run__sql`
-        // would otherwise have its own name torn in half and the call would go
-        // out as `sql`.
         let parsed = parse(&call("neon__run__sql", "{}")).unwrap();
         assert_eq!(
             parsed,
@@ -5218,8 +4305,6 @@ mod tests {
 
     #[test]
     fn a_name_that_is_not_a_plugin_is_still_an_unknown_tool() {
-        // The prefix has to be one of the three. Anything else is a model
-        // inventing a tool, and it has to be told so rather than dispatched.
         for name in ["github__issues", "__run_sql", "neon__", "run_sql"] {
             assert!(
                 matches!(parse(&call(name, "{}")), Err(ToolParseError::UnknownTool { .. })),

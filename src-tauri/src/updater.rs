@@ -1,24 +1,3 @@
-//! `guaca-updater`: the process beside a box's host that can replace it.
-//!
-//! A host cannot update itself. A container cannot swap its own image; what
-//! can is the Docker socket, which is root on the box, and guacad runs the
-//! shell commands agents ask for, so it must never hold one. The socket goes
-//! to a second container that runs nothing else, and guacad reaches it through
-//! a Unix socket on a volume the two share.
-//!
-//! It can be asked two things: how the host is, and to install the latest
-//! build on the box's channel whose manifest one of that channel's keys
-//! signed. Not an image, not a command, not a restore, and not a channel: the
-//! channel is the updater's own setting, fixed where the box was installed.
-//! That list is what makes it safe to leave within reach of an agent's shell:
-//! the most anything in the host can make it do is update the box to the
-//! newest build Guaca published on the channel the box already follows, which
-//! interrupts work and loses none.
-//!
-//! The sequence is the desktop's, in `host.rs`, run with a box's [`Spec`].
-//! After it has updated the host it replaces itself from the same release, so
-//! a fix to this file reaches a box without anybody logging in to it.
-
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -31,24 +10,16 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use crate::host::{self, LocalHost, Operation, Reach, Running, Spec, Target};
 use crate::updates::Channel;
 
-/// The host's container.
 pub const HOST: &str = "guacad";
-/// The updater's container, while it is the one serving.
 pub const UPDATER: &str = "guaca-updater";
-/// An updater that has been replaced, until its replacement is serving and
-/// removes it.
 const RETIRING: &str = "guaca-updater-retiring";
 const HOST_OWNER: &str = "bot.guaca.box";
 const UPDATER_OWNER: &str = "bot.guaca.updater";
-/// Where the journal lives: a volume only the updater mounts, so nothing in
-/// the host can rewrite what an interrupted update left.
 const STATE: &str = "guaca-updater";
 const STATE_DIR: &str = "/var/lib/guaca-updater";
-/// The volume the socket is on, mounted into both containers.
 const SOCKET: &str = "guaca-updater-socket";
 const SOCKET_DIR: &str = "/run/guaca-updater";
 
-/// What a box is configured with, handed to the host by name.
 pub const HOST_ENV: &[&str] = &[
     "GUACA_TOKEN",
     "GUACA_ORIGIN",
@@ -59,23 +30,12 @@ pub const HOST_ENV: &[&str] = &[
     "ANTHROPIC_API_KEY",
     "TZ",
 ];
-/// The updater's own settings. It carries these and the host's to the
-/// updater that replaces it, which is the only way they survive one.
-///
-/// The channel is here and not in `HOST_ENV`: a host learns its environment
-/// when it is made, and reinstalling replaces the updater and not the host,
-/// so the host asks the updater which channel it follows instead.
 const OWN_ENV: &[&str] = &["GUACA_PORT", "GUACA_VOLUME", "GUACA_CHANNEL"];
 
-/// The one line guacad sends.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "ask", rename_all = "camelCase")]
 pub enum Request {
     Status,
-    /// Install the latest signed build on the box's channel, which has to be
-    /// `version` from `commit`: the one the operator was shown and agreed to.
-    /// Every build of `main` carries the same version, so on that channel the
-    /// commit is the part that says which one, and it is required.
     Update {
         version: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -85,23 +45,17 @@ pub enum Request {
     },
 }
 
-/// How the box is, as the operator is shown it.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Report {
-    /// What this box installs. Absent from an older updater's report, which
-    /// only ever installed releases.
     #[serde(default)]
     pub channel: Channel,
     pub updating: bool,
     pub running: Option<Running>,
     pub operation: Option<Operation>,
-    /// Why the updater could not start the host, or refused the last update
-    /// before it began. A failure after that is in `operation`.
     pub error: Option<String>,
 }
 
-/// The host a box runs, as the updater makes it.
 pub fn host_spec() -> Result<Spec, String> {
     let port = match std::env::var("GUACA_PORT") {
         Ok(port) if !port.trim().is_empty() => {
@@ -132,12 +86,10 @@ pub fn host_spec() -> Result<Spec, String> {
     })
 }
 
-/// Where builds are read from, and the keys that have to have signed one.
 #[derive(Clone)]
 pub struct Source {
     pub channel: Channel,
     pub manifest: String,
-    /// Where a release's signature is. A build of `main` carries its own.
     pub downloads: String,
     pub keys: String,
 }
@@ -164,10 +116,7 @@ impl Source {
 pub struct Updater {
     host: LocalHost,
     source: Source,
-    /// Held from the moment an update is accepted until it has finished,
-    /// including the replacement of this updater.
     busy: AtomicBool,
-    /// Why the host could not be started, or the last update never began.
     problem: parking_lot::Mutex<Option<String>>,
 }
 
@@ -181,9 +130,6 @@ impl Updater {
             Ok(operation) => (operation, None),
             Err(error) => (None, Some(error)),
         };
-        // An update, not the manager's lock: the lock is also held while the
-        // host starts, and a box reported as updating then hides its button
-        // and draws a restart that is not happening.
         let unfinished = operation.as_ref().is_some_and(|op| !op.stage.finished());
         Report {
             channel: self.source.channel,
@@ -194,8 +140,6 @@ impl Updater {
         }
     }
 
-    /// Accepts an update and returns before it runs: the host this request
-    /// came through is about to be stopped.
     pub async fn update(
         self: &Arc<Self>,
         version: String,
@@ -251,8 +195,6 @@ impl Updater {
                 Channel::Main => format!("Main is now at {latest}, which is Guaca {}, not {version}. Check for updates and review it again.", release.version),
             });
         }
-        // Seven characters is the shortest spelling a person is shown, and a
-        // prefix any shorter would match builds nobody reviewed.
         if let Some(commit) = commit {
             if commit.len() < 7 || !release.commit.starts_with(commit) {
                 let reviewed = short(commit);
@@ -276,9 +218,6 @@ impl Updater {
         match self.host.update_attempt(&target, None, attempt_id).await {
             Ok(_) => {
                 tracing::info!(version = %target.version, %commit, "host updated");
-                // Before this updater replaces itself, because the one that
-                // replaces it removes this one, and whatever is after that
-                // line may never run.
                 let previous = self.host.operation().ok().flatten().map(|op| op.previous_image);
                 let docker = self.host.docker_path();
                 let own = own_image(docker).await.ok();
@@ -294,8 +233,6 @@ impl Updater {
             }
             Err(error) => {
                 tracing::warn!(%error, "host update did not finish");
-                // Refused before the sequence began, the journal still holds
-                // the last update, whose outcome is not this one's.
                 if self.journaled() == before {
                     *self.problem.lock() = Some(error);
                 }
@@ -307,7 +244,6 @@ impl Updater {
         self.host.operation().ok().flatten().and_then(|op| serde_json::to_string(&op).ok())
     }
 
-    /// Replaces this updater from the release the host now runs.
     async fn succeed(&self, image: &str) -> Result<(), String> {
         let docker = self.host.docker_path();
         if own_image(docker).await? == image {
@@ -316,8 +252,6 @@ impl Updater {
         install(docker, image).await
     }
 
-    /// Starts the host, and keeps trying while it will not start. The reason
-    /// is in every report until it does.
     async fn keep_started(&self) {
         loop {
             match self.host.start().await {
@@ -335,19 +269,12 @@ impl Updater {
     }
 }
 
-/// A commit as the operator is shown one.
 fn short(commit: &str) -> &str {
     commit.get(..7).unwrap_or(commit)
 }
 
-/// Where every host image a box installs comes from.
 const REPOSITORY: &str = "ghcr.io/madebywelch/guaca/guacad";
 
-/// Removes host images this box can no longer use: all but the one it runs
-/// now and the one before, which is what the one kept backup restores with.
-/// Docker refuses to remove an image a container still uses, and that one is
-/// left. Only this repository's images are looked at; anything the operator
-/// built or pulled under another name is theirs.
 async fn prune_images(docker: &Path, keep: &[&str]) {
     let listed = match host::run_docker(
         docker,
@@ -387,22 +314,16 @@ async fn prune_images(docker: &Path, keep: &[&str]) {
     }
 }
 
-/// How every updater is labeled, whatever it is named now.
 const MADE: (&str, &str) = (UPDATER_OWNER, UPDATER);
 
-/// Removes an updater that was renamed aside for a replacement.
 async fn retire(docker: &Path) -> Result<(), String> {
     if host::owned(docker, RETIRING, MADE).await?.is_some() {
-        // With the anonymous volume the image's VOLUME line gave it, which
-        // nothing mounts again and which would otherwise stay for good.
         host::run_docker(docker, &["rm", "--force", "--volumes", RETIRING], 60).await?;
         tracing::info!("removed the updater this one replaced");
     }
     Ok(())
 }
 
-/// The image the serving updater was made from, which is also what a box's
-/// first host is made from.
 async fn own_image(docker: &Path) -> Result<String, String> {
     let value = host::owned(docker, UPDATER, MADE).await?.ok_or(
         "This updater is not the one guaca-updater install made. Install it with deploy/box/install.sh.",
@@ -410,12 +331,7 @@ async fn own_image(docker: &Path) -> Result<String, String> {
     Ok(value["Config"]["Image"].as_str().unwrap_or_default().into())
 }
 
-/// Makes the updater container from `image`. One already there is renamed
-/// rather than removed, and named back if its replacement does not start;
-/// the replacement removes it once it is serving ([`serve`]).
 pub async fn install(docker: &Path, image: &str) -> Result<(), String> {
-    // Refused before the old updater is touched: the new one would refuse to
-    // serve, and the box would keep an updater nobody can replace from here.
     Channel::from_env()?;
     retire(docker).await?;
     let existing = host::owned(docker, UPDATER, MADE).await?.is_some();
@@ -435,7 +351,6 @@ pub async fn install(docker: &Path, image: &str) -> Result<(), String> {
         "--init",
         "--restart",
         "unless-stopped",
-        // The image's check asks the host's port, which this is not.
         "--no-healthcheck",
         "--user",
         "0",
@@ -463,22 +378,13 @@ pub async fn install(docker: &Path, image: &str) -> Result<(), String> {
     made.map(drop)
 }
 
-/// Serves until the process is stopped.
-///
-/// In this order: bind, retire the updater this one replaced, start the host,
-/// answer. Binding first means an updater that cannot serve never removes the
-/// one that can.
 #[cfg(unix)]
 pub async fn serve() -> Result<(), String> {
     let docker = host::docker_binary();
     let image = own_image(&docker).await?;
     let spec = host_spec()?;
-    // Refused here, before the bind, so a box installed with a channel nobody
-    // can read keeps the updater it had rather than one that guesses.
     let channel = Channel::from_env()?;
     let listener = bind(Path::new(host::UPDATER_SOCKET))?;
-    // Past the bind this updater is the one the host reaches, so nothing
-    // after it may stop it: an updater that exits here strands the box.
     if let Err(error) = retire(&docker).await {
         tracing::warn!(%error, "the updater this one replaced is still there");
     }
@@ -494,12 +400,9 @@ pub async fn serve() -> Result<(), String> {
 #[cfg(unix)]
 fn bind(path: &Path) -> Result<tokio::net::UnixListener, String> {
     use std::os::unix::fs::PermissionsExt;
-    // A socket left by the updater this one replaces, or by a crash.
     let _ = std::fs::remove_file(path);
     let listener = tokio::net::UnixListener::bind(path)
         .map_err(|e| format!("Could not listen on {}: {e}", path.display()))?;
-    // The host connects as its own unprivileged user. The volume is mounted
-    // into nothing else.
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o666))
         .map_err(|e| format!("Could not open {} to the host: {e}", path.display()))?;
     Ok(listener)
@@ -521,17 +424,13 @@ pub async fn listen(
     }
 }
 
-/// The longest request line read. Both requests fit in a hundred bytes.
 const MOST_REQUEST: u64 = 4096;
-/// The longest answer read. A report is a few hundred bytes.
 const MOST_ANSWER: u64 = 64 * 1024;
 
 #[cfg(unix)]
 async fn answer(stream: tokio::net::UnixStream, updater: &Arc<Updater>) -> std::io::Result<()> {
     let (read, mut write) = stream.into_split();
     let mut line = String::new();
-    // Anything in the host can connect, so a connection that never finishes
-    // its line is closed rather than held.
     tokio::time::timeout(
         Duration::from_secs(10),
         BufReader::new(read.take(MOST_REQUEST)).read_line(&mut line),
@@ -559,7 +458,6 @@ async fn answer(stream: tokio::net::UnixStream, updater: &Arc<Updater>) -> std::
     write.shutdown().await
 }
 
-/// Asks the box's updater one question, from the host.
 #[cfg(unix)]
 pub async fn ask(socket: &Path, request: &Request) -> Result<Value, String> {
     let unreachable = |e: std::io::Error| {
@@ -582,8 +480,6 @@ pub async fn ask(socket: &Path, request: &Request) -> Result<Value, String> {
             (None, None) => Err("The updater gave an answer the host cannot read.".into()),
         }
     };
-    // Long enough for a release lookup, which is the slow half of an update
-    // request; the update itself runs after the answer.
     tokio::time::timeout(Duration::from_secs(30), exchange)
         .await
         .map_err(|_| "The updater on this box took too long to answer. Try again.".to_string())?
@@ -630,7 +526,6 @@ mod tests {
         std::fs::write(dir.path().join("docker-state.json"), value.to_string()).unwrap();
     }
 
-    /// A box with a host, an updater, a release server and the key it signs with.
     struct Rig {
         dir: tempfile::TempDir,
         updater: Arc<Updater>,
@@ -649,7 +544,6 @@ mod tests {
         a_box_on(Channel::Release, failure, signed_by_us).await
     }
 
-    /// The commit the rig's build of `main` was made from.
     const TIP: &str = "e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0";
 
     async fn a_box_on(channel: Channel, failure: &str, signed_by_us: bool) -> Rig {
@@ -776,13 +670,11 @@ mod tests {
         assert_eq!(op.stage, host::Stage::Updated, "{:?}", op.error);
         let now = state(&bx.dir);
         assert!(now["container"]["Config"]["Image"].as_str().unwrap().contains("@sha256:"));
-        // The host is made with the socket and never with a value in its arguments.
         let made = now["created"].as_array().unwrap();
         assert!(made
             .iter()
             .any(|a| a.as_str().unwrap().contains("dst=/run/guaca-updater,readonly")));
         assert!(!made.iter().any(|a| a.as_str().unwrap().contains("GUACA_TOKEN=")));
-        // Then the updater: renamed aside, made again from the release, never removed by itself.
         let log = calls(&bx.dir);
         let renamed = log
             .iter()
@@ -904,7 +796,6 @@ mod tests {
         let earlier = json!({"stage":"Host updated","backup":"guacad-backup-0","previousImage":"older",
             "targetImage":"guacad:old","targetVersion":"0.1.0","error":null});
         std::fs::write(bx.dir.path().join("host-update.json"), earlier.to_string()).unwrap();
-        // Another manager holds the host, so the sequence never begins.
         let held = std::fs::File::create(bx.dir.path().join("host-update.lock")).unwrap();
         held.try_lock().unwrap();
         bx.updater.update(env!("CARGO_PKG_VERSION").into(), None).await.unwrap();
@@ -913,12 +804,6 @@ mod tests {
         assert_eq!((op.stage, op.target_version.as_str()), (host::Stage::Updated, "0.1.0"));
         let said = report.error.unwrap();
         assert!(said.contains("Another Guaca process"), "{said}");
-        // Released the way the product releases its own: `unlock` first, then
-        // close. Closing the descriptor alone leaves the lock on the open file
-        // description when a docker subprocess forked in that window is still
-        // holding a duplicate of it until exec, and the next attempt below is
-        // then refused by a lock nothing is really holding. `ProcessLock`'s
-        // `Drop` has the same two lines for the same reason.
         held.unlock().unwrap();
         drop(held);
         bx.updater.update(env!("CARGO_PKG_VERSION").into(), None).await.unwrap();
@@ -947,7 +832,6 @@ mod tests {
         assert!(now["others"][RETIRING].is_null());
         assert_eq!(now["others"][UPDATER]["Config"]["Image"], "guacad:new");
         assert_eq!(now["exists"], true, "the host is not the updater's to remove");
-        // Something else renamed to that name is somebody else's.
         let mut value = now;
         value["others"][RETIRING] = json!({"Config":{"Image":"x","Labels":{}}});
         write(&bx.dir, value);
@@ -989,8 +873,6 @@ mod tests {
         .await
         .unwrap_err();
         assert!(refused.contains("review it again"), "{refused}");
-        // A connection that never sends its line is let go, and the next is
-        // answered. The clock is paused, so the runtime skips the wait.
         tokio::time::pause();
         let mut silent = tokio::net::UnixStream::connect(&path).await.unwrap();
         let mut nothing = Vec::new();

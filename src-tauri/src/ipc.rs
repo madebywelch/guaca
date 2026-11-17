@@ -1,8 +1,3 @@
-//! The backend command surface. Browsers and native clients both use its HTTP
-//! dispatcher. Native-only host management lives in app.rs and holds no runtime.
-//! The macro keeps command names, argument shapes and responses in one place;
-//! ipc.contract.test.ts checks the frontend against this list.
-
 use crate::domain::decision::WorkDecision;
 use crate::domain::ids::DecisionId;
 use serde::{Deserialize, Serialize};
@@ -41,14 +36,6 @@ use crate::subscription::{DeviceCode, Status};
 
 use std::collections::HashMap;
 
-/// Why a call did not produce an answer.
-///
-/// Four cases rather than one string, because they are four different people's
-/// problems. An unknown command or malformed arguments is a client that is out
-/// of step with this build, which is the failure the contract test exists to
-/// prevent and which an operator can do nothing about. A [`CommandError`] is
-/// the command itself refusing, and it is the one the UI already knows how to
-/// draw. A result that will not serialize is this build's own bug.
 #[derive(Debug)]
 pub enum Refused {
     Unknown(String),
@@ -58,12 +45,6 @@ pub enum Refused {
 }
 
 impl Refused {
-    /// The status a transport should answer with.
-    ///
-    /// A refusal by the command is a 200 carrying a structured error, not an
-    /// HTTP failure: the webview has always received those as a rejected
-    /// promise with a `kind` on it, and turning half of them into 4xx would
-    /// give the client two ways to learn the same thing.
     pub const fn status(&self) -> u16 {
         match self {
             Refused::Unknown(_) => 404,
@@ -73,12 +54,10 @@ impl Refused {
         }
     }
 
-    /// What the client is told, in the shape it already parses.
     pub fn body(&self) -> CommandError {
         self.body_for(None)
     }
 
-    /// The same, naming which side to update when the client said what it is.
     pub fn body_for(&self, client: Option<&Client>) -> CommandError {
         match self {
             Refused::Unknown(name) => CommandError::new(
@@ -93,9 +72,6 @@ impl Refused {
                     skew(client)
                 ),
             ),
-            // Cloned whole rather than rebuilt from kind and message: a
-            // refusal that carries the layer underneath's words would lose
-            // them here, and it would look like a command that never had any.
             Refused::Command(err) => err.clone(),
             Refused::Answer(why) => CommandError::new(
                 "storage",
@@ -105,30 +81,19 @@ impl Refused {
     }
 }
 
-/// What a client says it is, on every call.
-///
-/// In the body rather than a header: a header an older host's CORS does not
-/// admit fails the preflight of every call, which turns a version skew into a
-/// workspace that cannot be reached at all.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Client {
     pub version: String,
-    /// The commit it was built from. A source build carries the version of
-    /// the last release, so two builds that agree on a version can disagree
-    /// about which commands exist, and only this tells them apart.
     #[serde(default)]
     pub build: String,
     #[serde(default)]
     pub desktop: bool,
-    /// One page load. What a sign-in's browser tab is addressed to, so the
-    /// window that asked opens it and the others do not.
     #[serde(default)]
     pub id: Option<String>,
 }
 
 impl Client {
-    /// The page id, if it is one: a short token, never text to repeat.
     pub fn page(&self) -> Option<String> {
         self.id.clone().filter(|id| {
             !id.is_empty()
@@ -137,8 +102,6 @@ impl Client {
         })
     }
 
-    /// The build, if it is one: a commit, possibly `-dirty`, never text to
-    /// repeat.
     pub fn build(&self) -> Option<&str> {
         is_build(&self.build).then_some(self.build.as_str())
     }
@@ -153,15 +116,11 @@ fn is_build(s: &str) -> bool {
     commit(s.strip_suffix("-dirty").unwrap_or(s))
 }
 
-/// Two builds known to be different code: both commits, and not one commit
-/// spelled at two lengths. A `-dirty` build matches only itself. The page's
-/// copy of this rule is `otherBuild` in `src/lib/releases.ts`.
 fn different_builds(a: &str, b: &str) -> bool {
     let same = a == b || (commit(a) && commit(b) && (a.starts_with(b) || b.starts_with(a)));
     is_build(a) && is_build(b) && !same
 }
 
-/// A commit as a person reads it: seven characters, and whether it was dirty.
 fn short(build: &str) -> String {
     let (hash, dirty) = match build.strip_suffix("-dirty") {
         Some(hash) => (hash, "-dirty"),
@@ -170,11 +129,6 @@ fn short(build: &str) -> String {
     format!("{}{dirty}", hash.get(..7).unwrap_or(hash))
 }
 
-/// The sentence that says which side of a skew to update.
-///
-/// Only a comparable release is ordered. Equal versions with different
-/// commands are two builds under one number, at least one of them from
-/// source, and a guess about which is older is worse than naming both.
 pub fn skew(client: Option<&Client>) -> String {
     skew_from(client, env!("CARGO_PKG_VERSION"), crate::updates::BUILD)
 }
@@ -227,7 +181,6 @@ impl std::fmt::Display for Refused {
     }
 }
 
-/// One call, answered.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Answered {
@@ -237,12 +190,7 @@ pub struct Answered {
 
 macro_rules! surface {
     ($( $name:ident ( $( $arg:ident : $ty:ty ),* $(,)? ) -> $ret:ty ),* $(,)?) => {
-        /// The server half: a name, some JSON arguments, and an answer.
         pub async fn dispatch(state: &AppState, name: &str, args: Value) -> Result<Value, Refused> {
-            // A call with no arguments arrives as `null` from some clients and
-            // `{}` from others, and both mean the same thing. Normalizing here
-            // rather than in each arm keeps the nineteen zero-argument commands
-            // from each needing a case.
             let args = if args.is_null() { Value::Object(Default::default()) } else { args };
             match name {
                 $(
@@ -257,11 +205,6 @@ macro_rules! surface {
                                 why: err.to_string(),
                             }
                         })?;
-                        // Annotated rather than inferred, so the return type
-                        // written in the list has to be the one the command
-                        // actually has. Without it the list could drift from
-                        // the implementation and only the desktop wrappers
-                        // would notice.
                         let value: $ret = commands::$name(state, $( $arg, )*)
                             .await
                             .map_err(Refused::Command)?;
@@ -272,11 +215,6 @@ macro_rules! surface {
             }
         }
 
-        /// Every command this build answers to.
-        ///
-        /// Read by `ipc.contract.test.ts`, which compares it against the calls
-        /// `src/lib/ipc.ts` can make. A name on one side and not the other is a
-        /// build failure rather than a click that does nothing.
         pub const NAMES: &[&str] = &[ $( stringify!($name), )* ];
     };
 }
@@ -450,9 +388,6 @@ mod tests {
 
     #[test]
     fn every_command_is_listed_exactly_once() {
-        // A duplicate compiles: the match arm is unreachable and the Tauri
-        // module fails, but only if the arities differ. This is the cheap check
-        // that the generated list is a set.
         let mut seen = NAMES.to_vec();
         seen.sort_unstable();
         let count = seen.len();
@@ -462,17 +397,11 @@ mod tests {
 
     #[test]
     fn the_surface_is_not_accidentally_empty() {
-        // The macro takes a trailing comma and an empty list, so a botched
-        // generation is a build that compiles and answers nothing.
         assert!(NAMES.len() > 90, "only {} commands reached the surface", NAMES.len());
     }
 
     #[tokio::test]
     async fn an_unknown_command_names_itself_and_says_what_to_do() {
-        // The failure this is written for is a client and a workspace on
-        // different builds, which on a server is routine rather than
-        // impossible. "unknown command" alone sends an operator to look at
-        // their crew.
         let refused = Refused::Unknown("summon_kraken".into());
         assert_eq!(refused.status(), 404);
         let body = refused.body();
@@ -497,8 +426,6 @@ mod tests {
         let page = client("0.0.1", "", false);
         let message = Refused::Unknown("x".into()).body_for(Some(&page)).message;
         assert!(message.contains("reload the page"), "{message}");
-        // A client at the host's own version that names no build, or no claim
-        // at all, cannot be told apart, and the message does not pretend otherwise.
         let same = client(env!("CARGO_PKG_VERSION"), "", true);
         for client in [Some(&same), None] {
             let message = Refused::Unknown("x".into()).body_for(client).message;
@@ -508,10 +435,6 @@ mod tests {
 
     #[test]
     fn one_version_on_two_builds_names_both_builds() {
-        // The failure this is for: a source-built app carries the version of
-        // the release before it, so against that release's host the versions
-        // agree and the commands do not. "Different versions" was false and
-        // the Host pane agreed with neither side.
         let release = "c15bd9a58d5e4406c92f4ad65ca263a35d68a492";
         let app = client("0.2.0", "79961bb-dirty", true);
         let message = skew_from(Some(&app), "0.2.0", release);
@@ -523,7 +446,6 @@ mod tests {
         let page = client("0.2.0", "79961bb", false);
         assert!(skew_from(Some(&page), "0.2.0", release).contains("reload the page"));
 
-        // One commit at two lengths, and one dirty tree on both sides, are one build.
         for build in ["c15bd9a", release] {
             let same = client("0.2.0", build, true);
             assert!(skew_from(Some(&same), "0.2.0", release).contains("whichever is older"));
@@ -532,13 +454,10 @@ mod tests {
         assert!(skew_from(Some(&dirty), "0.2.0", "d02c114-dirty").contains("whichever is older"));
         assert!(skew_from(Some(&dirty), "0.2.0", "d02c114").contains("different builds"));
 
-        // A client older than the field still parses, and names no build.
         let older: Client =
             serde_json::from_value(serde_json::json!({"version": "0.2.0"})).unwrap();
         assert_eq!(older.build(), None);
 
-        // A host built without a commit knows nothing to compare, and a
-        // build that is not a commit is not repeated back.
         assert!(skew_from(Some(&app), "0.2.0", "").contains("whichever is older"));
         let odd = client("0.2.0", "<script>", true);
         assert!(skew_from(Some(&odd), "0.2.0", release).contains("whichever is older"));
@@ -546,9 +465,6 @@ mod tests {
 
     #[test]
     fn a_command_refusing_is_not_an_http_failure() {
-        // The webview has always received a refusal as a rejected promise
-        // carrying a `kind`. Making half of them a 4xx would give the client
-        // two ways to learn one thing, and the two would disagree.
         let refused = Refused::Command(CommandError::new("duplicateName", "there are two Pips"));
         assert_eq!(refused.status(), 200);
         assert_eq!(refused.body().kind, "duplicateName");
@@ -556,8 +472,6 @@ mod tests {
 
     #[test]
     fn the_layer_underneath_a_refusal_reaches_the_page_that_draws_it() {
-        // A detail dropped here would be a disclosure that opens onto nothing,
-        // and it would look like a command that never had one.
         let refused = Refused::Command(
             CommandError::new("plugin", "could not reach http://127.0.0.1:9/mcp")
                 .with_detail("error sending request for url (http://127.0.0.1:9/mcp)"),
@@ -566,8 +480,6 @@ mod tests {
             refused.body().detail.as_deref(),
             Some("error sending request for url (http://127.0.0.1:9/mcp)")
         );
-        // And an ordinary refusal carries none, so the panel has nothing to
-        // fold away and the field does not serialize at all.
         let plain = Refused::Command(CommandError::new("validation", "there are two Pips"));
         assert_eq!(plain.body().detail, None);
         assert!(!serde_json::to_string(&plain.body()).unwrap().contains("detail"));

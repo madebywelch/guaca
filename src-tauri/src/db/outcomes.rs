@@ -1,12 +1,3 @@
-//! What each finished run ended in. See `domain/outcome.rs` for what an outcome
-//! is and why the runtime records it rather than a model.
-//!
-//! Every fact here is one the store already holds when the run settles: the
-//! message the run began with, the owner's newest note to the operator, the
-//! newest failed call, and what the run left on the desk. So the row is written
-//! inside the commit that settles the run, and the runtime hands it nothing but
-//! what only the runtime knows: how the run came to settle, and what it spent.
-
 use rusqlite::{params, Connection, OptionalExtension, Row, TransactionBehavior};
 
 use super::store::row_to_envelope;
@@ -23,28 +14,16 @@ const ENVELOPE: &str = "m.id,m.run_id,m.channel_id,m.from_kind,m.from_agent,m.to
 const COLUMNS: &str = "run_id,agent_id,group_id,trigger,trigger_ref,status,headline,note_id,needs,\
      steps,started_at,finished_at,seen_at";
 
-/// What a recurring check that found nothing says it did. Its agent was told
-/// to say nothing in that case, and that Guaca would say this instead.
 pub const NOTHING_NEW: &str = "Ran and found nothing new.";
 
-/// A notice the guard wrote in a channel: a limit reached, a stop, or work
-/// that ended without a word about it.
 const GUARD_STOP: &str = "EXISTS (SELECT 1 FROM json_each(m.parts) \
      WHERE json_extract(value,'$.type')='notice' AND json_extract(value,'$.kind')='guardStop')";
 
-/// The most a list returns, whatever it was asked for.
 pub const LIST_MAX: u32 = 500;
 
-/// A failed model call, as the runtime writes one: a notice of its own.
 const FAILED: &str = "EXISTS (SELECT 1 FROM json_each(m.parts) \
      WHERE json_extract(value,'$.type')='notice' AND json_extract(value,'$.kind')='upstreamError')";
 
-/// Writes the outcome of a run that has just settled, in the caller's commit.
-///
-/// Nothing for a run taken into another run's turn, whose answer is that run's
-/// outcome; for a run whose owner is gone to the compost; and for a run this
-/// file cannot say what started. Nothing either for a run that already has
-/// one, so settling twice can never announce twice.
 pub(super) fn record(
     tx: &Connection,
     run: RunId,
@@ -68,17 +47,9 @@ pub(super) fn record(
         "DESC",
         params![run.to_string(), owner.to_string()],
     )?;
-    // Failed when the last word is the failure: a call that failed and was
-    // followed by a closing note is a run that recovered, and calling it failed
-    // would put the wrong word beside the right headline.
     let failure = first(tx, FAILED, "DESC", params![run.to_string()])?
         .filter(|failure| note.as_ref().is_none_or(|note| failure.created_at > note.created_at));
     let needs = left_open(tx, run)?;
-    // A routine's run that ended without a word from its owner, with nothing
-    // left open and nothing the guard had to say about it in the owner's
-    // channel. The runtime writes that notice whenever silence left work
-    // unreported, so a run without one is a check that ran again, found
-    // nothing, and was told to say nothing in that case.
     let quiet = note.is_none()
         && needs.is_empty()
         && matches!(trigger, Trigger::Routine | Trigger::Event)
@@ -128,9 +99,6 @@ pub(super) fn record(
     Ok(Some(outcome))
 }
 
-/// Writes what may tell the operator about a run, in the commit that records
-/// it. Logged rather than raised when it cannot be written: the outcome is
-/// what For you lists, and losing it over a banner would lose both.
 fn announce(tx: &Connection, outcome: &Outcome) {
     let written = super::outbox::name_of(tx, outcome.agent_id).and_then(|name| {
         match crate::domain::outbox::for_outcome(outcome, &name.unwrap_or_default()) {
@@ -143,14 +111,6 @@ fn announce(tx: &Connection, outcome: &Outcome) {
     }
 }
 
-/// Writes `interrupted` for a run a restart is reporting, in the recovery's
-/// commit. `original` is the message the run began with and `notice` the line
-/// the restart wrote beside it, which is what the outcome points at: it is
-/// where Try again is.
-///
-/// What it spent is counted from what the store kept, a usage row for every
-/// call that answered and a notice for every one that failed, because the
-/// runtime that counted it is the process that died.
 pub(super) fn record_interrupted(
     tx: &Connection,
     original: &Envelope,
@@ -190,7 +150,6 @@ pub(super) fn record_interrupted(
     Ok(())
 }
 
-/// Who a run belongs to, and what started it.
 struct Owner {
     agent: AgentId,
     group: GroupId,
@@ -198,8 +157,6 @@ struct Owner {
     trigger_ref: Option<String>,
 }
 
-/// The owner of a run that began with `start`. None for an owner that no
-/// longer exists or has been deleted.
 fn owned(tx: &Connection, start: &Envelope) -> Result<Option<Owner>, StoreError> {
     let Participant::Agent { id: owner } = start.to else { return Ok(None) };
     let Some((trigger, trigger_ref)) = Trigger::of(start) else { return Ok(None) };
@@ -215,8 +172,6 @@ fn owned(tx: &Connection, start: &Envelope) -> Result<Option<Owner>, StoreError>
     Ok(Some(Owner { agent: owner, group, trigger, trigger_ref }))
 }
 
-/// The first message of a run that matches `filter`, in `order`: the oldest
-/// with `ASC`, the newest with `DESC`. `?1` in `args` is the run.
 fn first(
     tx: &Connection,
     filter: &str,
@@ -236,8 +191,6 @@ fn first(
     found.transpose()
 }
 
-/// What a run filed that is still waiting on the operator: its decisions still
-/// pending, then the escalation it raised if nobody has cleared it.
 fn left_open(tx: &Connection, run: RunId) -> Result<Vec<Need>, StoreError> {
     let run = run.to_string();
     let mut needs = Vec::new();
@@ -270,7 +223,6 @@ fn notice_text(message: &Envelope) -> String {
         .unwrap_or_default()
 }
 
-/// True when the row is new.
 fn insert(tx: &Connection, outcome: &Outcome) -> Result<bool, StoreError> {
     let needs = (!outcome.needs.is_empty())
         .then(|| serde_json::to_string(&outcome.needs).expect("a list of ids serializes"));
@@ -337,16 +289,6 @@ fn read(row: &Row<'_>) -> rusqlite::Result<Result<Outcome, StoreError>> {
     })())
 }
 
-/// The message `run` began with, when the turn reading `batch` is the one that
-/// closes it for `agent`: the agent owns the run, the run has an owner at all
-/// (the operator, a routine or a decision answer started it), every peer the
-/// agent handed work to in it has answered since it last did, and one of those
-/// answers is in the batch. `run` is every message of the run, oldest first.
-///
-/// The last condition is what keeps a courtesy out. A peer that answered and
-/// then wrote again to say thanks has the agent waiting on nobody, and its
-/// thanks is still not the end of anything: only the first word back after an
-/// ask is an answer.
 fn closes<'a>(run: &'a [Envelope], agent: AgentId, batch: &[MessageId]) -> Option<&'a Envelope> {
     let start = run.first()?;
     let me = Participant::Agent { id: agent };
@@ -380,8 +322,6 @@ fn closes<'a>(run: &'a [Envelope], agent: AgentId, batch: &[MessageId]) -> Optio
 }
 
 impl Store {
-    /// The message `run` began with, when the turn of `agent` that is reading
-    /// `batch` is the one that closes the run. See [`closes`].
     pub fn closing_start(
         &self,
         run: RunId,
@@ -399,8 +339,6 @@ impl Store {
         Ok(closes(&messages, agent, batch).cloned())
     }
 
-    /// Finished runs, newest first: everything since `since` in one group or
-    /// all of them, or only what the operator has not seen.
     pub fn outcomes(
         &self,
         since: Option<i64>,
@@ -428,15 +366,6 @@ impl Store {
         Ok(outcomes)
     }
 
-    /// What `agent` has already reported in `group` about runs that started
-    /// before `before`, newest first: the conversations its history window no
-    /// longer reaches, as the lines they ended with.
-    ///
-    /// A recurring check that found nothing reported nothing, so it is neither
-    /// listed nor counted against `limit`: an hourly check would otherwise push
-    /// out every line the agent did write. A run with nothing left in the
-    /// agent's channel was cleared by the operator, who wanted it gone from what
-    /// the agent reads back, and its line would bring it back.
     pub fn reported(
         &self,
         agent: AgentId,
@@ -478,13 +407,6 @@ impl Store {
         found.transpose()
     }
 
-    /// Marks unseen outcomes seen: the runs named, or every one that finished
-    /// by `before`, or the runs named that finished by then. Returns the runs
-    /// it marked, so every other window can drop the same rows.
-    ///
-    /// Bounded by a time rather than by "all", because a list on screen is a
-    /// moment: a run that finished after it was drawn is one the operator has
-    /// not read, and a Mark all seen that took it too would lose it.
     pub fn mark_outcomes_seen(
         &self,
         runs: Option<&[RunId]>,
@@ -503,8 +425,6 @@ impl Store {
         )
     }
 
-    /// Marks seen every outcome owned by the agent whose channel the operator
-    /// is looking at.
     pub fn mark_channel_seen(&self, agent: AgentId, now: i64) -> Result<Vec<RunId>, StoreError> {
         self.mark_seen_where("agent_id=?1", params![agent.to_string()], now)
     }
@@ -533,7 +453,6 @@ impl Store {
                 AND run_id IN (SELECT value FROM json_each(?1))",
             params![marked_json, now],
         )?;
-        // Seen is read: nothing still waiting to announce these runs should.
         super::outbox::withdraw_runs(&tx, &marked_json)?;
         tx.commit()?;
         marked
@@ -566,8 +485,6 @@ mod tests {
         (card.id, card.group_id)
     }
 
-    /// A run of `agent`'s that began in its channel at `started` and ended in
-    /// `headline`. Without `kept`, the operator has since cleared the channel.
     #[allow(clippy::too_many_arguments)]
     fn ran(
         store: &Store,
@@ -618,7 +535,6 @@ mod tests {
             let status = if i == 12 { Status::NeedsYou } else { Status::Done };
             ran(&store, me, group, &format!("Line {i}."), status, at, at + 50, true);
         }
-        // Each of these is newer than every line above and would push one out.
         for i in 1..=3 {
             let at = 2_000 + i * 100;
             ran(&store, me, group, NOTHING_NEW, Status::NothingNew, at, at + 50, true);
@@ -626,7 +542,6 @@ mod tests {
         ran(&store, other, group, "Chef's line.", Status::Done, 3_000, 3_050, true);
         ran(&store, me, GroupId::new(), "In the old group.", Status::Done, 3_100, 3_150, true);
         ran(&store, me, group, "Cleared.", Status::Done, 3_200, 3_250, false);
-        // Started inside the window: its messages are on screen already.
         ran(&store, me, group, "Still on screen.", Status::Done, window, window + 50, true);
         ran(&store, me, group, "Newer still.", Status::Done, window + 100, window + 150, true);
 
@@ -675,20 +590,15 @@ mod tests {
         let thanks = say(chef, me, Intent::Courtesy);
 
         let mut run = vec![start.clone(), to_chef, to_bo, from_chef.clone()];
-        // Bo has not answered, so this turn finishes nothing.
         assert!(closes(&run, a, &[from_chef.id]).is_none());
 
         run.push(from_bo.clone());
-        // Both have; the turn reading Bo's answer is the one that closes it,
-        // and so is a turn that read both answers together.
         assert_eq!(closes(&run, a, &[from_bo.id]).map(|e| e.id), Some(start.id));
         assert_eq!(closes(&run, a, &[from_chef.id, from_bo.id]).map(|e| e.id), Some(start.id));
 
-        // A courtesy from a peer that had already answered closes nothing.
         run.push(thanks.clone());
         assert!(closes(&run, a, &[thanks.id]).is_none());
 
-        // Nor does a run some other agent owns, or one nobody handed work out in.
         assert!(closes(&run, b, &[from_bo.id]).is_none());
         let chat = vec![start, say(me, chef, Intent::Courtesy), thanks.clone()];
         assert!(closes(&chat, a, &[thanks.id]).is_none());

@@ -1,6 +1,4 @@
 pub mod account;
-/// The desktop client: the window, the menu bar and the local host's container.
-/// It builds no runtime; agents run in `guacad`.
 #[cfg(feature = "desktop")]
 pub mod app;
 pub mod artifact;
@@ -21,26 +19,21 @@ pub mod llm;
 pub mod mcp;
 pub mod menubar;
 pub mod notebook;
-/// Whether macOS will show what a window raises. Only a window raises anything.
 #[cfg(feature = "desktop")]
 pub mod notifications;
 pub mod oauth;
 pub mod pickup;
 pub mod plugins;
-/// A control channel into a test build. Its protocol is compiled into the unit
-/// tests everywhere; the socket only into a build with the `probe` feature.
 #[cfg(any(test, feature = "probe"))]
 pub mod probe;
 pub mod probe_clock;
 pub mod programs;
 pub mod proxy;
 pub mod push;
-/// A source build rebuilding itself. Only a window has an app to replace.
 #[cfg(feature = "desktop")]
 pub mod rebuild;
 pub mod runtime;
 pub mod secrets;
-/// The server host: the same runtime, reached over HTTP and a socket.
 #[cfg(feature = "server")]
 pub mod server;
 pub mod skills;
@@ -50,7 +43,6 @@ pub mod subscription;
 mod testing;
 pub mod trajectory;
 pub mod transfer;
-/// The other one.
 #[cfg(feature = "desktop")]
 pub mod tray;
 #[cfg(feature = "server")]

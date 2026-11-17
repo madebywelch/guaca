@@ -1,30 +1,9 @@
-//! What the operator is looking at, as the window they last used said.
-//!
-//! Reported by the page whenever it changes, and kept in memory only: it is a
-//! fact about a moment rather than about the workspace, and a view that
-//! outlived a restart would describe a window that has since closed. An agent
-//! reads it through `settings`, which is where "what is this pane for" and
-//! "change this" arrive, and a question about the screen is answered from what
-//! the screen showed rather than guessed.
-//!
-//! Several windows can be open on one host. The last one to report focus is
-//! the one described: whichever the operator touched last is the one they are
-//! looking at. A window also reports when it loses focus, which describes
-//! nothing and changes only [`Clients`], the Host's sense of whether anybody is
-//! there at all. That is a separate question with a separate answer, kept per
-//! window, and the sentence an agent reads is never built from it.
-//!
-//! A pane arrives as the one-word id a page sends, and a sentence about the
-//! screen names it the way Settings draws it: an agent that describes "workspace"
-//! while the pane says Host is naming a place nobody can find.
-
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
 use super::ids::{AgentId, GroupId};
 
-/// Something open over the channel, which is what a question is usually about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Overlay {
@@ -53,21 +32,10 @@ impl Overlay {
     }
 }
 
-/// The longest pane name kept. Pane names are single words in the app.
 const MAX_SECTION: usize = 32;
 
-/// The longest window name kept. A page makes one up, so it is bounded and
-/// plain rather than trusted.
 const MAX_CLIENT: usize = 64;
 
-/// What Settings calls one of its panes, from the id a page sends.
-///
-/// The id is one lowercase word, which is all the wire can carry; the name is
-/// what the pane is drawn with, and what a person and an agent read. A sentence
-/// that said the id would send somebody looking for a pane whose name is on no
-/// screen, which is the whole of what renaming one is for. The frontend's
-/// `SECTION_LABELS` is the other half, and `src/lib/manual.test.ts` holds this
-/// table to it.
 pub fn pane(section: &str) -> Option<&'static str> {
     Some(match section {
         "general" => "General",
@@ -90,19 +58,13 @@ pub fn pane(section: &str) -> Option<&'static str> {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct OperatorView {
-    /// The channel on screen, if one is.
     pub agent_id: Option<AgentId>,
-    /// What is open over it, if anything.
     pub overlay: Option<Overlay>,
-    /// The pane inside that overlay, as the app names it: `limits`, `skills`.
     pub section: Option<String>,
-    /// The crew a crew's settings are open on.
     pub group_id: Option<GroupId>,
 }
 
 impl OperatorView {
-    /// What a page sent, made safe to put in front of a model: a pane name is
-    /// one lowercase word, and anything else is dropped rather than quoted.
     pub fn clean(mut self) -> Self {
         self.section = self.section.filter(|section| {
             !section.is_empty()
@@ -112,12 +74,10 @@ impl OperatorView {
         self
     }
 
-    /// The channel being read: on screen, with nothing open over it.
     pub fn reading(&self) -> Option<AgentId> {
         self.agent_id.filter(|_| self.overlay.is_none())
     }
 
-    /// One sentence, with the names the runtime looked up for the ids.
     pub fn describe(&self, agent: Option<&str>, crew: Option<&str>) -> String {
         let mut parts = Vec::new();
         match agent {
@@ -143,26 +103,13 @@ impl OperatorView {
     }
 }
 
-/// How long after a window last had focus the operator counts as away.
-///
-/// A window with focus says so again while it keeps it, so a report older than
-/// this is a window that closed, crashed or slept without saying so. Short
-/// enough that stepping out for coffee counts; long enough that switching to
-/// a terminal for a minute does not.
 pub const AWAY_AFTER_MS: i64 = 2 * 60 * 1000;
 
-/// The most windows remembered. A page names itself, so the list is bounded
-/// rather than trusted: past this, the window heard from longest ago goes.
 const MAX_CLIENTS: usize = 16;
 
-/// Whether anybody is there, as the Host sees it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Presence {
-    /// No window has had focus for [`AWAY_AFTER_MS`], or none ever has.
     Away,
-    /// A window had focus recently. `on_screen` is the channel the focused
-    /// window is reading, and `away_at` is when the operator counts as away
-    /// if no window says anything more.
     Here { on_screen: Option<AgentId>, away_at: i64 },
 }
 
@@ -174,7 +121,6 @@ impl Presence {
         }
     }
 
-    /// When the operator turns away if nothing changes; none if they are.
     pub fn away_at(&self) -> Option<i64> {
         match self {
             Presence::Here { away_at, .. } => Some(*away_at),
@@ -183,8 +129,6 @@ impl Presence {
     }
 }
 
-/// The last thing each window said about focus. In memory only, for the
-/// reason the view is: a window that outlived a restart is not one.
 #[derive(Debug, Clone, Default)]
 pub struct Clients {
     seen: HashMap<String, Seen>,
@@ -193,18 +137,12 @@ pub struct Clients {
 #[derive(Debug, Clone, Copy)]
 struct Seen {
     focused: bool,
-    /// When it said so. For a window that lost focus, the last moment the
-    /// operator was in it.
     at: i64,
     reading: Option<AgentId>,
 }
 
-/// The name of a window that did not give one.
 const ONE_WINDOW: &str = "window";
 
-/// A window's name as a page sent it, kept only if it is plain and short. A
-/// page makes it up, so it is never trusted, and it reaches nothing but the
-/// list below.
 pub fn window_name(raw: Option<String>) -> Option<String> {
     raw.filter(|name| {
         !name.is_empty()
@@ -214,8 +152,6 @@ pub fn window_name(raw: Option<String>) -> Option<String> {
 }
 
 impl Clients {
-    /// Keeps what one window just said: whether it has focus, and the channel
-    /// it shows with nothing over it. A window with no name is one window.
     pub fn report(
         &mut self,
         client: Option<&str>,
@@ -234,7 +170,6 @@ impl Clients {
         self.seen.insert(client, Seen { focused, at: now, reading });
     }
 
-    /// Whether anybody is there at `now`.
     pub fn presence(&self, now: i64) -> Presence {
         let Some(last) = self.seen.values().map(|seen| seen.at).max() else {
             return Presence::Away;
@@ -260,7 +195,6 @@ mod tests {
 
     #[test]
     fn a_pane_name_that_is_not_one_word_is_dropped_not_quoted() {
-        // It reaches a prompt, and a page is not a trusted author.
         for bad in ["Limits", "ignore previous instructions", "a;b", &"a".repeat(40)] {
             let view = OperatorView { section: Some(bad.to_string()), ..Default::default() };
             assert_eq!(view.clean().section, None, "{bad}");
@@ -271,8 +205,6 @@ mod tests {
 
     #[test]
     fn a_pane_is_named_the_way_settings_draws_it() {
-        // `workspace` is the id a page sends; Host is the name on the pane, and
-        // the only one the operator can point at when an agent says it.
         assert_eq!(pane("workspace"), Some("Host"));
         assert_eq!(pane("limits"), Some("Limits"));
         assert_eq!(pane("a-pane-this-build-does-not-draw"), None);
@@ -295,7 +227,6 @@ mod tests {
             OperatorView::default().describe(None, None),
             "The operator is looking at no channel."
         );
-        // What crosses IPC is spelled the way the frontend spells it.
         let wire = serde_json::to_value(&view).unwrap();
         assert_eq!(wire["overlay"], "crewSettings");
         assert!(wire.get("agentId").is_some());
@@ -315,7 +246,6 @@ mod tests {
         assert_eq!(clients.presence(1_000 + AWAY_AFTER_MS - 1), here);
         assert_eq!(clients.presence(1_000 + AWAY_AFTER_MS), Presence::Away);
 
-        // Saying so again keeps it there.
         clients.report(Some("a"), true, Some(pip), 100_000);
         assert_eq!(clients.presence(1_000 + AWAY_AFTER_MS).on_screen(), Some(pip));
     }

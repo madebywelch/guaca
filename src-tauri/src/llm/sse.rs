@@ -1,12 +1,3 @@
-//! Server-sent events decoding.
-//!
-//! Hand-rolled rather than pulled from a crate, because the requirement is
-//! twenty lines of state machine and the failure mode that matters (a JSON
-//! payload split across two TCP chunks) is exactly what a dependency would
-//! also have to handle. Writing it here means it is testable against that
-//! case directly.
-
-/// Accumulates raw bytes and yields complete `data:` payloads.
 #[derive(Debug, Default)]
 pub struct SseDecoder {
     buffer: String,
@@ -17,15 +8,10 @@ impl SseDecoder {
         Self::default()
     }
 
-    /// Feeds a chunk and returns every complete data payload it completed.
-    ///
-    /// A partial trailing line stays buffered until the rest arrives, which is
-    /// the whole point: streamed JSON is routinely cut mid-token.
     pub fn push(&mut self, chunk: &str) -> Vec<String> {
         self.buffer.push_str(chunk);
         let mut out = Vec::new();
 
-        // Only consume up to the last newline; whatever follows is incomplete.
         let Some(last_newline) = self.buffer.rfind('\n') else {
             return out;
         };
@@ -35,27 +21,19 @@ impl SseDecoder {
             let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
 
             if line.is_empty() {
-                // Event boundary. OpenAI-compatible streams put one data line
-                // per event, so there is nothing to flush here.
                 continue;
             }
-            // SSE comments. OpenRouter sends `: OPENROUTER PROCESSING` as a
-            // keepalive while a request is queued; treating it as data would
-            // blow up the JSON parse.
             if line.starts_with(':') {
                 continue;
             }
             if let Some(payload) = line.strip_prefix("data:") {
                 out.push(payload.trim_start().to_string());
             }
-            // Any other field (event:, id:, retry:) is irrelevant here.
         }
 
         out
     }
 
-    /// Whatever is left unterminated. Used to report a truncated stream rather
-    /// than silently returning a short response.
     pub fn remainder(&self) -> &str {
         &self.buffer
     }
@@ -73,7 +51,6 @@ mod tests {
 
     #[test]
     fn buffers_a_payload_split_across_chunks() {
-        // The case that breaks naive implementations.
         let mut d = SseDecoder::new();
         assert!(d.push("data: {\"choices\":[{\"delta\":{\"cont").is_empty());
         assert!(d.push("ent\":\"hel").is_empty());
@@ -136,8 +113,6 @@ mod tests {
 
     #[test]
     fn a_byte_at_a_time_stream_decodes_identically() {
-        // Worst-case chunking. If this matches the single-chunk result, the
-        // decoder has no chunk-boundary assumptions left.
         let full = "data: alpha\n\ndata: beta\n\ndata: [DONE]\n\n";
         let mut one_shot = SseDecoder::new();
         let expected = one_shot.push(full);

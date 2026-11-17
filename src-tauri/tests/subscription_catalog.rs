@@ -1,4 +1,3 @@
-//! The subscription selector reads the authenticated catalog, without a CLI.
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -89,8 +88,6 @@ async fn catalog(status: StatusCode, body: Value, expire: bool) -> Catalog {
     }
 }
 
-/// What the service does with `client_version`: a model whose floor is above
-/// it is left out, and one that does not parse is refused.
 fn version(raw: &str) -> Option<(u64, u64, u64)> {
     let mut parts = raw.split('.').map(|part| part.parse().ok());
     let parsed = (parts.next()??, parts.next()??, parts.next()??);
@@ -151,9 +148,6 @@ async fn live_offers_replace_the_compiled_list_in_priority_order() {
 
 #[tokio::test]
 async fn no_model_is_left_out_for_being_newer_than_guaca() {
-    // The floors the service put on the GPT-6 family. A pinned 0.153.3 showed
-    // the first and silently dropped the second, and the third stands for the
-    // next family, which must not need a release of Guaca to appear.
     let server = catalog(
         StatusCode::OK,
         json!({"models":[

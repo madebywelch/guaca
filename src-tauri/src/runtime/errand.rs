@@ -1,36 +1,3 @@
-//! Running errands: the agent's own model, once per brief, inside the turn
-//! that sent them.
-//!
-//! What an errand is and what bounds it is `domain/errand.rs`. This is the
-//! loop, and the one decision it makes is where it runs: inside the sending
-//! turn's tool call, on that turn's run, rather than as a job of its own. That
-//! is what lets everything the runtime already does for a run cover an errand
-//! with no second copy of it:
-//!
-//! - **The budget.** Every model call an errand makes is a step claimed from
-//!   the run, so `max_steps_per_run` is still the one ceiling on spend and the
-//!   trajectory suite still reads `steps == calls + failures` off the same
-//!   ledger.
-//! - **The stop.** The operator stops a conversation, not an agent, and an
-//!   errand is part of the conversation that sent it. It looks for the stop at
-//!   the boundaries a turn does, and its model calls are raced against it the
-//!   same way.
-//! - **Settling.** The sending turn is still holding its envelope while its
-//!   errands work, so the run cannot be reported finished under them.
-//! - **The answer.** It lands in the context that asked for it, as the result
-//!   of the call, rather than as a message on a run of its own. An errand is
-//!   bounded to `errand::ROUNDS` model calls, and a turn that had to be woken
-//!   again to read its answer would lose everything it knew when it asked.
-//!
-//! An errand acts as the agent: the same card, so the same tools, the same
-//! gates and the same places, and every call it makes is drawn in the agent's
-//! own trail. What it does not share is state a turn keeps for itself (what it
-//! has read, what it has attached), which each errand keeps apart and hands
-//! back. What it has read starts from what the turn had read when it sent the
-//! errand, because a gate that a page closed on the turn has to stay closed on
-//! the turn's errands, and a page an errand reads comes back to close it on
-//! the turn.
-
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -49,17 +16,9 @@ use crate::llm::tools::{self, ToolInvocation};
 use crate::runtime::events::UiEvent;
 use crate::runtime::guard::GuardLimits;
 
-/// What an errand borrows from the turn that sent it, read once by that turn.
-///
-/// Every field is something the turn already decided before its first call,
-/// and the errand is held to the same answer rather than reading any of it
-/// again: a model or a tool list resolved twice can disagree with itself.
 pub(super) struct Sender<'a> {
     pub card: &'a AgentCard,
     pub run_id: RunId,
-    /// The placeholder the sending turn is writing into. An errand's calls are
-    /// reported against it, so the operator watches them happen in the turn
-    /// that sent it rather than nowhere.
     pub stream_id: MessageId,
     pub inbound_hop: u16,
     pub cause: Option<MessageId>,
@@ -68,32 +27,16 @@ pub(super) struct Sender<'a> {
     pub inference: &'a InferenceConfig,
     pub model: &'a str,
     pub modalities: Modalities,
-    /// The tools the sending turn was offered, in the order it was offered
-    /// them. An errand is offered these less the three it is never given.
     pub offered: &'a [ToolSpec],
     pub named: &'a [PluginKind],
 }
 
-/// The computer and the browser, as the errands of one call hand them on.
 struct Place {
-    /// Where the browser was left. See `Reading::url`.
     url: Option<String>,
-    /// Whether any errand took them at all.
     used: bool,
 }
 
 impl Runtime {
-    /// Sends the errands one call asked for and waits for all of them.
-    ///
-    /// Returns the call's result for the sending turn and, separately, every
-    /// call the errands made, which belong in that turn's trail before the
-    /// errand call itself: they are what it did.
-    ///
-    /// `reading` is the sending turn's, and it goes both ways. Each errand
-    /// starts from a copy of it, so a page the turn read still gates what an
-    /// errand does; when they are all back, it takes in what any of them read,
-    /// so a page an errand read still gates what the turn does next. Between
-    /// the errands themselves nothing is shared but where the browser was left.
     pub(super) async fn send_errands(
         &self,
         from: &Sender<'_>,
@@ -126,16 +69,6 @@ impl Runtime {
             }
             Ok(ToolInvocation::Errand { briefs }) => {
                 let offered = tools::for_errands(from.offered.iter().cloned());
-                // Held by whichever errand first reaches for a computer or a
-                // browser, for as long as that errand lasts. Each of the two
-                // is one thing, and two errands working one page at once each
-                // undo what the other did.
-                //
-                // What it guards is where the browser was left, which is the
-                // one part of a reading that belongs to the browser rather than
-                // to whoever read: an errand that takes the browser after
-                // another has used it presses on the page that one left, not
-                // on the page the turn last saw.
                 let places = Arc::new(tokio::sync::Mutex::new(Place {
                     url: reading.url.clone(),
                     used: false,
@@ -154,19 +87,12 @@ impl Runtime {
                     errands.push(done);
                     trail.extend(parts);
                     reading.ingested |= read;
-                    // Handed on to the answer the sending turn is composing,
-                    // which is where a document an errand made belongs: the
-                    // errand has no answer of its own that anybody reads.
                     for file in files {
                         if !attached.iter().any(|held| held.digest == file.digest) {
                             attached.push(file);
                         }
                     }
                 }
-                // An errand that used the computer or the browser may have read
-                // something anywhere and left the browser somewhere else, so
-                // the turn's yes for one site does not survive it, and the
-                // turn's next press is judged where the browser now is.
                 let place = places.lock().await;
                 if place.used {
                     reading.allowed = None;
@@ -188,9 +114,6 @@ impl Runtime {
                 };
                 (errand::for_caller(&errands), outcome, trail)
             }
-            // The turn only sends a call here once it has parsed as an errand,
-            // so this is a defect rather than a model's mistake, and it says
-            // so rather than dispatching something nothing checked.
             Ok(_) => {
                 let error = "a call that was not an errand reached the errand path".to_string();
                 tracing::error!(agent = %from.card.name, tool = %call.name, "{error}");
@@ -211,14 +134,6 @@ impl Runtime {
         (ToolResult { rendered, part, image: None }, trail)
     }
 
-    /// One errand, from its brief to its answer.
-    ///
-    /// The round loop of `run_turn` with everything a turn does for the
-    /// operator taken out: no placeholder, no intake, no reply. What is left is
-    /// the budget, the stop and the tools, each exactly as the turn has them.
-    ///
-    /// Hands back, beside its answer, whether it has read a page or a screen,
-    /// counting what the turn had read before it was sent.
     #[allow(clippy::too_many_arguments)]
     async fn run_errand(
         &self,
@@ -237,12 +152,6 @@ impl Runtime {
             ChatMessage::user(errand::brief(brief)),
         ];
 
-        // A turn's own state, one of each per errand. Sharing `reading` would
-        // let a page one errand read gate a click another errand chose for
-        // reasons of its own; sharing `attached` would hand one errand's file
-        // to another's answer. `reading` starts from the turn's rather than
-        // from nothing, because what the turn read before it wrote the brief
-        // is part of every errand's reasons.
         let mut reading = sent.for_errand();
         let mut addressed = HashSet::new();
         let mut attached: Vec<Attachment> = Vec::new();
@@ -281,19 +190,12 @@ impl Runtime {
                 .await
             {
                 Ok(Some(completion)) => completion,
-                // Stopped mid-call. The step goes back for the reason the
-                // turn's does: nothing was answered and nothing failed, so a
-                // step left claimed is a bill naming a call that never was.
                 Ok(None) => {
                     self.inner.guard.lock().run_within(from.run_id, from.limits).release_step();
                     ending = Ending::Stopped;
                     break;
                 }
                 Err(err) => {
-                    // Written where the turn writes its own, and for the same
-                    // two readers: the operator, who should know the provider
-                    // refused something even though the turn carried on, and
-                    // the run's bill, which counts a failed call by its notice.
                     self.notice(
                         card.id,
                         from.run_id,
@@ -313,10 +215,6 @@ impl Runtime {
             }
 
             if completion.tool_calls.is_empty() {
-                // The answer, and the same test the turn applies to its own
-                // last sentence. A turn that closes on a promise is given a
-                // round to keep it; an errand is not, because the turn that
-                // sent it is still there to read the promise and decide.
                 ending = if completion.content.trim().is_empty()
                     || promise::promises_work(&completion.content).is_some()
                 {
@@ -338,9 +236,6 @@ impl Runtime {
                     ending = Ending::Stopped;
                     break 'rounds;
                 }
-                // Unique across the turn's whole trail. The model numbers its
-                // calls from one in every conversation, and three errands each
-                // calling `call_0` would be three chips the UI files as one.
                 let shown = ToolCall {
                     id: format!("{}:{}:{}", call.id, index + 1, inner.id),
                     ..inner.clone()
@@ -419,11 +314,6 @@ impl Runtime {
         )
     }
 
-    /// A call an errand is never given, refused where the operator can see it.
-    ///
-    /// Drawn like any other call, with its reason, for the reason a refused
-    /// send keeps its own chip: it is the runtime stopping something, and that
-    /// is the part of the trail somebody may have to act on.
     fn refuse_in_errand(
         &self,
         from: &Sender<'_>,

@@ -1,26 +1,3 @@
-//! Stopping a host without ending the work on it, and picking that work up on
-//! the next one.
-//!
-//! An update replaces the process every agent runs in, and on a box that
-//! follows `main` that is several times a day. Ending every conversation in
-//! flight each time, and asking the operator to send each one again, was the
-//! price of one rule: nothing interrupted in the middle of an action is ever
-//! repeated, because nobody can say whether it finished.
-//!
-//! A drain keeps the rule and stops paying the price. A host asked to stop
-//! stops starting things, and every turn in flight halts at the next boundary
-//! a stop already uses, where each call it made has come back and been written
-//! down. A model call in the air is dropped rather than waited out: it has no
-//! effect outside this process, and waiting would hold the update for as long
-//! as the model thinks. What the turn did is recorded in its channel, its
-//! messages are put down with that record, and the next host delivers them
-//! again with the record in the prompt. The work carries on from a point
-//! nobody has to vouch for. See `prompt::resumed` for what the turn is told.
-//!
-//! What does not reach a boundary in time is not put down, and the next host
-//! reports it interrupted exactly as a crash is reported: a turn still inside
-//! a tool call when the process ends is the case the rule exists for.
-//!
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -35,18 +12,10 @@ use crate::domain::envelope::{Envelope, Intent, NoticeKind, Part, Participant, T
 use crate::domain::ids::{AgentId, MessageId, RunId};
 use crate::domain::now_ms;
 
-/// How often a drain looks to see whether everything is down.
-///
-/// A look is two uncontended locks. Every way work gets put down would need a
-/// wake-up of its own otherwise, and a missed one would hold the host up for
-/// the whole window.
 const LOOK: Duration = Duration::from_millis(50);
 
-/// What a drain came to, for the host to log.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Drained {
-    /// Agents still in the middle of something when the time ran out. The
-    /// next host reports their conversations interrupted.
     pub working: Vec<String>,
 }
 
@@ -57,17 +26,6 @@ impl Drained {
 }
 
 impl Runtime {
-    /// Brings every agent to a halt at its next boundary and puts its work down
-    /// for the next host, waiting at most `within`.
-    ///
-    /// Nothing starts after this is called: no turn and no routine.
-    /// Messages still arrive and are kept, put down for the next host rather
-    /// than queued here.
-    ///
-    /// `within` has to be shorter than what the host is given to stop in, or
-    /// the process is killed with the drain half done. That is still safe, only
-    /// wasteful: every put-down is its own commit, and whatever had not been
-    /// put down is reported interrupted.
     pub async fn drain(&self, within: Duration) -> Drained {
         let began = tokio::time::Instant::now();
         let live: Vec<RunId> = {
@@ -80,14 +38,9 @@ impl Runtime {
             "the host is stopping: putting work down for the next one"
         );
 
-        // A turn parked on the operator is waiting for an answer that cannot
-        // come in time. Expired rather than refused, as a stop does it: nobody
-        // said no, and the turn picked up later asks again.
         for run in &live {
             self.release_parked(*run);
         }
-        // Every model call in flight is raced against this, and every paused
-        // actor parks on it.
         let notifiers: Vec<Arc<Notify>> =
             self.inner.inboxes.lock().values().map(|inbox| inbox.resume.clone()).collect();
         for resume in notifiers {
@@ -132,22 +85,6 @@ impl Runtime {
         names
     }
 
-    /// Puts envelopes down for the next host.
-    ///
-    /// `booked` are still counted against their runs, and are released here
-    /// without settling them: a run whose last booking is put down is handed on
-    /// whole, not finished, and emits nothing. `taken` were taken into the
-    /// running turn and are still counted against their own runs until it
-    /// ends, so they are released here too. `absorbed` were taken into a turn
-    /// on the last host, which released them, so only their rows are written.
-    /// `records` go with the first of `booked`, which is the message the turn
-    /// was answering.
-    ///
-    /// A routine firing that was taken in travels with that first message and
-    /// is redone, or reported, as part of it: its occurrence names the turn's
-    /// run as its owner. Its own run has nothing left to hand on, so it settles
-    /// here, before the rest is written. Handed on as well, it would be
-    /// reported interrupted beside the turn that carries it on.
     pub(super) fn put_down(
         &self,
         booked: &[Envelope],
@@ -215,7 +152,6 @@ impl Runtime {
             })
             .collect();
         drop(guard);
-        // Under the lock, so `whole` is still true when it is written.
         if let Err(err) =
             self.inner.store.put_down_with_absorbed(&messages, &whole, &routine_absorbed)
         {
@@ -223,11 +159,6 @@ impl Runtime {
         }
     }
 
-    /// Hands a run on whole: the last of it that was running has ended, and
-    /// the rest is put down.
-    ///
-    /// Called with the run lock held, by `track_inflight`, so it takes no lock
-    /// of its own but the guard's.
     pub(super) fn mark_whole(&self, runs: &[RunId]) {
         let guard = self.inner.guard.lock();
         let whole: Vec<_> = runs
@@ -242,11 +173,6 @@ impl Runtime {
         }
     }
 
-    /// Puts down everything an actor is holding: the envelope it has just
-    /// taken, its holding queue, and whatever is still in its inbox.
-    ///
-    /// What the operator stopped is ended as a stop ends it, with the notice,
-    /// because work called off is never picked up.
     pub(super) fn put_down_queue(
         &self,
         agent: AgentId,
@@ -297,14 +223,6 @@ impl Runtime {
         self.idle(agent);
     }
 
-    /// Ends a turn the host stopped at a boundary: writes down what it did, in
-    /// its own channel, and puts its messages down with that record.
-    ///
-    /// The record is the only thing the next turn learns the calls from, so a
-    /// turn whose record cannot be written is not put down at all. It stays
-    /// counted, the drain runs out of time on it, and the next host reports
-    /// it interrupted: repeating its calls blind is the one outcome worse
-    /// than that.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn put_turn_down(
         &self,
@@ -368,20 +286,11 @@ impl Runtime {
         self.idle(card.id);
     }
 
-    /// The records of what a turn picked up after a restart had already done,
-    /// taken so no other turn reads them.
     pub(super) fn resumed(&self, batch: &[Envelope]) -> (Vec<MessageId>, Vec<MessageId>) {
         let mut resuming = self.inner.resuming.lock();
         batch.iter().find_map(|envelope| resuming.remove(&envelope.id)).unwrap_or_default()
     }
 
-    /// Picks up what the last host put down. Called once at boot, after the
-    /// actors start and before the scheduler does, so an agent with work to
-    /// carry on reads as busy to the first sweep.
-    ///
-    /// Each conversation carries on against the budget it had spent, not a
-    /// fresh one: an update every few hours must not be a way for a cascade to
-    /// outlive its limits.
     pub fn pick_up(&self, recovered: Recovered) {
         let Recovered { resumed, steps, guards, .. } = recovered;
         let conversations = steps.len();
@@ -425,8 +334,6 @@ impl Runtime {
             }
             envelopes.push(put.envelope);
         }
-        // All at once, because the actors are already running: one handed its
-        // first message alone would start on it before the rest arrived.
         self.queue_all(envelopes);
         if messages > 0 {
             tracing::info!(messages, conversations, "picked up the work the last host put down");

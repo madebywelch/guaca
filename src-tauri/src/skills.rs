@@ -1,25 +1,3 @@
-//! Skills on disk: one directory per skill, holding its `SKILL.md`.
-//!
-//! Files rather than rows, for the reason memory is a file: a skill is a
-//! document a person may want to write in their own editor, carry to another
-//! harness, or drop into the volume of a box, and a table would make every one
-//! of those an export. `domain::skill` holds the rules; this holds the disk.
-//!
-//! ```text
-//! skills/
-//!   workspace/<name>/SKILL.md        the operator's, read by every crew
-//!   workspace/<name>/references/...  anything else the skill carries
-//!   workspace/<name>/.origin         where it was added from, if anywhere
-//!   crews/<group id>/<name>/SKILL.md one crew's
-//!   .defaults                        the starter skills already offered
-//! ```
-//!
-//! Bundled skills are compiled in and never touch the disk, so a host that
-//! was updated serves the manual of the build it runs rather than a copy an
-//! older build left behind. The starter skills are the opposite: copied into
-//! the operator's scope once, because they are the operator's to edit or
-//! delete, and a deleted one stays deleted.
-
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -29,11 +7,8 @@ use crate::domain::skill::{
     self, Clean, Package, Scope, Skill, SkillError, MAX_BODY, MAX_DESCRIPTION, MAX_FILES,
 };
 
-/// Skills that ship with Guaca, as `(name, file)`.
 const BUNDLED: &[(&str, &str)] = &[("guaca", include_str!("../skills/guaca/SKILL.md"))];
 
-/// The license the starter skills came under, carried beside each one so it
-/// travels wherever the skill is copied.
 const STARTER_LICENSE: &str = include_str!("../skills/defaults/LICENSE");
 
 macro_rules! starter {
@@ -48,10 +23,6 @@ macro_rules! starter {
     };
 }
 
-/// What every workspace starts with, adapted from Hermes Agent's own
-/// (`skills/defaults/LICENSE` says which, and at what commit). Kept to general
-/// procedure: nothing that names a program an agent here cannot run, a
-/// platform it is not on, or a tool it does not have.
 pub const STARTERS: &[(&str, &[(&str, &str)])] = &[
     starter!("grounded-citations"),
     starter!("grill-me"),
@@ -61,10 +32,8 @@ pub const STARTERS: &[(&str, &[(&str, &str)])] = &[
     starter!("meeting-action-items"),
 ];
 
-/// Where a skill added from elsewhere says it came from.
 const ORIGIN: &str = ".origin";
 
-/// The starter skills a workspace has already been given, one name a line.
 const OFFERED: &str = ".defaults";
 
 #[derive(Debug, thiserror::Error)]
@@ -116,7 +85,6 @@ impl Skills {
         }
     }
 
-    /// The skills compiled into this build.
     pub fn bundled() -> Vec<Skill> {
         BUNDLED
             .iter()
@@ -136,7 +104,6 @@ impl Skills {
             .collect()
     }
 
-    /// Every skill in one scope, in name order, without bodies.
     pub fn in_scope(&self, scope: Scope) -> Vec<Skill> {
         let Some(dir) = self.dir(scope) else {
             return Self::bundled().into_iter().map(without_body).collect();
@@ -152,8 +119,6 @@ impl Skills {
                 match self.load(scope, &name) {
                     Ok(found) => Some(without_body(found)),
                     Err(err) => {
-                        // Somebody's hand-written file. Skipped rather than
-                        // failing the whole list, and said where it can be read.
                         tracing::warn!(%err, skill = %name, "a skill could not be read");
                         None
                     }
@@ -164,8 +129,6 @@ impl Skills {
         found
     }
 
-    /// What an agent in `group` can read, one per name: its crew's own over
-    /// the operator's, and Guaca's own beside both.
     pub fn visible(&self, group: GroupId) -> Vec<Skill> {
         let mut all = self.in_scope(Scope::Crew { group_id: group });
         all.extend(self.in_scope(Scope::Workspace));
@@ -177,8 +140,6 @@ impl Skills {
         all
     }
 
-    /// One skill with its body, resolved the way `visible` resolves names.
-    /// `None` reads as the operator does, without a crew.
     pub fn read(&self, group: Option<GroupId>, name: &str) -> Result<Skill, SkillsError> {
         let mut scopes = Vec::with_capacity(3);
         if let Some(group_id) = group {
@@ -194,7 +155,6 @@ impl Skills {
         Err(SkillsError::NotFound(name.to_string()))
     }
 
-    /// One skill in exactly one scope.
     pub fn load(&self, scope: Scope, name: &str) -> Result<Skill, SkillsError> {
         skill::check_name(name)?;
         let Some(dir) = self.dir(scope) else {
@@ -212,8 +172,6 @@ impl Skills {
             Err(err) => return Err(io(&path)(err)),
         };
         let (_, description, body) = skill::parse(&text)?;
-        // Read leniently: a file somebody wrote by hand past a limit is still
-        // served, cut, rather than hidden. Only a write is refused for size.
         let (description, _) = crate::domain::cut_to(&description, MAX_DESCRIPTION);
         let (body, cut) = crate::domain::cut_to(&body, MAX_BODY);
         let body = if cut { format!("{body}\n\n[The rest of this skill was cut.]") } else { body };
@@ -228,8 +186,6 @@ impl Skills {
             .ok()
             .map(|text| text.trim().to_string())
             .filter(|text| !text.is_empty());
-        // The directory is the name. It is what every write and delete
-        // addresses, and a file that says otherwise is still found by it.
         Ok(Skill {
             name: name.to_string(),
             description,
@@ -241,8 +197,6 @@ impl Skills {
         })
     }
 
-    /// One file a skill carries, resolved the way [`Skills::read`] resolves
-    /// the skill. Served cut past [`MAX_BODY`], like a body.
     pub fn read_file(
         &self,
         group: Option<GroupId>,
@@ -253,9 +207,6 @@ impl Skills {
         let path = path.trim().trim_start_matches("./");
         skill::check_file(path)?;
         let no_file = || SkillsError::NoFile { name: found.name.clone(), path: path.to_string() };
-        // Listed means readable: a path that is not in the listing is refused
-        // here rather than resolved on disk, so a symlink a skill carried in
-        // cannot point a read somewhere else.
         if !found.files.iter().any(|listed| listed == path) {
             return Err(no_file());
         }
@@ -270,7 +221,6 @@ impl Skills {
         Ok(if cut { format!("{text}\n\n[The rest of this file was cut.]") } else { text })
     }
 
-    /// Creates or replaces one skill in one scope.
     pub fn write(&self, scope: Scope, clean: &Clean) -> Result<Skill, SkillsError> {
         let Some(dir) = self.dir(scope) else {
             return Err(SkillsError::ReadOnly(clean.name.clone()));
@@ -287,13 +237,6 @@ impl Skills {
         self.load(scope, &clean.name)
     }
 
-    /// Puts a skill written elsewhere into one scope, whole: its `SKILL.md` as
-    /// its author wrote it, every file beside it, and where it came from.
-    ///
-    /// Assembled in a hidden directory and renamed into place, so a crew never
-    /// reads a skill whose references are half written, and a failure leaves
-    /// nothing behind. Never over one already there: an operator who meant to
-    /// replace one deletes it first, and one who did not mean to keeps theirs.
     pub fn install(
         &self,
         scope: Scope,
@@ -337,8 +280,6 @@ impl Skills {
         self.load(scope, &package.name)
     }
 
-    /// Moves one skill to another name in the same scope, with everything it
-    /// carries. False when the new name is taken, which leaves both alone.
     pub fn rename(&self, scope: Scope, from: &str, to: &str) -> Result<bool, SkillsError> {
         skill::check_name(from)?;
         skill::check_name(to)?;
@@ -353,12 +294,6 @@ impl Skills {
         Ok(true)
     }
 
-    /// Copies each starter skill into the operator's scope the first time a
-    /// workspace is opened by a build that ships it, and never again.
-    ///
-    /// A name is offered once. One the operator deleted is not put back on
-    /// the next start, and one they already had under that name is left as
-    /// theirs rather than overwritten. Returns the names added.
     pub fn offer(&self, starters: &[(&str, &[(&str, &str)])]) -> Result<Vec<String>, SkillsError> {
         let ledger = self.root.join(OFFERED);
         let mut offered: Vec<String> = match fs::read_to_string(&ledger) {
@@ -377,8 +312,6 @@ impl Skills {
             let package = Package::new(name, files)?;
             match self.install(Scope::Workspace, &package, None) {
                 Ok(_) => added.push(name.to_string()),
-                // The operator's own under that name, or a scope with no room:
-                // theirs either way, and not asked again.
                 Err(SkillsError::Taken(_)) | Err(SkillsError::Invalid(SkillError::Full)) => {}
                 Err(err) => return Err(err),
             }
@@ -393,7 +326,6 @@ impl Skills {
         Ok(added)
     }
 
-    /// Removes one skill from one scope. False when there was none.
     pub fn delete(&self, scope: Scope, name: &str) -> Result<bool, SkillsError> {
         skill::check_name(name)?;
         let Some(dir) = self.dir(scope) else {
@@ -407,7 +339,6 @@ impl Skills {
         }
     }
 
-    /// Everything one crew wrote, when the crew is gone.
     pub fn forget_crew(&self, group: GroupId) {
         if let Some(dir) = self.dir(Scope::Crew { group_id: group }) {
             if let Err(err) = fs::remove_dir_all(&dir) {
@@ -424,9 +355,6 @@ fn without_body(mut found: Skill) -> Skill {
     found
 }
 
-/// Every file under a skill's directory but its `SKILL.md` and Guaca's own dot
-/// names, as sorted relative paths. Regular files only: a symlink is not
-/// followed, so nothing a skill carries can list a file outside it.
 fn beside(folder: &Path) -> Vec<String> {
     let mut found = Vec::new();
     let mut pending = vec![(folder.to_path_buf(), String::new())];
@@ -494,9 +422,6 @@ mod tests {
             );
             assert!(package.description.starts_with("Use "), "{name} says when to load it");
             let (_, _, body) = skill::parse(&package.text).unwrap();
-            // Written for another harness first, or for a Guaca that had tools
-            // this one no longer has. Each of these is a tool or a word a model
-            // here would try to call or look for.
             for foreign in [
                 "`shell`",
                 "`code`",
@@ -611,7 +536,6 @@ mod tests {
         let on_disk =
             fs::read_to_string(skills.dir(Scope::Workspace).unwrap().join("pdf/SKILL.md"));
         assert!(on_disk.unwrap().contains("license: MIT"));
-        // Listed with the rest, and its files never counted as skills.
         assert_eq!(skills.in_scope(Scope::Workspace).len(), 1);
     }
 
@@ -633,7 +557,6 @@ mod tests {
             let missing = matches!(refused, SkillsError::NoFile { .. });
             assert!(if expect_invalid { invalid } else { missing }, "{path}: {refused}");
         }
-        // Another crew does not see the skill at all.
         let other = skills.read_file(Some(GroupId::new()), "pdf", "reference.md").unwrap_err();
         assert!(matches!(other, SkillsError::NotFound(_)), "{other}");
     }
@@ -679,12 +602,10 @@ mod tests {
         assert_eq!(skills.load(Scope::Workspace, "cite").unwrap().files, ["LICENSE.txt"]);
         assert_eq!(skills.load(Scope::Workspace, "mine").unwrap().description, "the operator's");
 
-        // Deleted by the operator, and a later start does not put it back.
         skills.delete(Scope::Workspace, "cite").unwrap();
         assert!(skills.offer(first).unwrap().is_empty());
         assert!(matches!(skills.load(Scope::Workspace, "cite"), Err(SkillsError::NotFound(_))));
 
-        // A later build that ships one more offers only the new one.
         let later: &[(&str, &[(&str, &str)])] =
             &[("cite", &[("SKILL.md", STARTER)]), ("grill", &[("SKILL.md", STARTER)])];
         assert_eq!(skills.offer(later).unwrap(), ["grill"]);
@@ -706,7 +627,6 @@ mod tests {
         }
         let refused = skills.write(scope, &clean("one-more", "x")).unwrap_err();
         assert!(matches!(refused, SkillsError::Invalid(SkillError::Full)), "{refused}");
-        // Rewriting one already there is not growth.
         assert!(skills.write(scope, &clean("s0", "again")).is_ok());
     }
 }

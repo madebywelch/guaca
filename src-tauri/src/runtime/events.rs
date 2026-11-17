@@ -1,9 +1,3 @@
-//! Events pushed from the runtime to the UI.
-//!
-//! Behind a trait so the runtime can be tested without a webview. The Tauri
-//! implementation lives in `app.rs`; tests use [`RecordingSink`], which is what
-//! makes the cascade tests assertable rather than a staring contest with a log.
-
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -15,39 +9,17 @@ use crate::domain::ids::{AgentId, ApprovalId, EscalationId, GroupId, MessageId, 
 use crate::domain::outbox::{Kind as OutboxKind, Target};
 use crate::domain::outcome::Outcome;
 
-/// What an agent is doing right now, surfaced as the dot next to its name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "state")]
 pub enum Activity {
     Idle,
-    /// Mid-inference.
     Thinking,
-    /// Has queued work it has not started. `depth` is the inbox backlog.
-    Queued {
-        depth: usize,
-    },
-    /// Parked mid-turn on a permission request. Its own state rather than
-    /// `Thinking`, because the difference between a model that is working and
-    /// one that is waiting on the operator is the difference between leaving it
-    /// alone and going to answer it.
+    Queued { depth: usize },
     AwaitingApproval,
-    /// Not processing; messages accumulate.
     Paused,
 }
 
 impl Activity {
-    /// Whether anything landing on this agent now would wait its turn.
-    ///
-    /// What a routine's `skip_if_working` is asking about. Deliberately read
-    /// off the same value the dot beside the agent's name is drawn from, so
-    /// "it says Thinking and the sweep was skipped" is one fact rather than
-    /// two that agree on the day they were written.
-    ///
-    /// Idle is the only state where a delivery starts work immediately. A
-    /// queue that is not empty is work already waiting, a request on the
-    /// operator's desk is a turn parked mid-flight, and a paused agent takes
-    /// nothing off its inbox at all: putting a firing behind any of those is
-    /// the pile-up the option exists to avoid.
     pub fn is_working(self) -> bool {
         match self {
             Activity::Idle => false,
@@ -59,7 +31,6 @@ impl Activity {
     }
 }
 
-/// The single event channel the frontend subscribes to.
 pub const CHANNEL: &str = "guac://event";
 
 #[derive(Debug, Clone, Serialize)]
@@ -69,34 +40,17 @@ pub enum UiEvent {
     DecisionReminder {
         count: usize,
     },
-    /// The agent roster changed. The UI refetches rather than patching, because
-    /// the roster is small and a diff protocol here would be pure ceremony.
     AgentsChanged,
 
-    /// A sign-in needs the operator's browser, and the only one there is
-    /// belongs to whoever is reading the page. The host has nobody at its own
-    /// machine, so the page is asked to open the URL and to show it as a link
-    /// in case the browser refuses a window nobody clicked for.
     OpenUrl {
         url: String,
-        /// The page whose command asked, so only that window opens it. `None`
-        /// from a caller that did not say, which every window then opens, as
-        /// every window did before pages named themselves.
         client: Option<String>,
     },
 
-    /// A complete message was persisted.
     MessageAppended {
         message: Box<Envelope>,
     },
 
-    /// An agent began composing.
-    ///
-    /// `to` decides how the UI draws it. A reply to the operator becomes a
-    /// bubble that fills in as text arrives; a reply to a peer becomes a quiet
-    /// "writing to X" line, because the finished message is a collapsed wire
-    /// row and streaming it into a bubble first means watching text appear and
-    /// then vanish.
     StreamStarted {
         message_id: MessageId,
         channel_id: AgentId,
@@ -109,62 +63,22 @@ pub enum UiEvent {
         channel_id: AgentId,
         text: String,
     },
-    /// Part of the model's own working, for as long as the turn lasts.
-    ///
-    /// Addressed to the placeholder rather than to a channel, and that is what
-    /// makes it ephemeral for free: the UI files it under the agent that opened
-    /// the stream and drops the lot when the stream ends, so a thought cannot
-    /// outlive the turn that had it. Nothing here is persisted, and no channel
-    /// id is carried because a thought is not filed anywhere: a turn writing to
-    /// a peer streams into that peer's channel, while the operator watching
-    /// this agent work is reading its own.
     ReasoningDelta {
         message_id: MessageId,
         text: String,
     },
-    /// A tool call this turn has started, before anything is known about how
-    /// it went.
-    ///
-    /// Addressed to the placeholder for the same reason `ReasoningDelta` is,
-    /// and it buys the same thing: the webview files it under the agent that
-    /// opened the stream and drops the lot when the stream ends, so what a turn
-    /// was watched reaching for cannot outlive the turn. The record is the
-    /// message that follows, which carries every one of these as a
-    /// `Part::ToolCall`; this is only what that record looks like while it is
-    /// still being made.
-    ///
-    /// Emitted before the call, not after it. A command can sit for a minute
-    /// and a page load for several seconds, and the operator watching cannot
-    /// otherwise tell a turn waiting on a machine from one that has stopped.
-    ///
-    /// Nothing here is new to the webview. The name and the arguments are the
-    /// same bytes the transcript draws once the turn ends; they are the model's
-    /// own words, and a credential's value is in neither.
     ToolStarted {
         message_id: MessageId,
-        /// The provider's id for the call, which is what pairs this with the
-        /// finish below. Two identical calls in one turn are two calls.
         call_id: String,
         name: String,
         arguments: serde_json::Value,
     },
-    /// The same call, finished, as the record of it that the message will
-    /// carry.
-    ///
-    /// The whole `Part::ToolCall` rather than the outcome alone, and that is
-    /// what makes the chip drawn while a turn runs and the chip drawn
-    /// afterward the same chip rather than two that agree today. A memory
-    /// rewrite carries what it overwrote and nothing outside the runtime could
-    /// supply it; the next thing a call has to say for itself will be the same,
-    /// and an event listing the fields it happened to need would have to be
-    /// remembered at that point.
     ToolFinished {
         message_id: MessageId,
         call_id: String,
         part: Part,
     },
 
-    /// The placeholder is replaced by the persisted message that follows.
     StreamEnded {
         message_id: MessageId,
         channel_id: AgentId,
@@ -175,52 +89,31 @@ pub enum UiEvent {
         activity: Activity,
     },
 
-    /// These channels were emptied. Anything holding their messages should
-    /// drop them and read again.
     ChannelsCleared {
         agents: Vec<AgentId>,
     },
 
-    /// A model call finished and reported what it cost.
-    ///
-    /// Emitted per call rather than per turn, so the number moves while an
-    /// agent is still working rather than once it has finished.
     TokensUsed {
         agent_id: AgentId,
         group_id: GroupId,
         run_id: RunId,
         prompt: u32,
         completion: u32,
-        /// Of `prompt`, how many tokens the provider read from its cache. A
-        /// share of the prompt count, never added to it.
         cached: u32,
-        /// Absent when the provider does not price calls, which is not the
-        /// same as free and must not be added up as zero.
         cost: Option<f64>,
     },
 
-    /// Every agent in a run has gone quiet.
     RunSettled {
         run_id: RunId,
         steps_used: u32,
     },
-    /// What a run that has just settled ended in. After its `RunSettled`, and
-    /// only for a run that has an outcome: one taken into another run's turn,
-    /// or put down for the next host, has none here.
     OutcomeRecorded {
         outcome: Box<Outcome>,
     },
-    /// The operator has seen these outcomes, in this window or another one.
-    /// The ids rather than a count, so every list can drop exactly those rows.
     OutcomesSeen {
         run_ids: Vec<RunId>,
     },
 
-    /// Something the Host has decided is worth an interruption, offered to
-    /// every window. A window shows it only if `claimDelivery` with this id
-    /// answers true, which it does for exactly one of them. A window that was
-    /// not connected asks `pendingDeliveries` instead, so missing this event
-    /// loses nothing.
     Delivery {
         id: String,
         kind: OutboxKind,
@@ -230,120 +123,50 @@ pub enum UiEvent {
         created_at: i64,
     },
 
-    /// An agent is waiting on the operator.
-    ///
-    /// The request itself travels in the transcript, as a part of the message
-    /// that carries it. Only the id is here, because what the UI is missing at
-    /// this point is not the wording but the fact that it is still live.
     ApprovalRequested {
         approval_id: ApprovalId,
         agent_id: AgentId,
     },
-    /// Answered, timed out, or abandoned by a restart.
     ApprovalSettled {
         approval_id: ApprovalId,
         state: ApprovalState,
     },
 
-    /// An agent has put something on the operator's desk and carried on.
-    ///
-    /// The id and the agent, for the reason `ApprovalRequested` carries those
-    /// two and nothing else: what the UI is missing is not the wording, which
-    /// it reads back whole, but that the desk it is drawing is now behind the
-    /// store.
     EscalationRaised {
         escalation_id: EscalationId,
         agent_id: AgentId,
     },
-    /// The operator has dealt with one, or it went with the agent that raised
-    /// it. Not a settlement: nothing was answered and nothing was granted.
     EscalationCleared {
         escalation_id: EscalationId,
     },
 
-    /// One agent's schedule changed: it set a routine, edited one, canceled
-    /// one, or one came due and moved to its next slot.
-    ///
-    /// Not `AgentsChanged`, which is what this used to borrow. The roster did
-    /// not change, and the panel drawing the schedule was not listening for it
-    /// anyway: an agent that scheduled something for itself left the operator
-    /// reading a list that was drawn before the routine existed, which they
-    /// could only fix by closing the panel and opening it again.
     RoutinesChanged {
         agent_id: AgentId,
     },
 
-    /// Something moved on one crew's calendar.
-    ///
-    /// The crew rather than the agent, because the calendar is the crew's: an
-    /// agent's write is read by every other agent in it and drawn on a surface
-    /// that is showing every crew at once. Same argument `RoutinesChanged`
-    /// makes about a panel drawn before the routine existed, one scope up.
-    ///
-    /// The operator's own edits do not come through here. Those are a command
-    /// that hands the row straight back, and the view that made the call is the
-    /// view that already has it.
     CalendarChanged {
         group_id: GroupId,
     },
 
-    /// One of a crew's artifacts was made, changed or changed hands.
-    ///
-    /// The crew, for the reason the calendar's is: the list it moves is drawn
-    /// for every crew at once when the rail is showing all of them. Emitted for
-    /// the operator's own changes too, because the Artifacts dialog is not the
-    /// only view of one: a card in a transcript names the version it made.
     ArtifactsChanged {
         group_id: GroupId,
     },
 
-    /// One agent's memory was rewritten by the agent itself.
-    ///
-    /// Same argument as `RoutinesChanged`, one panel over: the operator reads
-    /// an agent's memory in the column beside it while the agent is working,
-    /// and the agent rewrites that file mid-turn. Without this the page on
-    /// screen is the one that was true when the panel was drawn, and the only
-    /// way to find out otherwise is to click away and back.
-    ///
-    /// Only the runtime's own write emits it. The operator's edit comes back
-    /// from `set_agent_memory` as what was actually stored, so the panel that
-    /// made it already has the answer, and an event there would be a refetch
-    /// to learn what the reply just said.
     MemoryChanged {
         agent_id: AgentId,
     },
-    /// One agent appended a working note.
-    ///
-    /// Its own event rather than a second meaning for `MemoryChanged`, because
-    /// the two panels refetch different things and folding them together would
-    /// have every note an agent writes re-read a memory that has not moved.
-    /// Notes are written far more often than memory, which is the whole design,
-    /// so the cheap one must not drag the expensive one behind it.
     WorkingNotesChanged {
         agent_id: AgentId,
     },
 
-    /// The workspace settings changed, whoever changed them.
-    ///
-    /// Carries the redacted settings rather than asking for a refetch, because
-    /// every client that is open needs exactly this and nothing else, and the
-    /// client that made the change is one of them: a second window still
-    /// drawing what it read at connect would save it back over this.
     SettingsChanged {
         settings: Box<crate::config::RedactedConfig>,
     },
 
-    /// A skill was written or deleted, by the operator or by an agent.
-    ///
-    /// The scope rather than the skill, because what redraws is a list: the
-    /// operator's in Settings, or one crew's in its settings.
     SkillsChanged {
         scope: crate::domain::skill::Scope,
     },
 
-    /// One agent wrote, moved or deleted a file in its own notebook. Same
-    /// argument as `MemoryChanged`: the operator may be reading it beside the
-    /// agent while it works.
     NotebookChanged {
         agent_id: AgentId,
     },
@@ -353,7 +176,6 @@ pub trait EventSink: Send + Sync + 'static {
     fn emit(&self, event: UiEvent);
 }
 
-/// Discards everything. For tests that do not assert on events.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NullSink;
 
@@ -361,7 +183,6 @@ impl EventSink for NullSink {
     fn emit(&self, _event: UiEvent) {}
 }
 
-/// Keeps every event for inspection.
 #[derive(Debug, Default)]
 pub struct RecordingSink {
     events: Mutex<Vec<UiEvent>>,
@@ -376,7 +197,6 @@ impl RecordingSink {
         self.events.lock().clone()
     }
 
-    /// Concatenated stream text for one message, in arrival order.
     pub fn streamed_text(&self, message_id: MessageId) -> String {
         self.events
             .lock()
@@ -390,7 +210,6 @@ impl RecordingSink {
             .collect()
     }
 
-    /// The same for the reasoning that ran alongside it.
     pub fn streamed_reasoning(&self, message_id: MessageId) -> String {
         self.events
             .lock()
@@ -450,10 +269,6 @@ mod tests {
 
     #[test]
     fn idle_is_the_only_state_where_work_starts_at_once() {
-        // What a routine's `skip_if_working` is asking about, so every state
-        // has to be answered for deliberately: a firing put behind a queue, a
-        // permission request or a pause is the pile-up the option exists to
-        // prevent, and only one of the five is the agent standing free.
         assert!(!Activity::Idle.is_working());
         assert!(Activity::Thinking.is_working());
         assert!(Activity::Queued { depth: 1 }.is_working());
@@ -475,7 +290,6 @@ mod tests {
                 text: text.into(),
             });
         }
-        // Interleaved traffic from a different agent must not bleed in.
         sink.emit(UiEvent::StreamDelta {
             message_id: other,
             channel_id: channel,
@@ -488,9 +302,6 @@ mod tests {
 
     #[test]
     fn a_thought_and_the_text_beside_it_are_kept_apart() {
-        // They share a placeholder and arrive interleaved. A sink that mixed
-        // them would put the model's working into the assertion that says what
-        // the operator watched appear.
         let sink = RecordingSink::new();
         let id = MessageId::new();
         sink.emit(UiEvent::ReasoningDelta { message_id: id, text: "weighing it up".into() });
@@ -546,9 +357,6 @@ mod tests {
 
     #[test]
     fn a_live_tool_call_arrives_in_the_shape_the_chip_is_drawn_from() {
-        // The live chip and the recorded one are built by the same rules in
-        // `lib/trail.ts`, which reads a name, its arguments and an outcome. A
-        // key that arrived under another spelling would draw as an unknown tool.
         let started = serde_json::to_value(UiEvent::ToolStarted {
             message_id: MessageId::new(),
             call_id: "call_1".into(),
@@ -584,8 +392,6 @@ mod tests {
 
     #[test]
     fn a_stream_says_who_it_is_addressed_to() {
-        // Without this the UI streams a peer message into a bubble and then
-        // replaces it with a collapsed row, which reads as text disappearing.
         let json = serde_json::to_value(UiEvent::StreamStarted {
             message_id: MessageId::new(),
             channel_id: AgentId::new(),

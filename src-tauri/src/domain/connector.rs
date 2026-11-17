@@ -1,55 +1,29 @@
-//! Credentials a crew can use.
-//!
-//! The operator supplies values through the group's Secrets tab and explicitly
-//! selects recipients. The store rechecks group membership at execution time.
-//! Values go into child-process environments, never into this metadata type.
-//! `docs/SECRETS.md` describes storage, output redaction and the process boundary.
-
 use serde::{Deserialize, Serialize};
 
 use super::ids::{AgentId, ConnectorId, GroupId};
 
-/// A service name longer than this is a paragraph, not a label.
 pub const MAX_SERVICE_LEN: usize = 48;
 pub const MAX_ACCOUNT_LEN: usize = 120;
-/// Notes are read by a model on every turn, so they are one line, not a page.
 pub const MAX_NOTE_LEN: usize = 240;
 
-/// A credential granted to selected agents in one group.
-///
-/// Serializable in full: there is no secret on it. The value is held in the
-/// store and supplied to authorized process environments.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Connector {
     pub id: ConnectorId,
-    /// Scoped to a group, like everything else an agent can see. A crew cannot
-    /// use another crew's credentials any more than it can message its agents.
     pub group_id: GroupId,
-    /// What the credential is for: `GitHub`, `Linear`, `Stripe`.
     pub service: String,
-    /// Who it acts as, when the operator said. Often blank: picking GitHub from
-    /// a list needs a token and nothing else, and a box demanding the account
-    /// name of a token you already hold is a question with no purpose.
     pub account: String,
-    /// The environment variable the agent will find it in.
     pub env_var: String,
-    /// One line for the agent, in the operator's words: `read-only`,
-    /// `production, do not write`.
     pub note: String,
-    /// Whether a value is stored. False is a connector that would hand the
-    /// machine an empty variable, which is worth showing as broken.
     pub secret_set: bool,
     #[serde(default)]
     pub agents: Vec<AgentId>,
-    /// Kept empty for wire compatibility. No fragment of a value is returned.
     pub secret_hint: String,
     pub created_at: i64,
     pub updated_at: i64,
 }
 
 impl Connector {
-    /// The line an agent reads about a credential it holds.
     pub fn own_line(&self) -> String {
         let mut line = format!("- {}", self.service);
         if !self.account.is_empty() {
@@ -63,9 +37,6 @@ impl Connector {
     }
 }
 
-/// Fields an operator can set. Separate from [`Connector`] so ids and
-/// timestamps cannot be forged across IPC, and so the secret can be carried
-/// inward without ever being carried back.
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectorDraft {
@@ -75,7 +46,6 @@ pub struct ConnectorDraft {
     pub env_var: String,
     #[serde(default)]
     pub note: String,
-    /// Write-only input; rotation uses the update command.
     #[serde(default)]
     pub secret: Option<String>,
     #[serde(default)]
@@ -108,7 +78,6 @@ pub enum ConnectorError {
 }
 
 impl ConnectorDraft {
-    /// Normalizes and validates operator input.
     pub fn validate(&self) -> Result<CleanConnector, ConnectorError> {
         let service = self.service.trim();
         if service.is_empty() {
@@ -118,9 +87,6 @@ impl ConnectorDraft {
             return Err(ConnectorError::ServiceTooLong { max: MAX_SERVICE_LEN });
         }
 
-        // Blank is fine and usual. A token identifies its own account to the
-        // service it belongs to, so demanding one here is a box the operator
-        // has to invent an answer for.
         let account = self.account.trim();
         if account.chars().count() > MAX_ACCOUNT_LEN {
             return Err(ConnectorError::AccountTooLong { max: MAX_ACCOUNT_LEN });
@@ -139,10 +105,6 @@ impl ConnectorDraft {
             return Err(ConnectorError::BadEnvVar { got: env_var });
         }
 
-        // A credential with no value would put an empty variable on the
-        // machine, and the agent would read the resulting 401 as a revoked
-        // token rather than as a connector nobody finished setting up. There is
-        // no usable credential without a value, so it is required here.
         let secret = self.secret.as_deref().unwrap_or_default().trim().to_string();
         validate_secret(&secret)?;
 
@@ -211,11 +173,6 @@ pub(crate) fn reserved(name: &str) -> bool {
         .any(|prefix| name.starts_with(prefix))
 }
 
-/// Whether a string is safe to use as a shell environment variable name.
-///
-/// The name goes into a process environment beside a secret. Anything outside
-/// this set is either ignored by the shell or, worse, is not a variable name at
-/// all and turns the surrounding command into something else.
 fn is_env_name(name: &str) -> bool {
     !name.is_empty()
         && !name.starts_with(|c: char| c.is_ascii_digit())
@@ -274,8 +231,6 @@ mod tests {
 
     #[test]
     fn an_environment_variable_name_is_checked_before_it_reaches_a_shell() {
-        // The name is written into a process environment next to a secret. A
-        // name with a space or a semicolon in it is not a variable at all.
         for bad in ["TOKEN;rm -rf /", "MY TOKEN", "2TOKEN", "", "TOKEN$X", "TOKEN-A"] {
             let mut d = draft();
             d.env_var = bad.into();
@@ -288,10 +243,6 @@ mod tests {
 
     #[test]
     fn a_credential_without_a_value_is_refused_rather_than_stored_empty() {
-        // Stored empty, the machine gets `GITHUB_TOKEN=` and every call comes
-        // back unauthorized, which reads to the agent as a revoked token rather
-        // than as a connector nobody finished setting up. Creation requires a
-        // usable value before access can be granted.
         for missing in [Some("   ".to_string()), None] {
             let mut d = draft();
             d.secret = missing;
@@ -305,9 +256,6 @@ mod tests {
         d.service = "  ".into();
         assert_eq!(d.validate().unwrap_err(), ConnectorError::BlankService);
 
-        // Picking GitHub from a list needs a token and nothing else. A box
-        // demanding the account name of a token you already hold is a question
-        // with no purpose, so a blank one is the ordinary case.
         let mut d = draft();
         d.account = "".into();
         assert_eq!(d.validate().unwrap().account, "");
@@ -348,17 +296,12 @@ mod tests {
         );
         assert!(connector("read-only").own_line().ends_with("(read-only)"));
 
-        // The usual case, where the operator picked a service and pasted a
-        // token: no account to name, and no dangling "as".
         let anonymous = Connector { account: String::new(), ..connector("") };
         assert_eq!(anonymous.own_line(), "- GitHub — the credential is in $GITHUB_TOKEN");
     }
 
     #[test]
     fn a_connector_carries_no_secret_anywhere_it_could_be_serialized() {
-        // The whole point of the split between Connector and ConnectorDraft. If
-        // a secret field ever lands here it goes to the webview, into the
-        // prompt, and into the transcript, all at once.
         let held = connector("");
         let json = serde_json::to_value(&held).unwrap();
         assert_eq!(json["secretSet"], true);

@@ -1,10 +1,3 @@
-//! End-to-end runtime tests.
-//!
-//! These drive the real actor runtime against a scripted OpenAI-compatible
-//! server, so everything between "operator presses enter" and "four agents have
-//! replied" is exercised: tool-call assembly, the guard, channel routing, batch
-//! coalescing, and settle detection. The only thing swapped out is the model.
-
 mod harness;
 
 use std::collections::HashMap;
@@ -33,8 +26,6 @@ use guac_lib::runtime::guard::GuardLimits;
 use guac_lib::runtime::{prompt, OnDisk, Runtime};
 
 use harness::*;
-
-// ---- tests ---------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn queued_work_preserves_approval_activity_until_the_request_is_answered() {
@@ -159,7 +150,6 @@ async fn an_exhausted_turn_leaves_new_work_its_own_budget() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn manager_introduces_itself_to_every_other_agent() {
-    // The whole introduction, start to finish.
     let peers = ["Chef", "Host", "Barista", "Sommelier"];
     let stub = serve(move |body| {
         let who = speaker(body);
@@ -191,7 +181,6 @@ async fn manager_introduces_itself_to_every_other_agent() {
         .unwrap();
     h.settle(run).await;
 
-    // Every peer received the introduction in its own channel.
     for peer in peers {
         let texts = h.channel_texts(peer);
         assert!(
@@ -200,7 +189,6 @@ async fn manager_introduces_itself_to_every_other_agent() {
         );
     }
 
-    // Every reply came back to the Manager's channel.
     let manager_channel = h.channel_texts("Manager").join("\n");
     for peer in peers {
         assert!(
@@ -209,15 +197,8 @@ async fn manager_introduces_itself_to_every_other_agent() {
         );
     }
 
-    // Four introductions out, four replies back.
     assert_eq!(h.feed().len(), 8, "expected 4 sends and 4 replies in the activity feed");
 
-    // Two Manager calls to send and then speak, four peer calls, and between
-    // one and four more for the Manager to read the replies, depending on how
-    // many batches they land in. That last part is scheduling, not behavior,
-    // so this bounds amplification rather than pinning a number: batching
-    // itself is asserted deterministically in
-    // `replies_queued_together_are_read_in_a_single_turn`.
     let calls = stub.calls.load(Ordering::SeqCst);
     assert!(
         (6..=10).contains(&calls),
@@ -227,14 +208,6 @@ async fn manager_introduces_itself_to_every_other_agent() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_message_that_arrives_mid_turn_reaches_the_turn_that_is_working() {
-    // The operator types a correction while an agent is working. Before the
-    // turn could see its own inbox, that correction waited for the turn to end,
-    // which on a long turn is forty minutes: the work it was meant to steer was
-    // finished and published first.
-    //
-    // The message is sent from inside the stub rather than from the test, so
-    // there is no race to lose. Answering the first model call is provably
-    // inside the turn, and provably before the round that follows it.
     let hook: Arc<std::sync::OnceLock<(Runtime, guac_lib::domain::ids::AgentId)>> =
         Arc::new(std::sync::OnceLock::new());
     let typed = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -270,8 +243,6 @@ async fn a_message_that_arrives_mid_turn_reaches_the_turn_that_is_working() {
         texts.iter().any(|t| t.contains("Changed it to we")),
         "the turn never read what the operator typed while it worked: {texts:?}"
     );
-    // The discriminator. Left queued, the correction becomes a turn of its own
-    // and this line is what the working turn finishes with first.
     assert!(
         !texts.iter().any(|t| t.contains("Draft done")),
         "the turn finished on its own answer and read the correction afterwards: {texts:?}"
@@ -280,30 +251,17 @@ async fn a_message_that_arrives_mid_turn_reaches_the_turn_that_is_working() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn work_that_lands_mid_turn_is_reported_even_when_the_turn_owed_nobody_words() {
-    // A turn woken by a peer's answer owes nobody words, which is `NoteOnly`,
-    // and `NoteOnly` tells an agent that silence is usually right. That is true
-    // of what it woke up to and false of work that lands while it runs, so
-    // anything taken in that carries work moves the turn to `Assigned`, where a
-    // note the agent never writes is reported rather than looking like an agent
-    // that quietly stopped. Both modes write to the same place, so nothing the
-    // UI has already drawn moves.
     let hook: Arc<std::sync::OnceLock<(Runtime, guac_lib::domain::ids::AgentId)>> =
         Arc::new(std::sync::OnceLock::new());
 
     let armed = hook.clone();
     let stub = serve(move |body| {
         if speaker(body) == "Manager" {
-            // An answer, which is the one thing that never expects one back.
             return Script::Say("Here is the answer.".into());
         }
-        // The correction has been taken in. Say nothing at all, which is what
-        // `NoteOnly` invites and what must not pass unremarked now that work
-        // has landed in this turn.
         if anyone_said(body, "fix the headline") {
             return Script::Say(String::new());
         }
-        // Woken by the Manager's answer: nobody is waiting on this agent's
-        // words. The operator types while it is working.
         if reading_peer_replies(body) {
             if let Some((runtime, writer)) = armed.get() {
                 runtime.send_from_human(*writer, "Also fix the headline.").unwrap();
@@ -324,8 +282,6 @@ async fn work_that_lands_mid_turn_is_reported_even_when_the_turn_owed_nobody_wor
         h.runtime.send_from_human(h.id("Writer"), "Ask the Manager about the launch.").unwrap();
     h.settle(run).await;
 
-    // A notice, not text: this is Guaca speaking into the Writer's channel,
-    // which is what `plain_text` filters out.
     h.wait_until("the silent turn to be reported", |h| {
         h.runtime
             .store()
@@ -342,15 +298,6 @@ async fn work_that_lands_mid_turn_is_reported_even_when_the_turn_owed_nobody_wor
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_message_the_prompt_already_carries_is_taken_in_once() {
-    // `deliver` writes to the store before it touches the inbox, so a message
-    // queued behind the one a turn is answering is already in the history that
-    // turn reads while still sitting in the inbox waiting to be answered.
-    // Taken in without checking, it is written into the prompt twice, and a
-    // model reading the same instruction twice is being told it was said twice.
-    //
-    // Pausing is what makes the window certain rather than likely: both
-    // messages are provably in the store before the agent is free to read
-    // either.
     let seen = Arc::new(AtomicUsize::new(0));
     let counter = seen.clone();
     let stub = serve(move |body| {
@@ -389,10 +336,6 @@ async fn a_message_the_prompt_already_carries_is_taken_in_once() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_turn_answering_a_peer_leaves_the_operator_a_turn_of_their_own() {
-    // The other half of the rule, and the reason it is not "read everything".
-    // A turn in `ToPeer` is addressed to the agent that asked, so an operator
-    // message folded into it would be read and never answered. It waits, and
-    // gets the turn it is owed.
     let hook: Arc<std::sync::OnceLock<(Runtime, guac_lib::domain::ids::AgentId)>> =
         Arc::new(std::sync::OnceLock::new());
     let typed = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -430,14 +373,12 @@ async fn a_turn_answering_a_peer_leaves_the_operator_a_turn_of_their_own() {
     let run = h.runtime.send_from_human(h.id("Manager"), "Get the announcement drafted.").unwrap();
     h.settle(run).await;
 
-    // The peer got its answer, undiluted.
     let manager = h.channel_texts("Manager");
     assert!(
         manager.iter().any(|t| t.contains("Here is the announcement")),
         "the peer that asked never got its answer: {manager:?}"
     );
 
-    // And the operator got theirs, in a turn of its own.
     h.wait_until("the operator's message to be answered", |h| {
         h.channel_texts("Writer").iter().any(|t| t.contains("Noted for next time"))
     })
@@ -446,9 +387,6 @@ async fn a_turn_answering_a_peer_leaves_the_operator_a_turn_of_their_own() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn replies_queued_together_are_read_in_a_single_turn() {
-    // Batching is what stops four replies from costing four Manager turns.
-    // Rather than racing the scheduler, this pauses the Manager so all four
-    // replies are provably sitting in its inbox before it wakes up.
     let peers = ["Chef", "Host", "Barista", "Sommelier"];
     let stub = serve(move |body| {
         let who = speaker(body);
@@ -464,8 +402,6 @@ async fn replies_queued_together_are_read_in_a_single_turn() {
                 }
             }
         } else {
-            // Long enough that the Manager is idle and pausable before any
-            // reply is on the wire.
             std::thread::sleep(Duration::from_millis(250));
             Script::Say(format!("Acknowledged, from {who}."))
         }
@@ -480,16 +416,12 @@ async fn replies_queued_together_are_read_in_a_single_turn() {
     let manager = h.id("Manager");
     let run = h.runtime.send_from_human(manager, "Say hello to everyone.").unwrap();
 
-    // Once all four introductions are out, the peers are still sleeping.
     h.wait_until("the introductions to be sent", |h| {
         h.feed().iter().filter(|e| e.from == Participant::Agent { id: manager }).count() == 4
     })
     .await;
     h.pause("Manager");
 
-    // Waiting on the transcript alone is not enough: a message is persisted
-    // before it is enqueued, so resuming in that window catches only three.
-    // At most one reply can have been pulled already, hence three still queued.
     h.wait_until("all four replies to be queued", |h| {
         let delivered =
             h.feed().iter().filter(|e| e.to == Participant::Agent { id: manager }).count();
@@ -526,14 +458,6 @@ async fn replies_queued_together_are_read_in_a_single_turn() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_reply_still_being_worked_on_is_waited_for_rather_than_read_alone() {
-    // The gather used to run on a 2.5-second clock sized to this suite's own
-    // stub, which answers in milliseconds. Real model calls land tens of
-    // seconds apart, so in production the window expired before the second
-    // answer of every fan-out and a coordinator read its replies one whole
-    // prompt and one model call at a time. The wait now follows the work: as
-    // long as a peer that owes an answer is still on it, the gatherer holds
-    // out. Grocer's answer here takes longer than the whole of the old window,
-    // and it must still be read in the same turn as Chef's.
     let stub = serve(move |body| {
         let who = speaker(body);
         if who == "Manager" {
@@ -588,12 +512,6 @@ async fn a_reply_still_being_worked_on_is_waited_for_rather_than_read_alone() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_answer_owed_by_a_peer_that_failed_is_not_waited_out() {
-    // The other half of the generous window, and the reason it can be generous
-    // at all. A peer whose model call fails every attempt never answers, and
-    // an agent that waited the full window for it would hold its own turn, and
-    // the run's settlement, open for two minutes of nothing. The gather ends
-    // when nobody owing an answer is still working, so the failed peer ends it
-    // within this test's ordinary settle window rather than at the ceiling.
     let stub = serve(move |body| {
         let who = speaker(body);
         if who == "Manager" {
@@ -617,8 +535,6 @@ async fn an_answer_owed_by_a_peer_that_failed_is_not_waited_out() {
 
     let h = harness(&stub, &["Manager", "Chef", "Grocer"], GuardLimits::default());
     let run = h.runtime.send_from_human(h.id("Manager"), "Say hello to both.").unwrap();
-    // The whole assertion: 20 seconds covers Grocer's retries and nothing like
-    // the gather ceiling, so settling here means the wait ended with the peer.
     h.settle(run).await;
 
     assert!(
@@ -630,13 +546,6 @@ async fn an_answer_owed_by_a_peer_that_failed_is_not_waited_out() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_second_operator_line_reaches_the_model_after_the_first_rather_than_above_it() {
-    // `deliver` writes to the store before the inbox, so an operator's second
-    // line typed while the first is being picked up is in the history the turn
-    // reads while still queued behind the batch. Rendered from the history it
-    // sat *above* the message it follows, because the batch is rendered last:
-    // a correction read before the thing it corrects. It is kept out of the
-    // history now and reaches the model through intake, in the order it was
-    // said.
     let stub = serve(|body| {
         let _ = body;
         Script::Say("Both noted.".into())
@@ -648,8 +557,6 @@ async fn a_second_operator_line_reaches_the_model_after_the_first_rather_than_ab
 
     h.pause("Writer");
     let run = h.runtime.send_from_human(writer, "First thing: book the 4pm slot.").unwrap();
-    // Distinct millisecond stamps, so the second line is provably newer than
-    // the batch. Two lines in one millisecond have no order to restore.
     tokio::time::sleep(Duration::from_millis(5)).await;
     h.runtime.send_from_human(writer, "Second thing: actually make that 5pm.").unwrap();
     h.wait_until("both lines to be filed", |h| h.channel_texts("Writer").len() == 2).await;
@@ -691,15 +598,11 @@ async fn a_second_operator_line_reaches_the_model_after_the_first_rather_than_ab
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_agents_told_to_talk_forever_stop_on_their_own() {
-    // Both agents are scripted to always message the other. Without the guard
-    // this never terminates.
     let stub = serve(|body| {
         let who = speaker(body);
         let other = if who == "Ping" { "Pong" } else { "Ping" };
         Script::SendTo {
             recipients: vec![other.to_string()],
-            // Varying text defeats the dedup check on purpose, so this test
-            // exercises the hop and pair limits rather than dedup.
             text: format!(
                 "message {} from {who}",
                 body["messages"].as_array().map(|m| m.len()).unwrap_or(0)
@@ -729,7 +632,6 @@ async fn two_agents_told_to_talk_forever_stop_on_their_own() {
     assert!(!feed.is_empty(), "the agents should have exchanged something before stopping");
     assert!(feed.len() <= 8, "too much traffic before the guard bit: {}", feed.len());
 
-    // The transcript must say why it stopped, not just go quiet.
     let all: String = h
         .runtime
         .store()
@@ -805,9 +707,6 @@ async fn messaging_an_agent_that_does_not_exist_is_reported_to_the_model() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agents_tool_trail_stays_in_its_own_channel() {
-    // Regression: the trail used to ride along on the reply envelope, and a
-    // reply to a peer files in the recipient's channel. Opening one agent's
-    // channel therefore showed you every other agent's private working notes.
     let stub = serve(|body| {
         let who = speaker(body);
         if who == "Manager" {
@@ -843,8 +742,6 @@ async fn an_agents_tool_trail_stays_in_its_own_channel() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_guard_refusal_is_reported_to_the_agent_that_hit_it() {
-    // The refusal is about what this agent tried to do, so it belongs in this
-    // agent's channel rather than traveling to whoever it was aimed at.
     let stub = serve(|body| {
         let who = speaker(body);
         let other = if who == "Ping" { "Pong" } else { "Ping" };
@@ -932,7 +829,6 @@ async fn a_deleted_agent_stops_receiving_but_keeps_its_transcript() {
 
     let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
 
-    // Give Chef some history first.
     let first = h.runtime.send_from_human(h.id("Chef"), "hello Chef").unwrap();
     h.settle(first).await;
     assert!(!h.channel_texts("Chef").is_empty());
@@ -955,9 +851,6 @@ async fn a_deleted_agent_stops_receiving_but_keeps_its_transcript() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn deleting_a_paused_agent_stops_its_actor() {
-    // Regression: a paused actor parks on a notifier whose only other handle
-    // lives in the inbox. Deleting the agent drops that inbox, so the actor
-    // would wait forever, leaking the task and the message it was holding.
     let stub = serve(|_| Script::Say("ok".into())).await;
     let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
     assert_eq!(h.runtime.live_actors(), 2);
@@ -965,8 +858,6 @@ async fn deleting_a_paused_agent_stops_its_actor() {
     h.park("Chef", "you are paused").await;
 
     h.runtime.store().set_lifecycle(h.id("Chef"), Lifecycle::Terminated).unwrap();
-    // Deleting must wake the parked actor by itself. Nothing else can: this
-    // call drops the last handle to the notifier it is waiting on.
     h.runtime.stop_agent(h.id("Chef"));
 
     h.wait_until("Chef's actor to exit", |h| h.runtime.live_actors() == 1).await;
@@ -1018,14 +909,9 @@ async fn an_upstream_failure_is_reported_in_the_channel_rather_than_swallowed() 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_progress_note_is_in_the_next_turn_with_how_long_ago_it_was_written() {
-    // The other half of the write-manage-read loop, and the half that expires.
-    // An agent notes what it is waiting on, and finds it on its next turn under
-    // an age, which is what tells it whether to keep waiting.
     let stub = serve(|body| {
         let system = body["messages"][0]["content"].as_str().unwrap_or_default();
         if system.contains("waiting on the legal read") {
-            // Said back so the assertion below is about the prompt rather than
-            // about anything this stub knows.
             let age = if system.contains("just now") { "fresh" } else { "stale" };
             Script::Say(format!("still waiting, and the note reads {age}."))
         } else if has_tool_result(body) {
@@ -1043,7 +929,6 @@ async fn a_progress_note_is_in_the_next_turn_with_how_long_ago_it_was_written() 
     let notes = h.runtime.store().working_notes(h.id("Manager")).unwrap();
     assert_eq!(notes.len(), 1, "the note should be stored");
     assert_eq!(notes[0].body, "waiting on the legal read");
-    // And nowhere near the memory, which is the entire point of the split.
     assert_eq!(
         h.runtime.workspace().read(h.id("Manager")),
         "",
@@ -1060,9 +945,6 @@ async fn a_progress_note_is_in_the_next_turn_with_how_long_ago_it_was_written() 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_progress_note_tells_the_agent_how_many_it_now_holds() {
-    // The count is how an agent learns the list is bounded without being
-    // lectured about it in the tool description on every turn, and it is what
-    // says an older note has just gone.
     let stub = serve(|body| {
         if has_tool_result(body) {
             let results = serde_json::to_string(&body["messages"]).unwrap_or_default();
@@ -1083,13 +965,6 @@ async fn a_progress_note_tells_the_agent_how_many_it_now_holds() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn noting_the_same_line_twice_stores_it_once_and_says_how_old_the_first_is() {
-    // The one mechanical brake on a bounded list filling with a single fact.
-    // "Still waiting on the legal read", noted on four turns, is four of
-    // sixteen slots spent on one thing and three notes that record nothing.
-    // Acknowledging the repeat is what teaches an agent that restating is how
-    // you say something is still true, so it is not acknowledged: it is told
-    // how old the note it already has is, which is what it was reaching for and
-    // what it needs to decide whether to chase.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say(serde_json::to_string(&body["messages"]).unwrap_or_default())
@@ -1117,8 +992,6 @@ async fn noting_the_same_line_twice_stores_it_once_and_says_how_old_the_first_is
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agent_can_write_its_memory_and_reads_it_back_next_turn() {
-    // The write-manage-read loop, end to end: an agent records something on one
-    // turn and finds it in its own prompt on the next.
     let stub = serve(|body| {
         let system = body["messages"][0]["content"].as_str().unwrap_or_default();
         if system.contains("Operator prefers terse replies") {
@@ -1150,11 +1023,6 @@ async fn an_agent_can_write_its_memory_and_reads_it_back_next_turn() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agent_calling_the_old_name_for_its_memory_still_writes_it() {
-    // `update_notes` is what this tool was called for a year. A model that
-    // learned Guaca from an older transcript still reaches for it, and refusing
-    // it would spend a turn on a rename the agent had no way to hear about.
-    // What is recorded is the current name either way, so the rename does not
-    // fork the transcript from today onward.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("Remembered.".into())
@@ -1179,11 +1047,6 @@ async fn an_agent_calling_the_old_name_for_its_memory_still_writes_it() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_memory_write_records_the_version_it_replaced() {
-    // What the operator wants from the transcript is what changed, and a
-    // rewrite is the whole file either way: two pages of near-identical
-    // markdown compared by eye. So the call carries what it overwrote, and it
-    // is carried rather than looked up because by the time anybody reads the
-    // channel the file says something else again.
     let stub = serve(|body| {
         let system = body["messages"][0]["content"].as_str().unwrap_or_default();
         if has_tool_result(body) {
@@ -1224,11 +1087,6 @@ async fn a_memory_write_records_the_version_it_replaced() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_memory_write_tells_the_panel_drawing_it() {
-    // The operator reads an agent's memory in the column beside it, and the
-    // moment they are most likely to be doing that is while the agent is
-    // working, which is the moment the agent rewrites the file. Without this
-    // the page on screen is the one that was true when the panel was drawn and
-    // the only way to find out otherwise is to click away and back.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("Done.".into())
@@ -1253,9 +1111,6 @@ async fn a_memory_write_tells_the_panel_drawing_it() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_memory_write_that_failed_tells_nobody_it_changed() {
-    // The panel reads the file again on this event, so one emitted for a write
-    // that did not land is a read that reports the same page it already had,
-    // in front of an operator who has just been told something changed.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("Done.".into())
@@ -1266,7 +1121,6 @@ async fn a_memory_write_that_failed_tells_nobody_it_changed() {
     .await;
 
     let h = harness(&stub, &["Manager"], GuardLimits::default());
-    // A file where the workspace directory has to go: every write fails.
     std::fs::write(h.runtime.workspace().root(), b"not a directory").unwrap();
 
     let run = h.runtime.send_from_human(h.id("Manager"), "remember who verifies").unwrap();
@@ -1292,7 +1146,6 @@ async fn a_memory_write_that_failed_tells_nobody_it_changed() {
     );
 }
 
-/// What each tool call this turn made so far came back with, in order.
 fn answers_so_far(body: &serde_json::Value) -> Vec<String> {
     body["messages"]
         .as_array()
@@ -1303,8 +1156,6 @@ fn answers_so_far(body: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
-/// The operator saving an agent's memory from the panel: the page they were
-/// shown, and the version it was, which is what `set_agent_memory` is sent.
 fn operator_saves(workspace: &guac_lib::workspace::Workspace, id: guac_lib::domain::ids::AgentId) {
     let shown = workspace.read_versioned(id);
     let saved = workspace
@@ -1320,11 +1171,6 @@ const MEMORY_CONFLICT: &str =
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_operator_save_during_a_turn_is_not_overwritten_by_the_agents_rewrite() {
-    // The agent's rewrite is the page it was shown at the top of its turn
-    // with a change made to it. The operator corrected that page from the
-    // panel while the turn ran, and the rewrite used to be stored over their
-    // correction, putting back the line they had just fixed with nothing to
-    // tell either of them.
     let workspace = Arc::new(std::sync::OnceLock::new());
     let saving = workspace.clone();
     let stub = serve(move |body| {
@@ -1374,10 +1220,6 @@ async fn an_operator_save_during_a_turn_is_not_overwritten_by_the_agents_rewrite
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn after_a_refused_rewrite_the_agent_can_make_its_change_on_the_operators_page() {
-    // The refusal says to make the change again on top of the page it hands
-    // back, so that is the page the next write is checked against. Checked
-    // against the page the turn began with, every write after the operator's
-    // save would be refused until the turn ran out.
     let workspace = Arc::new(std::sync::OnceLock::new());
     let saving = workspace.clone();
     let stub = serve(move |body| match answers_so_far(body).len() {
@@ -1412,10 +1254,6 @@ async fn after_a_refused_rewrite_the_agent_can_make_its_change_on_the_operators_
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn with_nobody_else_writing_every_rewrite_in_a_turn_is_saved() {
-    // The other side of the check. With no save in between, the agent's
-    // write is stored and answered exactly as it always was, and a second
-    // rewrite in the same turn is checked against the page its own first one
-    // stored, not the one the turn began with.
     let stub = serve(|body| match answers_so_far(body).len() {
         0 => Script::Memory("Smith handles verification.".into()),
         1 => Script::Memory("Smith handles verification.\nJones signs off.".into()),
@@ -1450,11 +1288,6 @@ async fn with_nobody_else_writing_every_rewrite_in_a_turn_is_saved() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn what_one_agent_remembers_is_never_shown_to_another() {
-    // A memory is written by an agent for itself, in whatever shorthand suits
-    // it, and it holds whatever the operator has told that one agent in
-    // confidence. It is also the only thing that survives a conversation, so a
-    // crew that pooled memories would grow a shared file nobody wrote and every
-    // agent acts on. One file per agent, and the boundary is the prompt.
     let stub = serve(|body| {
         if speaker(body) != "Manager" {
             return Script::Say("Nothing to add.".into());
@@ -1470,7 +1303,6 @@ async fn what_one_agent_remembers_is_never_shown_to_another() {
     let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
     let written = h.runtime.send_from_human(h.id("Manager"), "remember where I live").unwrap();
     h.settle(written).await;
-    // A second turn, so the Manager's own prompt is one built after the write.
     let again = h.runtime.send_from_human(h.id("Manager"), "still there?").unwrap();
     h.settle(again).await;
     let asked = h.runtime.send_from_human(h.id("Chef"), "anything I should know?").unwrap();
@@ -1528,12 +1360,6 @@ async fn streamed_text_matches_the_persisted_message() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_turn_that_speaks_twice_is_watched_with_the_break_between_its_rounds() {
-    // A turn is several model calls under one placeholder, and a model that
-    // narrates its work says something before each tool call. The message that
-    // lands puts a blank line between those sentences; the bubble the operator
-    // watched being written has to put one there too, or every round after the
-    // first begins in the middle of the sentence the last one ended with:
-    // "...who is here.Two of us."
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("Two of us.".into())
@@ -1570,14 +1396,6 @@ async fn a_turn_that_speaks_twice_is_watched_with_the_break_between_its_rounds()
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_turn_that_ends_on_a_promise_is_given_the_round_back() {
-    // The failure, verbatim: a plugin that had just started answering again,
-    // two checks left to run, rounds and budget to run them in, and a closing
-    // line of "Checking both properly". A turn ends when the model stops
-    // calling tools, so that sentence was the end of it. The operator read a
-    // promise, waited, and had to send another message to get the work done.
-    //
-    // The prompt now says a message ends the turn, which is the fix for a model
-    // that reads its prompt. This is the fix for the rest of them.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("Drive's newest file is still 27 Aug.".into())
@@ -1597,10 +1415,6 @@ async fn a_turn_that_ends_on_a_promise_is_given_the_round_back() {
         said.contains("still 27 Aug"),
         "the work the turn promised has to happen in the turn that promised it: {said:?}"
     );
-    // The promise stays in the message rather than being retracted. The
-    // operator watched it being written, so a finished message without it would
-    // disagree with the bubble they read; left where it is, it reads as the
-    // sentence before the answer, which is what it turned out to be.
     assert_eq!(
         said,
         "Both answered, so the plugin is back. Checking both properly.\n\n\
@@ -1615,9 +1429,6 @@ async fn a_turn_that_ends_on_a_promise_is_given_the_round_back() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_turn_that_promises_again_is_not_argued_with() {
-    // The bound. A model that answers the nudge with the same sentence is not
-    // going to be talked into working, and without a cap this is a turn that
-    // spends every round it has and the budget behind them on one promise.
     let stub = serve(|_| Script::Say("Checking now.".into())).await;
     let h = harness(&stub, &["Manager"], GuardLimits::default());
     let run = h.runtime.send_from_human(h.id("Manager"), "is the plugin back?").unwrap();
@@ -1632,9 +1443,6 @@ async fn a_turn_that_promises_again_is_not_argued_with() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_turn_that_says_what_it_found_is_left_alone() {
-    // What the check costs when it is wrong, which is what decides how tight it
-    // has to be. A turn closing on a report is the overwhelmingly common case
-    // and it must not buy a second model call.
     let stub =
         serve(|_| Script::Say("Checked both. Drive is stale and Gmail has nothing.".into())).await;
     let h = harness(&stub, &["Manager"], GuardLimits::default());
@@ -1646,11 +1454,6 @@ async fn a_turn_that_says_what_it_found_is_left_alone() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_retried_round_opens_its_replacement_at_the_left_margin() {
-    // The other half of that break. A retry throws away what was drawn and
-    // starts a new placeholder, so the round it reopens for is the first thing
-    // in that bubble however many rounds came before it. Deciding the break
-    // from what has been collected rather than from what is on screen puts a
-    // blank line at the top of every recovered turn.
     let answers = Arc::new(AtomicUsize::new(0));
     let stub = serve(move |body| {
         if !has_tool_result(body) {
@@ -1686,16 +1489,11 @@ async fn a_retried_round_opens_its_replacement_at_the_left_margin() {
         "Two of us.",
         "the replacement bubble held nothing to be separated from"
     );
-    // And the record is unaffected: it kept the round the screen threw away.
     assert_eq!(h.channel_texts("Manager").pop().unwrap(), "Checking who is here.\n\nTwo of us.");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_model_that_thinks_out_loud_is_watched_without_being_recorded() {
-    // The whole of the feature: an operator can see what a turn is doing while
-    // it does it, and nothing about it survives the turn. Reasoning that leaked
-    // into the message would be replayed into every later prompt, hashed by the
-    // loop guard, and read back by a peer as something the agent had said.
     let stub = serve(|_| Script::Thinking {
         about: "They want the total, so 17 times 23.".into(),
         say: "391.".into(),
@@ -1722,7 +1520,6 @@ async fn a_model_that_thinks_out_loud_is_watched_without_being_recorded() {
     );
     assert_eq!(h.sink.streamed_text(stream_id), "391.");
 
-    // And the transcript holds the answer alone.
     let persisted = h.channel_texts("Manager").pop().unwrap();
     assert_eq!(persisted, "391.");
     assert!(!persisted.contains("17 times 23"), "reasoning reached the transcript: {persisted}");
@@ -1730,11 +1527,6 @@ async fn a_model_that_thinks_out_loud_is_watched_without_being_recorded() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_turn_says_what_it_reached_for_before_it_knows_how_it_went() {
-    // The wait this exists for: a turn can spend ten minutes working through
-    // tool results and publish nothing about any of them until it ends. The
-    // operator watching had a pulsing avatar and a line of prose the model
-    // wrote about itself, which is what a turn says it is doing rather than
-    // what it did.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("Two of us.".into())
@@ -1756,9 +1548,6 @@ async fn a_turn_says_what_it_reached_for_before_it_knows_how_it_went() {
         })
         .expect("a stream should have started");
 
-    // Reported before the call is made, which is the half that matters: a
-    // command can sit for a minute, and a call only reported once it comes back
-    // is silence for exactly as long as the wait it was meant to explain.
     let started = events
         .iter()
         .position(|e| {
@@ -1781,15 +1570,8 @@ async fn a_turn_says_what_it_reached_for_before_it_knows_how_it_went() {
     else {
         unreachable!("both were matched above")
     };
-    // Paired by the provider's own id. Two identical calls in one turn are two
-    // calls, and an outcome filed against the wrong one is a chip that says a
-    // call succeeded when its twin is the one that did.
     assert_eq!(opened, closed);
 
-    // And what the operator watched land is what the transcript holds: the same
-    // part, not a second reading of it. One function draws the chip from this
-    // value at both ends, so they cannot disagree about a call, and whatever a
-    // call has to say for itself next reaches both of them or neither.
     let recorded: Vec<_> = h
         .runtime
         .store()
@@ -1805,8 +1587,6 @@ async fn a_turn_says_what_it_reached_for_before_it_knows_how_it_went() {
         "the record must agree with what was drawn"
     );
 
-    // One call, one record. What was watched happening is the same work as what
-    // the transcript keeps, not a second entry beside it.
     assert_eq!(
         events.iter().filter(|e| matches!(e, UiEvent::ToolFinished { .. })).count(),
         recorded.len()
@@ -1815,9 +1595,6 @@ async fn a_turn_says_what_it_reached_for_before_it_knows_how_it_went() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_thought_is_coalesced_on_the_same_clock_as_the_text() {
-    // Reasoning is produced as fast as text and costs the same IPC hop and
-    // render. A thinking model streaming its working one token at a time is
-    // the freeze the pen exists to prevent, arriving through a second door.
     let thinking = "weighing the options carefully. ".repeat(40);
     let expected = thinking.clone();
     let stub =
@@ -1842,15 +1619,11 @@ async fn a_thought_is_coalesced_on_the_same_clock_as_the_text() {
             _ => None,
         })
         .expect("a stream should have started");
-    // Coalesced, not truncated: the tail is flushed when the call ends.
     assert_eq!(h.sink.streamed_reasoning(stream_id), expected);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_turn_that_thinks_twice_is_watched_with_the_break_between_its_rounds() {
-    // What an operator was shown: a model publishing one heading per round,
-    // thirteen rounds of it run into one line with nothing between them, so the
-    // line above the composer read "Updating skill memoryChecking suppression".
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Thinking { about: "**Answering**".into(), say: "Two of us.".into() }
@@ -1876,16 +1649,11 @@ async fn a_turn_that_thinks_twice_is_watched_with_the_break_between_its_rounds()
         })
         .expect("a stream should have started");
     assert_eq!(h.sink.streamed_reasoning(stream_id), "**Checking who is here**\n\n**Answering**");
-    // The break belongs to the thinking alone. The round that thought and said
-    // nothing leaves nothing in front of the words.
     assert_eq!(h.channel_texts("Manager").pop().unwrap(), "Two of us.");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_retried_round_opens_its_thinking_at_the_left_margin() {
-    // The retry reopens under a new id and the window throws away the thinking
-    // of the attempt that broke, so the replacement is the first thing in its
-    // buffer however many rounds came before it.
     let answers = Arc::new(AtomicUsize::new(0));
     let stub = serve(move |body| {
         if !has_tool_result(body) {
@@ -1920,11 +1688,6 @@ async fn a_retried_round_opens_its_thinking_at_the_left_margin() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_long_reply_reaches_the_window_in_far_fewer_events_than_tokens() {
-    // Every event is an IPC hop and a re-render in the operator's window, and a
-    // model writes faster than a screen refreshes. Emitting one per token spent
-    // the main thread on work no eye could resolve; with five agents answering
-    // at once it stopped painting altogether, which is what an operator
-    // reported as the app freezing and the text arriving in a lump.
     let reply = "the quick brown fox jumps over the lazy dog.".repeat(40);
     let expected = reply.clone();
     let stub = serve(move |_| Script::Say(reply.clone())).await;
@@ -1939,8 +1702,6 @@ async fn a_long_reply_reaches_the_window_in_far_fewer_events_than_tokens() {
         expected.len().div_ceil(7)
     );
 
-    // And not one character was coalesced away. The buffer is flushed when the
-    // call ends, or the tail of every reply would be lost.
     let stream_id = h
         .sink
         .snapshot()
@@ -1956,8 +1717,6 @@ async fn a_long_reply_reaches_the_window_in_far_fewer_events_than_tokens() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn agents_run_concurrently_rather_than_one_after_another() {
-    // Each peer's response is delayed. If the runtime were serial, five agents
-    // at 300ms each would take 1.5s; concurrent should be closer to one delay.
     let peers = ["Chef", "Host", "Barista", "Sommelier"];
     let stub = serve(move |body| {
         let who = speaker(body);
@@ -1993,12 +1752,8 @@ async fn agents_run_concurrently_rather_than_one_after_another() {
     );
 }
 
-// ---- skills --------------------------------------------------------------
-
 #[tokio::test]
 async fn a_skill_one_agent_writes_is_offered_to_its_crew_on_the_next_turn() {
-    // The whole loop: a write through the tool, stored for the crew, named in
-    // the next prompt of a crewmate, and read back whole by `view`.
     let stub = serve(|body| {
         let who = speaker(body);
         if who == "Writer" {
@@ -2072,9 +1827,6 @@ async fn an_agent_cannot_write_guacas_skill_or_delete_the_operators() {
 
 #[tokio::test]
 async fn a_skill_names_the_files_it_carries_and_an_agent_reads_only_those() {
-    // A skill added from elsewhere arrives with references. `view` names them
-    // after the instructions, `view` with `file` reads one, and a path that
-    // climbs out of the skill is refused with a way forward.
     let stub = serve(|body| {
         let who = speaker(body);
         if has_tool_result(body) {
@@ -2124,8 +1876,6 @@ async fn a_skill_names_the_files_it_carries_and_an_agent_reads_only_those() {
     );
 }
 
-// ---- the notebook --------------------------------------------------------------
-
 #[tokio::test]
 async fn a_file_an_agent_keeps_is_named_on_its_next_turn_and_read_only_when_asked() {
     let stub = serve(|body| {
@@ -2161,8 +1911,6 @@ async fn a_file_an_agent_keeps_is_named_on_its_next_turn_and_read_only_when_aske
         .unwrap()
         .contains("October"));
 }
-
-// ---- settings --------------------------------------------------------------
 
 #[tokio::test]
 async fn an_agent_reads_the_settings_and_what_the_operator_is_looking_at_and_never_a_key() {
@@ -2222,7 +1970,6 @@ async fn a_settings_change_happens_only_when_the_operator_allows_it() {
         asked.detail
     );
 
-    // An "always" for this action is one yes, and leaves nothing standing.
     h.runtime.decide_approval(request, Decision::AlwaysAllow).unwrap();
     h.wait_until("the change lands", |h| h.runtime.config().limits.max_hops == 12).await;
     assert_eq!(h.runtime.config().limits.max_steps_per_run, before.max_steps_per_run);
@@ -2231,8 +1978,6 @@ async fn a_settings_change_happens_only_when_the_operator_allows_it() {
         .store()
         .has_standing_grant(h.id("Helper"), ProtectedAction::ChangeSettings)
         .unwrap());
-    // The change lands inside the turn, before the model is told about it, so
-    // what the model was told is only there once the turn has finished.
     h.settle(run).await;
     let results = tool_results(&stub).join("\n");
     assert!(results.contains("The operator allowed it: changed Relay depth"), "{results}");
@@ -2261,8 +2006,6 @@ async fn an_agent_is_refused_the_endpoint_before_the_operator_is_bothered() {
     assert!(results.contains("`baseUrl` is the operator's"), "{results}");
 }
 
-/// A page in the default crew, made before the turn, with a condensed view
-/// when `condensed` is given and one connector read.
 fn pinnable(
     h: &Harness,
     owner: &str,
@@ -2290,7 +2033,6 @@ fn pinnable(
         .unwrap()
 }
 
-/// An agent that pins whatever id the operator's message ends on.
 async fn pinning(width: &'static str, every: u32) -> Stub {
     serve(move |body| {
         let asked = last_word(body);
@@ -2310,9 +2052,6 @@ async fn pinning(width: &'static str, every: u32) -> Stub {
 
 #[tokio::test]
 async fn a_page_reaches_the_status_bar_only_once_the_operator_says_yes_to_it_and_its_reads() {
-    // The bar is the operator's, so a pin parks. The card has to show every
-    // read the page will make on it and how often, because the yes allows
-    // those too: one decision, not a placement now and refused reads later.
     let stub = pinning("wide", 10).await;
     let h = harness(&stub, &["Rae"], GuardLimits::default());
     let page = pinnable(&h, "Rae", Some("<b>3 open</b>"));
@@ -2345,7 +2084,6 @@ async fn a_page_reaches_the_status_bar_only_once_the_operator_says_yes_to_it_and
         "the yes allowed the reads it showed"
     );
 
-    // Its crew reads that it is up there, which is what keeps the strip true.
     let run = h.runtime.send_from_human(h.id("Rae"), "Anything new?").unwrap();
     h.settle(run).await;
     let prompt = prompts_by_agent(&stub).remove("Rae").unwrap_or_default();
@@ -2371,8 +2109,6 @@ async fn a_page_without_a_condensed_view_is_refused_before_anybody_is_asked() {
 
 #[tokio::test]
 async fn an_agent_cannot_pin_another_crews_page() {
-    // The wall, for the one surface every crew shares. The id is real; the
-    // crew on the caller's card is the only thing stopping it.
     let stub = pinning("narrow", 5).await;
     let h = harness_in_groups(
         &stub,
@@ -2421,14 +2157,8 @@ async fn a_deleted_page_leaves_the_status_bar_with_it() {
     assert_eq!(left, vec![kept.id], "a pin never outlives its page, and the others stay put");
 }
 
-// ---- the calendar --------------------------------------------------------
-
 #[tokio::test]
 async fn an_agent_writes_its_crews_calendar_and_is_told_back_the_date_it_stored() {
-    // The answer restating the local wall clock is the whole safety mechanism
-    // on a date. It is the one argument a model gets wrong silently, and told
-    // back what was stored it reads its own mistake in the same turn instead of
-    // the operator finding it a week later.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("On the calendar.".into())
@@ -2455,9 +2185,6 @@ async fn an_agent_writes_its_crews_calendar_and_is_told_back_the_date_it_stored(
 
 #[tokio::test]
 async fn a_date_a_model_invented_is_refused_with_the_two_shapes_that_work() {
-    // A refusal that only says no gets reworded and retried. This one has to
-    // carry the formats, because the model has no other way to learn them
-    // inside the turn.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("Fixing that.".into())
@@ -2482,16 +2209,10 @@ async fn a_date_a_model_invented_is_refused_with_the_two_shapes_that_work() {
 
 #[tokio::test]
 async fn an_agent_cannot_move_another_crews_meeting() {
-    // The wall, end to end. The id is real, the occasion exists, and the only
-    // thing stopping the move is that it belongs to a crew this agent is not
-    // in. An id is a thing a model can invent, which is why the group is taken
-    // from the card and never from the call.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("Understood.".into())
         } else {
-            // The id is substituted into the prompt the operator sends, so the
-            // script reads it back out of the conversation it is answering.
             let asked = body["messages"]
                 .as_array()
                 .and_then(|turns| turns.last())
@@ -2510,7 +2231,6 @@ async fn an_agent_cannot_move_another_crews_meeting() {
         GuardLimits::default(),
     );
 
-    // Chef's crew has a deposition. Manager is in the other crew.
     let theirs = h.runtime.store().get_agent(h.id("Chef")).unwrap().unwrap().group_id;
     let when = guac_lib::domain::occasion::parse_when("2099-11-02 10:00").unwrap();
     let clean =
@@ -2535,8 +2255,6 @@ async fn an_agent_cannot_move_another_crews_meeting() {
     assert_eq!(untouched.starts_at, hidden.starts_at, "and it must not have moved");
 }
 
-/// The id at the end of the last thing the operator said, for a script that
-/// has to name an artifact the test made before the turn.
 fn last_word(body: &serde_json::Value) -> String {
     body["messages"]
         .as_array()
@@ -2550,7 +2268,6 @@ fn last_word(body: &serde_json::Value) -> String {
         .to_string()
 }
 
-/// Every `artifact` call an agent's own record holds, with what it made.
 fn artifact_calls(
     h: &Harness,
     name: &str,
@@ -2665,10 +2382,6 @@ async fn viewing_a_page_shows_its_condensed_view_so_an_edit_to_it_is_not_blind()
 
 #[tokio::test]
 async fn a_crewmate_edits_without_messaging_the_owner_who_reads_it_on_its_next_turn() {
-    // Anyone in the crew edits, one agent owns. The editor is told the owner
-    // will read about it, and the owner does, from its own prompt, without a
-    // message waking it: a message would be a paid turn, and an owner woken by
-    // every edit edits back.
     let stub = serve(|body| {
         let asked = last_word(body);
         if has_tool_result(body) || !asked.contains('-') {
@@ -2778,9 +2491,6 @@ async fn an_edit_without_a_note_is_refused_and_changes_nothing() {
 
 #[tokio::test]
 async fn an_agent_cannot_touch_another_crews_artifact() {
-    // The wall, end to end. The id is real and the page exists; the only thing
-    // stopping the edit is the crew on the caller's card, and the refusal is
-    // the one an id that never existed gets.
     let stub = serve(|body| {
         let asked = last_word(body);
         if has_tool_result(body) {
@@ -2836,9 +2546,6 @@ async fn an_agent_cannot_touch_another_crews_artifact() {
 
 #[tokio::test]
 async fn an_agent_reads_what_its_own_crew_already_has() {
-    // The control for the test above: the wall must not be a blanket ban. The
-    // fortnight in front of the crew is in the prompt, which is what an agent
-    // asked about Thursday answers from.
     let stub = serve(|_| Script::Say("Nothing else that week.".into())).await;
 
     let h = harness(&stub, &["Manager"], GuardLimits::default());
@@ -2864,12 +2571,8 @@ async fn an_agent_reads_what_its_own_crew_already_has() {
     assert!(prompt.contains("in 2 days"), "with how far off it is: {prompt}");
 }
 
-// ---- group isolation -----------------------------------------------------
-
 #[tokio::test]
 async fn an_agent_cannot_message_a_peer_in_another_group() {
-    // Chef exists, is live, and is addressed by its exact name. The only thing
-    // stopping the message is the group boundary.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("Understood.".into())
@@ -2902,7 +2605,6 @@ async fn an_agent_cannot_message_a_peer_in_another_group() {
 
 #[tokio::test]
 async fn agents_in_the_same_group_still_reach_each_other() {
-    // The control for the test above: the boundary must not be a blanket ban.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("Sent.".into())
@@ -2929,9 +2631,6 @@ async fn agents_in_the_same_group_still_reach_each_other() {
 
 #[tokio::test]
 async fn the_directory_never_lists_agents_from_another_group() {
-    // The boundary has to hold at discovery too. Refusing the send but naming
-    // the peer in the directory would hand the model a roster it can only be
-    // frustrated by, and leak who exists elsewhere.
     let stub =
         serve(
             |body| {
@@ -2962,11 +2661,6 @@ async fn the_directory_never_lists_agents_from_another_group() {
 
 #[tokio::test]
 async fn a_reply_sent_through_the_tool_does_not_demand_another() {
-    // Models answer their correspondent by calling `send_message` at them
-    // rather than replying in plain text. If that counts as a fresh approach,
-    // the answer demands an answer and the exchange only ends when the guard
-    // fires: a two-agent introduction was observed reaching hop 7 of 8, stopped
-    // by the dedup rule rather than by anyone running out of things to say.
     let stub = serve(|body| {
         let last = body["messages"]
             .as_array()
@@ -2978,7 +2672,6 @@ async fn a_reply_sent_through_the_tool_does_not_demand_another() {
         if has_tool_result(body) {
             Script::Say("noted".into())
         } else if last.contains("hello from manager") {
-            // Chef answers Manager the way the real models do.
             Script::SendTo { recipients: vec!["Manager".into()], text: "hello back".into() }
         } else if last.contains("hello back") {
             Script::Say("ok".into())
@@ -3012,16 +2705,6 @@ async fn a_reply_sent_through_the_tool_does_not_demand_another() {
 
 #[tokio::test]
 async fn a_peer_that_answered_through_the_tool_does_not_then_write_to_the_operator() {
-    // Found in a real workspace. The operator asked one agent to introduce
-    // itself to the crew, it messaged seven, and three of the seven then wrote
-    // to the operator: "I replied to the Chief of Staff confirming how I work".
-    // The operator had spoken to one agent and got mail from four.
-    //
-    // The turn shape that produces it is ordinary: answer the peer with
-    // `send_message`, then keep typing. The trailing text is not a second
-    // answer, so it was sent to the operator instead, who is the one
-    // participant an envelope can always be addressed to. Being addressable is
-    // not the same as being the audience.
     let stub = serve(|body| {
         if speaker(body) == "Chef" {
             if has_tool_result(body) {
@@ -3056,9 +2739,6 @@ async fn a_peer_that_answered_through_the_tool_does_not_then_write_to_the_operat
          {to_operator:?}"
     );
 
-    // Not delivered is not the same as thrown away. It is on the record of the
-    // turn that wrote it, in Chef's own channel, where the operator can read
-    // what their agent did without being handed a message about it.
     let recorded: Vec<String> = chef
         .iter()
         .filter(|e| e.to == Participant::System)
@@ -3072,29 +2752,13 @@ async fn a_peer_that_answered_through_the_tool_does_not_then_write_to_the_operat
 
 #[tokio::test]
 async fn the_agent_the_operator_wrote_to_still_reports_after_it_answers_its_crew() {
-    // The other half of the rule above, and what it shipped as. The same turn
-    // shape means the opposite thing for the one agent the operator actually
-    // wrote to: it answers its crew with `send_message` and closes the turn
-    // addressing the operator, because delegating and then saying where the
-    // work got to is the whole of its job.
-    //
-    // Every turn it runs after the first is woken by a peer, so `ToPeer` is the
-    // only mode it is ever in again and this is the only path its report has:
-    // `send_message` reaches agents, and there is no name for the operator.
-    // Filed as commentary, ten reports in one real run reached nobody while the
-    // operator asked why nothing was happening and four agents worked.
     let stub = serve(|body| {
         if speaker(body) == "Chef" {
             if anyone_said(body, "Now cost the fish") {
                 Script::Say("Fish is costed.".into())
             } else if has_tool_result(body) {
-                // The worker half, in the same run: Chef has already answered
-                // and the operator was never in this exchange.
                 Script::Say("Told Manager about the soup.".into())
             } else {
-                // An answer declared as work, which is what comes back up a
-                // delegation and what puts the manager in `ToPeer` for the
-                // rest of the run.
                 Script::Instruct {
                     recipients: vec!["Manager".into()],
                     text: "Soup is costed.".into(),
@@ -3140,8 +2804,6 @@ async fn the_agent_the_operator_wrote_to_still_reports_after_it_answers_its_crew
         h.transcript()
     );
 
-    // And the rule it is carved out of still holds inside the same run: Chef
-    // answered Manager and the operator was never in that exchange.
     let from_chef: Vec<String> = h
         .runtime
         .store()
@@ -3159,12 +2821,6 @@ async fn the_agent_the_operator_wrote_to_still_reports_after_it_answers_its_crew
 
 #[tokio::test]
 async fn a_document_attached_after_the_answer_still_reaches_the_peer_that_asked() {
-    // The carve-out in the rule above, and the reason it is not "drop whatever
-    // a turn trails". Text written after the answer went is a restatement of
-    // it; a file is not. `send_message` carries its own files, so one attached
-    // afterward has reached nobody at all, and the agent that asked for the
-    // work is who it belongs to. Silently filing it as commentary would lose
-    // the only thing the turn produced.
     let stub = serve(|body| {
         let calls = body["messages"]
             .as_array()
@@ -3173,8 +2829,6 @@ async fn a_document_attached_after_the_answer_still_reaches_the_peer_that_asked(
 
         if speaker(body) == "Chef" {
             match calls {
-                // Answer the way the real models do, then hand the document
-                // over afterward, then say so.
                 0 => Script::SendTo { recipients: vec!["Manager".into()], text: "On it.".into() },
                 1 => Script::Attach { tool: "attach_file".into(), files: vec!["menu.md".into()] },
                 _ => Script::Say("Tidied and attached.".into()),
@@ -3199,8 +2853,6 @@ async fn a_document_attached_after_the_answer_still_reaches_the_peer_that_asked(
         .unwrap();
     h.settle(run).await;
 
-    // In Manager's channel and from Chef: that is a document delivered to the
-    // agent that asked, rather than one filed in the sender's own record.
     let handed_back: Vec<String> = h
         .runtime
         .store()
@@ -3224,9 +2876,6 @@ async fn a_document_attached_after_the_answer_still_reaches_the_peer_that_asked(
 
 #[tokio::test]
 async fn a_refused_courtesy_tells_the_agent_what_to_do_instead() {
-    // The refusal is read mid-turn by the model that caused it, and it is the
-    // only thing standing between "stop being polite at each other" and a
-    // model that tries the same send again with different words.
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let recorder = seen.clone();
     let stub = serve(move |body| {
@@ -3269,11 +2918,6 @@ async fn a_refused_courtesy_tells_the_agent_what_to_do_instead() {
 
 #[tokio::test]
 async fn a_second_instruction_to_a_peer_that_already_answered_is_delivered() {
-    // Found in a real session. The operator authorized an external send, the
-    // coordinator relayed it, read the answer, and was refused when it tried to
-    // instruct again: the guard cannot tell a second instruction from a thank
-    // you, and it was aimed at the thank you. Every delegation needing two
-    // rounds died there, so the sender now says which it is.
     let stub = serve(|body| {
         let who = speaker(body);
         let text = body["messages"]
@@ -3288,12 +2932,8 @@ async fn a_second_instruction_to_a_peer_that_already_answered_is_delivered() {
                 Script::Say("Ready, but I need you to confirm before I send.".into())
             }
         } else if text.contains("Sent.") {
-            // The answer to the second instruction came back, so the Manager
-            // can close the loop it opened.
             Script::Say("Done: Chef sent the mailing.".into())
         } else if text.contains("I need you to confirm") {
-            // The turn this test exists for: woken by an answer, nobody is
-            // waiting on the Manager, and it has genuinely new work to give.
             Script::Instruct {
                 recipients: vec!["Chef".into()],
                 text: "Confirmed by the operator: go ahead and send it.".into(),
@@ -3320,9 +2960,6 @@ async fn a_second_instruction_to_a_peer_that_already_answered_is_delivered() {
         to_chef.iter().any(|t| t.contains("go ahead and send it")),
         "the follow-up instruction never reached Chef: {to_chef:?}"
     );
-    // The instruction was work, so its answer comes back to the agent that
-    // gave it rather than stranding in Chef's own channel: the Manager can
-    // assemble what came of the work it placed.
     assert!(
         h.channel_texts("Manager").iter().any(|t| t.contains("Sent.")),
         "Chef's answer never reached the Manager that instructed it:\n{}",
@@ -3337,17 +2974,6 @@ async fn a_second_instruction_to_a_peer_that_already_answered_is_delivered() {
 
 #[tokio::test]
 async fn a_peer_instructed_after_it_answered_does_the_work_rather_than_going_quiet() {
-    // Found in a real session, and the exact shape of it. The operator asked
-    // for an email, the coordinator relayed it, the peer opened the document
-    // and reported back, and the coordinator then issued the actual send
-    // instruction. That instruction was delivered, and the peer said nothing.
-    //
-    // Nothing was waiting on a reply, so the turn ran in the mode that tells an
-    // agent nobody is asking it for anything and silence is usually right. It
-    // spent a model call and complied. From the operator's side an agent had
-    // simply stopped. Work re-arms the reply path now, so the second
-    // instruction runs as an ordinary reply turn: the prompt says someone is
-    // waiting, and the answer lands with them.
     let stub = serve(|body| {
         let who = speaker(body);
         let text = body["messages"]
@@ -3359,10 +2985,6 @@ async fn a_peer_instructed_after_it_answered_does_the_work_rather_than_going_qui
             if !text.contains("go ahead and send it") {
                 Script::Say("I have the file open, confirm before I send.".into())
             } else if text.contains("Nothing here needs an answer") {
-                // The old failure, kept as a tripwire: if the second
-                // instruction ever runs in the silent mode again, this arm
-                // plays the model that reads its prompt and complies, and the
-                // assertion below fails on an agent that went quiet.
                 Script::Say(String::new())
             } else {
                 Script::Say("Sent it.".into())
@@ -3395,8 +3017,6 @@ async fn a_peer_instructed_after_it_answered_does_the_work_rather_than_going_qui
 
 #[tokio::test]
 async fn work_and_a_reply_are_different_questions_on_the_wire() {
-    // The two used to be the same field. An instruction carries work and wants
-    // no reply, which is the combination that had nowhere to live.
     let stub = serve(|body| {
         if speaker(body) == "Chef" {
             Script::Say("Done.".into())
@@ -3430,9 +3050,6 @@ async fn work_and_a_reply_are_different_questions_on_the_wire() {
 
 #[tokio::test]
 async fn a_courtesy_to_a_peer_that_already_answered_is_still_refused() {
-    // The other half. Declaring intent is not a way around the guard: the
-    // thank-you that used to run a crew in circles is turned away exactly as
-    // before, and only a message that says it carries work gets through.
     let stub = serve(|body| {
         let text = body["messages"]
             .as_array()
@@ -3469,14 +3086,6 @@ async fn a_courtesy_to_a_peer_that_already_answered_is_still_refused() {
 
 #[tokio::test]
 async fn an_introduction_ends_when_everyone_has_answered() {
-    // The whole shape, as an operator ran it: introduce yourself to three
-    // agents, all three answer, and the manager goes back round thanking them.
-    //
-    // The replies land milliseconds apart, so the manager's turn sees one of
-    // them and the other two arrive after. Deciding "am I answering this peer"
-    // from the batch made those two strangers, and strangers get messages that
-    // demand answers: the exchange went to hop 4 and produced four summaries
-    // for one instruction.
     let stub = serve(|body| {
         let text = body["messages"]
             .as_array()
@@ -3486,7 +3095,6 @@ async fn an_introduction_ends_when_everyone_has_answered() {
         if has_tool_result(body) {
             Script::Say("introductions done".into())
         } else if text.contains("good to meet you") {
-            // The manager thanks all three, whatever the batch happened to hold.
             Script::SendTo {
                 recipients: vec!["Chef".into(), "Baker".into(), "Grocer".into()],
                 text: "thanks all".into(),
@@ -3523,9 +3131,6 @@ async fn an_introduction_ends_when_everyone_has_answered() {
 
 #[tokio::test]
 async fn a_group_can_pin_a_model_without_touching_the_other_group() {
-    // Settings resolve agent over group over app. The point of the chain is
-    // that two crews can run on different models at once, so this checks what
-    // the model actually received rather than what was configured.
     let stub = serve(|_| Script::Say("ok".into())).await;
 
     let dir = tempfile::tempdir().unwrap();
@@ -3541,8 +3146,6 @@ async fn a_group_can_pin_a_model_without_touching_the_other_group() {
         })
         .unwrap();
 
-    // One agent inherits its group's model, one names its own, one is in the
-    // default group and inherits the app default.
     let mut inherits = draft("Inherits", &["testing"]);
     inherits.group_id = Some(pinned.id);
     inherits.model = String::new();
@@ -3612,10 +3215,6 @@ async fn a_group_can_pin_a_model_without_touching_the_other_group() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_group_runs_on_its_own_budget_and_leaves_the_next_group_alone() {
-    // A limit is a statement about one crew's work, not about the app. The stub
-    // answers every call with another tool call, so each agent runs until
-    // something stops it, and the model name on the request is what says which
-    // group's ceiling did.
     let stub = serve(|_| Script::Notes("still working".into())).await;
 
     let dir = tempfile::tempdir().unwrap();
@@ -3703,7 +3302,6 @@ async fn a_group_runs_on_its_own_budget_and_leaves_the_next_group_alone() {
     );
     assert_eq!(calls("roomy/model"), 6, "a group that sets no budget runs on the app's");
 
-    // And the crew that stopped is told why, in the group's own numbers.
     let said: String = h
         .runtime
         .store()
@@ -3715,17 +3313,11 @@ async fn a_group_runs_on_its_own_budget_and_leaves_the_next_group_alone() {
     assert!(said.contains("budget of 2 model calls"), "the operator must be told: {said}");
 }
 
-// ---- routines ------------------------------------------------------------
-
 #[tokio::test]
 async fn a_routine_that_is_due_wakes_its_agent() {
-    // The whole point of a schedule is that something happens without anyone
-    // typing, so this drives the real scheduler rather than calling the
-    // delivery path directly.
     let stub = serve(|_| Script::Say("checked the listings".into())).await;
     let h = harness(&stub, &["Watcher"], GuardLimits::default());
 
-    // Due a moment ago, the state the scheduler actually finds things in.
     h.runtime
         .store()
         .create_routine(
@@ -3744,7 +3336,6 @@ async fn a_routine_that_is_due_wakes_its_agent() {
     })
     .await;
 
-    // A repeating routine stays, moved forward rather than firing again.
     let routines = h.runtime.store().agent_routines(h.id("Watcher")).unwrap();
     assert_eq!(routines.len(), 1, "a repeat must survive its own run");
     assert!(
@@ -3785,14 +3376,6 @@ async fn a_one_off_routine_does_not_come_due_twice() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_routine_that_skips_lands_on_the_idle_agent_and_not_on_the_working_one() {
-    // Two agents, one sweep, the same routine, opposite answers. The point of
-    // the option is a sweep that must not stack: an agent still working through
-    // the last one does not want this one waiting behind it, and the next slot
-    // is an hour away regardless.
-    //
-    // Busy is parked on a permission request, which is a turn genuinely in
-    // flight and held open until somebody answers it. Idle has been sent
-    // nothing.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("done".into())
@@ -3836,9 +3419,6 @@ async fn a_routine_that_skips_lands_on_the_idle_agent_and_not_on_the_working_one
     })
     .await;
 
-    // The working one was passed over, and the history says so rather than
-    // leaving a gap: a firing that vanishes without trace reads exactly like a
-    // scheduler that has stopped running.
     let skipped = h.runtime.store().routine_runs(booked["Busy"].id, 20).unwrap();
     assert_eq!(skipped.len(), 1);
     assert_eq!(skipped[0].kind, RunKind::Skipped);
@@ -3854,8 +3434,6 @@ async fn a_routine_that_skips_lands_on_the_idle_agent_and_not_on_the_working_one
         h.transcript()
     );
 
-    // Dropped, not deferred: the slot moved on exactly as it would have if the
-    // firing had happened, so nothing comes due again on the next tick.
     let after = h.runtime.store().get_routine(booked["Busy"].id).unwrap().unwrap();
     assert!(
         after.next_run_at.expect("a clock routine holds a slot") > now_ms(),
@@ -3863,8 +3441,6 @@ async fn a_routine_that_skips_lands_on_the_idle_agent_and_not_on_the_working_one
     );
     assert_eq!(after.last_run_at, Some(after.next_run_at.unwrap() - 3_600_000));
 
-    // And the same routine on an agent with nothing in hand is delivered
-    // normally, which is what stops this being a way to switch a schedule off.
     h.wait_until("the idle agent to do the work", |h| {
         h.channel_texts("Idle").iter().any(|t| t.contains("checked the listings"))
     })
@@ -3876,9 +3452,6 @@ async fn a_routine_that_skips_lands_on_the_idle_agent_and_not_on_the_working_one
 
 #[tokio::test]
 async fn a_routine_left_on_the_ordinary_rule_waits_its_turn_rather_than_being_dropped() {
-    // The default, and the one that must not change. An agent busy at nine is
-    // still the agent that has to send the report, so its firing queues and is
-    // read when the turn in front of it finishes.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("done".into())
@@ -3926,11 +3499,6 @@ async fn a_routine_left_on_the_ordinary_rule_waits_its_turn_rather_than_being_dr
 
 #[tokio::test]
 async fn a_fired_routine_reaches_the_model_as_its_instruction_and_the_operator_as_one_line() {
-    // Both halves of the same delivery. The model has to be told exactly what
-    // the routine says, or a schedule does nothing. The operator was being
-    // shown the same several sentences as a chat bubble from Guaca, in the
-    // middle of their own conversation with the agent: the system prompting
-    // their agent, drawn as though somebody had typed it to them.
     let stub = serve(|_| Script::Say("checked".into())).await;
     let h = harness(&stub, &["Watcher"], GuardLimits::default());
 
@@ -3950,7 +3518,6 @@ async fn a_fired_routine_reaches_the_model_as_its_instruction_and_the_operator_a
     let run = h.runtime.test_routine(&routine).unwrap();
     h.settle(run).await;
 
-    // What the model was sent: the instruction, unchanged.
     let sent = h.runtime.store().channel_messages(h.id("Watcher"), 20).unwrap();
     let fired = sent
         .iter()
@@ -3962,8 +3529,6 @@ async fn a_fired_routine_reaches_the_model_as_its_instruction_and_the_operator_a
         "the prompt reads a routine's instruction the same way it reads any text"
     );
 
-    // What the transcript holds: one part naming the routine, and no loose
-    // text for a bubble to draw.
     match fired.parts.as_slice() {
         [Part::Routine { routine_id, name, what, payload }] => {
             assert_eq!(*routine_id, routine.id, "so the operator can open the routine it names");
@@ -3974,8 +3539,6 @@ async fn a_fired_routine_reaches_the_model_as_its_instruction_and_the_operator_a
         other => panic!("a fired routine is one routine part, got {other:?}"),
     }
 
-    // And the agent still did the work, which is the whole point of the change
-    // being only about how it is drawn.
     assert!(
         h.channel_texts("Watcher").iter().any(|t| t.contains("checked")),
         "the routine fired and the agent said nothing:\n{}",
@@ -3985,9 +3548,6 @@ async fn a_fired_routine_reaches_the_model_as_its_instruction_and_the_operator_a
 
 #[tokio::test]
 async fn testing_a_routine_delivers_it_without_spending_the_schedule() {
-    // The button exists so an operator can find out what a routine does before
-    // Tuesday morning. Firing it through the scheduler's own path would move
-    // the slot, and on a one-shot it would consume the only firing it had.
     let stub = serve(|_| Script::Say("checked the listings".into())).await;
     let h = harness(&stub, &["Watcher"], GuardLimits::default());
 
@@ -4016,17 +3576,11 @@ async fn testing_a_routine_delivers_it_without_spending_the_schedule() {
     assert_eq!(after[0].next_run_at, Some(due_next_week), "and must still be due when it was");
     assert!(after[0].last_run_at.is_none(), "a test is not the routine having run");
 
-    // It is in the history, marked as the test it was.
     let history = h.runtime.store().routine_runs(routine.id, 20).unwrap();
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].kind, RunKind::Test);
 }
 
-/// The event route, served on its own over this harness's runtime: the
-/// address to post to and the secret a post has to carry.
-///
-/// The route is the server's, so everything that posts to it is in the server
-/// build only. A desktop has no event route at all.
 #[cfg(feature = "server")]
 async fn receiver(h: &Harness) -> (String, String) {
     let secret = "test-secret-that-is-long-enough-to-be-one";
@@ -4157,20 +3711,12 @@ async fn event_arriving_after_drain_is_kept_for_the_next_host() {
 #[cfg(feature = "server")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_event_posted_to_the_receiver_fires_the_routine_standing_on_it() {
-    // The whole path an event takes: a POST to the event route, the routine
-    // standing on that service and topic, the agent's turn, and the history.
-    // Driven over real HTTP rather than by calling `deliver_event`, because
-    // what the operator wires is a URL and a header, and those are the two
-    // things this can get wrong.
     let stub = serve(|_| Script::Say("chased it".into())).await;
     let h = harness(&stub, &["Clerk"], GuardLimits::default());
     let routine = dunning(&h, "Clerk", false);
     let (base, secret) = receiver(&h).await;
 
     let reply = reqwest::Client::new()
-        // Capitalized on purpose: the address is matched the way the trigger
-        // was stored, lowered, or a routine set as `stripe` would never hear
-        // from a webhook configured as `Stripe`.
         .post(format!("{base}/events/Stripe/invoice.payment_failed"))
         .bearer_auth(&secret)
         .body(r#"{"id":"in_1","amount_due":1200}"#)
@@ -4188,7 +3734,6 @@ async fn an_event_posted_to_the_receiver_fires_the_routine_standing_on_it() {
     })
     .await;
 
-    // What the model was sent: the instruction, then the body, named as data.
     let sent = h.runtime.store().channel_messages(h.id("Clerk"), 20).unwrap();
     let fired = sent.iter().find(|m| m.from == Participant::System).expect("delivered");
     let text = fired.plain_text();
@@ -4203,14 +3748,11 @@ async fn an_event_posted_to_the_receiver_fires_the_routine_standing_on_it() {
         other => panic!("an event firing is one routine part with a body, got {other:?}"),
     }
 
-    // The history says an event came, with a run to thread back to.
     let runs = h.runtime.store().routine_runs(routine.id, 20).unwrap();
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].kind, RunKind::Event);
     assert!(runs[0].run_id.is_some());
 
-    // The routine stands, holding no slot, and recorded having run: an event
-    // repeats, so it must not go the way a one-off does.
     let after = h.runtime.store().get_routine(routine.id).unwrap().unwrap();
     assert_eq!(after.next_run_at, None);
     assert!(after.last_run_at.is_some());
@@ -4226,10 +3768,6 @@ async fn an_event_posted_to_the_receiver_fires_the_routine_standing_on_it() {
 #[cfg(feature = "server")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_post_that_does_not_carry_the_secret_fires_nothing() {
-    // The secret in the header is the whole of what stops a page open in the
-    // operator's browser from firing a routine by posting a form, so a post
-    // without it has to spend nothing: no turn, no history, no trace of which
-    // addresses exist.
     let stub = serve(|_| Script::Say("chased it".into())).await;
     let h = harness(&stub, &["Clerk"], GuardLimits::default());
     let routine = dunning(&h, "Clerk", false);
@@ -4241,11 +3779,8 @@ async fn a_post_that_does_not_carry_the_secret_fires_nothing() {
     assert_eq!(bare.status(), 401);
     let wrong = client.post(&address).bearer_auth("nope").body("{}").send().await.unwrap();
     assert_eq!(wrong.status(), 401);
-    // A secret in the body is not a secret in the header, which is the point.
     let in_body = client.post(&address).body("secret=test-secret").send().await.unwrap();
     assert_eq!(in_body.status(), 401);
-    // And nothing but a POST at the route is answered as anything but a
-    // refusal that says what the route is for.
     let get = client.get(&address).send().await.unwrap();
     assert_eq!(get.status(), 405);
     let elsewhere = client.post(format!("{base}/hooks/stripe")).send().await.unwrap();
@@ -4263,9 +3798,6 @@ async fn a_post_that_does_not_carry_the_secret_fires_nothing() {
 #[cfg(feature = "server")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_event_nobody_stands_on_is_answered_with_a_404() {
-    // A 200 here would tell a script its wiring works while the routine it
-    // was meant for sits under a different spelling. The one answer that has
-    // to be wrong loudly.
     let stub = serve(|_| Script::Say("chased it".into())).await;
     let h = harness(&stub, &["Clerk"], GuardLimits::default());
     dunning(&h, "Clerk", false);
@@ -4290,8 +3822,6 @@ async fn an_event_nobody_stands_on_is_answered_with_a_404() {
 #[cfg(feature = "server")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_event_that_lands_on_a_working_agent_is_skipped_when_the_routine_says_so() {
-    // The same question the clock's sweep asks, asked from the event route: the
-    // column would otherwise be true on an event routine and mean nothing.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("done".into())
@@ -4351,8 +3881,6 @@ async fn an_event_that_lands_on_a_working_agent_is_skipped_when_the_routine_says
 #[cfg(feature = "server")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_bearer_scheme_in_lower_case_is_accepted() {
-    // RFC 9110 makes the scheme case-insensitive, and senders write it every
-    // way. A 401 for `bearer` would read as a wrong secret.
     let stub = serve(|_| Script::Say("chased it".into())).await;
     let h = harness(&stub, &["Clerk"], GuardLimits::default());
     let routine = dunning(&h, "Clerk", false);
@@ -4377,8 +3905,6 @@ async fn a_bearer_scheme_in_lower_case_is_accepted() {
 #[cfg(feature = "server")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_event_for_a_paused_agents_routine_says_the_agent_is_paused() {
-    // Before, this read exactly like a misspelled topic, and the sender went
-    // looking for a typo. The routine is there; its agent is not taking work.
     let stub = serve(|_| Script::Say("chased it".into())).await;
     let h = harness(&stub, &["Clerk", "Spare"], GuardLimits::default());
     dunning(&h, "Clerk", false);
@@ -4408,8 +3934,6 @@ async fn an_event_for_a_paused_agents_routine_says_the_agent_is_paused() {
     );
     assert!(h.runtime.store().channel_messages(h.id("Clerk"), 20).unwrap().is_empty());
 
-    // Beside a routine that can take it, the event is delivered and the paused
-    // one is still counted, so the 200 does not hide it.
     let spare = dunning(&h, "Spare", false);
     let reply = post().await.unwrap();
     assert_eq!(reply.status(), 200);
@@ -4424,7 +3948,6 @@ async fn an_event_for_a_paused_agents_routine_says_the_agent_is_paused() {
 #[cfg(feature = "server")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_secret_is_checked_before_the_event_is_read() {
-    // A wrong token learns nothing about which events exist.
     let stub = quiet().await;
     let h = harness(&stub, &["Clerk"], GuardLimits::default());
     let (base, secret) = receiver(&h).await;
@@ -4441,7 +3964,6 @@ async fn the_secret_is_checked_before_the_event_is_read() {
     let missing = client.post(format!("{base}/events/stripe/invoice.paid")).send().await.unwrap();
     assert_eq!(missing.status(), 401);
 
-    // Right length, wrong bytes: the comparison is not a prefix check.
     let near = secret.replace('e', "f");
     assert_eq!(near.len(), secret.len());
     let refused = client
@@ -4478,8 +4000,6 @@ async fn delivery_id_is_checked_only_after_the_secret() {
 #[cfg(feature = "server")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_client_waiting_to_be_told_to_continue_is_noticed() {
-    // curl sends `Expect: 100-continue` for anything over a kilobyte and waits
-    // to be told to go ahead. A query string is not part of the event.
     let stub = quiet().await;
     let h = harness(&stub, &["Clerk"], GuardLimits::default());
     let routine = h
@@ -4516,8 +4036,6 @@ async fn a_client_waiting_to_be_told_to_continue_is_noticed() {
 #[cfg(feature = "server")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_refused_request_still_says_how_much_body_is_on_its_way() {
-    // A client still sending its body when the refusal is written reads a
-    // reset instead of the sentence that says what it did wrong.
     let stub = quiet().await;
     let h = harness(&stub, &["Clerk"], GuardLimits::default());
     let (base, _secret) = receiver(&h).await;
@@ -4536,7 +4054,6 @@ async fn a_refused_request_still_says_how_much_body_is_on_its_way() {
     );
 }
 
-/// The refusal an agent's `add` gets once it keeps `n` routines, in full.
 fn at_the_cap(n: usize) -> String {
     format!(
         "Refused: you already keep {n} routines, which is the most one agent may keep. Cancel \
@@ -4545,8 +4062,6 @@ fn at_the_cap(n: usize) -> String {
     )
 }
 
-/// Gives an agent `n` routines on the clock, every third one switched off,
-/// as the operator would: the cap counts what can still fire, on or off.
 fn keep_routines(h: &Harness, who: &str, n: usize) -> Vec<guac_lib::domain::routine::Routine> {
     (0..n)
         .map(|i| {
@@ -4609,9 +4124,6 @@ async fn the_twenty_first_routine_an_agent_adds_is_refused_and_nothing_is_writte
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_operator_can_still_add_a_routine_past_the_cap() {
-    // The cap binds what an agent hands itself, not what the operator sets.
-    // The panel's add is the store's, with no count in front of it, and the
-    // agent's next add is refused with the count as it now stands.
     let stub = serve(book_another).await;
     let h = harness(&stub, &["Watcher"], GuardLimits::default());
     keep_routines(&h, "Watcher", 21);
@@ -4627,7 +4139,6 @@ async fn the_operator_can_still_add_a_routine_past_the_cap() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn update_and_cancel_still_work_at_the_cap() {
-    // The refusal points at both, so both have to work at the cap.
     let ids: Arc<std::sync::Mutex<Vec<String>>> = Default::default();
     let script_ids = ids.clone();
     let stub = serve(move |body| {
@@ -4732,17 +4243,12 @@ async fn a_fired_one_off_and_a_cancelled_routine_do_not_count_toward_the_cap() {
 
 #[tokio::test]
 async fn a_weekday_routine_slept_through_a_weekend_records_the_two_slots_it_missed() {
-    // Due Friday at nine, and the host off from Thursday night until Monday
-    // afternoon. It fires once on waking, and that one row says it stands for
-    // Friday's slot and Monday's, both gone by with nothing running. The
-    // weekend holds no slot to miss.
     let stub = serve(|_| Script::Say("swept".into())).await;
     let h = harness(&stub, &["Watcher"], GuardLimits::default());
     let local = |d: u32, hour: u32| {
         let date = chrono::NaiveDate::from_ymd_opt(2025, 1, d).unwrap();
         guac_lib::domain::instant(date.and_hms_opt(hour, 0, 0).unwrap()).unwrap()
     };
-    // 2025-01-03 is a Friday.
     let routine = h
         .runtime
         .store()
@@ -4773,8 +4279,6 @@ async fn a_weekday_routine_slept_through_a_weekend_records_the_two_slots_it_miss
 
 #[tokio::test]
 async fn a_routine_that_comes_due_while_the_host_is_up_missed_nothing() {
-    // Overdue all the same, but by a slot that came after the host was up:
-    // whatever held it back, it was not the host being off.
     let stub = serve(|_| Script::Say("swept".into())).await;
     let h = harness(&stub, &["Watcher"], GuardLimits::default());
     let routine = h
@@ -4801,13 +4305,6 @@ async fn a_routine_that_comes_due_while_the_host_is_up_missed_nothing() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_routine_that_fires_is_work_to_do_rather_than_something_to_note() {
-    // A fired routine arrives from the system, and nobody is waiting on the
-    // agent's words: the answer goes into its own channel. That combination is
-    // the one that used to mean "nothing is being asked of you, and silence is
-    // usually right", because the instruction came from neither the operator
-    // nor a peer and so matched neither arm. A model that reads its prompt then
-    // does exactly what it was told, and the operator watches a schedule they
-    // set produce nothing at all, which is indistinguishable from a broken one.
     let stub = serve(|body| {
         let prompt = body["messages"][0]["content"].as_str().unwrap_or_default();
         if prompt.contains("Nothing here needs an answer") {
@@ -4835,7 +4332,6 @@ async fn a_routine_that_fires_is_work_to_do_rather_than_something_to_note() {
     let run = h.runtime.test_routine(&routine).unwrap();
     h.settle(run).await;
 
-    // The mode itself, which is the claim: a routine hands over work.
     let prompt = prompts_by_agent(&stub).remove("Watcher").expect("the Watcher ran");
     assert!(
         prompt.contains("You have been given something to do"),
@@ -4854,11 +4350,6 @@ async fn a_routine_that_fires_is_work_to_do_rather_than_something_to_note() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_routine_can_hand_its_work_to_the_specialist_it_belongs_to() {
-    // A standing job in a crew is rarely one agent's to do alone: the schedule
-    // belongs to whoever owns the outcome, and the work belongs to whoever has
-    // the skill. This is the whole delegation path with nobody typing anything,
-    // and it runs under a budget of its own because a fired routine is a fresh
-    // run.
     let stub = serve(|body| {
         let who = speaker(body);
         if who == "Researcher" {
@@ -4913,10 +4404,6 @@ async fn a_routine_can_hand_its_work_to_the_specialist_it_belongs_to() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_standing_request_becomes_one_routine_that_does_the_job_when_it_fires() {
-    // The whole loop an operator asks for when they say "every weekday": the
-    // agent books it, what it booked is what it was asked for, and the thing
-    // that fires later is something it can act on with nothing else in front of
-    // it.
     let stub = serve(|body| {
         let woken_by_the_schedule = body["messages"]
             .as_array()
@@ -4967,7 +4454,6 @@ async fn a_standing_request_becomes_one_routine_that_does_the_job_when_it_fires(
         tool_results(&stub)
     );
 
-    // And what it booked works: the same delivery the scheduler makes.
     let fired = h.runtime.test_routine(&booked[0]).unwrap();
     h.settle(fired).await;
     assert!(
@@ -4984,23 +4470,12 @@ async fn a_standing_request_becomes_one_routine_that_does_the_job_when_it_fires(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_change_to_a_routine_changes_the_one_that_stands_rather_than_adding_a_second() {
-    // The failure this exists for. An operator books something, comes back half
-    // an hour later and asks for it at a different time without saying which
-    // routine they mean. The agent had no way to know it already kept one, and
-    // no verb for changing it: it wrote a second beside the first, said it had
-    // made the change, and both fired from then on.
-    //
-    // The id is read out of the agent's own prompt, so this asserts the whole
-    // path rather than the tool: what it keeps is in front of it, and the way
-    // to change it takes that id.
     let stub = serve(|body| {
         if has_tool_result(body) {
             return Script::Say("Moved it to every morning.".into());
         }
         match standing_id(body) {
             Some(id) => Script::Retime { id, repeat: "daily".into() },
-            // No id in the prompt is the bug: an agent that cannot see what it
-            // keeps books a second routine instead.
             None => Script::Book {
                 name: "Listings check".into(),
                 what: "Check the listings and say what is new.".into(),
@@ -5054,14 +4529,10 @@ async fn a_change_to_a_routine_changes_the_one_that_stands_rather_than_adding_a_
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn one_agent_cannot_retime_or_cancel_another_agents_routine() {
-    // A schedule is not shared. `update` reaches a row by id, and an id that
-    // arrives from anywhere other than this agent's own list has to miss.
     let stub = serve(|body| {
         if has_tool_result(body) {
             return Script::Say("Could not change it.".into());
         }
-        // The id is passed in through the instruction, which is the only way an
-        // agent could come by a peer's: read out of a message.
         let id = body["messages"]
             .as_array()
             .and_then(|m| m.last())
@@ -5107,10 +4578,6 @@ async fn one_agent_cannot_retime_or_cancel_another_agents_routine() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_second_routine_for_a_job_already_standing_is_named_while_the_turn_can_still_fix_it() {
-    // The backstop for the same failure, for a turn that books anyway. Not a
-    // refusal: nothing here can tell "move the sweep" from "sweep twice a day",
-    // and refusing the second would refuse honest work. Said, with both ids,
-    // while the turn that knows which it meant is still running.
     let stub = serve(|body| {
         if has_tool_result(body) {
             return Script::Say("Booked.".into());
@@ -5175,9 +4642,6 @@ async fn a_routine_that_is_switched_off_stays_quiet_and_starts_again_when_asked(
     h.runtime.store().set_routine_active(routine.id, false).unwrap();
 
     h.runtime.start_scheduler();
-    // Overdue and inactive: the one state where the scheduler must do nothing.
-    // Two ticks' worth, since proving a negative here is proving it stayed
-    // silent through the sweep that would otherwise have caught it.
     tokio::time::sleep(Duration::from_millis(400)).await;
     assert!(
         h.channel_texts("Watcher").is_empty(),
@@ -5193,13 +4657,6 @@ async fn a_routine_that_is_switched_off_stays_quiet_and_starts_again_when_asked(
 
 #[test]
 fn a_schedule_that_cannot_be_read_parks_until_the_next_tick() {
-    // The scheduler shares its runtime with every agent, so a pass that returns
-    // without waiting is not a slow scheduler: it is a worker nobody else gets
-    // back. Paused time is what makes that observable rather than merely slow.
-    // Tokio only advances a paused clock once every task is parked on a timer,
-    // so a scheduler spinning on a store it cannot read holds the clock still
-    // and the minute below never elapses. One thread, because on a multi-thread
-    // runtime the spin has somewhere else to go and the bug hides.
     let (finished, watch) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -5210,14 +4667,10 @@ fn a_schedule_that_cannot_be_read_parks_until_the_next_tick() {
         rt.block_on(async {
             let stub = serve(|_| Script::Say("never called".into())).await;
             let h = harness(&stub, &["Watcher"], GuardLimits::default());
-            // The one failure the scheduler cannot read its way out of, and the
-            // one that stays broken for as long as the process runs.
             h.runtime.store().conn().unwrap().execute_batch("DROP TABLE routines").unwrap();
 
             h.runtime.start_scheduler();
 
-            // Several ticks' worth, and it costs no real time: the clock jumps
-            // the moment this task and the scheduler are both on a timer.
             tokio::time::sleep(Duration::from_secs(60)).await;
         });
         let _ = finished.send(());
@@ -5244,14 +4697,7 @@ fn signin_on(agent: guac_lib::domain::ids::AgentId, service: &str) -> Signin {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agent_is_told_what_its_browser_holds_and_what_its_peers_hold() {
-    // The whole point, end to end. Two failures it exists to stop, and they are
-    // opposites: an agent whose browser is signed in and does not know, so it
-    // declines; and an agent told about a session on another machine, so it
-    // tries and hits a login wall.
     let stub = serve(|_| Script::Say("Noted.".into())).await;
-    // A crew with browsers, because a session is only worth naming to an agent
-    // that could go and use it: what an agent is told it can reach is filtered
-    // by the places it actually has.
     let h = harness_with_browser(&stub, &["Manager", "Researcher"], GuardLimits::default());
 
     let group = h.runtime.store().get_agent(h.id("Manager")).unwrap().unwrap().group_id;
@@ -5285,26 +4731,20 @@ async fn an_agent_is_told_what_its_browser_holds_and_what_its_peers_hold() {
     let researcher = prompts.get("Researcher").expect("Researcher ran");
     let manager = prompts.get("Manager").expect("Manager ran");
 
-    // The agent that holds the session knows it holds it, and knows which of
-    // its two places holds it: a session in one is unreachable from the other.
     assert!(
         researcher.contains("You are signed in to these already")
             && researcher.contains("- LinkedIn in your browser"),
         "the agent whose browser is signed in must be told so: {researcher}"
     );
-    // The one that is not, is not told it is.
     assert!(
         !manager.contains("You are signed in to these already"),
         "cookies are in one jar; claiming otherwise produces a login wall: {manager}"
     );
-    // But it is told who to ask, which is the answer it should give instead.
     assert!(
         manager.contains("Researcher") && manager.contains("signed in to LinkedIn"),
         "the roster has to name the agent that can do it: {manager}"
     );
 
-    // A credential is a string, so both machines have it, and neither prompt
-    // has the value.
     for prompt in [researcher, manager] {
         assert!(prompt.contains("$GITHUB_TOKEN"), "the variable is named: {prompt}");
         assert!(!prompt.contains("ghp_hunter2"), "a secret reached a model: {prompt}");
@@ -5313,11 +4753,6 @@ async fn an_agent_is_told_what_its_browser_holds_and_what_its_peers_hold() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_account_on_a_place_that_was_taken_back_is_named_to_nobody() {
-    // A sign-in outlives the place it was found on, deliberately: the profile
-    // holding those cookies is kept when a browser is taken back, so the
-    // account is still there if it is given back. Naming it meanwhile is the
-    // overclaim that is worse than saying nothing — the agent decides it has
-    // access and hits a login wall, or a peer routes the work to it.
     let stub = serve(|_| Script::Say("Noted.".into())).await;
     let h = harness_with_browser(&stub, &["Manager", "Researcher"], GuardLimits::default());
 
@@ -5348,14 +4783,11 @@ async fn an_account_on_a_place_that_was_taken_back_is_named_to_nobody() {
         !manager.contains("signed in to LinkedIn"),
         "and a peer must not be sent to it: {manager}"
     );
-    // The row is still there for when the browser is given back.
     assert_eq!(h.runtime.store().agent_signins(h.id("Researcher")).unwrap().len(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_directory_says_which_peer_is_signed_in_to_what() {
-    // The roster in the prompt is one path; `directory` is the other, and an
-    // agent that calls it mid-turn to decide who to delegate to reads this one.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("Researcher can.".into())
@@ -5401,13 +4833,8 @@ async fn the_directory_says_which_peer_is_signed_in_to_what() {
     );
 }
 
-// ---- adding an agent -----------------------------------------------------
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agent_cannot_add_a_colleague_without_the_operator_saying_so() {
-    // The whole point of the mechanism: the turn stops, nothing exists yet, and
-    // a person decides. An agent that could staff its own workspace could spend
-    // the operator's money in a shape they never chose.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("Chief of Product is set up.".into())
@@ -5452,11 +4879,6 @@ async fn an_agent_cannot_add_a_colleague_without_the_operator_saying_so() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agent_made_by_an_agent_is_given_neither_place_and_its_maker_is_told() {
-    // A crew that could staff itself with machines would route around the
-    // decision entirely: one agent with a computer makes three more and the
-    // operator finds out from the bill. And the maker has to hear it, or it
-    // hands the web to a peer that cannot reach it and reports the work as
-    // delegated.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("Scout is set up.".into())
@@ -5489,12 +4911,6 @@ async fn an_agent_made_by_an_agent_is_given_neither_place_and_its_maker_is_told(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agent_told_by_a_peer_that_it_was_authorized_asks_the_operator_instead_of_refusing() {
-    // The live failure this exists for. The operator authorized an email, the
-    // coordinator relayed the authorization, and the sending agent declined:
-    // correctly, because a peer's word is a claim. It then asked the operator
-    // to repeat the instruction in another channel, which is the operator
-    // doing the routing by hand for a decision they had already made. Asking
-    // them, with two buttons, is the whole difference.
     let stub = serve(|body| {
         let text = body["messages"]
             .as_array()
@@ -5516,16 +4932,11 @@ async fn an_agent_told_by_a_peer_that_it_was_authorized_asks_the_operator_instea
     })
     .await;
 
-    // A workspace with a machine, because an agent with no way out of the
-    // workspace has nothing for the operator to authorize and is refused
-    // before they are asked.
     let h = harness_with_computer(&stub, &["Outreach"], GuardLimits::default());
     let run =
         h.runtime.send_from_human(h.id("Outreach"), "Manager will tell you what to send.").unwrap();
 
     let request = h.awaited_request().await;
-    // The question is in the transcript, where the operator is already looking,
-    // and it says what will happen rather than that something wants doing.
     let asked = h
         .runtime
         .store()
@@ -5577,9 +4988,6 @@ async fn a_denied_request_to_act_stops_the_action_and_says_so() {
     })
     .await;
 
-    // A workspace with a machine, because an agent with no way out of the
-    // workspace has nothing for the operator to authorize and is refused
-    // before they are asked.
     let h = harness_with_computer(&stub, &["Outreach"], GuardLimits::default());
     let run =
         h.runtime.send_from_human(h.id("Outreach"), "Manager will tell you what to send.").unwrap();
@@ -5600,11 +5008,6 @@ async fn a_denied_request_to_act_stops_the_action_and_says_so() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_computer_belongs_to_an_agent_the_operator_gave_one_to_and_not_to_the_workspace() {
-    // One key, one workspace, two agents, and only one of them was given a
-    // machine. The key used to decide on its own, which meant an operator who
-    // wanted a crew where one agent runs commands and the rest only talk had no
-    // way to say so: every agent was offered `run_command` and the first one to
-    // think of it rented itself a sandbox.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("I could not run that: I have no computer.".into())
@@ -5617,8 +5020,6 @@ async fn a_computer_belongs_to_an_agent_the_operator_gave_one_to_and_not_to_the_
     .await;
 
     let h = harness_with_computer(&stub, &["Runner", "Talker"], GuardLimits::default());
-    // The harness gives the crew whatever the provider makes possible, so this
-    // is the operator's decision under test: Talker is not to have one.
     h.runtime.store().set_has_computer(h.id("Talker"), false).unwrap();
 
     let refused =
@@ -5627,9 +5028,6 @@ async fn a_computer_belongs_to_an_agent_the_operator_gave_one_to_and_not_to_the_
     let allowed = h.runtime.send_from_human(h.id("Runner"), "Anything to do?").unwrap();
     h.settle(allowed).await;
 
-    // Decided before the first token, which is the half that costs nothing: a
-    // tool offered for a place an agent does not have is a model call and a
-    // turn spent finding out.
     let offered = tools_by_agent(&stub);
     assert!(
         offered["Runner"].contains(&"run_command".to_string()),
@@ -5642,8 +5040,6 @@ async fn a_computer_belongs_to_an_agent_the_operator_gave_one_to_and_not_to_the_
         );
     }
 
-    // And the half that is load-bearing: a model calling a name it was never
-    // offered is refused rather than served, or the tool list is decoration.
     let told = tool_results(&stub).join("\n");
     assert!(told.contains("you have no computer"), "{told}");
     assert!(
@@ -5655,7 +5051,6 @@ async fn a_computer_belongs_to_an_agent_the_operator_gave_one_to_and_not_to_the_
         "a refused call must not have rented a machine anyway"
     );
 
-    // The operator hears about it in words, in the channel they asked in.
     assert!(
         h.channel_texts("Talker").iter().any(|t| t.contains("no computer")),
         "and the turn still ends in an answer:\n{}",
@@ -5666,11 +5061,6 @@ async fn a_computer_belongs_to_an_agent_the_operator_gave_one_to_and_not_to_the_
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_screen_is_neither_offered_nor_served_to_a_model_that_cannot_be_shown_one() {
-    // The agent has the machine. What it does not have is a model that can be
-    // sent a picture, and `use_screen` hands back nothing else: the coordinates
-    // to click next are in the picture and nowhere else. Both halves are
-    // tested, because a model names tools it was never offered and the tool
-    // list alone is decoration.
     let listing = serde_json::json!({
         "data": [{
             "id": "test/model",
@@ -5690,17 +5080,11 @@ async fn a_screen_is_neither_offered_nor_served_to_a_model_that_cannot_be_shown_
     let run = h.runtime.send_from_human(h.id("Runner"), "What is on the screen?").unwrap();
     h.settle(run).await;
 
-    // Decided before the first token, which is the half that costs nothing.
     let offered = tools_by_agent(&stub);
     assert!(!offered["Runner"].contains(&"use_screen".to_string()), "{offered:?}");
-    // And the rest of the machine is untouched: a shell answers in text, and a
-    // program on the desktop is there for the operator to watch.
     assert!(offered["Runner"].contains(&"run_command".to_string()), "{offered:?}");
     assert!(offered["Runner"].contains(&"open_on_desktop".to_string()), "{offered:?}");
 
-    // The load-bearing half. Served, the machine would be worked, the screen
-    // captured and the picture thrown away, which reads to the model as a
-    // screen that came back blank.
     let told = tool_results(&stub).join("\n");
     assert!(told.contains("a picture cannot reach the model"), "{told}");
     assert!(told.contains("`run_command`"), "a refusal needs a way forward: {told}");
@@ -5713,10 +5097,6 @@ async fn a_screen_is_neither_offered_nor_served_to_a_model_that_cannot_be_shown_
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_browser_is_given_the_same_way_and_refused_the_same_way() {
-    // The other place, and a separate decision: a crew where one agent reads
-    // the web and nobody else leaves the workspace is the ordinary shape. The
-    // gate is the same three lines with one boolean changed, which is exactly
-    // the shape a copy-paste error hides in.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("I could not open that: I have no browser.".into())
@@ -5754,12 +5134,6 @@ async fn a_browser_is_given_the_same_way_and_refused_the_same_way() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn asking_to_act_with_nowhere_to_act_is_refused_without_troubling_the_operator() {
-    // The live failure. An agent worked out that it could not reach the
-    // operator's calendar, and asked them for permission to have it. This
-    // workspace has no computer and no browser, so there was no action to
-    // authorize and nothing a click could have handed over: what was missing
-    // was access. The operator got a decision that changed nothing instead of a
-    // sentence saying what they would have to add.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say(
@@ -5801,8 +5175,6 @@ async fn asking_to_act_with_nowhere_to_act_is_refused_without_troubling_the_oper
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_refusal_reaches_the_model_as_a_decision_rather_than_a_failure() {
-    // A refusal worded as an error gets retried. This one has to read as
-    // settled, or the next turn asks the operator the same question again.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("Understood, no new agent.".into())
@@ -5829,15 +5201,12 @@ async fn a_refusal_reaches_the_model_as_a_decision_rather_than_a_failure() {
     assert!(told.contains("said no"), "the model has to be told what happened: {told}");
     assert!(told.contains("do not ask again"), "and that it is settled: {told}");
 
-    // The operator still gets an answer rather than a dead turn.
     let said = h.channel_texts("Manager");
     assert!(said.iter().any(|t| t.contains("no new agent")), "{said:?}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn always_allow_means_the_same_agent_is_not_asked_twice() {
-    // The second request is the one that must not appear. Asking again after
-    // "always" is how a permission prompt becomes something to click through.
     let hires = Arc::new(AtomicUsize::new(0));
     let counter = hires.clone();
     let stub = serve(move |body| {
@@ -5875,8 +5244,6 @@ async fn always_allow_means_the_same_agent_is_not_asked_twice() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_name_already_taken_is_refused_without_troubling_the_operator() {
-    // Approving a create that then fails on a duplicate name spends the
-    // operator's attention on nothing at all.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("There is already a Chef.".into())
@@ -5903,14 +5270,8 @@ async fn a_name_already_taken_is_refused_without_troubling_the_operator() {
     assert!(told.contains("already an agent called Chef"), "{told}");
 }
 
-// ---- surviving a bad connection ------------------------------------------
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_connection_that_drops_once_is_retried_rather_than_reported() {
-    // The failure an operator actually hits: a laptop changes network, one
-    // request never lands, and an agent that would have answered fine reports
-    // that it could not reach the endpoint. Retrying is what the operator would
-    // have done, so the runtime does it first.
     let attempts = Arc::new(AtomicUsize::new(0));
     let counter = attempts.clone();
     let stub = serve(move |_body| {
@@ -5937,8 +5298,6 @@ async fn a_connection_that_drops_once_is_retried_rather_than_reported() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_call_that_keeps_failing_is_reported_with_the_message_to_send_again() {
-    // Once retries are spent the operator has to be told, and told next to the
-    // thing that failed, or the only way back is to retype what they asked.
     let stub = serve(|_body| Script::Unavailable).await;
 
     let h = harness(&stub, &["Manager"], GuardLimits::default());
@@ -5974,9 +5333,6 @@ async fn a_call_that_keeps_failing_is_reported_with_the_message_to_send_again() 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_call_that_fails_after_tool_calls_keeps_the_record_of_them() {
-    // The calls before the failure happened. A notice with nothing above it
-    // reads as a turn that did nothing, and Try again would send Chef the
-    // same message a second time without anyone being told it went once.
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let manager_calls = Arc::new(AtomicUsize::new(0));
@@ -5987,8 +5343,6 @@ async fn a_call_that_fails_after_tool_calls_keeps_the_record_of_them() {
             post(move |body: axum::extract::Json<serde_json::Value>| {
                 let counter = counter.clone();
                 async move {
-                    // Chef takes the message and says nothing back, so the only
-                    // turn Manager runs is the one that fails.
                     if speaker(&body.0) == "Chef" {
                         let said = render(&Script::Say(String::new()));
                         return ([("content-type", "text/event-stream")], said).into_response();
@@ -6125,15 +5479,6 @@ async fn retrying_something_that_is_no_longer_there_says_so() {
 
 #[tokio::test]
 async fn an_agent_given_work_that_says_nothing_is_reported_rather_than_vanishing() {
-    // The shipped bug, from the operator's side, on the path that produces it:
-    // a peer that has already answered is instructed again. Work re-arms the
-    // reply path, so the second instruction expects an answer and the turn
-    // runs as an ordinary reply turn — whose silence used to be the invisible
-    // kind. A turn that produced no text produced no envelope either, so there
-    // was nothing in Chef's channel, nothing in the feed, nothing for the
-    // Manager that was owed the answer, and an agent that to the operator had
-    // simply stopped. The turn may still be silent; it may no longer be silent
-    // invisibly.
     let stub = serve(|body| {
         let text = body["messages"]
             .as_array()
@@ -6180,8 +5525,6 @@ async fn an_agent_given_work_that_says_nothing_is_reported_rather_than_vanishing
         "work re-arms the reply path even for a peer that has already answered"
     );
 
-    // Read as a notice part rather than as text: this is Guaca speaking into
-    // Chef's channel, which is exactly what `plain_text` filters out.
     let reported = h
         .runtime
         .store()
@@ -6201,10 +5544,6 @@ async fn an_agent_given_work_that_says_nothing_is_reported_rather_than_vanishing
 
 #[tokio::test]
 async fn an_agent_reading_an_acknowledgment_may_still_say_nothing_quietly() {
-    // The other side of the same line, and the one that must not regress. The
-    // asymmetry that terminates cascades depends on a peer being able to read a
-    // courtesy and write nothing at all. Reporting that as a failure would put
-    // a chip in a channel after every well-behaved broadcast.
     let stub = serve(|body| {
         if speaker(body) == "Chef" {
             Script::Say("good to meet you".into())
@@ -6227,14 +5566,6 @@ async fn an_agent_reading_an_acknowledgment_may_still_say_nothing_quietly() {
     );
 }
 
-// ---- saying it has stopped, without stopping ------------------------------
-
-/// Everything the model was sent this call, as one string.
-///
-/// Deliberately every message rather than only the last: what these stubs
-/// branch on is whether a tool has already answered, and that answer arrives as
-/// a message of its own. It reads the system prompt too, which is what one of
-/// them is asking about.
 fn said(body: &serde_json::Value) -> String {
     body["messages"]
         .as_array()
@@ -6242,12 +5573,6 @@ fn said(body: &serde_json::Value) -> String {
         .unwrap_or_default()
 }
 
-/// Whether `escalate` has already answered this turn.
-///
-/// Two phrases because there are deliberately two answers, and the difference
-/// between them is the feature: a first raise is told it is on the desk, and a
-/// repeat is told how long the operator has had it and how many turns have gone
-/// into the same wall. A stub keyed on one of them loops on the other.
 fn escalated(body: &serde_json::Value) -> bool {
     let said = said(body);
     said.contains("on the operator's desk now") || said.contains("You already had that up")
@@ -6255,12 +5580,6 @@ fn escalated(body: &serde_json::Value) -> bool {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agent_that_cannot_go_on_puts_it_on_the_desk_and_finishes_its_turn() {
-    // The case neither of the two parking tools could cover. Nothing here can
-    // be answered inside a turn: the operator has to go and do something, and
-    // ten minutes of a parked turn would end with the wall still there and a
-    // run booking spent. So the agent says so on its way out and carries on,
-    // and what it said becomes a row rather than a paragraph in a channel
-    // nobody has open.
     let stub = serve(|body| {
         if escalated(body) {
             Script::Say("Flagged it. I have done what I can without the deploy key.".into())
@@ -6274,8 +5593,6 @@ async fn an_agent_that_cannot_go_on_puts_it_on_the_desk_and_finishes_its_turn() 
     let run = h.runtime.send_from_human(h.id("Analyst"), "Ship it.").unwrap();
     h.settle(run).await;
 
-    // Nothing parked, and that is the point rather than a gap: the turn ran to
-    // the end and the agent was never held anywhere.
     assert_eq!(
         h.sink.count_of(|e| matches!(e, UiEvent::ApprovalRequested { .. })),
         0,
@@ -6298,10 +5615,6 @@ async fn an_agent_that_cannot_go_on_puts_it_on_the_desk_and_finishes_its_turn() 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_second_turn_that_hits_the_same_wall_counts_rather_than_queues() {
-    // Six turns into one wall is one thing to deal with, and the operator has
-    // to be able to see that it is six. A row each would be a desk that reads
-    // as six problems; a silent second raise would be a desk that reads as one
-    // bad afternoon.
     let stub = serve(|body| {
         if escalated(body) {
             Script::Say("Nothing else I can do here.".into())
@@ -6324,8 +5637,6 @@ async fn a_second_turn_that_hits_the_same_wall_counts_rather_than_queues() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_open_escalation_is_in_the_next_turns_prompt() {
-    // An agent that cannot see what it has already escalated raises it again as
-    // news every turn, which is the behavior in a channel that this replaced.
     let stub = serve(|body| {
         if said(body).contains("What you have already escalated") {
             Script::Say("Still waiting on the key. Nothing has moved.".into())
@@ -6376,21 +5687,13 @@ async fn clearing_one_says_so_and_leaves_the_agent_free_to_raise_another() {
     assert_eq!(h.sink.count_of(|e| matches!(e, UiEvent::EscalationCleared { .. })), 1);
     assert!(h.runtime.store().open_escalations(50).unwrap().is_empty());
 
-    // Cleared is not answered. Nothing was waiting on it, so nothing resumed,
-    // and the agent is not told: what unblocks it is a message in its channel.
     let again = h.runtime.send_from_human(h.id("Analyst"), "And now?").unwrap();
     h.settle(again).await;
     assert_eq!(h.runtime.store().open_escalations(50).unwrap().len(), 1);
 }
 
-// ---- asking the operator what, rather than whether ------------------------
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agent_that_cannot_decide_asks_the_operator_and_carries_on_with_the_answer() {
-    // The case `request_permission` could never cover. Nothing here needs
-    // authorizing: the agent could take either road and does not know which the
-    // operator wants. Before this existed its only moves were to guess, or to
-    // write the question into a channel nobody was watching and stop.
     let stub = serve(|body| {
         let text = body["messages"]
             .as_array()
@@ -6440,13 +5743,6 @@ async fn an_agent_that_cannot_decide_asks_the_operator_and_carries_on_with_the_a
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_settled_question_says_more_on_the_page_and_nothing_more_to_the_agent() {
-    // The channel now draws what was answered under the question, reading it
-    // from the row the store already keeps. This is the pin on the other side
-    // of that: the turn resumed with the same tool result it was handed before
-    // the card learned to say this, word for word, and the question the turn
-    // stored is still only the question. A display change must not become a
-    // second thing the model is told, and must not become a field on a part the
-    // agent wrote.
     let stub = serve(|body| {
         if anyone_said(body, "The operator answered") {
             Script::Say("Going with Northwind, as you said.".into())
@@ -6507,12 +5803,6 @@ async fn a_settled_question_says_more_on_the_page_and_nothing_more_to_the_agent(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_question_nobody_answers_records_no_answer_and_releases_the_turn() {
-    // What this proves and what it does not, said plainly. A stop is the one
-    // unanswered end an offline test can reach: the ten minute window is a real
-    // wall clock and the stub here is a real server, so a paused clock is not
-    // available. So this covers the row and the release — nothing is recorded
-    // as said, and the turn is not left parked — and it does not cover what the
-    // agent does next, which is a model's behavior and belongs to the evals.
     let stub = serve(|_| Script::AskQuestion {
         question: "Which vendor?".into(),
         options: vec!["Northwind".into(), "Contoso".into()],
@@ -6534,10 +5824,6 @@ async fn a_question_nobody_answers_records_no_answer_and_releases_the_turn() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_question_cannot_be_answered_with_a_verdict_and_a_permission_cannot_be_answered_with_a_word(
 ) {
-    // Two surfaces draw these, and both draw both kinds. A card that offered
-    // Allow and Deny for "which vendor" would settle the row without saying
-    // anything, and the turn would resume having been told nothing: it reads
-    // back the answer, and there would not be one.
     let stub = serve(|_| Script::AskQuestion {
         question: "Which vendor?".into(),
         options: vec!["Northwind".into(), "Contoso".into()],
@@ -6567,19 +5853,12 @@ async fn a_question_cannot_be_answered_with_a_verdict_and_a_permission_cannot_be
     h.settle(run).await;
 }
 
-// ---- the compost ---------------------------------------------------------
-
-/// A crew whose model is never asked anything. The compost is entirely runtime
-/// machinery, so what the model would have said is beside the point.
 async fn quiet() -> Stub {
     serve(|_| Script::Say("ok".into())).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_deleted_agent_keeps_its_memory_while_it_waits() {
-    // The whole argument for the compost. Deleting used to take the memory on
-    // the click, and a restore that came back with an agent that had forgotten
-    // its work would not be worth offering.
     let stub = quiet().await;
     let h = harness(&stub, &["Researcher"], GuardLimits::default());
     let id = h.id("Researcher");
@@ -6607,18 +5886,12 @@ async fn a_deleted_agent_cannot_be_messaged_and_comes_back_able_to_be() {
 
     let back = h.runtime.restore_agent(&card).unwrap();
     assert_eq!(back.lifecycle, Lifecycle::Paused, "it comes back stopped, not working");
-    // Addressable again: paused queues rather than refuses, which is the
-    // difference between a restore and a resume.
     let run = h.runtime.send_from_human(id, "welcome back").unwrap();
     h.runtime.stop_run(run);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_restore_steps_around_a_name_the_crew_gave_away() {
-    // A composted agent frees its name at once, which is what lets the crew
-    // hire a replacement. Without settling it, the restore dies on the unique
-    // index and the operator is shown a database error for a button whose job
-    // is to succeed.
     let stub = quiet().await;
     let h = harness(&stub, &["Researcher"], GuardLimits::default());
     let card = h.runtime.store().get_agent(h.id("Researcher")).unwrap().unwrap();
@@ -6656,9 +5929,6 @@ async fn emptying_the_compost_takes_the_memory_and_leaves_the_transcript() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_sweep_takes_whoever_is_past_the_deadline_and_nobody_else() {
-    // The promise the panel draws a countdown against. Nothing else in the
-    // build empties the compost, so without this the feature is a list that
-    // grows forever and a memory that is never actually deleted.
     let stub = quiet().await;
     let h = harness(&stub, &["Researcher", "Scribe"], GuardLimits::default());
     let (due, waiting) = (h.id("Researcher"), h.id("Scribe"));
@@ -6666,9 +5936,6 @@ async fn the_sweep_takes_whoever_is_past_the_deadline_and_nobody_else() {
     for id in [due, waiting] {
         h.runtime.workspace().write(id, "whoever", "something worth keeping").unwrap();
     }
-    // Stamped through the store rather than through the runtime, because one of
-    // them has to be dated a month ago and that is the one thing a test cannot
-    // wait for. The stamp is all the sweep reads.
     h.runtime.store().discard_agent(due, now_ms() - COMPOST_MS - 1).unwrap();
     h.runtime.store().discard_agent(waiting, now_ms()).unwrap();
 
@@ -6682,11 +5949,8 @@ async fn the_sweep_takes_whoever_is_past_the_deadline_and_nobody_else() {
     assert!(h.runtime.store().get_agent(waiting).unwrap().unwrap().discarded());
 }
 
-// ---- a host that stops ---------------------------------------------------
-
 use guac_lib::domain::envelope::NoticeKind;
 
-/// A request from a turn picked up after a restart, carrying what it had done.
 fn picked_up(body: &serde_json::Value) -> bool {
     anyone_said(body, "restarted partway through your turn")
 }
@@ -6840,11 +6104,6 @@ async fn a_reply_owed_before_an_update_does_not_request_another_reply() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_turn_an_update_stops_carries_on_after_it_without_making_its_calls_again() {
-    // The case the drain exists for. The turn has already done something (a
-    // working note stands in for an email) and is waiting on the model when
-    // the host is told to stop. Its history cannot show it the call, because
-    // a message projects to its text, so a turn rebuilt from history alone
-    // reads the request again with no sign of what it did, and does it again.
     let stub = serve(|body| {
         if picked_up(body) {
             Script::Say("Noted, and done.".into())
@@ -6890,9 +6149,6 @@ async fn a_turn_an_update_stops_carries_on_after_it_without_making_its_calls_aga
     );
     assert!(notices_of(&h, "Researcher", NoticeKind::Interrupted).is_empty(), "nothing to review");
 
-    // The budget it had spent came with it: one call before the restart (the
-    // one in the air was dropped and given back) and one after. A fresh budget
-    // would say one, and would let every update hand a cascade another.
     let steps = h.sink.snapshot().into_iter().find_map(|event| match event {
         UiEvent::RunSettled { run_id, steps_used } if run_id == run => Some(steps_used),
         _ => None,
@@ -7005,9 +6261,6 @@ async fn work_queued_behind_a_busy_agent_is_carried_across_an_update() {
     h.settle(first).await;
     h.settle(second).await;
 
-    // One turn, because the second is the operator's and a running turn takes
-    // the operator's messages in. What matters is that both reached it, in the
-    // order they were sent, and neither is waiting on anybody to send it again.
     let after_restart: Vec<serde_json::Value> = stub.transcript.lock()[1..].to_vec();
     assert_eq!(after_restart.len(), 1, "the first turn was dropped mid-call and never answered");
     let prompt = after_restart[0].to_string();
@@ -7075,9 +6328,6 @@ async fn a_paused_agents_held_work_waits_for_it_on_the_next_host() {
 
 use guac_lib::domain::ids::RunId;
 
-/// An operator message taken into a turn that is working, held there: the first
-/// model call waits for `gate` so the second message is in the inbox before the
-/// round that takes it in, and the call after that is the one in the air.
 async fn taken_in_mid_turn(
     h: &Harness,
     stub: &Stub,
@@ -7103,9 +6353,6 @@ fn settled_on(sink: &RecordingSink, run: RunId) -> bool {
         .any(|event| matches!(event, UiEvent::RunSettled { run_id, .. } if *run_id == run))
 }
 
-/// The first call waits for the gate and makes a call, so the turn goes round
-/// again; every call after it hangs, and a call that reads as picked up after
-/// a restart answers.
 async fn gated_researcher(
     gate: Arc<std::sync::atomic::AtomicBool>,
     calls: Arc<AtomicUsize>,
@@ -7129,11 +6376,6 @@ async fn gated_researcher(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_message_taken_into_a_turn_the_process_dies_in_is_reported_with_it() {
-    // The operator's second message was read by the turn that was working, and
-    // that turn is the only thing that would ever answer it. The process ends
-    // before the turn does, with no drain. The second message has to come back
-    // as interrupted beside the first: had its run settled when it was read,
-    // nothing would be left to say it was never answered.
     let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let calls = Arc::new(AtomicUsize::new(0));
     let stub = gated_researcher(gate.clone(), calls.clone()).await;
@@ -7167,9 +6409,6 @@ async fn a_message_taken_into_a_turn_an_update_stops_is_handed_on_not_settled() 
     let h = harness(&stub, &["Researcher"], GuardLimits::default());
     let (first, second) = taken_in_mid_turn(&h, &stub, &gate, &calls).await;
 
-    // The turn is stopped at its boundary, and the message it read goes down
-    // with it for the next host. Handed on, not finished: the host that stops
-    // never says it settled.
     let stopping = h.sink.clone();
     let (h, drained) = h.restart(Duration::from_secs(5)).await;
     assert!(drained.is_complete(), "{drained:?}");
@@ -7217,10 +6456,6 @@ async fn a_decision_answered_while_the_host_is_stopping_is_followed_through_by_t
         .unwrap();
 
     assert!(h.runtime.drain(Duration::from_secs(5)).await.is_complete());
-    // Nothing on this host reads the agent's inbox again. That is what an
-    // answer queued here would wait behind when the agent's turn is still
-    // inside a tool call as the process ends, and an answer that waits for an
-    // actor is reported interrupted although nothing ever started on it.
     h.runtime.stop_agent(agent.id);
     let answered = h.runtime.answer_decision(decision.id, "11 AM", false, None).unwrap();
     let run = answered.delivery_run.unwrap();
@@ -7235,9 +6470,6 @@ async fn a_decision_answered_while_the_host_is_stopping_is_followed_through_by_t
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_keyed_message_sent_while_the_host_is_stopping_is_answered_by_the_next_one() {
-    // The composer's send carries a key so a retry after a lost reply is the
-    // same message. It is put down for the next host exactly as a send
-    // without one is, rather than refused because the host is stopping.
     let stub = serve(|_| Script::Say("Here.".into())).await;
     let h = harness(&stub, &["Researcher"], GuardLimits::default());
     let researcher = h.id("Researcher");
@@ -7265,10 +6497,6 @@ async fn a_keyed_message_sent_while_the_host_is_stopping_is_answered_by_the_next
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_recurring_check_that_found_nothing_ends_quiet_with_an_outcome_and_no_notice() {
-    // A check that runs every morning and finds nothing most mornings. Told
-    // that silence is the one wrong answer, it wrote a line a day saying so,
-    // and a silent one drew a notice that the agent had stopped. Now it is told
-    // it may say nothing, and the run's outcome says it ran and found nothing.
     let stub = serve(|_| Script::Say(String::new())).await;
     let h = harness(&stub, &["Watcher"], GuardLimits::default());
     let routine = h
@@ -7300,8 +6528,6 @@ async fn a_recurring_check_that_found_nothing_ends_quiet_with_an_outcome_and_no_
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_one_off_that_ends_in_silence_is_still_reported() {
-    // The other ending. Work that will not come round again has nowhere else
-    // to be reported, so silence there is still the one wrong answer.
     let stub = serve(|_| Script::Say(String::new())).await;
     let h = harness(&stub, &["Watcher"], GuardLimits::default());
     let routine = h
@@ -7329,10 +6555,6 @@ async fn a_one_off_that_ends_in_silence_is_still_reported() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_operator_message_read_mid_turn_is_answered_under_the_prompt_for_it() {
-    // A routine's turn is told nobody is waiting on a reply. The operator
-    // types while it works, the message is read on the next round, and from
-    // then on somebody is waiting: the prompt has to say so on that round
-    // rather than keep the one the turn started with.
     let hook: Arc<std::sync::OnceLock<(Runtime, guac_lib::domain::ids::AgentId)>> =
         Arc::new(std::sync::OnceLock::new());
     let armed = hook.clone();
@@ -7386,10 +6608,6 @@ async fn an_operator_message_read_mid_turn_is_answered_under_the_prompt_for_it()
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_turn_that_reads_the_last_answer_closes_the_delegation_and_its_line_is_the_outcome() {
-    // The answer to a delegation used to come back to a turn told that
-    // silence was usually right, so whether its result was ever written down
-    // was up to the model. The turn that reads the last answer is now the one
-    // that finishes the work, and its first line is what the operator sees.
     let closing: Arc<parking_lot::Mutex<Option<String>>> = Arc::default();
     let kept = closing.clone();
     let stub = serve(move |body| {
@@ -7434,7 +6652,6 @@ async fn the_turn_that_reads_the_last_answer_closes_the_delegation_and_its_line_
     assert_eq!(outcome.status, OutcomeStatus::Done);
 }
 
-/// Whether the guard wrote a notice in an agent's channel.
 fn guard_stopped(h: &Harness, name: &str) -> bool {
     h.runtime
         .store()
@@ -7445,11 +6662,6 @@ fn guard_stopped(h: &Harness, name: &str) -> bool {
         .any(|part| matches!(part, Part::Notice { kind: NoticeKind::GuardStop, .. }))
 }
 
-// ---- a request nobody answered in time moves to For you -------------------
-
-/// What each of the four is told when its ten minutes run out, as the operator
-/// approved it, one space between words. Pinned here as literals so a change
-/// to how the source wraps a sentence cannot change what a model reads.
 const LAPSED_PERMISSION: &str = "Nobody answered in ten minutes, so you do not have permission and must not act now. Your request is now on the operator's For you desk, and their answer will reach you as a new message. If they allow it, ask again for the same action and it is granted without waiting. Carry on with anything that does not depend on it, and say in your note that it is waiting on them.";
 const LAPSED_QUESTION: &str = "Nobody answered in ten minutes, so you are on your own for this turn. Your question is now on the operator's For you desk, and their answer will reach you as a new message. Do not ask again this turn. Take the most defensible option, do as much of the work as that lets you, and in your note say what you asked, what you assumed instead, and what would change if the assumption is wrong.";
 const LAPSED_SETTINGS: &str = "Nobody answered in ten minutes, so nothing changed. The request is now on the operator's For you desk with its before and after, and their answer will reach you as a new message. If they allow it, ask again for the same change and it is applied without waiting, unless one of those settings has changed since.";
@@ -7459,7 +6671,6 @@ fn lapsed_create(name: &str) -> String {
     format!("Nobody answered the request to create {name} in ten minutes, so nothing was created. The request is now on the operator's For you desk, and their answer will reach you as a new message. If they allow it, ask again with the same details and it goes through without waiting. Finish what you can without it.")
 }
 
-/// The one decision on an agent's desk, and the request it was filed from.
 fn filed_for(h: &Harness, name: &str) -> guac_lib::domain::decision::WorkDecision {
     let desk = h.runtime.store().decisions(Some(h.id(name))).unwrap();
     assert_eq!(desk.len(), 1, "one decision on the desk: {desk:?}");
@@ -7470,9 +6681,6 @@ fn asked_count(h: &Harness) -> usize {
     h.sink.count_of(|e| matches!(e, UiEvent::ApprovalRequested { .. }))
 }
 
-/// A stub that asks with `ask` on every turn and says `done` once it has a
-/// result back. Each turn starts without a tool result, so a turn the answer
-/// from For you starts asks again, which is the point.
 async fn asks_every_turn(ask: Script) -> Stub {
     serve(move |body| {
         if anyone_said(body, "restarted partway") {
@@ -7556,7 +6764,6 @@ async fn a_lapsed_permission_allowed_later_lets_the_same_request_through_once() 
         filed.request
     );
 
-    // Long enough that a request that parks is seen parked.
     h.runtime.set_approval_window(Duration::from_secs(60));
     let answered = h.runtime.answer_decision(filed.id, "Allow", false, None).unwrap();
     h.settle(answered.delivery_run.expect("delivered")).await;
@@ -7574,7 +6781,6 @@ async fn a_lapsed_permission_allowed_later_lets_the_same_request_through_once() 
         "the agent was told what the yes covers"
     );
 
-    // Once: the next time it asks, it is asked about.
     let again = h.runtime.send_from_human(h.id("Outreach"), "Send it again.").unwrap();
     h.wait_until("the second repeat to park", |h| asked_count(h) == 2).await;
     let parked = h
@@ -7636,8 +6842,6 @@ async fn a_lapsed_settings_change_allowed_later_applies_once_unless_a_setting_mo
         assert!(filed.request.context.contains(&format!("{was} → {}", was + 3)), "{filed:?}");
 
         if moved {
-            // The operator changed that setting meanwhile. What they allow
-            // later is the change as it was put to them, from where it was.
             let mut config = h.runtime.config();
             config.limits.max_hops = was + 1;
             h.runtime.set_config(config);
@@ -7708,14 +6912,6 @@ async fn a_request_a_stop_ended_says_nobody_decided_and_files_nothing() {
     assert!(h.runtime.store().decisions(None).unwrap().is_empty());
 }
 
-// ---- a host that crashes --------------------------------------------------
-
-/// Ends this host the way a crash does, with no drain: every actor stops where
-/// it is, and the workspace is opened on a new host with the recovery and the
-/// pickup boot runs. `paused` are paused on the new host before it starts, so
-/// what it picks up waits there without a turn beginning on it.
-///
-/// Returns the runs it delivered again and how many it reported interrupted.
 fn crash(h: Harness, paused: &[&str]) -> (Harness, Vec<RunId>, usize) {
     for id in h.ids.values() {
         h.runtime.stop_agent(*id);
@@ -7742,7 +6938,6 @@ fn crash(h: Harness, paused: &[&str]) -> (Harness, Vec<RunId>, usize) {
     (Harness { runtime, sink, ids: h.ids, _dir: h._dir }, again, interrupted)
 }
 
-/// Hangs every call until `crashed` is set, then answers.
 async fn hangs_until(crashed: Arc<std::sync::atomic::AtomicBool>, answer: &'static str) -> Stub {
     serve(
         move |_| {
@@ -7756,7 +6951,6 @@ async fn hangs_until(crashed: Arc<std::sync::atomic::AtomicBool>, answer: &'stat
     .await
 }
 
-/// The first message's turn is in the air, and the second waits behind it.
 async fn queued_behind_a_busy_turn(h: &Harness, stub: &Stub) -> (RunId, RunId) {
     let researcher = h.id("Researcher");
     let first = h.runtime.send_from_human(researcher, "The first thing.").unwrap();
@@ -7782,10 +6976,6 @@ fn interrupted_runs(h: &Harness, name: &str) -> Vec<RunId> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_message_queued_behind_a_busy_turn_is_answered_after_a_crash() {
-    // Nothing read the second message before the process died, so nothing can
-    // have happened because of it that was not written down. The next host
-    // delivers it as though it had just arrived, and the operator never has to
-    // notice there was a crash at all.
     let crashed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stub = hangs_until(crashed.clone(), "Second handled.").await;
     let h = harness(&stub, &["Researcher"], GuardLimits::default());
@@ -7806,9 +6996,6 @@ async fn a_message_queued_behind_a_busy_turn_is_answered_after_a_crash() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_message_whose_turn_had_called_the_model_is_reported_not_delivered_again() {
-    // The turn was in a model call when the process died. It may have been in
-    // a tool call instead, and nothing written down can tell the two apart,
-    // so it is never repeated on its own: it is reported, with Try again.
     let crashed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stub = hangs_until(crashed.clone(), "Should not be asked.").await;
     let h = harness(&stub, &["Researcher"], GuardLimits::default());
@@ -7826,10 +7013,6 @@ async fn a_message_whose_turn_had_called_the_model_is_reported_not_delivered_aga
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_message_two_crashes_in_a_row_find_unstarted_is_answered_once() {
-    // The first crash delivers the queued message again, to an agent that is
-    // paused, so no turn starts on it before the second crash. It is still a
-    // message nothing has read, so the second crash delivers it again too,
-    // and it is answered exactly once.
     let crashed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stub = hangs_until(crashed.clone(), "Second handled.").await;
     let h = harness(&stub, &["Researcher"], GuardLimits::default());
@@ -7927,11 +7110,8 @@ async fn a_decision_answer_queued_behind_a_busy_turn_is_followed_through_after_a
     assert_eq!(row.status, DecisionStatus::Completed);
 }
 
-// ---- what an agent has already reported ----------------------------------
-
 const REPORTED: &str = "## What you have already reported";
 
-/// The newest user turn of a request: what the turn is answering.
 fn answering(body: &serde_json::Value) -> String {
     body["messages"]
         .as_array()
@@ -7941,13 +7121,11 @@ fn answering(body: &serde_json::Value) -> String {
         .to_string()
 }
 
-/// The number written after `word` in `text`: "Topic 7." is 7.
 fn number_after(text: &str, word: &str) -> Option<u32> {
     let rest = &text[text.find(word)? + word.len()..];
     rest.chars().take_while(char::is_ascii_digit).collect::<String>().parse().ok()
 }
 
-/// The lines under the section, as the agent read them.
 fn reported_lines(system: &str) -> Vec<String> {
     let Some(at) = system.find(REPORTED) else { return Vec::new() };
     let rest = &system[at + REPORTED.len()..];
@@ -7955,7 +7133,6 @@ fn reported_lines(system: &str) -> Vec<String> {
     body.lines().filter(|line| line.starts_with("- ")).map(str::to_string).collect()
 }
 
-/// The system prompt of the last request an agent made answering `needle`.
 fn prompt_answering(stub: &Stub, name: &str, needle: &str) -> serde_json::Value {
     stub.transcript
         .lock()
@@ -7966,7 +7143,6 @@ fn prompt_answering(stub: &Stub, name: &str, needle: &str) -> serde_json::Value 
         .unwrap_or_else(|| panic!("{name} never answered {needle:?}"))
 }
 
-/// Every conversation turn a request draws after its system prompt, as text.
 fn drawn(body: &serde_json::Value) -> Vec<String> {
     body["messages"].as_array().unwrap()[1..]
         .iter()
@@ -7974,7 +7150,6 @@ fn drawn(body: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
-/// A topic the operator raises and the agent reports on in one line.
 async fn reporter() -> Stub {
     serve(|body| {
         let asked = answering(body);
@@ -7997,7 +7172,6 @@ async fn an_agent_is_shown_the_ten_newest_lines_it_ended_with_before_its_window(
     let last = h.runtime.send_from_human(h.id("Manager"), "Anything else?").unwrap();
     h.settle(last).await;
 
-    // While the whole conversation still fits, there is nothing to list.
     for topic in 1..=15 {
         let body = prompt_answering(&stub, "Manager", &format!("Topic {topic}."));
         let system = body["messages"][0]["content"].as_str().unwrap();
@@ -8008,8 +7182,6 @@ async fn an_agent_is_shown_the_ten_newest_lines_it_ended_with_before_its_window(
     let system = body["messages"][0]["content"].as_str().unwrap();
     let on_screen: Vec<u32> =
         drawn(&body).iter().filter_map(|turn| number_after(turn, "Topic ")).collect();
-    // A run is older than the window when the message that started it is not
-    // drawn, and the newest ten of those are listed, newest first.
     let expected: Vec<String> = (1..=32)
         .rev()
         .filter(|topic| !on_screen.contains(topic))
@@ -8136,9 +7308,6 @@ async fn a_cleared_channel_takes_what_was_reported_in_it_along() {
     assert!(!system.contains(REPORTED), "{system}");
 }
 
-// ---- the overnight tidy ---------------------------------------------------
-
-/// Turns the overnight tidy on, at three, for the group the agent is in.
 fn tidy_overnight(h: &Harness, name: &str) {
     let store = h.runtime.store();
     let agent = store.get_agent(h.id(name)).unwrap().unwrap();
@@ -8155,18 +7324,15 @@ fn tidy_overnight(h: &Harness, name: &str) {
         .unwrap();
 }
 
-/// A minute past the tidy hour, some nights from now.
 fn night(nights: i64) -> i64 {
     Tidy::last_struck(3, now_ms() + nights * 86_400_000).unwrap() + 60_000
 }
 
-/// The tidies an agent has been handed, oldest first.
 fn tidies(h: &Harness, name: &str) -> Vec<Envelope> {
     let channel = h.runtime.store().channel_messages(h.id(name), 500).unwrap();
     channel.into_iter().filter(Envelope::is_tidy).collect()
 }
 
-/// What the model was handed last on this call, as it read it.
 fn last_handed(body: &serde_json::Value) -> String {
     body["messages"]
         .as_array()
@@ -8176,7 +7342,6 @@ fn last_handed(body: &serde_json::Value) -> String {
         .to_string()
 }
 
-/// Whether this model call is a tidy's.
 fn a_tidy(body: &serde_json::Value) -> bool {
     last_handed(body).starts_with(&format!("[SYSTEM]\n{TIDY}"))
 }
@@ -8196,8 +7361,6 @@ fn system_of(body: &serde_json::Value) -> String {
     body["messages"][0]["content"].as_str().unwrap_or_default().to_string()
 }
 
-/// Sweeps for the tidies owed at a moment, and waits for the agent's to
-/// settle when it was handed one.
 async fn sweep(h: &Harness, name: &str, at: i64) -> Option<Envelope> {
     let before = tidies(h, name).len();
     h.runtime.sweep_tidy(at);
@@ -8210,23 +7373,16 @@ async fn sweep(h: &Harness, name: &str, at: i64) -> Option<Envelope> {
     Some(tidy)
 }
 
-/// Every row in the outbox that has not been claimed: what any window or
-/// endpoint could still be shown.
 fn outbox(h: &Harness) -> std::collections::BTreeSet<String> {
     let store = h.runtime.store();
     let due = store.due_deliveries(i64::MAX).unwrap().into_iter().map(|row| row.id);
     due.chain(store.pending_deliveries(None).unwrap().into_iter().map(|row| row.id)).collect()
 }
 
-/// How many finished runs For you, the rail and the menu bar count unseen.
 fn unseen(h: &Harness) -> usize {
     h.runtime.store().outcomes(None, None, true, 500).unwrap().len()
 }
 
-/// What this test binary logged at warn and above, every test's together.
-///
-/// Installed on first use. The one scenario that reads it looks for its own
-/// agent's name, so what the others log beside it does not matter.
 fn warnings() -> String {
     struct Into(Arc<std::sync::Mutex<Vec<u8>>>);
     impl std::io::Write for Into {
@@ -8294,13 +7450,10 @@ async fn an_opted_in_agent_is_tidied_once_at_the_hour_on_what_its_work_ended_wit
         assert!(!system_of(&asked).contains(heading), "a tidy does not read {heading}");
     }
 
-    // Once a night, and nothing to show for it as a finished run.
     assert_eq!(sweep(&h, "Planner", at + 3_600_000).await, None);
     assert_eq!(tidies(&h, "Planner").len(), 1);
     assert_eq!(h.runtime.store().outcome(tidy.run_id).unwrap(), None);
-    // The clock's, and not a routine the agent keeps or could count.
     assert!(h.runtime.store().agent_routines(planner).unwrap().is_empty());
-    // Nothing since that night, so nothing the next.
     assert_eq!(sweep(&h, "Planner", night(2)).await, None);
 }
 
@@ -8317,7 +7470,6 @@ async fn nobody_is_tidied_without_the_switch_or_without_work_since() {
         GuardLimits::default(),
     );
     tidy_overnight(&h, "Idle");
-    // Work, in a group that never turned the switch on.
     let run = h.runtime.send_from_human(h.id("Busy"), "File the receipts.").unwrap();
     h.settle(run).await;
     let calls = stub.calls.load(Ordering::SeqCst);
@@ -8424,7 +7576,6 @@ async fn a_tidy_records_nothing_reaches_nobody_and_is_not_read_again() {
         h.transcript()
     );
 
-    // Neither the tidy nor anything it said is in the next turn.
     let next = h.runtime.send_from_human(h.id("Planner"), "And the caterer?").unwrap();
     h.settle(next).await;
     let body = stub.transcript.lock().last().cloned().unwrap();
@@ -8433,8 +7584,6 @@ async fn a_tidy_records_nothing_reaches_nobody_and_is_not_read_again() {
     for gone in ["Time to tidy your memory", "All tidy"] {
         assert!(!read.contains(gone), "{gone} came back in a later turn");
     }
-    // And nothing of it is among what the agent has reported, which is
-    // where a later prompt reads its earlier conversations from.
     let card = h.runtime.store().get_agent(h.id("Planner")).unwrap().unwrap();
     let reported = h.runtime.store().reported(card.id, card.group_id, i64::MAX, 50).unwrap();
     let mut runs: Vec<_> = reported.iter().map(|one| one.run_id).collect();
@@ -8520,7 +7669,6 @@ async fn a_failed_tidy_says_so_reaches_nobody_and_is_owed_again_and_retried_as_a
     assert!(outbox(&h).is_subset(&outbox_before), "a failed tidy reached the outbox");
     assert_eq!(unseen(&h), unseen_before, "a failed tidy is counted as unseen");
 
-    // Try again: the same tidy, and still only a tidy.
     healthy.store(true, Ordering::SeqCst);
     let again = h.runtime.retry_turn(planner, failed.id).unwrap();
     h.settle(again).await;
@@ -8582,7 +7730,6 @@ async fn a_tidy_that_stored_its_rewrite_before_failing_has_read_its_lines() {
     assert_eq!(sweep(&h, "Planner", night(2)).await, None);
 }
 
-/// What a tidy is told when its rewrite is longer than it may leave the page.
 fn over_the_limit(limit: usize, after: usize) -> String {
     format!(
         "Not saved: a tidy may not leave your memory page longer than {limit} characters, and \
@@ -8591,9 +7738,6 @@ fn over_the_limit(limit: usize, after: usize) -> String {
     )
 }
 
-/// A tidy that answers its first call with `first` and its second with
-/// `then`, saying nothing after, over a page that starts as `page`. The
-/// agent has finished one run, so it is owed a tidy on the first night.
 async fn tidy_writing(
     page: &str,
     first: String,
@@ -8619,16 +7763,12 @@ async fn tidy_writing(
     (stub, h, planner)
 }
 
-/// What the tool calls of the last model call were answered with.
 fn told(stub: &Stub) -> Vec<String> {
     stub.transcript.lock().last().map(answers_so_far).unwrap_or_default()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_tidy_may_grow_a_short_page_up_to_two_thousand_characters_and_no_further() {
-    // A short page is not what the limit is for, so a tidy may add the line
-    // it came to add. Two thousand characters is the floor, and a rewrite of
-    // exactly that is stored.
     let (stub, h, planner) =
         tidy_writing("The venue is the Hall.", "a".repeat(2001), Some("b".repeat(2000))).await;
 
@@ -8660,9 +7800,6 @@ async fn a_tidy_may_not_grow_a_page_already_over_the_limit() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_tidy_whose_last_save_was_refused_is_owed_its_lines_again() {
-    // It meant to change the page and could not, which is not the same as
-    // finding nothing to change. The night is still spent, so it is not given
-    // again before the next one.
     let (stub, h, planner) = tidy_writing(&"c".repeat(2500), "c".repeat(2600), None).await;
 
     let first = sweep(&h, "Planner", night(1)).await.expect("owed a tidy");
@@ -8697,9 +7834,6 @@ async fn a_normal_turn_may_make_the_page_as_long_as_it_likes() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_operator_save_during_a_tidy_is_answered_as_a_conflict_not_as_the_limit() {
-    // The rewrite is over the limit and also made from a page the operator
-    // has since corrected. The correction is what the tidy has to know about:
-    // cutting the rewrite to fit would still put back the line they fixed.
     let workspace = Arc::new(std::sync::OnceLock::new());
     let saving = workspace.clone();
     let stub = serve(move |body| {

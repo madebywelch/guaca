@@ -1,5 +1,3 @@
-//! A saved effort is independent of a model override. Auto asks the model to
-//! choose; an absent override inherits from the enclosing group or app.
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
