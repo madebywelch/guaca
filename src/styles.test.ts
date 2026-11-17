@@ -41,6 +41,32 @@ describe("avatar sizes", () => {
   );
 });
 
+describe("the type ladder", () => {
+  const ladder = [...css.matchAll(/^\s*--type-([a-z]+): ([\d.]+)rem;$/gm)].map(([, role, rem]) => ({
+    role,
+    px: Number(rem) * ROOT_PX,
+  }));
+
+  it("has nine roles", () => {
+    expect(ladder.map(({ role }) => role)).toHaveLength(9);
+  });
+
+  it("sets every role in whole pixels at scale 1", () => {
+    for (const { role, px } of ladder) expect(Number.isInteger(px), `--type-${role}`).toBe(true);
+  });
+
+  it("puts nothing under 11px", () => {
+    for (const { role, px } of ladder) expect(px, `--type-${role}`).toBeGreaterThanOrEqual(11);
+  });
+
+  it("keeps every role at least 1px from the one below it", () => {
+    const sizes = ladder.map(({ px }) => px).sort((a, b) => a - b);
+    for (const [index, px] of sizes.slice(1).entries()) {
+      expect(px - (sizes[index] ?? 0)).toBeGreaterThanOrEqual(1);
+    }
+  });
+});
+
 describe("avatar hit targets", () => {
   it.each(["picker__item", "orb", "agent-row"])(
     "keeps animated artwork out of hit testing inside %s",
