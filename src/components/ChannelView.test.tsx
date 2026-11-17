@@ -880,3 +880,32 @@ describe("inline reasoning and tool calls", () => {
     expect(document.querySelector(".turn-work")).toBeNull();
   });
 });
+
+describe("what a screen reader is told", () => {
+  const said = () => document.querySelector('p.offscreen[role="status"]')?.textContent;
+  const toOperator = (from: string, channelId: string, text: string) =>
+    envelope({
+      channelId,
+      from: { kind: "agent", id: from },
+      to: { kind: "human" },
+      parts: [{ type: "text", text }],
+    });
+
+  it("says nothing on a channel switch, and the next arrival there", () => {
+    const { rerender } = open([toOperator(MANAGER, MANAGER, "Filed it.")]);
+    const chef = [toOperator(CHEF, CHEF, "Menu is set.")];
+    act(() => useStore.setState({ messages: { ...useStore.getState().messages, [CHEF]: chef } }));
+    rerender(<ChannelView channel={CHEF} onOpenMenu={() => {}} />);
+    expect(said()).toBe("");
+
+    act(() =>
+      useStore.setState({
+        messages: {
+          ...useStore.getState().messages,
+          [CHEF]: [...chef, toOperator(CHEF, CHEF, "Dinner is at seven.")],
+        },
+      }),
+    );
+    expect(said()).toBe("Chef: Dinner is at seven.");
+  });
+});
