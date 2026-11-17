@@ -174,7 +174,7 @@ fn priced(cost: Option<f64>) -> Option<f64> {
     cost.filter(|cost| *cost >= MIN_PRICE)
 }
 
-fn money(dollars: f64) -> String {
+pub fn money(dollars: f64) -> String {
     if dollars >= 100.0 {
         format!("${}", dollars.round() as i64)
     } else if dollars >= 1.0 {

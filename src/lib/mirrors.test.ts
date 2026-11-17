@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { money } from "../components/Spend";
 import { LIMITS } from "./limits";
 import { allows } from "./plugins";
 import { otherBuild } from "./releases";
@@ -63,6 +64,7 @@ const CHECKS: Record<string, Check> = {
       file,
     );
   },
+  money: each(money),
   "plain-text": each((parts: Part[]) => plainText({ ...ENVELOPE, parts })),
   "plugin-access": each(({ access, agent }: { access: PluginAccess; agent: AgentId }) =>
     allows(access, agent),

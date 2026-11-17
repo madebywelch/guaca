@@ -28,6 +28,7 @@ const CHECKS: &[(&str, Check)] = &[
     ("event-spec", event_spec),
     ("human-gap", gap),
     ("limits", limits),
+    ("money", money),
     ("plain-text", plain_text),
     ("plugin-access", plugin_access),
     ("plugin-call", plugin_call),
@@ -222,6 +223,10 @@ fn plain_text(file: &Value) {
 
 fn builds(file: &Value) {
     each(file, |(a, b): (String, String)| guac_lib::ipc::different_builds(&a, &b));
+}
+
+fn money(file: &Value) {
+    each(file, guac_lib::menubar::money);
 }
 
 #[derive(Deserialize)]
