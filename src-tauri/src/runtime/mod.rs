@@ -5,8 +5,10 @@ pub mod events;
 pub mod guard;
 mod outbox;
 pub mod prompt;
+mod watch;
 
 pub use drain::Drained;
+use watch::Watch;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicI64, AtomicU16, AtomicU64, AtomicUsize, Ordering};
@@ -3372,17 +3374,14 @@ impl Runtime {
 
         tokio::pin!(work);
         loop {
-            let woken = signal.notified();
-            tokio::pin!(woken);
-            woken.as_mut().enable();
-
-            if self.stopped(run_id) {
+            let watch = Watch::arm(&signal, || self.stopped(run_id));
+            if *watch.stop() {
                 return None;
             }
 
             tokio::select! {
                 done = &mut work => return Some(done),
-                () = woken => {}
+                () = watch.woken() => {}
             }
         }
     }
@@ -7217,16 +7216,21 @@ async fn actor_loop(
                 }
                 Some(card) if card.lifecycle.accepts_work() => break,
                 Some(card) => {
-                    let waiter = resume.notified();
-                    tokio::pin!(waiter);
-                    waiter.as_mut().enable();
+                    let watch = Watch::arm(&resume, || {
+                        (
+                            runtime.draining() && !runtime.called_off(first.run_id),
+                            runtime.stopped(first.run_id),
+                            runtime.anything_stopped(),
+                        )
+                    });
+                    let &(for_next_host, stopped, anything_stopped) = watch.stop();
 
-                    if runtime.draining() && !runtime.called_off(first.run_id) {
+                    if for_next_host {
                         put_down = true;
                         break;
                     }
 
-                    if runtime.stopped(first.run_id) {
+                    if stopped {
                         runtime.notice(
                             id,
                             first.run_id,
@@ -7240,7 +7244,7 @@ async fn actor_loop(
                         called_off = true;
                         break;
                     }
-                    if runtime.anything_stopped() {
+                    if anything_stopped {
                         while let Ok(queued) = rx.try_recv() {
                             if runtime.called_off(queued.run_id) {
                                 depth.fetch_sub(1, Ordering::SeqCst);
@@ -7264,7 +7268,7 @@ async fn actor_loop(
                     }
 
                     runtime.set_activity(id, Activity::Paused);
-                    waiter.await;
+                    watch.woken().await;
                 }
             }
         }
