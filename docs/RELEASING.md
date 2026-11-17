@@ -121,9 +121,15 @@ export GUACA_COMMIT="$GUACA_SOURCE"
 pnpm install --frozen-lockfile
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 ./scripts/ci.sh
-APPLE_SIGNING_IDENTITY='Developer ID Application: Robert Welch (LN79XLHFLT)' \
+CI=true APPLE_SIGNING_IDENTITY='Developer ID Application: Robert Welch (LN79XLHFLT)' \
   pnpm tauri build --target universal-apple-darwin --bundles app,dmg -- --locked
 ```
+
+The release is built on a Mac someone is working on, so the build must not open
+Finder windows or ask for permission to control Finder. `CI=true` does that: it
+makes Tauri pass `--skip-jenkins` to `bundle_dmg.sh`. The bundler reads the
+variable itself and accepts only the value `true`. The `--ci` flag does not set
+it, so the flag alone still drives Finder.
 
 The universal binary contains both Apple Silicon and Intel code. Tauri enables
 the hardened runtime by default and signs with the Keychain identity. No private
@@ -142,7 +148,7 @@ submitting it:
 ```sh
 GUACA_BUNDLE=src-tauri/target/universal-apple-darwin/release/bundle
 GUACA_APP="$GUACA_BUNDLE/macos/Guaca.app"
-GUACA_OUT="$PWD/src-tauri/target/releases/$GUACA_SOURCE"
+GUACA_OUT="$HOME/guaca-releases/v$GUACA_VERSION-$(git rev-parse --short=7 "$GUACA_SOURCE")"
 mkdir -p "$GUACA_OUT"
 codesign --verify --deep --strict --all-architectures --verbose=2 "$GUACA_APP"
 codesign --display --verbose=4 "$GUACA_APP"
@@ -210,11 +216,13 @@ xcrun stapler validate "$GUACA_APP"
 
 ### Package the stapled app
 
-Run the script Tauri generated, with the arguments Tauri passes it, on the stapled
-app. `--skip-jenkins` skips the AppleScript that arranges the window in Finder,
-so packaging drives no window and needs no Automation permission. The positions
-and window size are Tauri's defaults; `tauri.conf.json` has no `dmg` section,
-and if one is added its values belong here too:
+Run the script Tauri generated on the stapled app, with the arguments Tauri passes
+it under `CI=true`. `--skip-jenkins` skips the AppleScript step, so packaging
+drives no Finder window. That step is the only reader of the icon positions,
+the window size and `--hide-extension`, so those arguments have no effect here
+and are kept only to match Tauri's own call. The disk image opens with Finder's
+default arrangement, as the build's own disk image does. The volume name, the
+volume icon and the link to Applications are still applied:
 
 ```sh
 GUACA_DMG="$GUACA_OUT/Guaca_${GUACA_VERSION}_universal.dmg"
@@ -309,6 +317,10 @@ results:
 5. **On this Mac** works with Docker, and **Remote host** works against a
    matching host.
 6. A universal build launches on both Intel and Apple Silicon.
+7. The downloaded `guaca-release.json` verifies against `release-keys.pub` with
+   its `.sig`, and names the released version, the source commit and the
+   backend image digest. Use the check in
+   [Release checks in browser and desktop](#release-checks-in-browser-and-desktop).
 
 ## Upload manually to GitHub Releases
 
@@ -381,9 +393,10 @@ reporting success. After any write, use `gh release view` again and verify the
 expected draft state, source SHA, notes, filenames, sizes, and uploaded asset
 SHA-256 digests. Download and hash the assets if GitHub does not return digests.
 
-Keep the final stapled DMG, checksum, notes, source SHA, backend digest, build
-logs, and both notarization receipts in `$GUACA_OUT`, the ignored
-`src-tauri/target/releases/<source-sha>/`, before removing the build worktree.
+Keep the final stapled DMG, checksum, manifest pair, notes, source SHA, backend
+digest, build logs, and both notarization receipts in `$GUACA_OUT`,
+`~/guaca-releases/v<version>-<short sha>/`. It is outside the build worktree,
+so removing the worktree leaves them in place.
 Only the DMG and checksum belong in release assets. Report the absolute local
 artifact directory and release URL to the operator.
 
@@ -424,7 +437,7 @@ after recording the image digest:
 
 ```sh
 GUACA_BACKEND_IMAGE=ghcr.io/madebywelch/guaca/guacad@sha256:THE_DIGEST \
-  node scripts/release-manifest.mjs /path/to/artifacts/guaca-release.json
+  node scripts/release-manifest.mjs "$GUACA_OUT/guaca-release.json"
 ```
 
 The generator verifies the frontend, Cargo and desktop versions agree and
@@ -433,10 +446,33 @@ exact bytes it writes with the Ed25519 key at
 `~/.config/guaca/release-signing-key.pem` (override with
 `GUACA_RELEASE_SIGNING_KEY=/path/to/key.pem`), and refuses to write anything
 when that key's public half is not in `release-keys.pub`, because no updater
-would install the release. Upload both files alongside the verified DMG and
-checksum before publishing the release. A release without the signature is
-shown as available and refused by every box's updater, which says so; a box
-cannot install it until a signed release follows.
+would install the release.
+
+Check a downloaded pair the way an updater does, from a checkout of the release
+tag so `release-keys.pub` is the one that release ships. Set `GUACA_DOWNLOAD` to
+the directory holding the two files. The command exits nonzero unless the
+signature verifies against `release-keys.pub` and the manifest names this
+version and the tag's commit, and it prints the backend image the manifest pins.
+That image must equal the digest recorded for the release:
+
+```sh
+node --input-type=module -e '
+import { readFileSync } from "node:fs";
+import { trusted } from "./scripts/release-manifest.mjs";
+const [dir, version, commit] = process.argv.slice(1);
+const bytes = readFileSync(dir + "/guaca-release.json");
+const said = readFileSync(dir + "/guaca-release.json.sig", "utf8");
+if (!trusted(bytes, said, readFileSync("release-keys.pub", "utf8"))) throw new Error("The signature does not verify against release-keys.pub.");
+const { version: named, commit: built, image } = JSON.parse(bytes);
+if (named !== version || built !== commit) throw new Error("The manifest names " + named + " at " + built + ".");
+console.log(image);
+' "$GUACA_DOWNLOAD" "$GUACA_VERSION" "$(git rev-parse "$GUACA_TAG^{commit}")"
+```
+
+Upload both files alongside the verified DMG and checksum before publishing the
+release. A release without the signature is shown as available and refused by
+every box's updater, which says so; a box cannot install it until a signed
+release follows.
 
 The key is the one thing that lets a box install a release, so it is not in
 this repository and should not live only on the release machine. Keep a copy

@@ -28,8 +28,9 @@ before following the relative documentation link.
 
 Use a clean detached worktree at the recorded full SHA. Run `scripts/ci.sh` and
 relevant live checks for changed integrations; record real results. Build the
-universal app with locked dependencies, not `scripts/install.sh`, which installs
-and may re-sign the operator's local app.
+universal app with locked dependencies and `CI=true`, which keeps Tauri's disk
+image step from driving Finder, not `scripts/install.sh`, which installs and may
+re-sign the operator's local app.
 
 The local signing identity is `Developer ID Application: Robert Welch (LN79XLHFLT)`.
 Verify it is still valid using `security find-identity -v -p codesigning`.
@@ -58,8 +59,9 @@ exit 65, "does not have a ticket stapled to it", means the DMG was packaged too
 early. This check is required. A stapled app in the build directory is a
 different copy, and Gatekeeper accepts an unstapled app through its online
 lookup, so neither stands in for it. The second-Mac download check repeats it.
-Create the checksum after stapling. Keep artifacts and receipts under an ignored
-directory named for the source revision.
+Create the checksum after stapling. Keep artifacts and receipts in
+`~/guaca-releases/v<version>-<short sha>/`, outside the build worktree, so
+removing the worktree does not delete them.
 
 ## Upload and report
 
