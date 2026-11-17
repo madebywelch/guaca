@@ -7,6 +7,7 @@ import { fieldDate } from "./calendar";
 import { readableSize } from "./files";
 import { LIMITS } from "./limits";
 import { allows } from "./plugins";
+import { inferenceOf } from "./providers";
 import { otherBuild } from "./releases";
 import { eventSpec, humanGap, parseTrigger, repeats } from "./routine";
 import { attachedFiles, sendRecipients } from "./toolArgs";
@@ -17,6 +18,7 @@ import {
   type Envelope,
   type Part,
   type PluginAccess,
+  type Provider,
   plainText,
 } from "./types";
 
@@ -71,6 +73,21 @@ const CHECKS: Record<string, Check> = {
     eventSpec(service, topic),
   ),
   "human-gap": each(humanGap),
+  inference: each(
+    ({
+      group,
+      workspace,
+    }: {
+      group: { provider: Provider | null; apiKeySet: boolean } | null;
+      workspace: { provider: Provider; apiKeySet: boolean };
+    }) =>
+      inferenceOf(
+        group === null
+          ? undefined
+          : { inference: { provider: group.provider }, apiKeySet: group.apiKeySet },
+        workspace,
+      ),
+  ),
   limits: (file) => {
     expect(LIMITS.map(({ key, min, max }) => ({ input: key, expected: { min, max } }))).toEqual(
       file,

@@ -27,6 +27,7 @@ import { bindingFor } from "./lib/keybinds";
 import { FEED_COALESCE_MS, presenceOf, presenceReporter, samePresence } from "./lib/menubar";
 import { catchUp, deliver, land } from "./lib/notify";
 import { readFirstTask } from "./lib/onboarding";
+import { inferenceOf } from "./lib/providers";
 import { useRuntime } from "./lib/runtime";
 import { asSection, type Section } from "./lib/sections";
 import { type Banner, useLiveAgents, useStore } from "./lib/store";
@@ -297,11 +298,11 @@ export default function App() {
       overlay === "crewSettings" && editingGroup !== "new" ? (editingGroup?.id ?? null) : null,
   });
   const currentGroup = groups.find((group) => group.id === (openAgent?.groupId ?? railGroup));
-  const unpaid = (group: Group | undefined) =>
-    settings !== null &&
-    (group?.inference.provider ?? settings.provider) === "compatible" &&
-    !group?.apiKeySet &&
-    !settings.apiKeySet;
+  const unpaid = (group: Group | undefined) => {
+    if (settings === null) return false;
+    const { provider, keyed } = inferenceOf(group, settings);
+    return provider === "compatible" && !keyed;
+  };
   const peopled = groups.filter((group) => agents.some((agent) => agent.groupId === group.id));
   const needsKey =
     ready &&
