@@ -1,5 +1,7 @@
 import http.client
+import importlib.util
 import inspect
+import io
 import json
 import socket
 import sys
@@ -169,6 +171,50 @@ class Stand(unittest.TestCase):
                      {"content-type": "application/json"})
         body = conn.getresponse().read().decode()
         self.assertTrue(body.rstrip().endswith("data: [DONE]"))
+
+
+def cli():
+    spec = importlib.util.spec_from_file_location("verify_cli", Path(__file__).with_name("verify.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class Starting(unittest.TestCase):
+    def setUp(self) -> None:
+        self.verify = cli()
+        self.order: list[str] = []
+        ready = {key: {"ok": True} for key in ("web", "guacad", "guacadClock", "chromium")}
+        self.patches = [
+            mock.patch.object(self.verify, "doctor", return_value={**ready, "commit": "c", "ok": True}),
+            mock.patch.object(self.verify, "attempt", side_effect=self.attempted),
+            mock.patch.object(sys, "argv", ["verify.py", "reply", "peers"]),
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+            mock.patch("sys.stderr", new_callable=io.StringIO),
+        ]
+        for patch in self.patches:
+            patch.start()
+
+    def tearDown(self) -> None:
+        for patch in reversed(self.patches):
+            patch.stop()
+
+    def attempted(self, name: str, run: int, evidence: Path, keep: bool) -> dict:
+        self.order.append(name)
+        return {"scenario": name, "run": run, "pass": True, "seconds": 0, "steps": []}
+
+    def test_the_browser_is_started_once_before_any_scenario_starts_its_clock(self) -> None:
+        with mock.patch.object(self.verify, "start_browser", side_effect=lambda: self.order.append("browser") or 1.0):
+            self.assertEqual(self.verify.main(), 0)
+        self.assertEqual(self.order, ["browser", "reply", "peers"])
+
+    def test_a_browser_that_never_starts_runs_no_scenario_and_says_so(self) -> None:
+        never = BrowserError("Target.createTarget: no answer within 120s")
+        with mock.patch.object(self.verify, "start_browser", side_effect=never):
+            self.assertEqual(self.verify.main(), 2)
+        self.assertEqual(self.order, [])
+        said = json.loads(sys.stdout.getvalue())
+        self.assertIn("no answer within 120s", said["missing"]["browser"]["error"])
 
 
 class Updating(unittest.TestCase):
