@@ -164,7 +164,7 @@ pub fn run() {
                 .unwrap_or_else(|_| "guac=info,warn".into()),
         )
         .init();
-    crate::programs::adopt_operator_path();
+    unsafe { crate::programs::adopt_operator_path_while_single_threaded() };
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
     let builder = builder.activate_ignoring_other_apps(false);
