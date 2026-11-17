@@ -1,25 +1,4 @@
 #!/usr/bin/env python3
-"""Run Guaca's Mac-only behavior as scenarios a machine can check.
-
-    scripts/probe.py                       every scenario, three times each
-    scripts/probe.py launch panel          some of them
-    scripts/probe.py --runs 1 permission   once
-    scripts/probe.py --no-build ...        reuse the last test build
-    scripts/probe.py --list                what there is
-
-Each scenario starts a scratch Host (the daemon, on loopback, with its own
-data directory and a seeded workspace) and a test build of the app (its own
-bundle identifier, a scratch home, launched in the background), drives it
-through the probe's control channel, asks macOS what it did, and tears all of
-it down. One JSON document comes out on stdout; the exit status is 1 if any
-step failed. docs/PROBE.md says what each scenario proves and what it cannot.
-
-Screen steps (pressing Allow on a permission prompt, clicking a banner,
-capturing the test windows) need Accessibility and Screen Recording for the
-app that runs this command. Without them those scenarios fail with that
-reason; nothing here asks for either.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -42,6 +21,27 @@ import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any, Callable
+
+USAGE = """Run Guaca's Mac-only behavior as scenarios a machine can check.
+
+    scripts/probe.py                       every scenario, three times each
+    scripts/probe.py launch panel          some of them
+    scripts/probe.py --runs 1 permission   once
+    scripts/probe.py --no-build ...        reuse the last test build
+    scripts/probe.py --list                what there is
+
+Each scenario starts a scratch Host (the daemon, on loopback, with its own
+data directory and a seeded workspace) and a test build of the app (its own
+bundle identifier, a scratch home, launched in the background), drives it
+through the probe's control channel, asks macOS what it did, and tears all of
+it down. One JSON document comes out on stdout; the exit status is 1 if any
+step failed. docs/PROBE.md says what each scenario proves and what it cannot.
+
+Screen steps (pressing Allow on a permission prompt, clicking a banner,
+capturing the test windows) need Accessibility and Screen Recording for the
+app that runs this command. Without them those scenarios fail with that
+reason; nothing here asks for either.
+"""
 
 ROOT = Path(__file__).resolve().parent.parent
 TAURI = ROOT / "src-tauri"
@@ -1967,6 +1967,32 @@ SCENARIOS: dict[str, Callable[[Record, Scratch], None]] = {
     "escape": scenario_escape,
 }
 
+SUMMARIES: dict[str, str] = {
+    "launch": "A background launch stays in the background; a normal launch comes to the front.",
+    "permission": "A bundle macOS has never seen: not asked, then asked when a delivery waits.",
+    "notification": "Whatever this Mac allows the test bundle, a delivery and the test button do what the pane says.",
+    "panel": "The menu bar panel opens, lists the group, and closing it hands the keyboard back.",
+    "panelstable": "A channel-close followed immediately by a channel-reopen leaves the panel visible and focused for three seconds.",
+    "allow": "Screen: Allow on the question, and the waiting delivery is shown as a banner.",
+    "button": "Screen: once macOS allows the bundle, the Settings test button raises a banner.",
+    "busy": "Screen: a delivery handed over while the window's main thread is busy is drawn, and its click opens the conversation.",
+    "deny": "Screen: Don't Allow on the question, and the pane says notifications are off.",
+    "click": "Screen: a delivery's banner, clicked, opens the conversation it is about.",
+    "away": "Screen: four deliveries waiting when the window connects are one banner, and all four are taken.",
+    "capture": "Screen: one image of the test build's panel and one of its window, and nothing else.",
+    "longaway": "Screen: Guaca hidden for six minutes; a question and a finished run are each a banner.",
+    "question": "Screen: a run that asks the operator a question is a banner at once, and its click opens the conversation.",
+    "hidden": "Screen: at the window once, then Guaca hidden; a run that finishes is a banner.",
+    "switched": "Screen: at the window once, then another app in front; a run that finishes is a banner.",
+    "fold": "Screen: two runs that finish while the operator is away are one banner, and its click opens For you.",
+    "testclick": "Screen: a click on the Settings test banner brings Guaca forward.",
+    "push": "Every window closed: a question and a finished run each reach the push address once.",
+    "hiddenpush": "Screen: at the window once, then Guaca hidden; a run that finishes reaches the push address once.",
+    "refused": "Screen: a banner the system refuses is given back, and pushed once although the window is present.",
+    "draft": "Screen: a draft typed to one agent in the panel is not on another, and is there when you come back; read through Accessibility.",
+    "escape": "Screen: a real click on the icon gives the panel the keyboard; a real Escape closes it and gives the keyboard back.",
+}
+
 
 # The command ----------------------------------------------------------------
 
@@ -2048,7 +2074,7 @@ def patient(patience: float, deferrals: list[dict], entry: dict) -> bool:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(description=USAGE, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("scenarios", nargs="*", help="which to run; all of them if none")
     parser.add_argument("--runs", type=int, default=3, help="times in a row to run each (default 3)")
     parser.add_argument("--no-build", action="store_true", help="reuse the last test build")
@@ -2059,8 +2085,8 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.list:
-        for name, scenario in SCENARIOS.items():
-            print(f"{name:14} {(scenario.__doc__ or '').strip()}")
+        for name in SCENARIOS:
+            print(f"{name:14} {SUMMARIES.get(name, '')}")
         return 0
     if sys.platform != "darwin":
         print("the probe drives macOS; run it on a Mac", file=sys.stderr)

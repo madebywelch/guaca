@@ -27,6 +27,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+USAGE = "scripts/package-dmg.py path/to/Guaca.app path/to/Guaca_X.Y.Z_universal.dmg"
+
 VOLUME = "Guaca"
 WINDOW = "{{10, 657}, {660, 400}}"
 ICON_SIZE = 128.0
@@ -204,7 +206,7 @@ def package(app: Path, out: Path) -> None:
 
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
-        print(__doc__.strip().splitlines()[2].strip(), file=sys.stderr)
+        print(USAGE, file=sys.stderr)
         return 2
     app, out = Path(argv[0]), Path(argv[1])
     if app.suffix != ".app" or not (app / "Contents/Info.plist").is_file():

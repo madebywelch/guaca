@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""Fill a Guaca workspace with a transcript that draws every row a channel has.
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sqlite3
+import sys
+import time
+import uuid
+
+USAGE = """Fill a Guaca workspace with a transcript that draws every row a channel has.
 
 Written for looking at the UI, so it costs nothing and needs no key: the rows
 go straight into SQLite in the shape the runtime writes them, and the app draws
@@ -12,16 +22,6 @@ operator's own workspace. Rename that profile aside first and let the app make
 a fresh one; `--force` is there for when you have done exactly that and want it
 anyway.
 """
-
-from __future__ import annotations
-
-import argparse
-import json
-import os
-import sqlite3
-import sys
-import time
-import uuid
 
 PROFILE = "~/Library/Application Support/com.madebywelch.guac"
 GROUP = "00000000-0000-4000-8000-000000000001"
@@ -43,7 +43,7 @@ def tool(name: str, arguments: dict, outcome: dict) -> dict:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(description=USAGE, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--db", default=os.path.join(os.path.expanduser(PROFILE), "guac.db"))
     ap.add_argument("--force", action="store_true", help="write even if the database already holds messages")
     args = ap.parse_args()

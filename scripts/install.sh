@@ -53,7 +53,17 @@ while [ $# -gt 0 ]; do
     --no-pull) PULL=0 ;;
     --launch)  LAUNCH=1 ;;
     -h|--help)
-      sed -n '3,11p' "$0" | sed 's/^# \{0,1\}//'
+      cat <<'EOF'
+Build the latest Guaca and put it in /Applications, replacing whatever is
+already there.
+
+  ./scripts/install.sh              latest main, built here, installed
+  ./scripts/install.sh --no-pull    whatever is checked out right now
+  ./scripts/install.sh --launch     and open it once it lands
+
+  GUACA_DEST             where the app goes            (/Applications)
+  GUACA_SIGN_IDENTITY    what signs it                 (-, ad-hoc)
+EOF
       exit 0
       ;;
     *)
