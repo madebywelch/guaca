@@ -56,10 +56,7 @@ impl Presence {
     }
 
     fn crew_named(&self, group: GroupId) -> Option<&Crew> {
-        if self.crews.len() < 2 {
-            return None;
-        }
-        self.crews.iter().find(|crew| crew.id == group)
+        crew_named(&self.crews, group)
     }
 
     fn crew_of(&self, agent: AgentId) -> Option<&Crew> {
@@ -148,6 +145,13 @@ impl Presence {
     }
 }
 
+pub fn crew_named(crews: &[Crew], group: GroupId) -> Option<&Crew> {
+    if crews.len() < 2 {
+        return None;
+    }
+    crews.iter().find(|crew| crew.id == group)
+}
+
 fn crews_working<'a>(busy: &[Option<&'a Crew>]) -> Vec<&'a Crew> {
     let mut crews: Vec<&Crew> = Vec::new();
     for &crew in busy.iter().flatten() {
@@ -186,24 +190,21 @@ pub fn money(dollars: f64) -> String {
     }
 }
 
-fn compact(tokens: u64) -> String {
+pub fn compact(tokens: u64) -> String {
     if tokens < 1_000 {
         return tokens.to_string();
     }
-    if tokens < 1_000_000 {
-        let thousands = tokens as f64 / 1_000.0;
-        return if thousands < 10.0 {
-            format!("{thousands:.1}k")
-        } else {
-            format!("{}k", thousands.round() as i64)
-        };
+    let (unit, suffix) = if tokens < 1_000_000 { (1_000, "k") } else { (1_000_000, "M") };
+    let units = tokens as f64 / unit as f64;
+    if units >= 10.0 {
+        return format!("{}{suffix}", units.round() as i64);
     }
-    let millions = tokens as f64 / 1_000_000.0;
-    if millions < 10.0 {
-        format!("{millions:.1}M")
-    } else {
-        format!("{}M", millions.round() as i64)
+    let exactly_half_a_tenth = tokens.is_multiple_of(unit / 4) && !tokens.is_multiple_of(unit / 2);
+    if exactly_half_a_tenth {
+        let tenths = (tokens * 10).div_ceil(unit);
+        return format!("{}.{}{suffix}", tenths / 10, tenths % 10);
     }
+    format!("{units:.1}{suffix}")
 }
 
 pub const PANEL_WIDTH: f64 = 360.0;

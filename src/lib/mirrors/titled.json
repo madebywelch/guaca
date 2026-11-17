@@ -1,0 +1,30 @@
+[
+  {
+    "input": "stripe",
+    "expected": "Stripe"
+  },
+  {
+    "input": "github",
+    "expected": "Github"
+  },
+  {
+    "input": "",
+    "expected": ""
+  },
+  {
+    "input": "élan",
+    "expected": "Élan"
+  },
+  {
+    "input": "ßpay",
+    "expected": "SSpay"
+  },
+  {
+    "input": "𐐨ab",
+    "expected": "𐐀ab"
+  },
+  {
+    "input": "9to5",
+    "expected": "9to5"
+  }
+]

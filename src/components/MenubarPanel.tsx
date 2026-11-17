@@ -19,6 +19,7 @@ import { useFollowBottom } from "../lib/follow";
 import { api } from "../lib/ipc";
 import { exchange, headline, liveReply, panelOrder, said, workingCount } from "../lib/menubar";
 import { finished, moreLine, newestByAgent, PANEL_LINES } from "../lib/outcomes";
+import { groupNamed } from "../lib/presence";
 import { useLiveAgents, useStore } from "../lib/store";
 import { useNow } from "../lib/time";
 import { BEFORE_RELOAD, workspaceOrigin } from "../lib/transport";
@@ -186,8 +187,7 @@ function Overview({ agents, onOpen }: { agents: AgentCard[]; onOpen: (id: AgentI
   const open = decisions.filter(needsAnswer).length;
   const news = finished(outcomes);
   const more = moreLine(news.length, PANEL_LINES);
-  const crewOf = (agent: AgentCard) =>
-    groups.length > 1 ? groups.find((group) => group.id === agent.groupId)?.name : undefined;
+  const crewOf = (agent: AgentCard) => groupNamed(groups, agent.groupId);
 
   return (
     <>

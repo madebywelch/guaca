@@ -61,6 +61,14 @@ A run is ready when the Host answers `/health` and the page has exchanged the
 invitation's token for a session and drawn the App settings button. That is
 usable, not just alive: the schema is migrated and the page is admitted.
 
+Before the first scenario starts its clock, `verify.py` starts Chromium once on
+a throwaway profile and waits, for at most three minutes, until it has opened a
+tab. A cold browser on a loaded runner can take longer than a scenario's
+30-second answer to its first tab, and that start belongs to the run, not to
+whichever scenario happens to go first. The summary reports it as
+`browserStartSeconds`. A browser that never starts runs no scenario and exits 2,
+naming the browser under `missing`.
+
 To drive the product by hand against the same stand-in model:
 
 ```sh
@@ -105,6 +113,16 @@ A scenario is a function in `scripts/e2e/scenarios.py` taking a `World`
   finds them, and pressed with real mouse and keyboard events. A name that
   matches nothing fails listing the names that are shown.
 - `w.check(step, holds, observed=..., detail=..., shot=True)`: one recorded step.
+
+A scenario declared with `updater=True` also gets `w.updater`, a stand-in for a
+box's updater on the Unix socket the Host reads from `GUACA_UPDATER_SOCKET`. Set
+`w.updater.script` to a function from the request (`{"ask": "status"}` or
+`{"ask": "update", ...}`) to the line it answers (`{"ok": report}` or
+`{"err": message}`), or to `None` to close without answering. `w.updater.updates()`
+lists the update requests it was sent. The Host's release check cannot be
+answered from loopback, since the feed is signed, so `w.ui.answer(pattern, body)`
+answers the page's own requests that match `pattern` with whatever `body()`
+returns, using the browser's Fetch domain.
 
 Shared journeys in `scenarios.py`: `first_run` (onboarding from an empty
 workspace to a first agent that has answered), `write(w, to, text)` (the field),

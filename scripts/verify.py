@@ -32,6 +32,7 @@ checkout is not ready to verify. .claude/skills/verify/SKILL.md is the guide.
 
 import argparse
 import json
+import os
 import shutil
 import signal
 import subprocess
@@ -40,12 +41,26 @@ import time
 import traceback
 from pathlib import Path
 
-from e2e.browser import BrowserError, find_chromium
+from e2e.browser import Browser, BrowserError, find_chromium
 from e2e.scenarios import SCENARIOS, unproved
 from e2e.world import (EVIDENCE, GUACAD, GUACAD_CLOCK, ROOT, SCRATCH, STAND_IN_KEY, STAND_IN_MODEL,
                        WEB, Failed, World, say)
 
 MANIFEST = ROOT / "src-tauri/Cargo.toml"
+BROWSER_START_SECONDS = 180
+
+
+def start_browser() -> float:
+    began = time.monotonic()
+    profile = SCRATCH / f"browser-start-{os.getpid()}"
+    browser = Browser(profile / "profile")
+    try:
+        browser.open("about:blank", within=BROWSER_START_SECONDS)
+        browser.evaluate("document.readyState")
+    finally:
+        browser.close()
+        shutil.rmtree(profile, ignore_errors=True)
+    return round(time.monotonic() - began, 1)
 
 
 def build() -> None:
@@ -93,7 +108,7 @@ def doctor() -> dict:
 
 
 def attempt(name: str, run: int, evidence: Path, keep: bool) -> dict:
-    world = World(name, run, evidence, SCENARIOS[name].minute_ms)
+    world = World(name, run, evidence, SCENARIOS[name].minute_ms, updater=SCENARIOS[name].updater)
     started = time.monotonic()
     error = None
     try:
@@ -197,6 +212,12 @@ def main() -> int:
         return 2
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     SCRATCH.mkdir(parents=True, exist_ok=True)
+    try:
+        browser_start = start_browser()
+    except BrowserError as why:
+        print(json.dumps({"ready": False, "missing": {"browser": {"ok": False, "error": str(why)}}}, indent=2))
+        return 2
+    print(f"browser started in {browser_start}s", file=sys.stderr)
     results = []
     for name in names:
         for run in range(1, args.runs + 1):
@@ -215,6 +236,7 @@ def main() -> int:
     summary = {
         "pass": all(r["pass"] for r in results),
         "commit": checks["commit"],
+        "browserStartSeconds": browser_start,
         "counts": {name: {"runs": len(runs), "passed": sum(1 for r in results if r["scenario"] == name and r["pass"])}
                    for name, runs in by_scenario.items()},
         "identical": {name: all(r == runs[0] for r in runs) for name, runs in by_scenario.items()},

@@ -3,9 +3,6 @@ import { describe, expect, it } from "vitest";
 import { ACCENTS, CHARACTERS, lookupCharacter } from "../avatars/catalog";
 import { HIREABLE, pick, STARTER_CREW, STATIONS, toDraft } from "./cafeteria";
 import { matchMentions, mentionAt } from "./mentions";
-import constants from "./mirrors/constants.json";
-
-const MAX_NAME_LEN = constants.maxAgentNameLength;
 
 describe("the cafeteria catalog", () => {
   it("has presets to hire", () => {
@@ -51,17 +48,6 @@ describe("the cafeteria catalog", () => {
   it("leaves no station empty", () => {
     const empty = STATIONS.filter((station) => !HIREABLE.some((p) => p.station === station));
     expect(empty, "a heading with nothing under it").toEqual([]);
-  });
-
-  it("writes every preset so the runtime would accept it", () => {
-    for (const preset of HIREABLE) {
-      expect(preset.name.trim(), preset.id).not.toBe("");
-      expect([...preset.name].length, `${preset.id} name is too long`).toBeLessThanOrEqual(
-        MAX_NAME_LEN,
-      );
-      expect(preset.color, `${preset.id} color`).toMatch(/^#[0-9a-f]{6}$/);
-      expect(preset.avatar.trim(), preset.id).not.toBe("");
-    }
   });
 
   it("tells peers what every preset is for", () => {

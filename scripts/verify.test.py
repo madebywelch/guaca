@@ -1,6 +1,9 @@
 import http.client
+import importlib.util
 import inspect
+import io
 import json
+import socket
 import sys
 import tempfile
 import threading
@@ -12,8 +15,8 @@ from pathlib import Path
 
 from e2e.browser import Browser, BrowserError, split_frames
 from e2e.scenarios import SCENARIOS, unproved
-from e2e.world import (UNSCRIPTED, Call, Egress, Failed, Model, call, held, redact, refuse, say, stream,
-                       until)
+from e2e.world import (UNSCRIPTED, Call, Egress, Failed, Model, Updater, call, held, redact, refuse, say,
+                       stream, until)
 
 
 def post(base: str, body: dict, key: str = "k") -> tuple[int, bytes]:
@@ -168,6 +171,75 @@ class Stand(unittest.TestCase):
                      {"content-type": "application/json"})
         body = conn.getresponse().read().decode()
         self.assertTrue(body.rstrip().endswith("data: [DONE]"))
+
+
+def cli():
+    spec = importlib.util.spec_from_file_location("verify_cli", Path(__file__).with_name("verify.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class Starting(unittest.TestCase):
+    def setUp(self) -> None:
+        self.verify = cli()
+        self.order: list[str] = []
+        ready = {key: {"ok": True} for key in ("web", "guacad", "guacadClock", "chromium")}
+        self.patches = [
+            mock.patch.object(self.verify, "doctor", return_value={**ready, "commit": "c", "ok": True}),
+            mock.patch.object(self.verify, "attempt", side_effect=self.attempted),
+            mock.patch.object(sys, "argv", ["verify.py", "reply", "peers"]),
+            mock.patch("sys.stdout", new_callable=io.StringIO),
+            mock.patch("sys.stderr", new_callable=io.StringIO),
+        ]
+        for patch in self.patches:
+            patch.start()
+
+    def tearDown(self) -> None:
+        for patch in reversed(self.patches):
+            patch.stop()
+
+    def attempted(self, name: str, run: int, evidence: Path, keep: bool) -> dict:
+        self.order.append(name)
+        return {"scenario": name, "run": run, "pass": True, "seconds": 0, "steps": []}
+
+    def test_the_browser_is_started_once_before_any_scenario_starts_its_clock(self) -> None:
+        with mock.patch.object(self.verify, "start_browser", side_effect=lambda: self.order.append("browser") or 1.0):
+            self.assertEqual(self.verify.main(), 0)
+        self.assertEqual(self.order, ["browser", "reply", "peers"])
+
+    def test_a_browser_that_never_starts_runs_no_scenario_and_says_so(self) -> None:
+        never = BrowserError("Target.createTarget: no answer within 120s")
+        with mock.patch.object(self.verify, "start_browser", side_effect=never):
+            self.assertEqual(self.verify.main(), 2)
+        self.assertEqual(self.order, [])
+        said = json.loads(sys.stdout.getvalue())
+        self.assertIn("no answer within 120s", said["missing"]["browser"]["error"])
+
+
+class Updating(unittest.TestCase):
+    def ask(self, path: Path, request: dict) -> bytes:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as conn:
+            conn.settimeout(10)
+            conn.connect(str(path))
+            conn.sendall(json.dumps(request).encode() + b"\n")
+            return conn.makefile("rb").readline()
+
+    def test_the_stand_in_updater_answers_its_script_one_line_and_records_the_ask(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            updater = Updater(Path(directory) / "updater.sock", Path(directory))
+            updater.script = lambda ask: {"err": "no"} if ask["ask"] == "update" else {"ok": {"updating": False}}
+            self.assertEqual(json.loads(self.ask(updater.path, {"ask": "status"})), {"ok": {"updating": False}})
+            self.assertEqual(json.loads(self.ask(updater.path, {"ask": "update", "version": "1"})), {"err": "no"})
+            self.assertEqual(updater.updates(), [{"ask": "update", "version": "1"}])
+            updater.stop()
+
+    def test_a_script_that_returns_nothing_closes_without_an_answer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            updater = Updater(Path(directory) / "updater.sock", Path(directory))
+            self.assertEqual(self.ask(updater.path, {"ask": "update", "version": "1"}), b"")
+            self.assertEqual(len(updater.updates()), 1)
+            updater.stop()
 
 
 class Leaving(unittest.TestCase):

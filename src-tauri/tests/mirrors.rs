@@ -9,12 +9,12 @@ use serde_json::{json, Value};
 use chrono::{Local, NaiveDate, TimeZone};
 use guac_lib::config::{AppConfig, Provider};
 use guac_lib::db::Store;
-use guac_lib::domain::agent::{CleanDraft, MAX_NAME_LEN};
+use guac_lib::domain::agent::{AgentDraft, CleanDraft, MAX_NAME_LEN};
 use guac_lib::domain::attachment::Attachment;
 use guac_lib::domain::connector::CleanConnector;
 use guac_lib::domain::envelope::Envelope;
 use guac_lib::domain::group::{GroupInference, InferenceOverrides};
-use guac_lib::domain::ids::AgentId;
+use guac_lib::domain::ids::{AgentId, GroupId};
 use guac_lib::domain::occasion::{parse_when, When};
 use guac_lib::domain::plugin::{PluginAccess, PluginKind, STDIO};
 use guac_lib::domain::routine::{human_gap, Cadence, EventTrigger, Trigger};
@@ -22,6 +22,7 @@ use guac_lib::domain::view::AWAY_AFTER_MS;
 use guac_lib::llm::modality::Modalities;
 use guac_lib::llm::openrouter::{LlmClient, ToolCall};
 use guac_lib::llm::tools::{self, Surfaces, ToolInvocation};
+use guac_lib::menubar::{crew_named, Crew};
 use guac_lib::runtime::events::RecordingSink;
 use guac_lib::runtime::guard::GuardLimits;
 use guac_lib::runtime::{OnDisk, Runtime};
@@ -31,8 +32,11 @@ type Check = fn(&Value);
 
 const CHECKS: &[(&str, Check)] = &[
     ("builds", builds),
+    ("compact", compact),
     ("constants", constants),
+    ("crew-name", crew_name),
     ("event-spec", event_spec),
+    ("hireable", hireable),
     ("human-gap", gap),
     ("inference", inference),
     ("limits", limits),
@@ -43,6 +47,7 @@ const CHECKS: &[(&str, Check)] = &[
     ("plugin-call", plugin_call),
     ("sizes", sizes),
     ("tool-names", tool_names),
+    ("titled", titled),
     ("tool-surfaces", tool_surfaces),
     ("trigger", trigger),
 ];
@@ -161,6 +166,45 @@ fn event_spec(file: &Value) {
     each(file, |spec: Spec| EventTrigger { service: spec.service, topic: spec.topic }.as_str());
 }
 
+fn hireable(file: &Value) {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Preset {
+        id: String,
+        name: String,
+        avatar: String,
+        color: String,
+        system_prompt: String,
+        skills: Vec<String>,
+    }
+    for case in file.as_array().expect("the catalog is a list of presets") {
+        let preset: Preset = parsed(case);
+        let draft = AgentDraft {
+            group_id: None,
+            name: preset.name,
+            avatar: preset.avatar,
+            color: preset.color,
+            model: String::new(),
+            subscription_model: None,
+            reasoning_effort: None,
+            system_prompt: preset.system_prompt,
+            skills: preset.skills,
+        };
+        let clean =
+            draft.validate().unwrap_or_else(|e| panic!("{} cannot be hired: {e}", preset.id));
+        assert_eq!(
+            (clean.name, clean.avatar, clean.color, clean.system_prompt, clean.skills),
+            (draft.name, draft.avatar, draft.color, draft.system_prompt, draft.skills),
+            "{} is stored differently from how the cafeteria shows it",
+            preset.id
+        );
+    }
+}
+
+fn titled(file: &Value) {
+    each(file, |service: String| guac_lib::domain::routine::titled(&service));
+}
+
 fn gap(file: &Value) {
     each(file, human_gap);
 }
@@ -240,6 +284,19 @@ fn plain_text(file: &Value) {
 
 fn builds(file: &Value) {
     each(file, |(a, b): (String, String)| guac_lib::ipc::different_builds(&a, &b));
+}
+
+fn crew_name(file: &Value) {
+    #[derive(Deserialize)]
+    struct Named {
+        groups: Vec<Crew>,
+        group: GroupId,
+    }
+    each(file, |case: Named| crew_named(&case.groups, case.group).map(|crew| crew.name.clone()));
+}
+
+fn compact(file: &Value) {
+    each(file, guac_lib::menubar::compact);
 }
 
 fn money(file: &Value) {

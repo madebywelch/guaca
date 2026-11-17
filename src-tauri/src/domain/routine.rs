@@ -54,7 +54,7 @@ impl EventTrigger {
     }
 }
 
-fn titled(service: &str) -> String {
+pub fn titled(service: &str) -> String {
     let mut chars = service.chars();
     match chars.next() {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),

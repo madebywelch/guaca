@@ -64,6 +64,8 @@ class Browser:
         def wire() -> None:
             os.dup2(to_child_r, 3)
             os.dup2(from_child_w, 4)
+            os.set_inheritable(3, True)
+            os.set_inheritable(4, True)
 
         args = [
             binary,
@@ -176,10 +178,10 @@ class Browser:
         said = [line for line in lines if ":FATAL:" in line][:1] or lines[-5:]
         return f"the browser went away (exit {code}): " + (" | ".join(said) or "it said nothing")
 
-    def open(self, url: str) -> None:
-        target = self.send("Target.createTarget", {"url": "about:blank"}, session=False)["targetId"]
+    def open(self, url: str, within: float = 30) -> None:
+        target = self.send("Target.createTarget", {"url": "about:blank"}, session=False, timeout=within)["targetId"]
         self.session = self.send(
-            "Target.attachToTarget", {"targetId": target, "flatten": True}, session=False
+            "Target.attachToTarget", {"targetId": target, "flatten": True}, session=False, timeout=within
         )["sessionId"]
         for domain in ("Page", "Runtime", "Network", "DOM", "Accessibility"):
             self.send(f"{domain}.enable")
@@ -207,6 +209,21 @@ class Browser:
             except OSError:
                 pass
 
+
+    def answer(self, pattern: str, body: Callable[[], Any]) -> None:
+        def paused(message: dict) -> None:
+            if message.get("method") != "Fetch.requestPaused":
+                return
+            fulfill = {
+                "requestId": message["params"]["requestId"],
+                "responseCode": 200,
+                "responseHeaders": [{"name": "content-type", "value": "application/json"}],
+                "body": base64.b64encode(json.dumps(body()).encode()).decode(),
+            }
+            threading.Thread(target=self.send, args=("Fetch.fulfillRequest", fulfill), daemon=True).start()
+
+        self.listen(paused)
+        self.send("Fetch.enable", {"patterns": [{"urlPattern": pattern, "requestStage": "Request"}]})
 
     def evaluate(self, expression: str) -> Any:
         result = self.send("Runtime.evaluate", {"expression": expression, "returnByValue": True})

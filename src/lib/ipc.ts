@@ -112,6 +112,8 @@ const EVENT_CHANNEL = "guac://event";
 
 const REVEAL_CHANNEL = "guac://reveal";
 
+type PanelAssignment = Remote & { generation: number };
+
 export const api = {
   listPermissionRules: (groupId: GroupId | null) =>
     invoke<PermissionRule[]>("list_permission_rules", { groupId }),
@@ -379,13 +381,14 @@ export const api = {
 
   reportPresence: (presence: Presence | null) => invokeLocal<void>("report_presence", { presence }),
 
-  reportHost: (host: Remote) => invokeLocal<void>("report_host", { host }),
+  reportHost: (host: Remote, generation?: number) =>
+    invokeLocal<boolean>("report_host", { host, generation }),
 
   notificationAccess: () => invokeLocal<NotificationAccess | null>("notification_access"),
 
   openNotificationSettings: () => invokeLocal<void>("open_notification_settings"),
 
-  menubarHost: () => invokeLocal<Remote | null>("menubar_host"),
+  menubarHost: () => invokeLocal<PanelAssignment | null>("menubar_host"),
 
   openWindow: (target: Reveal | null) => invokeLocal<void>("open_window", { target }),
 
