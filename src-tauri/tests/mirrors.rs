@@ -18,6 +18,7 @@ use guac_lib::domain::ids::AgentId;
 use guac_lib::domain::occasion::{parse_when, When};
 use guac_lib::domain::plugin::{PluginAccess, PluginKind, STDIO};
 use guac_lib::domain::routine::{human_gap, Cadence, EventTrigger, Trigger};
+use guac_lib::domain::view::AWAY_AFTER_MS;
 use guac_lib::llm::modality::Modalities;
 use guac_lib::llm::openrouter::{LlmClient, ToolCall};
 use guac_lib::llm::tools::{self, Surfaces, ToolInvocation};
@@ -314,6 +315,7 @@ fn constants(file: &Value) {
     let mut ours = json!({
         "stdio": STDIO,
         "maxAgentNameLength": MAX_NAME_LEN,
+        "awayAfterMs": AWAY_AFTER_MS,
         "catalog": PluginKind::ALL.iter().map(PluginKind::slug).collect::<Vec<_>>(),
     });
     #[cfg(feature = "desktop")]
