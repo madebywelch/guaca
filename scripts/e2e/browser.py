@@ -284,16 +284,17 @@ class Browser:
 
     def click(self, role: str, name: str, exact: bool = True) -> None:
         deadline = time.monotonic() + ACTIONABLE_SECONDS
-        while True:
+        point = None
+        while point is None:
             try:
-                x, y = self._center(self.one(role, name, exact))
-                break
+                point = self._center(self.one(role, name, exact))
             except BrowserGone:
                 raise
             except BrowserError:
                 if time.monotonic() >= deadline:
                     raise
                 time.sleep(0.1)
+        x, y = point
         for kind in ("mouseMoved", "mousePressed", "mouseReleased"):
             self.send("Input.dispatchMouseEvent",
                       {"type": kind, "x": x, "y": y, "button": "left", "clickCount": 1})
