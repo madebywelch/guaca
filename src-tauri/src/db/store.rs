@@ -230,6 +230,13 @@ const SEARCH_SCAN: u32 = 400;
 
 const EXCERPT_CHARS: usize = 160;
 
+#[derive(Debug, Clone, Copy)]
+enum AgentFlag {
+    HasComputer,
+    HasBrowser,
+    RunsErrands,
+}
+
 #[derive(Debug, Clone)]
 pub struct Store {
     pool: Pool<SqliteConnectionManager>,
@@ -830,15 +837,15 @@ impl Store {
     }
 
     pub fn set_has_computer(&self, id: AgentId, given: bool) -> Result<(), StoreError> {
-        self.set_flag(id, "has_computer", given)
+        self.set_flag(id, AgentFlag::HasComputer, given)
     }
 
     pub fn set_has_browser(&self, id: AgentId, given: bool) -> Result<(), StoreError> {
-        self.set_flag(id, "has_browser", given)
+        self.set_flag(id, AgentFlag::HasBrowser, given)
     }
 
     pub fn set_runs_errands(&self, id: AgentId, given: bool) -> Result<(), StoreError> {
-        self.set_flag(id, "runs_errands", given)
+        self.set_flag(id, AgentFlag::RunsErrands, given)
     }
 
     pub fn set_browser_consent(&self, id: AgentId, consent: Consent) -> Result<(), StoreError> {
@@ -853,7 +860,12 @@ impl Store {
         Ok(())
     }
 
-    fn set_flag(&self, id: AgentId, column: &str, value: bool) -> Result<(), StoreError> {
+    fn set_flag(&self, id: AgentId, flag: AgentFlag, value: bool) -> Result<(), StoreError> {
+        let column = match flag {
+            AgentFlag::HasComputer => "has_computer",
+            AgentFlag::HasBrowser => "has_browser",
+            AgentFlag::RunsErrands => "runs_errands",
+        };
         let conn = self.conn()?;
         let changed = conn.execute(
             &format!("UPDATE agents SET {column}=?2 WHERE id=?1"),
