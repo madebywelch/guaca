@@ -5089,7 +5089,14 @@ impl Runtime {
                     && (command.contains(&format!("${}", connector.env_var))
                         || command.contains(&format!("${{{}}}", connector.env_var)))
             })
-            .map(|connector| format!("{} (${})", connector.service, connector.env_var))
+            .map(|connector| {
+                let service = if connector.service.contains([',', '"', '·']) {
+                    format!("\"{}\"", connector.service.replace('"', "\"\""))
+                } else {
+                    connector.service
+                };
+                format!("{service} (${})", connector.env_var)
+            })
             .collect();
 
         if named.is_empty() {
