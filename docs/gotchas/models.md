@@ -2,7 +2,7 @@
 
 Two reads off one vendor catalog: what a model is good at, which is a
 suggestion, and whether it can be shown a picture, which is a refusal.
-`llm/catalog.rs`, `llm/modality.rs` and `src/lib/roles.ts`.
+`commands/catalog.rs`, `llm/modality.rs` and `src/lib/roles.ts`.
 
 - **A model that cannot be shown a picture is one the endpoint said so about,
   and nothing else.** An endpoint that publishes no modalities, and a model that

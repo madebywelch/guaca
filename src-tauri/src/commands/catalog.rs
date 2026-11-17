@@ -77,7 +77,7 @@ impl Catalog {
         }
     }
 
-    pub async fn ranked(&self, category: &str) -> Result<Vec<RankedModel>, CatalogError> {
+    pub(super) async fn ranked(&self, category: &str) -> Result<Vec<RankedModel>, CatalogError> {
         let category = category.trim().to_ascii_lowercase();
         if !CATEGORIES.contains(&category.as_str()) {
             return Err(CatalogError::Unsupported { asked: category });

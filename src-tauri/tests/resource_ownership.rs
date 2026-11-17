@@ -15,9 +15,8 @@ fn command_state(h: &harness::Harness) -> Arc<guac_lib::commands::AppState> {
     use guac_lib::{
         account::Account,
         artifact::Artifacts,
-        commands::{AppState, Reach},
+        commands::{AppState, Catalog, Reach},
         domain::deployment::Deployment,
-        llm::catalog::Catalog,
         subscription::Subscription,
     };
     use std::sync::atomic::AtomicU16;

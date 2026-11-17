@@ -53,15 +53,15 @@ impl Occasion {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Clean {
-    pub group_id: GroupId,
-    pub agent_id: Option<AgentId>,
-    pub title: String,
-    pub detail: String,
-    pub place: String,
-    pub starts_at: i64,
-    pub minutes: Option<u32>,
-    pub all_day: bool,
-    pub cut: bool,
+    group_id: GroupId,
+    agent_id: Option<AgentId>,
+    title: String,
+    detail: String,
+    place: String,
+    starts_at: i64,
+    minutes: Option<u32>,
+    all_day: bool,
+    cut: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -111,6 +111,42 @@ impl Clean {
             all_day: when.all_day,
             cut: title_cut || detail_cut || place_cut,
         })
+    }
+
+    pub fn group_id(&self) -> GroupId {
+        self.group_id
+    }
+
+    pub fn agent_id(&self) -> Option<AgentId> {
+        self.agent_id
+    }
+
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+
+    pub fn place(&self) -> &str {
+        &self.place
+    }
+
+    pub fn starts_at(&self) -> i64 {
+        self.starts_at
+    }
+
+    pub fn minutes(&self) -> Option<u32> {
+        self.minutes
+    }
+
+    pub fn all_day(&self) -> bool {
+        self.all_day
+    }
+
+    pub fn cut(&self) -> bool {
+        self.cut
     }
 }
 

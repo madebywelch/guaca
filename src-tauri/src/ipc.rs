@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::commands::{
-    self, AppState, ArtifactAddress, ClaudeProgram, CommandError, FileRef, GroupReset,
+    self, AppState, ArtifactAddress, ClaudeProgram, CommandError, FileRef, GroupReset, RankedModel,
     RoutineDraft, SentMessage, SettingsPatch, Staged,
 };
 use crate::config::RedactedConfig;
@@ -29,7 +29,6 @@ use crate::domain::usage::{GroupUsage, RunUsage};
 use crate::domain::worknote::WorkingNote;
 use crate::e2b::Computer;
 use crate::kernel::Browser;
-use crate::llm::catalog::RankedModel;
 use crate::menubar::Presence;
 use crate::runtime::events::Activity;
 use crate::subscription::{DeviceCode, Status};

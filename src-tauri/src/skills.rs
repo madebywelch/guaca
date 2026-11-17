@@ -563,6 +563,39 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_script_a_skill_carries_is_text_to_read_and_never_made_runnable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (skills, _dir) = store();
+        let script = "#!/bin/sh\necho filled";
+        let pdf = package("pdf", &[("scripts/fill.sh", script)]);
+        skills.install(Scope::Workspace, &pdf, None).unwrap();
+
+        assert_eq!(skills.read_file(None, "pdf", "scripts/fill.sh").unwrap(), script);
+        let folder = skills.dir(Scope::Workspace).unwrap().join("pdf");
+        for path in ["SKILL.md", "scripts/fill.sh"] {
+            let mode = fs::metadata(folder.join(path)).unwrap().permissions().mode();
+            assert_eq!(mode & 0o111, 0, "{path} is {mode:o}, which something could run");
+        }
+    }
+
+    #[test]
+    fn nothing_that_holds_a_skill_can_start_a_process() {
+        let sources = [
+            ("skills.rs", include_str!("skills.rs")),
+            ("skills_sh.rs", include_str!("skills_sh.rs")),
+            ("domain/skill.rs", include_str!("domain/skill.rs")),
+        ];
+        for (name, source) in sources {
+            let shipped = source.split("#[cfg(test)]").next().unwrap();
+            for spawn in ["process::", "Command::new", "CommandExt"] {
+                assert!(!shipped.contains(spawn), "{name} reaches {spawn}");
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_symlink_a_skill_carries_is_neither_listed_nor_read() {
         let (skills, dir) = store();
         skills.install(Scope::Workspace, &package("pdf", &[]), None).unwrap();

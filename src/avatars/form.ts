@@ -172,7 +172,7 @@ function furthest(pts: Point[]): number {
   return most;
 }
 
-function press(a: number, th: number, w: number, amp: number): number {
+export function press(a: number, th: number, w: number, amp: number): number {
   let d = a - th * TAU;
   while (d > Math.PI) d -= TAU;
   while (d < -Math.PI) d += TAU;

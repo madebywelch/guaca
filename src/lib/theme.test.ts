@@ -251,3 +251,11 @@ describe("the stylesheet's own values", () => {
     }
   });
 });
+
+describe("the grays", () => {
+  it("stay under two hundredths of chroma, so no column competes with an agent's color", () => {
+    for (const [key, gray] of Object.entries(GRAYS)) {
+      expect(gray.c, `${key} grays`).toBeLessThan(0.02);
+    }
+  });
+});

@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+
 import { describe, expect, it } from "vitest";
 
 import { CHARACTERS } from "./catalog";
@@ -15,7 +17,7 @@ import {
   saccadeBlink,
   settle,
 } from "./eyes";
-import { blend, bodyPoints, FORM, grip, outline, PULL } from "./form";
+import { blend, bodyPoints, FORM, grip, outline, PULL, press } from "./form";
 import { MOODS, type Mood } from "./moods";
 
 const MOOD_KEYS = Object.keys(MOODS) as Mood[];
@@ -596,5 +598,38 @@ describe("the look", () => {
     expect(glance).toBeLessThan(0.25);
     expect(look).toBeGreaterThan(glance * 1.5);
     expect(look).toBeLessThan(0.45);
+  });
+});
+
+describe("the icon's bodies", () => {
+  it("press a thumbprint into the rim exactly as the app's bodies do", () => {
+    const samples: [number, number, number, number][] = [];
+    for (let a = -7; a <= 13; a += 0.37) {
+      for (const th of [-1.2, -0.25, 0, 0.13, 0.5, 0.91, 1.75]) {
+        for (const w of [0.3, 0.7, 0.8]) {
+          for (const amp of [-0.32, 0.8]) samples.push([a, th, w, amp]);
+        }
+      }
+    }
+    const icon = JSON.parse(
+      execFileSync(
+        "python3",
+        [
+          "-c",
+          [
+            "import importlib.util, json, sys",
+            'spec = importlib.util.spec_from_file_location("icon", "scripts/make-icon.py")',
+            "icon = importlib.util.module_from_spec(spec)",
+            "spec.loader.exec_module(icon)",
+            "print(json.dumps([icon.press(*s) for s in json.load(sys.stdin)]))",
+          ].join("\n"),
+        ],
+        { input: JSON.stringify(samples), encoding: "utf8" },
+      ),
+    ) as number[];
+    expect(icon).toHaveLength(samples.length);
+    samples.forEach((sample, at) => {
+      expect(icon[at], `press(${sample.join(", ")})`).toBeCloseTo(press(...sample), 12);
+    });
   });
 });
