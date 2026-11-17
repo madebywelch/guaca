@@ -212,6 +212,7 @@ exactly what `./scripts/ci.sh` with no argument runs.
 
 | Job | Runs | Needs |
 |---|---|---|
+| grants (comments, suppressions, prose files) | `ci.sh grants`: the grant lint's tests, then the lint over the change; the only job that fetches full history, which it needs to find the merge base and the ledger's commit | Node 22, pnpm and Python 3 |
 | web, scripts, assets, connector | `ci.sh assets`, `scripts`, `web`, `connector`, one step each | Node 22 and pnpm |
 | rust desktop | `ci.sh desktop`: format, Clippy and every test with the desktop features | the Tauri headers, Rust, a built `dist/` |
 | rust daemon (no Tauri, no frontend) | `ci.sh daemon`: Clippy and every test built as the daemon | Rust only, so a dependency on Tauri or `dist/` fails here |
