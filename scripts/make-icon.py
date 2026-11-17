@@ -28,7 +28,7 @@ RIM = 0.6
 AX, AY = 0.80, 1.10
 SIG = ((1, 0.105, 0.0), (2, 0.022, 0.0))
 
-SWELL, FLATTEN, LEAN, WIDTH = 0.8, 0.32, 0.1, 0.7
+SWELL, FLATTEN, WIDTH = 0.8, 0.32, 0.7
 
 BIG = {
     "span": 29.0,
@@ -76,9 +76,8 @@ class Body:
 
     def __init__(self, spec: dict) -> None:
         self.gaze = spec["gaze"]
-        gx, gy = self.gaze
-        self.cx = CENTER + gx * RADIUS * LEAN
-        self.cy = CENTER + gy * RADIUS * LEAN
+        self.cx = CENTER
+        self.cy = CENTER
 
         xs, ys = [], []
         for i in range(720):
