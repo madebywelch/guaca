@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
 import { api, openExternal } from "../lib/ipc";
-import { hostOf, markFor, refusalWords, reportLine, STDIO } from "../lib/plugins";
+import { allows, hostOf, markFor, refusalWords, reportLine, STDIO } from "../lib/plugins";
 import { useStore } from "../lib/store";
 import {
   type AccountConnection,
@@ -134,10 +134,6 @@ function HeaderFields({
 function toggled(access: PluginAccess, agent: AgentId): AgentId[] {
   const current = access.mode === "chosen" ? access.agents : [];
   return current.includes(agent) ? current.filter((id) => id !== agent) : [...current, agent];
-}
-
-function allows(access: PluginAccess, agent: AgentId): boolean {
-  return access.mode === "everyone" || access.agents.includes(agent);
 }
 
 function offeredTo(access: PluginAccess, crew: AgentCard[]): string {

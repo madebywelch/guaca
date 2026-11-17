@@ -1,4 +1,11 @@
-import { type CatalogKind, errorMessage, type PluginKind, type ServerReport } from "./types";
+import {
+  type AgentId,
+  type CatalogKind,
+  errorMessage,
+  type PluginAccess,
+  type PluginKind,
+  type ServerReport,
+} from "./types";
 
 export interface Brand {
   path: string;
@@ -65,6 +72,10 @@ export function nameFor(kind: PluginKind): string {
 }
 
 export const STDIO = "stdio:";
+
+export function allows(access: PluginAccess, agent: AgentId): boolean {
+  return access.mode === "everyone" || access.agents.includes(agent);
+}
 
 export function hostOf(endpoint: string): string {
   if (endpoint.startsWith(STDIO)) {
