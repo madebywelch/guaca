@@ -677,7 +677,7 @@ in, keeps that conversation off the next host. A message the turn had acted on
 is put down inside the turn's own row, never as a row of its own, so the next
 host gives it back to that same turn together with the record of what was done
 for it. When the turn's own conversation is the one stopped, before or after
-the restart, the message stays owed and is reported interrupted. A turn whose start mark cannot be written is put down
+the restart, the message is reported interrupted at once, with Try again. A turn whose start mark cannot be written is put down
 rather than run, so its message stays owed and the next host delivers it; the
 conversation says so at once, and that notice does not count as the turn having
 started, so a crash before the next host delivers it still delivers it.

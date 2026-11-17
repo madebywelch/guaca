@@ -15,6 +15,7 @@ pub enum Settled {
     Finished,
     Stopped,
     Absorbed,
+    Interrupted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

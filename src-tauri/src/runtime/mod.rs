@@ -574,6 +574,7 @@ struct Runs {
     draining: bool,
     put_down: HashSet<RunId>,
     absorbed: HashSet<RunId>,
+    cut_short: HashSet<RunId>,
 }
 
 type ResumeRecords = (Vec<MessageId>, Vec<MessageId>);
@@ -2213,11 +2214,14 @@ impl Runtime {
             {
                 let stopped = runs.stopped.remove(&run);
                 let absorbed = runs.absorbed.remove(&run);
+                let cut_short = runs.cut_short.remove(&run);
                 if runs.put_down.contains(&run) {
                     self.mark_whole(&[run]);
                     None
                 } else {
-                    let ending = if absorbed {
+                    let ending = if cut_short {
+                        Settled::Interrupted
+                    } else if absorbed {
                         Settled::Absorbed
                     } else if stopped {
                         Settled::Stopped
@@ -2690,7 +2694,7 @@ impl Runtime {
                 ),
             );
             let acted_on = carried.len();
-            let ended = self.hand_back(run_id, carried, acted_on, intake);
+            let ended = self.hand_back(agent_id, run_id, carried, acted_on, intake);
             self.finish_turn(agent_id, run_id, batch.len(), &ended);
             return;
         }
@@ -3213,13 +3217,17 @@ impl Runtime {
             );
         }
 
-        let taken_in =
-            if called_off { self.hand_back(run_id, taken_in, acted_on, intake) } else { taken_in };
+        let taken_in = if called_off {
+            self.hand_back(agent_id, run_id, taken_in, acted_on, intake)
+        } else {
+            taken_in
+        };
         self.finish_turn(agent_id, run_id, batch.len(), &taken_in);
     }
 
     fn hand_back(
         &self,
+        agent: AgentId,
         run: RunId,
         taken: Vec<Envelope>,
         acted_on: usize,
@@ -3227,6 +3235,7 @@ impl Runtime {
     ) -> Vec<Envelope> {
         let mut ended = Vec::new();
         let mut unread = Vec::new();
+        let mut cut = Vec::new();
         {
             let mut runs = self.inner.runs.lock();
             let acted: HashSet<RunId> =
@@ -3242,16 +3251,35 @@ impl Runtime {
                 runs.absorbed.remove(&envelope.run_id);
                 if !acted.contains(&envelope.run_id) {
                     unread.push(envelope);
-                } else if Self::release_bookings(&mut runs, envelope.run_id, 1) {
-                    self.inner.guard.lock().unpin(envelope.run_id);
+                } else {
+                    runs.cut_short.insert(envelope.run_id);
+                    cut.push(envelope.clone());
+                    ended.push(envelope);
                 }
             }
+        }
+        for envelope in &cut {
+            self.cut_short_notice(agent, envelope);
         }
         for envelope in unread.into_iter().rev() {
             intake.depth.fetch_add(1, Ordering::SeqCst);
             intake.carry.push_front(envelope);
         }
         ended
+    }
+
+    pub(super) fn cut_short_notice(&self, agent: AgentId, envelope: &Envelope) {
+        self.notice(
+            agent,
+            envelope.run_id,
+            Some(envelope.id),
+            NoticeKind::Interrupted,
+            format!(
+                "You stopped another conversation while {} was working on this one too, so this \
+                 was not finished. Review any actions already taken before retrying.",
+                self.agent_name(agent)
+            ),
+        );
     }
 
     fn let_go(&self, agent: AgentId, stopped: &Envelope, intake: &mut Intake<'_>) {
@@ -3262,7 +3290,7 @@ impl Runtime {
             .filter(|envelope| !envelope.is_routine())
             .collect();
         let acted_on = carried.len();
-        let ended = self.hand_back(stopped.run_id, carried, acted_on, intake);
+        let ended = self.hand_back(agent, stopped.run_id, carried, acted_on, intake);
         self.finish_turn(agent, stopped.run_id, 1, &ended);
     }
 

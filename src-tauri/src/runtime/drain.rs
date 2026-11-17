@@ -137,12 +137,12 @@ impl Runtime {
             .map(|envelope| envelope.run_id)
             .collect();
         let mut ended = Vec::new();
+        let mut cut = Vec::new();
         for envelope in booked.iter().chain(taken.iter().filter(|envelope| !routine(envelope))) {
             if owed.contains(&envelope.run_id) {
                 runs.absorbed.remove(&envelope.run_id);
-                if Self::release_bookings(&mut runs, envelope.run_id, 1) {
-                    self.inner.guard.lock().unpin(envelope.run_id);
-                }
+                runs.cut_short.insert(envelope.run_id);
+                cut.push(envelope);
                 continue;
             }
             if live(&envelope.run_id) {
@@ -211,6 +211,12 @@ impl Runtime {
             }
         };
         drop(runs);
+        for envelope in cut {
+            if let Participant::Agent { id } = envelope.to {
+                self.cut_short_notice(id, envelope);
+            }
+            ended.push(envelope.run_id);
+        }
         for run in ended {
             self.track_inflight(run, -1);
         }

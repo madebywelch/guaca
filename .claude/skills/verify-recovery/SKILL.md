@@ -64,7 +64,7 @@ Each action is one SQLite commit, or one section the code runs under `Runtime.in
 | `pending` | the `pending_runs` row: `none`, `unstarted` (`started_at IS NULL`), `started` |
 | `put`, `whole` | `put_down` rows (`rec` when `records` is not empty, `link` for a message in its carrier's `absorbed` list) and `put_down_runs` rows |
 | `extra` | other messages in the run (records, notices, replies), which `put_down::UNTOUCHED` tests; it skips the system notice a failed start mark writes, which `SkipStartNote` models |
-| `notices` | Interrupted notices written by `Store::recover` |
+| `notices` | Interrupted notices, written by `Store::recover`, or at once by `Runtime::cut_short_notice` for a message a stopped turn had acted on, which then settles as `Settled::Interrupted` |
 | `read`, `acted`, `answered`, `blind`, `marked`, `calledOff`, `resumedOff` | ghosts: what really happened, which the code cannot see |
 | `Send` | `Runtime::deliver_with_expectation`: `Store::append_delivery` and `book`, or while draining `Store::append_put_down` and `hand_on` |
 | `Dequeue`, `PutDownQueued` | `actor_loop` taking `first`, and `Runtime::put_down_queue` while draining |

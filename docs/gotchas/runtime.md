@@ -118,7 +118,9 @@ code.
   what a turn took in, and for a turn the operator stopped that used to settle
   every conversation it had read, answered or not. `hand_back` sorts them first:
   unread since the last tool call goes back to the queue, read before a call
-  stays owed for the next host to report, and only the stopped ones end here.
+  is reported interrupted at once and settles, and only the stopped ones end
+  as stopped. A `cut_short` run settles through `finish_turn` like the others:
+  released early, it would settle twice.
 - **A message a put-down turn acted on rides in that turn's row.** As a bare
   `put_down` row it is queued as a turn of its own, and once the carrier's
   conversation is stopped that turn runs with no record of the calls already

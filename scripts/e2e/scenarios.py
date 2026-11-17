@@ -426,6 +426,73 @@ def scenario_restart(w: World) -> None:
     no_unscripted(w)
 
 
+HOURS = "Find the vendor's opening hours."
+NUMBER = "And find their phone number."
+LOOKING = "Looking up the vendor."
+DIALING = "Looking up the number."
+FOUND = "Their number is 555-0100."
+CUT_SHORT = (f"You stopped another conversation while {AGENT} was working on this one too, so this was not "
+             "finished. Review any actions already taken before retrying.")
+
+
+def scenario_stop(w: World) -> None:
+    looking = threading.Event()
+    dialing = threading.Event()
+
+    def script(c: Call) -> Reply | None:
+        if c.last_user == "ping":
+            return say("pong")
+        if c.speaker != AGENT:
+            return None
+        if c.last_user.endswith("Say hello."):
+            return say(HELLO)
+        after_tool = len(c.messages) > 1 and c.messages[-2].get("role") == "tool"
+        if c.last_user.endswith(HOURS) and not c.tool_results():
+            return held(looking, call("note_progress", note=LOOKING))
+        if c.last_user.endswith(NUMBER) and after_tool:
+            return call("note_progress", note=DIALING)
+        if c.last_user.endswith(NUMBER) and c.tool_results():
+            return held(dialing, say("Hours and number found."))
+        if c.last_user.endswith(NUMBER):
+            return say(FOUND)
+        return None
+
+    w.model.script = script
+    w.start()
+    first_run(w)
+    settled(w, 1)
+
+    write(w, AGENT, HOURS)
+    w.wait("the first conversation's model call is in the air", lambda: asked(w, HOURS) == 1)
+    write(w, AGENT, NUMBER)
+    w.wait("the second conversation's message is written", lambda: w.host.scalar(
+        "SELECT count(*) FROM messages WHERE parts LIKE ?", f"%{NUMBER}%"))
+    looking.set()
+    w.wait("a call is made after the second message was taken in", lambda: any(
+        e["asked"].endswith(NUMBER) and e["toolResults"] for e in w.model.calls))
+    w.check("the turn took the second conversation in and acted on it",
+            sum(1 for e in w.model.calls if e["asked"].endswith(NUMBER)) == 2,
+            observed=[e["asked"].endswith(NUMBER) for e in w.model.calls[-2:]])
+
+    w.wait("the turn offers Stop", lambda: w.ui.find("button", "Stop"))
+    w.ui.click("button", "Stop")
+    w.wait("the second conversation says it was cut short", lambda: CUT_SHORT in conversation(w))
+    dialing.set()
+    ended = settled(w, 3, "both conversations settle")
+    calls = len(w.model.calls)
+    w.check("stopping one conversation tells the other at once that it was not finished, with Try again",
+            sorted(o["status"] for o in ended[1:]) == ["interrupted", "stopped"]
+            and w.ui.find("button", "Try again") and FOUND not in said(w, AGENT),
+            observed={"outcomes": ended, "tryAgain": bool(w.ui.find("button", "Try again"))}, shot=True)
+
+    w.ui.click("button", "Try again")
+    w.wait("Try again answers the second conversation", lambda: FOUND in said(w, AGENT))
+    w.check("Try again sends the cut-short message once more and it is answered",
+            len(w.model.calls) == calls + 1 and said(w, AGENT).count(FOUND) == 1,
+            observed={"said": said(w, AGENT)}, shot=True)
+    no_unscripted(w)
+
+
 INSTRUCTION = "Check the failed invoice."
 
 
@@ -655,6 +722,15 @@ SCENARIOS: dict[str, Scenario] = {
         "Try again runs the turn once more and the reply arrives",
         "a message whose start cannot be recorded says so at once, runs nothing and offers no Try again",
         "the next Host delivers the message that could not start, and the reply arrives once",
+        "every model call was one the scenario scripted",
+    )),
+    "stop": Scenario(scenario_stop, "A person stops a conversation while its turn is also working on a second "
+                     "one; the second is told at once that it was not finished and Try again finishes it, rather "
+                     "than it waiting for the next Host or running again by itself.",
+    (
+        "the turn took the second conversation in and acted on it",
+        "stopping one conversation tells the other at once that it was not finished, with Try again",
+        "Try again sends the cut-short message once more and it is answered",
         "every model call was one the scenario scripted",
     )),
     "routine": Scenario(scenario_routine, "A person adds a routine on an event, one delivery fires it once and the "

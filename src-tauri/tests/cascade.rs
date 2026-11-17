@@ -8030,7 +8030,7 @@ async fn stopping_a_turn_hands_back_a_message_it_took_in_and_never_acted_on() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn stopping_a_turn_keeps_a_message_it_acted_on_owed_for_the_next_host() {
+async fn stopping_a_turn_tells_a_message_it_acted_on_at_once_and_settles_it() {
     let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let calls = Arc::new(AtomicUsize::new(0));
     let stub = {
@@ -8059,24 +8059,36 @@ async fn stopping_a_turn_keeps_a_message_it_acted_on_owed_for_the_next_host() {
     h.wait_until("the turn to end", |h| h.runtime.live_runs() == 0).await;
 
     assert_eq!(calls.load(Ordering::SeqCst), 3, "the message a call acted on was carried on blind");
-    assert!(!settled_on(&h.sink, second), "a message the turn acted on was settled unanswered");
-    assert!(h.runtime.store().outcome(second).unwrap().is_none());
+    h.settle(second).await;
+    assert_cut_short(&h, second);
 
     h.runtime.stop_agent(researcher);
     let store = Store::open(&h._dir.path().join("guac.db")).unwrap();
     let recovered = guac_lib::boot::recover(&store).unwrap();
     assert!(recovered.resumed.is_empty(), "a message a turn acted on was delivered again");
-    assert_eq!(recovered.interrupted, 1);
-    let reported: Vec<RunId> = store
-        .channel_messages(researcher, 50)
-        .unwrap()
-        .into_iter()
-        .filter(|m| {
-            matches!(m.parts.first(), Some(Part::Notice { kind: NoticeKind::Interrupted, .. }))
-        })
-        .map(|m| m.run_id)
+    assert_eq!(recovered.interrupted, 0, "the conversation was reported a second time");
+}
+
+fn assert_cut_short(h: &Harness, run: RunId) {
+    let messages = h.runtime.store().channel_messages(h.id("Researcher"), 200).unwrap();
+    let asked = messages.iter().find(|m| m.run_id == run && m.from == Participant::Human).unwrap();
+    let notices: Vec<&Envelope> = messages
+        .iter()
+        .filter(|m| m.run_id == run && m.parts.iter().any(|p| matches!(p, Part::Notice { .. })))
         .collect();
-    assert_eq!(reported, vec![second]);
+    assert_eq!(notices.len(), 1, "{}", h.transcript());
+    assert_eq!(notices[0].cause, Some(asked.id), "Try again would not send this message");
+    assert_eq!(
+        notices[0].parts,
+        vec![Part::Notice {
+            kind: NoticeKind::Interrupted,
+            text: "You stopped another conversation while Researcher was working on this one too, \
+                   so this was not finished. Review any actions already taken before retrying."
+                .into(),
+        }]
+    );
+    let outcome = h.runtime.store().outcome(run).unwrap().expect("the conversation has an outcome");
+    assert_eq!(outcome.status, OutcomeStatus::Interrupted);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -8185,7 +8197,7 @@ async fn a_message_handed_on_beside_the_turn_that_acted_on_it_never_runs_without
     };
     let h = harness(&stub, &["Researcher"], GuardLimits::default());
     let researcher = h.id("Researcher");
-    let (first, _second) = taken_in_mid_turn(&h, &stub, &gate, &calls).await;
+    let (first, second) = taken_in_mid_turn(&h, &stub, &gate, &calls).await;
     h.wait_until("the call after the second was taken in", |_| calls.load(Ordering::SeqCst) == 3)
         .await;
 
@@ -8204,6 +8216,8 @@ async fn a_message_handed_on_beside_the_turn_that_acted_on_it_never_runs_without
         h.transcript()
     );
     assert!(!h.channel_texts("Researcher").iter().any(|t| t.contains("Calling the vendor again.")));
+    assert!(settled_on(&h.sink, second), "the second conversation waited for another host");
+    assert_cut_short(&h, second);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
