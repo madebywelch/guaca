@@ -78,6 +78,10 @@ pub struct Bound {
 }
 
 const DRAIN_WINDOW: std::time::Duration = std::time::Duration::from_secs(20);
+const _: () = assert!(
+    DRAIN_WINDOW.as_millis() < crate::host::STOP_TIMEOUT.as_millis(),
+    "DRAIN_WINDOW has to end before host::STOP_TIMEOUT kills the daemon"
+);
 
 impl Bound {
     pub async fn serve(self) -> Result<(), String> {

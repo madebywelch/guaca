@@ -12,6 +12,8 @@ pub const IMAGE: &str = match option_env!("GUACA_BACKEND_IMAGE") {
     None => concat!("ghcr.io/madebywelch/guaca/guacad:", env!("CARGO_PKG_VERSION")),
 };
 
+pub const STOP_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub const UPDATER_SOCKET: &str = "/run/guaca-updater/updater.sock";
 const UPDATER_DIR: &str = "/run/guaca-updater";
 
@@ -916,6 +918,7 @@ impl LocalHost {
             port.map(|p| format!("127.0.0.1:{p}:8787")).unwrap_or_else(|| "127.0.0.1::8787".into());
         let label = format!("{}={}", self.spec.owner, self.spec.name);
         let workspace = format!("type=volume,src={},dst=/var/lib/guaca", self.spec.volume);
+        let stop_timeout = STOP_TIMEOUT.as_secs().to_string();
         let mut args = vec![
             "run",
             "--detach",
@@ -927,7 +930,7 @@ impl LocalHost {
             "--restart",
             "unless-stopped",
             "--stop-timeout",
-            "30",
+            &stop_timeout,
             "--publish",
             &binding,
             "--mount",
@@ -1132,6 +1135,21 @@ pub(crate) mod tests {
     }
     async fn docker(args: &[&str], seconds: u64) -> Result<String, String> {
         run_docker(&docker_binary(), args, seconds).await
+    }
+
+    #[test]
+    fn every_way_the_daemon_is_run_gives_it_the_same_stop_timeout() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let read = |file: &str| std::fs::read_to_string(root.join(file)).unwrap();
+        let setting = |text: &str, key: &str| -> u64 {
+            let line = text.lines().map(str::trim).find_map(|line| line.strip_prefix(key));
+            let value = line.unwrap_or_else(|| panic!("no {key} line"));
+            value.trim().trim_end_matches('s').parse().unwrap()
+        };
+        let compose = setting(&read("docker-compose.yml"), "stop_grace_period:");
+        let unit = setting(&read("deploy/guacad.service"), "TimeoutStopSec=");
+        assert_eq!(compose, STOP_TIMEOUT.as_secs(), "stop_grace_period in docker-compose.yml");
+        assert_eq!(unit, STOP_TIMEOUT.as_secs(), "TimeoutStopSec in deploy/guacad.service");
     }
     #[cfg(unix)]
     async fn simulated(
