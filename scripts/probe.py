@@ -137,6 +137,8 @@ def helper(*args: str) -> Any:
         if built.returncode != 0:
             raise Failed(f"could not build the system helper: {built.stderr.strip()[-400:]}")
     answer = run([str(HELPER), *args], timeout=30)
+    if args[0] in REAL_INPUT:
+        OWN_INPUT["at"] = time.monotonic()
     value = json.loads(answer.stdout.strip().splitlines()[-1]) if answer.stdout.strip() else None
     if answer.returncode != 0:
         raise Failed((value or {}).get("error") or answer.stderr.strip() or "the system helper failed")
@@ -280,13 +282,21 @@ def codesign(app: Path) -> dict:
 
 AWAY = 5.0
 
+INPUT_SLACK = 0.5
+
+REAL_INPUT = frozenset({"click-icon", "escape"})
+
+OWN_INPUT = {"at": -math.inf}
+
 
 def idle_seconds() -> float:
     return float(helper("idle")["seconds"])
 
 
 def person_away(what: str) -> None:
-    if idle_seconds() < AWAY:
+    idle = idle_seconds()
+    since_own = time.monotonic() - OWN_INPUT["at"]
+    if idle < AWAY and idle < since_own - INPUT_SLACK:
         raise Deferred(f"{what}: someone is using the Mac; try again later")
 
 
@@ -502,6 +512,7 @@ class StandIn:
     ASK = "PROBE-ASK"
     REPLY = "Probe test run finished.\nNothing here needs you; this is a scripted reply."
     QUESTION = "Probe test question: which one?"
+    ANSWER = "First"
 
     def __init__(self, scratch: Scratch) -> None:
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -537,7 +548,7 @@ class StandIn:
         if self.ASK in text and not answered:
             call = {"index": 0, "id": "call_ask", "type": "function",
                     "function": {"name": "ask_operator",
-                                 "arguments": json.dumps({"question": self.QUESTION, "options": ["First", "Second"]})}}
+                                 "arguments": json.dumps({"question": self.QUESTION, "options": [self.ANSWER, "Second"]})}}
             return [{"choices": [{"index": 0, "delta": {"tool_calls": [call]}}]},
                     {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}], "usage": usage}]
         return [{"choices": [{"index": 0, "delta": {"content": self.REPLY}}]},
@@ -841,9 +852,13 @@ class Record:
     def passed(self) -> bool:
         return not self.deferred and all(step.get("pass", True) for step in self.steps)
 
+    @property
+    def outcome(self) -> str:
+        return "not run" if self.deferred else "pass" if self.passed else "fail"
+
     def result(self) -> dict:
         return {"scenario": self.scenario, "run": self.index, "pass": self.passed,
-                "deferred": self.deferred, "steps": self.steps}
+                "deferred": self.deferred, "outcome": self.outcome, "steps": self.steps}
 
 
 
@@ -1495,6 +1510,11 @@ class Listener:
         return [push for push in self.received if push["title"] == title]
 
 
+def answer_the_question(host: Host) -> None:
+    asked = wait_until("the question waits for an answer", lambda: host.call("pending_approvals"), 10)
+    host.call("answer_question", id=asked[0]["id"], answer=StandIn.ANSWER)
+
+
 def scenario_push(record: Record, scratch: Scratch) -> None:
     host = Host(scratch, MINUTE_MS)
     record.secrets.append(host.token)
@@ -1507,12 +1527,16 @@ def scenario_push(record: Record, scratch: Scratch) -> None:
         pushed = wait_until("the question is pushed", lambda: phone.titled("Needs you"), 20)
         record.check("the question is pushed", pushed[0]["body"].startswith("Researcher has a question"),
                      {"body": pushed[0]["body"], "priority": pushed[0]["priority"]})
+        answer_the_question(host)
+        answered = wait_until("the answered run is pushed", lambda: phone.titled("Researcher"), 10 * MINUTE_MS / 1000 + 20)
+        record.check("the answered run is pushed with its headline", answered[0]["body"] == StandIn.REPLY.splitlines()[0],
+                     {"body": answered[0]["body"], "priority": answered[0]["priority"]})
         host.send("Scribe", "Say something short; this is a probe test.")
         done = wait_until("the finished run is pushed", lambda: phone.titled("Scribe"), 10 * MINUTE_MS / 1000 + 20)
         record.check("the finished run is pushed with its headline", done[0]["body"] == StandIn.REPLY.splitlines()[0],
                      {"body": done[0]["body"], "priority": done[0]["priority"]})
         record.check("each is pushed once",
-                     holds_for("once", lambda: len(phone.received) == 2, 3),
+                     holds_for("once", lambda: len(phone.received) == 3, 3),
                      {"pushes": [p["title"] for p in phone.received]})
         record.check("the pushes name what they are about",
                      all(p["delivery"] for p in phone.received))
@@ -1701,13 +1725,16 @@ def scenario_longaway(record: Record, scratch: Scratch) -> None:
         host.send("Scribe", "Say something short; this is a probe test.")
         wait_until("both runs leave a row", lambda: len(
             [r for r in host.rows() if r["kind"] == "outcome" or "question" in r["title"]]) == 2, 30)
-        def both() -> list[dict]:
+        wait_until("the window takes the question", lambda: any(
+            "question" in r["title"] and r["status"] == "delivered" for r in host.rows("needs_you")), 30)
+        answer_the_question(host)
+        def taken() -> list[dict]:
             return [{k: r[k] for k in ("kind", "status")} for r in host.rows()
                     if r["kind"] == "outcome" or "question" in r["title"]]
 
-        claimed = wait_quietly(lambda: all(r["status"] == "delivered" for r in both()), 90)
-        record.check("after six minutes hidden: the window takes the question and the finished run",
-                     claimed is not None, None if claimed else {"rows": both()})
+        claimed = wait_quietly(lambda: len(taken()) == 3 and all(r["status"] == "delivered" for r in taken()), 90)
+        record.check("after six minutes hidden: the window takes the question and both finished runs",
+                     claimed is not None, None if claimed else {"rows": taken()})
         if claimed:
             presented = wait_quietly(lambda: len(log.matching(banner(app.bundle))) >= shown + 2, 10)
             record.check("and each is a banner", presented is not None,
@@ -1860,15 +1887,25 @@ def attempt(name: str, index: int, keep: bool) -> tuple[Record, dict]:
     return record, entry
 
 
-def patient(patience: float, deferrals: list[dict], entry: dict) -> bool:
-    deferrals.append({"scenario": entry["scenario"], "run": entry["run"], "step": entry["steps"][-1]["step"]})
-    print(f"{entry['scenario']} run {entry['run']}: put off, someone is using the Mac", file=sys.stderr)
-    deadline = time.monotonic() + patience
-    while time.monotonic() < deadline:
-        if idle_seconds() >= AWAY:
-            return True
-        time.sleep(2)
-    return False
+def summarize(results: list[dict]) -> dict:
+    ran = [r for r in results if r["outcome"] != "not run"]
+    never_ran = [name for name in dict.fromkeys(r["scenario"] for r in results)
+                 if not any(r["scenario"] == name for r in ran)]
+    counts = {outcome: sum(r["outcome"] == outcome for r in results) for outcome in ("pass", "fail", "not run")}
+    by_scenario: dict[str, list[list]] = {}
+    for result in ran:
+        by_scenario.setdefault(result["scenario"], []).append(
+            [(s["step"], s.get("pass"), s.get("observed")) for s in result["steps"]]
+        )
+    return {
+        "pass": counts["fail"] == 0 and not never_ran,
+        "counts": counts,
+        "notRun": [{"scenario": r["scenario"], "run": r["run"], "reason": r["steps"][-1]["step"]}
+                   for r in results if r["outcome"] == "not run"],
+        "neverRan": never_ran,
+        "runs": results,
+        "identical": {name: all(r == runs[0] for r in runs) for name, runs in by_scenario.items()},
+    }
 
 
 def main() -> int:
@@ -1877,8 +1914,6 @@ def main() -> int:
     parser.add_argument("--runs", type=int, default=3, help="times in a row to run each (default 3)")
     parser.add_argument("--no-build", action="store_true", help="reuse the last test build")
     parser.add_argument("--keep", action="store_true", help="leave scratch directories for inspection")
-    parser.add_argument("--patience", type=float, default=1800,
-                        help="seconds to wait for the Mac to be left alone before a put-off run gives up (default 1800)")
     parser.add_argument("--list", action="store_true", help="list the scenarios and exit")
     args = parser.parse_args()
 
@@ -1902,26 +1937,18 @@ def main() -> int:
 
     awake = subprocess.Popen(["caffeinate", "-u", "-d", "-i", "-w", str(os.getpid())])
     results = []
-    deferrals: list[dict] = []
     try:
         for name in args.scenarios or list(SCENARIOS):
             for index in range(1, args.runs + 1):
-                record, entry = attempt(name, index, args.keep)
-                while record.deferred and patient(args.patience, deferrals, entry):
-                    record, entry = attempt(name, index, args.keep)
+                _, entry = attempt(name, index, args.keep)
                 results.append(entry)
-                print(f"{name} run {index}: {'pass' if entry['pass'] else 'deferred' if entry['deferred'] else 'FAIL'}", file=sys.stderr)
+                said = {"pass": "pass", "fail": "FAIL", "not run": f"not run, {entry['steps'][-1]['step']}"}
+                print(f"{name} run {index}: {said[entry['outcome']]}", file=sys.stderr)
     finally:
         awake.terminate()
 
-    summary: dict = {"pass": all(r["pass"] for r in results), "deferrals": deferrals, "runs": results}
+    summary = summarize(results)
     summary["forgotten"] = sweep()
-    by_scenario: dict[str, list[list]] = {}
-    for result in results:
-        by_scenario.setdefault(result["scenario"], []).append(
-            [(s["step"], s.get("pass"), s.get("observed")) for s in result["steps"]]
-        )
-    summary["identical"] = {name: all(r == runs[0] for r in runs) for name, runs in by_scenario.items()}
     print(json.dumps(summary, indent=2))
     return 0 if summary["pass"] else 1
 

@@ -401,5 +401,211 @@ class PanelStableTests(unittest.TestCase):
                 app.forget.assert_called_once()
 
 
+
+class Clock:
+    def __init__(self):
+        self.now = 0.0
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+class LapsingHost:
+    WINDOW_S = 60
+
+    def __init__(self, clock, phone=None):
+        self.clock = clock
+        self.phone = phone
+        self.token = "probe-token"
+        self.asked_at = None
+        self.answered = False
+        self.outbox = []
+        self.calls = []
+
+    def lapsed(self):
+        return not self.answered and self.asked_at is not None and self.clock.now - self.asked_at >= self.WINDOW_S
+
+    def seed(self):
+        pass
+
+    def use(self, model):
+        pass
+
+    def stop(self):
+        pass
+
+    def finish(self, agent):
+        self.outbox.append({"kind": "outcome", "title": agent, "status": "pending"})
+        if self.phone is not None and not self.lapsed():
+            self.phone.push(agent, probe.StandIn.REPLY.splitlines()[0])
+
+    def send(self, agent, text):
+        self.calls.append(("send", agent))
+        if probe.StandIn.ASK in text:
+            self.asked_at = self.clock.now
+            self.outbox.append({"kind": "needs_you", "title": "Researcher has a question", "status": "delivered"})
+            if self.phone is not None:
+                self.phone.push("Needs you", "Researcher has a question. Its turn is parked until you answer.")
+        elif self.asked_at is not None and not self.answered and self.phone is not None:
+            self.outbox.append({"kind": "outcome", "title": agent, "status": "pending"})
+        else:
+            self.finish(agent)
+
+    def call(self, name, **args):
+        self.calls.append((name, args))
+        if name == "pending_approvals":
+            return [] if self.answered or self.lapsed() else [{"id": "question"}]
+        if name == "answer_question":
+            self.answered = True
+            self.finish("Researcher")
+        return None
+
+    def rows(self, kind=None):
+        if self.lapsed() and not any(r["title"] == "Researcher" for r in self.outbox):
+            self.finish("Researcher")
+            for row in self.outbox:
+                if row["title"] != "Researcher":
+                    row["status"] = "delivered"
+        elif self.answered and self.clock.now - self.asked_at >= self.WINDOW_S:
+            for row in self.outbox:
+                row["status"] = "delivered"
+        return [dict(r) for r in self.outbox if kind is None or r["kind"] == kind]
+
+
+class Phone:
+    def __init__(self):
+        self.received = []
+        self.url = "http://127.0.0.1:1/probe"
+
+    def push(self, title, body):
+        self.received.append({"title": title, "body": body, "priority": "3", "delivery": "probe"})
+
+    def titled(self, title):
+        return [p for p in self.received if p["title"] == title]
+
+
+class ScaledWindowTests(unittest.TestCase):
+    def clocked(self, clock):
+        return (patch.object(probe.time, "monotonic", side_effect=lambda: clock.now),
+                patch.object(probe.time, "sleep", side_effect=clock.sleep))
+
+    def test_push_answers_the_question_before_a_second_run_can_be_gathered_with_it(self):
+        clock, phone = Clock(), Phone()
+        host = LapsingHost(clock, phone)
+        record = probe.Record("push", 1, [])
+        ticking, sleeping = self.clocked(clock)
+        with patch.object(probe, "Host", return_value=host), patch.object(probe, "StandIn"), \
+             patch.object(probe, "Listener", return_value=phone), ticking, sleeping:
+            probe.StandIn.ASK = "PROBE-ASK"
+            probe.StandIn.REPLY = "Probe test run finished.\nscripted"
+            probe.StandIn.ANSWER = "First"
+            probe.scenario_push(record, Mock())
+        names = [c[0] if c[0] != "send" else ("send", c[1]) for c in host.calls]
+        self.assertLess(names.index("answer_question"), names.index(("send", "Scribe")))
+        self.assertTrue(record.passed, record.steps)
+        self.assertEqual([p["title"] for p in phone.received], ["Needs you", "Researcher", "Scribe"])
+
+    def test_longaway_answers_the_question_once_the_window_has_taken_it(self):
+        clock = Clock()
+        host = LapsingHost(clock)
+        banners = []
+        app = Mock(pid=7, bundle="probe.bundle")
+        log = Mock()
+        log.matching.side_effect = lambda _: banners
+        it = Mock(app=app, host=host, log=log)
+        prompted = Mock()
+        prompted.return_value.__enter__ = Mock(return_value=it)
+        prompted.return_value.__exit__ = Mock(return_value=False)
+
+        def rows(kind=None, real=host.rows):
+            found = real(kind)
+            banners[:] = ["banner"] * (1 + any(r["kind"] == "outcome" and r["status"] == "delivered" for r in host.outbox))
+            return found
+        host.rows = rows
+        record = probe.Record("longaway", 1, [])
+        ticking, sleeping = self.clocked(clock)
+        with patch.object(probe, "Prompted", prompted), patch.object(probe, "StandIn"), \
+             patch.object(probe, "screen_step"), patch.object(probe, "press_when_shown"), \
+             patch.object(probe, "front", return_value={"pid": 7}), patch.object(probe, "hand_back"), \
+             patch.object(probe, "LONG_AWAY_S", 0), ticking, sleeping:
+            probe.StandIn.ASK = "PROBE-ASK"
+            probe.StandIn.REPLY = "Probe test run finished."
+            probe.StandIn.ANSWER = "First"
+            probe.scenario_longaway(record, Mock())
+        self.assertTrue(record.passed, record.steps)
+        self.assertTrue(host.answered)
+        self.assertEqual(sorted(r["title"] for r in host.outbox),
+                         ["Researcher", "Researcher has a question", "Scribe"])
+
+
+class PersonAwayTests(unittest.TestCase):
+    def away(self, idle, since_own):
+        with patch.object(probe, "idle_seconds", return_value=idle), \
+             patch.object(probe.time, "monotonic", return_value=1000.0), \
+             patch.dict(probe.OWN_INPUT, {"at": 1000.0 - since_own}):
+            probe.person_away("clicking")
+
+    def test_input_after_the_probe_own_input_is_a_person(self):
+        with self.assertRaises(probe.Deferred):
+            self.away(idle=1.0, since_own=3.0)
+
+    def test_input_with_no_probe_input_is_a_person(self):
+        with self.assertRaises(probe.Deferred):
+            self.away(idle=1.0, since_own=float("inf"))
+
+    def test_the_probe_own_click_and_key_are_not_a_person(self):
+        self.away(idle=2.0, since_own=2.0)
+        self.away(idle=2.2, since_own=2.0)
+
+    def test_an_idle_mac_is_away(self):
+        self.away(idle=probe.AWAY, since_own=float("inf"))
+
+    def test_only_helpers_that_post_input_are_stamped(self):
+        done = subprocess.CompletedProcess([], 0, '{"seconds": 9}', "")
+        for args, stamped in ((("click-icon", "7"), True), (("escape",), True), (("idle",), False),
+                              (("press-group", "x"), False)):
+            with patch.object(probe, "run", return_value=done), \
+                 patch.object(probe.time, "monotonic", return_value=55.0), \
+                 patch.object(probe, "HELPER", Mock(exists=Mock(return_value=True), stat=Mock(return_value=Mock(st_mtime=2)))), \
+                 patch.object(probe, "HELPER_SOURCE", Mock(stat=Mock(return_value=Mock(st_mtime=1)))), \
+                 patch.dict(probe.OWN_INPUT, {"at": -1.0}):
+                probe.helper(*args)
+                self.assertEqual(probe.OWN_INPUT["at"] == 55.0, stamped, args)
+
+
+class SummaryTests(unittest.TestCase):
+    def entry(self, scenario, run, outcome):
+        steps = [{"step": "clicking: someone is using the Mac; try again later", "deferred": True}] \
+            if outcome == "not run" else [{"step": "a step", "pass": outcome == "pass"}]
+        return {"scenario": scenario, "run": run, "pass": outcome == "pass", "deferred": outcome == "not run",
+                "outcome": outcome, "steps": steps}
+
+    def test_a_put_off_run_is_counted_apart_and_never_as_a_pass(self):
+        summary = probe.summarize([self.entry("escape", 1, "pass"), self.entry("escape", 2, "not run")])
+        self.assertEqual(summary["counts"], {"pass": 1, "fail": 0, "not run": 1})
+        self.assertEqual(summary["notRun"], [{"scenario": "escape", "run": 2,
+                                              "reason": "clicking: someone is using the Mac; try again later"}])
+        self.assertTrue(summary["pass"])
+        self.assertEqual(summary["neverRan"], [])
+
+    def test_a_scenario_that_never_ran_fails_the_probe(self):
+        summary = probe.summarize([self.entry("launch", 1, "pass")] +
+                                  [self.entry("escape", n, "not run") for n in (1, 2, 3)])
+        self.assertFalse(summary["pass"])
+        self.assertEqual(summary["neverRan"], ["escape"])
+        self.assertNotIn("escape", summary["identical"])
+
+    def test_a_failure_fails_the_probe(self):
+        summary = probe.summarize([self.entry("push", 1, "fail"), self.entry("push", 2, "pass")])
+        self.assertFalse(summary["pass"])
+        self.assertEqual(summary["counts"]["fail"], 1)
+
+    def test_a_put_off_attempt_records_not_run(self):
+        record = probe.Record("escape", 2, [])
+        record.deferred = True
+        self.assertEqual(record.result()["outcome"], "not run")
+        self.assertFalse(record.result()["pass"])
+
+
 if __name__ == "__main__":
     unittest.main()

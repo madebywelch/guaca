@@ -28,20 +28,22 @@ scripts/probe.py launch panel            # some of them
 scripts/probe.py --runs 1 permission     # once
 scripts/probe.py --no-build notification # reuse the last test build
 scripts/probe.py --keep panel            # leave the scratch directories
-scripts/probe.py --patience 600 click    # give up on a busy Mac after ten minutes
 ```
 
 It needs a Mac with the toolchain `install.sh` needs (Rust, pnpm) and the
 Xcode command line tools, for `swiftc`. Progress goes to stderr; stdout is one
 JSON document with every step of every run, `pass` overall, and `identical`
-per scenario, which says whether the runs came out step for step the same. The
-exit status is 1 if any step failed.
+per scenario, which says whether the runs that ran came out step for step the
+same. Each run's `outcome` is `pass`, `fail` or `not run`, and `counts`
+totals them. The exit status is 1 if any step failed or if a scenario did not
+run in any of its runs.
 
 A run that would take the front or act on system UI while someone is using the
-Mac is put off, not forced: it is tried again once nobody has touched the
-keyboard or pointer for five seconds, for up to `--patience` seconds (half an
-hour by default), and `deferrals` in the JSON lists every run that was put
-off. Input from a Screen Sharing session counts as someone at the Mac.
+Mac is put off, not forced: it is recorded as `not run`, never as a pass, and
+`notRun` in the JSON lists each one with the step it stopped at. It is not
+tried again. Someone is using the Mac when the keyboard or pointer was touched
+in the last five seconds by anything but the probe's own real click or key
+press. Input from a Screen Sharing session counts as someone at the Mac.
 
 While it runs, the command holds one `caffeinate -u -d -i` from before the
 first screen step until it exits, so a banner, the question and a capture are
@@ -222,6 +224,11 @@ the Host with `GUACA_PROBE_MINUTE_MS`, the length of a minute in milliseconds
 and so does the ten minutes a request is held before it lapses into For you,
 which is how `scripts/verify.py lapse` watches a lapse in ten seconds;
 nothing else changes, and nothing an agent reads says a different length.
+Gathering and the request's hold are both ten minutes, so on that Host a
+question nobody answers lapses at the moment the gathered work is offered, and
+its parked run then finishes as one more outcome. `push` and `longaway` answer
+their question once it has been delivered, so each run ends the way the
+scenario names.
 
 It is held to the same promise as the channel. `probe_clock::scaled` is the
 identity in every build without the feature, `probe-host` does not compile
@@ -295,13 +302,13 @@ keeps a walk of the tree to a fraction of a second.
 | `click` | Screen: a delivery about one conversation is shown as a banner; clicking it opens that conversation. |
 | `away` | Screen: four deliveries waiting when the window connects, then Allow; all four are claimed and macOS presents exactly one banner, the "While you were away" fold. |
 | `capture` | Screen: one image of each of the test build's own windows, the panel open, and nothing else. |
-| `longaway` | Screen: at the window once, then Guaca hidden for six real minutes, long enough for WebKit to suspend a page nobody can see; a question and a finished run, on a Host with a six-second minute, are each claimed and drawn as a banner. On a build whose main window lets WebKit suspend its page, both stay unclaimed. |
+| `longaway` | Screen: at the window once, then Guaca hidden for six real minutes, long enough for WebKit to suspend a page nobody can see; a question, answered once the window has it, and two finished runs, on a Host with a six-second minute, are each claimed and drawn as a banner. On a build whose main window lets WebKit suspend its page, both stay unclaimed. |
 | `question` | Screen: a run on the loopback stand-in model that asks the operator a question is claimed and drawn as a banner at once, and a click on it opens the conversation. |
 | `hidden` | Screen: at the window once, then Guaca hidden; a run that finishes is drawn as a banner, and its click opens the conversation. The Host's minute is 30 seconds here, so the two minutes before away outlast the window's 45 second heartbeat: a window that kept saying it was there would hold the run back as seen. |
 | `switched` | Screen: the same, with Finder brought to the front instead of Guaca hidden. |
 | `fold` | Screen: two runs that finish while the operator is away are gathered into one banner, and its click opens For you. |
 | `testclick` | Screen: a click on the Settings test banner brings Guaca forward. |
-| `push` | Every window closed: a question and a finished run each reach a push address on loopback once, with what they are about. |
+| `push` | Every window closed: a question, the run it parked once it is answered, and another finished run each reach a push address on loopback once, with what they are about. |
 | `hiddenpush` | Screen: at the window once, then Guaca hidden; a run that finishes reaches the push address once. |
 | `refused` | Screen: a question whose banner the system refuses is given back by the window, pushed once although the window is present, and not taken again by that window. |
 | `escape` | Screen: with the window closed and Finder in front, a real click on the icon, through the window server, opens the panel and gives it the keyboard; a real Escape closes it, and Finder is in front again. The hand-back is asserted only once the panel had the keyboard. |
@@ -309,8 +316,8 @@ keeps a walk of the tree to a fraction of a second.
 
 The screen scenarios press system UI found by accessibility role and name, only
 inside the group whose text names the test build, and only while nobody has
-touched the keyboard or pointer for five seconds; otherwise the step is
-reported as deferred rather than forced. They need Accessibility (and, for
+touched the keyboard or pointer for five seconds; otherwise the run is
+reported as not run rather than forced. They need Accessibility (and, for
 `capture`, Screen Recording) for the app that runs the command, and fail with
 that reason until it has them. macOS grants both to the responsible process:
 the terminal a person runs the command in, or the agent or service that
