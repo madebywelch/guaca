@@ -1,3 +1,7 @@
+mod catalog;
+
+pub use catalog::{Catalog, RankedModel};
+
 use crate::domain::decision::WorkDecision;
 use crate::domain::ids::DecisionId;
 use std::collections::HashMap;
@@ -35,10 +39,10 @@ use crate::domain::usage::{GroupUsage, RunUsage};
 use crate::domain::worknote::WorkingNote;
 use crate::e2b::{Computer, E2bClient, E2bError};
 use crate::kernel::{Browser, KernelClient, KernelError};
-use crate::llm::catalog::{Catalog, CatalogError, RankedModel};
 use crate::runtime::events::{Activity, UiEvent};
 use crate::runtime::Runtime;
 use crate::subscription::{DeviceCode, SigninError, Status, Subscription};
+use catalog::CatalogError;
 
 pub type OpenUrl = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 

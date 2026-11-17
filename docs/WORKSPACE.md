@@ -2214,7 +2214,7 @@ models people actually send that work to, and capability orders the pool. Every
 row carries its price, because capability ordering ignores price and the most
 capable model in a pool is regularly the dearest thing in it: a one-click swap
 that hid the number would be a one-click way to make every turn forty times
-dearer. `llm/catalog.rs` has the rest, including why the twelve are checked
+dearer. `commands/catalog.rs` has the rest, including why the twelve are checked
 before a request is spent rather than after.
 
 ## A duplicate copies the card and nothing an agent went and did

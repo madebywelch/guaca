@@ -124,7 +124,7 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
         subscription: booted.subscription,
         claude_signin: Default::default(),
         account: booted.account,
-        catalog: Arc::new(crate::llm::catalog::Catalog::new()),
+        catalog: Arc::new(crate::commands::Catalog::new()),
         artifacts: booted.artifacts,
         artifact_port: booted.artifact_port,
     });

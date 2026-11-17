@@ -148,7 +148,7 @@ nothing.
 
 ```sh
 cargo test --manifest-path src-tauri/Cargo.toml --lib \
-  llm::catalog::tests::every_use_case -- --ignored --nocapture
+  commands::catalog::tests::every_use_case -- --ignored --nocapture
 ```
 
 Whether a model can be shown a picture is read off the same vendor's catalog and
