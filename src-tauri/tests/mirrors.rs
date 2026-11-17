@@ -203,14 +203,21 @@ fn plugin_call(file: &Value) {
 }
 
 fn plain_text(file: &Value) {
-    each(file, |parts: Value| {
+    for case in file.as_array().expect("a vector file is a list of cases") {
+        let shared = case.get("expected");
+        let (rust, web) = (case.get("rust"), case.get("web"));
+        assert!(
+            shared.is_some() != (rust.is_some() && web.is_some()),
+            "a case states one text for both sides, or a deliberate difference with one for each: {case}"
+        );
+        let expected: String = parsed(shared.or(rust).unwrap());
         let envelope: Envelope = parsed(&json!({
             "id": "00000000-0000-4000-8000-000000000010",
             "runId": "00000000-0000-4000-8000-000000000011",
             "channelId": "00000000-0000-4000-8000-000000000001",
             "from": { "kind": "human" },
             "to": { "kind": "agent", "id": "00000000-0000-4000-8000-000000000001" },
-            "parts": parts,
+            "parts": case["input"],
             "trust": "operator",
             "hop": 0,
             "expectsReply": true,
@@ -218,8 +225,8 @@ fn plain_text(file: &Value) {
             "cause": null,
             "createdAt": 0
         }));
-        envelope.plain_text()
-    });
+        assert_eq!(envelope.plain_text(), expected, "input {}", case["input"]);
+    }
 }
 
 fn builds(file: &Value) {

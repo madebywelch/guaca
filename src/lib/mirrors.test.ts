@@ -75,7 +75,22 @@ const CHECKS: Record<string, Check> = {
     );
   },
   money: each(money),
-  "plain-text": each((parts: Part[]) => plainText({ ...ENVELOPE, parts })),
+  "plain-text": (file) => {
+    for (const { input, expected, rust, web } of file as {
+      input: Part[];
+      expected?: string;
+      rust?: string;
+      web?: string;
+    }[]) {
+      const shared = expected !== undefined;
+      expect(shared !== (rust !== undefined && web !== undefined), JSON.stringify(input)).toBe(
+        true,
+      );
+      expect(plainText({ ...ENVELOPE, parts: input }), JSON.stringify(input)).toBe(
+        shared ? expected : web,
+      );
+    }
+  },
   "plugin-access": each(({ access, agent }: { access: PluginAccess; agent: AgentId }) =>
     allows(access, agent),
   ),
