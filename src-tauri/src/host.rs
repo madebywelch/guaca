@@ -228,11 +228,27 @@ pub fn docker_binary() -> PathBuf {
         .unwrap_or_else(|| "docker".into())
 }
 
+const STATED_ENV: [&str; 2] = ["TZ", "GUACA_UPDATER_SOCKET"];
+
+fn states_a_value(args: &[&str]) -> bool {
+    let stated = |assignment: &str| {
+        assignment.split_once('=').is_some_and(|(name, _)| !STATED_ENV.contains(&name))
+    };
+    args.windows(2).any(|pair| matches!(pair[0], "--env" | "-e") && stated(pair[1]))
+        || args.iter().any(|arg| arg.strip_prefix("--env=").is_some_and(stated))
+}
+
 pub(crate) async fn run_docker(
     binary: &Path,
     args: &[&str],
     seconds: u64,
 ) -> Result<String, String> {
+    if states_a_value(args) {
+        return Err(
+            "Guaca refused to put a variable's value on Docker's command line. Pass it by name."
+                .into(),
+        );
+    }
     let mut command = Command::new(binary);
     command.args(args).kill_on_drop(true);
     let output = tokio::time::timeout(Duration::from_secs(seconds), command.output())
@@ -1093,6 +1109,27 @@ fn bridge_address(value: &Value) -> Result<String, String> {
 pub(crate) mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn docker_is_never_handed_a_value_it_could_echo_back() {
+        let absent = Path::new("/guaca-no-such-docker");
+        for args in [
+            ["run", "--env", "GITHUB_TOKEN=ghp_hunter2", "image"],
+            ["run", "-e", "GITHUB_TOKEN=ghp_hunter2", "image"],
+            ["run", "--env=GITHUB_TOKEN=ghp_hunter2", "--rm", "image"],
+        ] {
+            let refused = run_docker(absent, &args, 5).await.unwrap_err();
+            assert!(refused.starts_with("Guaca refused"), "{args:?} reached Docker: {refused}");
+        }
+        for args in [
+            ["run", "--env", "GITHUB_TOKEN", "image"],
+            ["run", "--env", "TZ=America/New_York", "image"],
+            ["run", "--env", "GUACA_UPDATER_SOCKET=/run/guaca-updater/updater.sock", "image"],
+        ] {
+            let error = run_docker(absent, &args, 5).await.unwrap_err();
+            assert!(error.starts_with("Docker is not installed"), "{args:?} was refused: {error}");
+        }
+    }
     async fn docker(args: &[&str], seconds: u64) -> Result<String, String> {
         run_docker(&docker_binary(), args, seconds).await
     }
