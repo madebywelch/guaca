@@ -732,6 +732,56 @@ describe("a box that follows main", () => {
     expect(screen.queryByRole("button", { name: "Back up and update host" })).toBeNull();
   });
 
+  it.each([
+    [
+      "main moved before this click",
+      "Main is now at fffffff, not ddddddd. Check for updates and review it again.",
+    ],
+    [
+      "the other update was already running",
+      "An update is already running. Wait for it to finish.",
+    ],
+  ])(
+    "shows the update another client started, and why this one did not, when %s",
+    async (_, refusal) => {
+      const moved = "f".repeat(40);
+      fetched.mockImplementation((url: string, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          box = {
+            ...idle,
+            updating: true,
+            operation: {
+              stage: "Backing up data",
+              attemptId: "another-client",
+              backup: null,
+              previousImage: "old",
+              targetImage: image,
+              targetVersion: "0.1.0",
+              error: null,
+            },
+          };
+          (release as { latest: Record<string, unknown> }).latest.commit = moved;
+          return Promise.resolve(
+            new Response(JSON.stringify({ err: { kind: "updater", message: refusal } }), {
+              status: 409,
+              headers: { "content-type": "application/json" },
+            }),
+          );
+        }
+        if (url.endsWith("/health")) return json(health);
+        return json(url.endsWith("/v1/host") ? box : release);
+      });
+      mount();
+      fireEvent.click(await screen.findByRole("button", { name: "Back up and update host" }));
+      await poke();
+      await screen.findByText("Backing up data · step 3 of 5");
+      expect(screen.getByRole("alert").textContent).toBe(refusal);
+      expect(screen.queryByText("Starting update")).toBeNull();
+      expect(screen.queryByText(/lost the Host's reply/)).toBeNull();
+      expect(fetched.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    },
+  );
+
   it("updates to the build that was reviewed, by commit, and names it when done", async () => {
     mount();
     const button = await screen.findByRole("button", { name: "Back up and update host" });
