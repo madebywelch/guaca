@@ -22,4 +22,4 @@ for (const [name, radius] of Object.entries(SILHOUETTES)) {
 writeFileSync("node_modules/.cache/silhouettes.json", JSON.stringify(out));
 '
 
-uv run --quiet design/wordmarks/wordmarks.py
+uv run --quiet --python ">=3.11" --with "fonttools>=4.60" --with "brotli>=1.1" design/wordmarks/wordmarks.py
