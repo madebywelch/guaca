@@ -9,7 +9,7 @@ readonly MODEL_DIR=formal/recovery
 readonly CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/guaca"
 readonly JAR="$CACHE/tla2tools-$TLA_VERSION.jar"
 
-readonly CODE="MarkBeforeRead=TRUE AcceptOneCommit=TRUE RecoverUntouched=TRUE RecoverClears=TRUE"
+readonly CODE="MarkBeforeRead=TRUE AcceptOneCommit=TRUE RecoverUntouched=TRUE RecoverClears=TRUE KeepLink=TRUE"
 readonly CALM="OperatorStops=FALSE StartCanFail=FALSE"
 readonly STOPS="OperatorStops=TRUE StartCanFail=FALSE"
 readonly FAILS="OperatorStops=FALSE StartCanFail=TRUE"
@@ -17,12 +17,12 @@ readonly ALL="NoBlindRepeat NothingLost OnlyStartedReported ReportedOnce Stopped
 
 CHECKS=(
   "holds|code, no stops, no failed commit|$CODE $CALM|$ALL"
-  "holds|code, operator stops and a failed start mark|$CODE OperatorStops=TRUE StartCanFail=TRUE|NothingLost OnlyStartedReported ReportedOnce StoppedStaysStopped"
-  "finding|a message handed on beside the turn that acted on it is delivered blind once that turn's conversation is stopped|$CODE $STOPS|NoBlindRepeat"
-  "broken|model read before the start mark|MarkBeforeRead=FALSE AcceptOneCommit=TRUE RecoverUntouched=TRUE RecoverClears=TRUE $CALM|NoBlindRepeat"
-  "broken|pending_runs row in its own commit|MarkBeforeRead=TRUE AcceptOneCommit=FALSE RecoverUntouched=TRUE RecoverClears=TRUE $CALM|NothingLost"
-  "broken|recover reports every unfinished conversation|MarkBeforeRead=TRUE AcceptOneCommit=TRUE RecoverUntouched=FALSE RecoverClears=TRUE $CALM|OnlyStartedReported"
-  "broken|recover keeps the rows it reported|MarkBeforeRead=TRUE AcceptOneCommit=TRUE RecoverUntouched=TRUE RecoverClears=FALSE $CALM|ReportedOnce"
+  "holds|code, operator stops and a failed start mark|$CODE OperatorStops=TRUE StartCanFail=TRUE|$ALL"
+  "broken|model read before the start mark|MarkBeforeRead=FALSE AcceptOneCommit=TRUE RecoverUntouched=TRUE RecoverClears=TRUE KeepLink=TRUE $CALM|NoBlindRepeat"
+  "broken|pending_runs row in its own commit|MarkBeforeRead=TRUE AcceptOneCommit=FALSE RecoverUntouched=TRUE RecoverClears=TRUE KeepLink=TRUE $CALM|NothingLost"
+  "broken|recover reports every unfinished conversation|MarkBeforeRead=TRUE AcceptOneCommit=TRUE RecoverUntouched=FALSE RecoverClears=TRUE KeepLink=TRUE $CALM|OnlyStartedReported"
+  "broken|recover keeps the rows it reported|MarkBeforeRead=TRUE AcceptOneCommit=TRUE RecoverUntouched=TRUE RecoverClears=FALSE KeepLink=TRUE $CALM|ReportedOnce"
+  "broken|a message the turn acted on is handed on without its carrier|MarkBeforeRead=TRUE AcceptOneCommit=TRUE RecoverUntouched=TRUE RecoverClears=TRUE KeepLink=FALSE $STOPS|NoBlindRepeat"
 )
 
 fetch_tools() {

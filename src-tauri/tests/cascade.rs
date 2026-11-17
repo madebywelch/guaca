@@ -8162,3 +8162,86 @@ async fn a_failed_start_mark_leaves_the_message_owed_and_the_next_host_answers_i
     assert!(h.channel_texts("Researcher").iter().any(|t| t.contains("The room is booked.")));
     assert_eq!(h.runtime.store().outcome(run).unwrap().unwrap().status, OutcomeStatus::Done);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_message_handed_on_beside_the_turn_that_acted_on_it_never_runs_without_that_record() {
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let stub = {
+        let (gate, calls) = (gate.clone(), calls.clone());
+        serve(move |_| match calls.fetch_add(1, Ordering::SeqCst) {
+            0 => {
+                let deadline = Instant::now() + Duration::from_secs(20);
+                while !gate.load(Ordering::SeqCst) && Instant::now() < deadline {
+                    std::thread::yield_now();
+                }
+                Script::Progress("Looking up the vendor.".into())
+            }
+            1 => Script::Progress("Looking up the number.".into()),
+            2 => Script::Hang,
+            _ => Script::Say("Calling the vendor again.".into()),
+        })
+        .await
+    };
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let researcher = h.id("Researcher");
+    let (first, _second) = taken_in_mid_turn(&h, &stub, &gate, &calls).await;
+    h.wait_until("the call after the second was taken in", |_| calls.load(Ordering::SeqCst) == 3)
+        .await;
+
+    h.runtime.store().set_lifecycle(researcher, Lifecycle::Paused).unwrap();
+    let (h, drained) = h.restart(Duration::from_secs(5)).await;
+    assert!(drained.is_complete(), "{drained:?}");
+    assert!(h.runtime.stop_run(first));
+    h.settle(first).await;
+    h.resume("Researcher");
+    h.wait_until("the picked-up work to leave the process", |h| h.runtime.live_runs() == 0).await;
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        3,
+        "the second conversation ran again without the record of the call made for it:\n{}",
+        h.transcript()
+    );
+    assert!(!h.channel_texts("Researcher").iter().any(|t| t.contains("Calling the vendor again.")));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_message_handed_on_beside_the_turn_that_acted_on_it_is_carried_on_in_that_turn() {
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let stub = {
+        let (gate, calls) = (gate.clone(), calls.clone());
+        serve(move |_| match calls.fetch_add(1, Ordering::SeqCst) {
+            0 => {
+                let deadline = Instant::now() + Duration::from_secs(20);
+                while !gate.load(Ordering::SeqCst) && Instant::now() < deadline {
+                    std::thread::yield_now();
+                }
+                Script::Progress("Looking up the vendor.".into())
+            }
+            1 => Script::Progress("Looking up the number.".into()),
+            2 => Script::Hang,
+            _ => Script::Say("Hours and number found.".into()),
+        })
+        .await
+    };
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let (first, second) = taken_in_mid_turn(&h, &stub, &gate, &calls).await;
+    h.wait_until("the call after the second was taken in", |_| calls.load(Ordering::SeqCst) == 3)
+        .await;
+
+    let (h, drained) = h.restart(Duration::from_secs(5)).await;
+    assert!(drained.is_complete(), "{drained:?}");
+    h.settle(first).await;
+    h.settle(second).await;
+
+    assert_eq!(calls.load(Ordering::SeqCst), 4, "{}", h.transcript());
+    let resumed = stub.transcript.lock().last().cloned().unwrap();
+    assert!(picked_up(&resumed), "the turn did not carry on with its record");
+    assert!(
+        anyone_said(&resumed, "And their phone number."),
+        "the second message was not carried with it"
+    );
+    assert!(h.channel_texts("Researcher").iter().any(|t| t.contains("Hours and number found.")));
+}

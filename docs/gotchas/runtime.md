@@ -119,6 +119,12 @@ code.
   every conversation it had read, answered or not. `hand_back` sorts them first:
   unread since the last tool call goes back to the queue, read before a call
   stays owed for the next host to report, and only the stopped ones end here.
+- **A message a put-down turn acted on rides in that turn's row.** As a bare
+  `put_down` row it is queued as a turn of its own, and once the carrier's
+  conversation is stopped that turn runs with no record of the calls already
+  made for it. Every way a carrier ends before its turn starts (the stop check
+  in `run_turn`, a stop while paused, a stop while draining) goes through
+  `hand_back` with what it carried.
 - **`put_down` checks the stop itself.** The check in `run_turn` is read
   before the record is written, and a stop can land between the two. Reading
   `Runs.stopped` under the lock the commit is written under is the only place

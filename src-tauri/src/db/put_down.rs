@@ -26,6 +26,7 @@ pub struct PutDown {
 #[derive(Debug, Default)]
 pub struct Recovered {
     pub resumed: Vec<PutDown>,
+    pub carried: Vec<RunId>,
     pub steps: HashMap<RunId, u32>,
     pub guards: HashMap<RunId, RunState>,
     pub interrupted: usize,
@@ -164,6 +165,31 @@ impl Store {
 
         let (mut resumed, cut): (Vec<PutDown>, Vec<PutDown>) =
             put.into_iter().partition(|put| whole.contains_key(&put.envelope.run_id));
+        let mut carried: Vec<RunId> = Vec::new();
+        {
+            let mut stmt =
+                tx.prepare(&format!("SELECT {ENVELOPE} FROM messages m WHERE m.id=?1"))?;
+            for put in &mut resumed {
+                let mut kept = Vec::with_capacity(put.absorbed.len());
+                for id in std::mem::take(&mut put.absorbed) {
+                    let found = stmt
+                        .query_map([id.to_string()], row_to_envelope)?
+                        .next()
+                        .transpose()?
+                        .transpose()?;
+                    match found {
+                        Some(envelope) if !envelope.is_routine() => {
+                            if whole.contains_key(&envelope.run_id) {
+                                carried.push(envelope.run_id);
+                                kept.push(id);
+                            }
+                        }
+                        _ => kept.push(id),
+                    }
+                }
+                put.absorbed = kept;
+            }
+        }
         let already: HashSet<_> = resumed.iter().map(|put| put.envelope.id).collect();
         {
             let mut stmt = tx.prepare(&format!(
@@ -186,8 +212,11 @@ impl Store {
             }
         }
         {
-            let mut picked: HashSet<RunId> =
-                resumed.iter().map(|put| put.envelope.run_id).collect();
+            let mut picked: HashSet<RunId> = resumed
+                .iter()
+                .map(|put| put.envelope.run_id)
+                .chain(carried.iter().copied())
+                .collect();
             let mut stmt = tx.prepare(&format!(
                 "SELECT {ENVELOPE} FROM messages m JOIN pending_runs p ON p.message_id=m.id
                   WHERE {UNTOUCHED} ORDER BY m.created_at,m.id"
@@ -204,7 +233,8 @@ impl Store {
             resumed.extend(untouched);
             resumed.sort_by_key(|put| put.envelope.created_at);
         }
-        let picked: HashSet<RunId> = resumed.iter().map(|put| put.envelope.run_id).collect();
+        let picked: HashSet<RunId> =
+            resumed.iter().map(|put| put.envelope.run_id).chain(carried.iter().copied()).collect();
         let associated: HashSet<MessageId> =
             resumed.iter().flat_map(|put| put.absorbed.iter().copied()).collect();
 
@@ -276,7 +306,7 @@ impl Store {
                 }
             }
         }
-        Ok(Recovered { resumed, steps, guards, interrupted: anchors.len() })
+        Ok(Recovered { resumed, carried, steps, guards, interrupted: anchors.len() })
     }
 }
 

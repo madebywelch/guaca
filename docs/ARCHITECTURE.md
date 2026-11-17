@@ -307,6 +307,14 @@ a turn that cannot be told about the call would repeat it. So it stays owed in
 `pending_runs`, started and unsettled, and the next host reports it
 interrupted with Try again, as a crash would.
 
+The same holds across a restart. A drain writes a message the turn acted on
+into the turn's own `put_down` row (`absorbed`), not a row of its own, and
+`Store::recover` hands it back with that row (`Recovered::carried`), so the
+next host carries it on in the same turn, with the record. Delivered on its
+own, it would be a turn with no record of the calls already made for it, which
+is what a stop of the turn's conversation in the moments after the restart
+used to produce.
+
 The run that booked it is remembered as taken in, and it settles with no outcome
 of its own. Its answer is whatever the turn that read it went on to write, so it
 is that run's outcome that says what came of it. See *A run ends in an outcome*.
