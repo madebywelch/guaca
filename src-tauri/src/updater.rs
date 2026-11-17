@@ -385,10 +385,22 @@ pub async fn serve() -> Result<(), String> {
     let spec = host_spec()?;
     let channel = Channel::from_env()?;
     let listener = bind(Path::new(host::UPDATER_SOCKET))?;
-    if let Err(error) = retire(&docker).await {
+    let failed = take_over(listener, &docker, spec, &image, channel).await;
+    Err(format!("The socket failed: {failed}"))
+}
+
+#[cfg(unix)]
+async fn take_over(
+    listener: tokio::net::UnixListener,
+    docker: &Path,
+    spec: Spec,
+    image: &str,
+    channel: Channel,
+) -> std::io::Error {
+    if let Err(error) = retire(docker).await {
         tracing::warn!(%error, "the updater this one replaced is still there");
     }
-    let host = LocalHost::with_spec(spec, &image)
+    let host = LocalHost::with_spec(spec, image)
         .with_journal(Path::new(STATE_DIR).join("host-update.json"));
     let updater = Arc::new(Updater::new(host, Source::of(channel)));
     let starting = updater.clone();
@@ -409,12 +421,12 @@ fn bind(path: &Path) -> Result<tokio::net::UnixListener, String> {
 }
 
 #[cfg(unix)]
-pub async fn listen(
-    listener: tokio::net::UnixListener,
-    updater: Arc<Updater>,
-) -> Result<(), String> {
+pub async fn listen(listener: tokio::net::UnixListener, updater: Arc<Updater>) -> std::io::Error {
     loop {
-        let (stream, _) = listener.accept().await.map_err(|e| format!("The socket failed: {e}"))?;
+        let (stream, _) = match listener.accept().await {
+            Ok(accepted) => accepted,
+            Err(error) => return error,
+        };
         let updater = updater.clone();
         tokio::spawn(async move {
             if let Err(error) = answer(stream, &updater).await {
