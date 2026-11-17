@@ -288,8 +288,8 @@ fn client() -> &'static reqwest::Client {
 
 async fn send(url: &str, request: push::Request) -> Answer {
     let mut post = client().post(url);
-    for (name, value) in &request.headers {
-        post = post.header(*name, value);
+    for (name, value) in request.headers() {
+        post = post.header(name, value);
     }
     let response = match post.body(request.body).send().await {
         Ok(response) => response,
