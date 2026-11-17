@@ -16,7 +16,7 @@ const JS_DIALECTS = new Map([
 ]);
 
 const HASH_LINE_FILES =
-  /(^|\/)(\.gitignore|\.dockerignore|\.gitattributes|\.npmrc|\.editorconfig|\.env[^/]*|[^/]+\.(service|example|ini|conf))$/;
+  /(^|\/)(\.gitignore|\.dockerignore|\.gitattributes|\.npmrc|\.editorconfig|\.env[^/]*|_headers|_redirects|[^/]+\.(service|example|ini|conf|pub))$/;
 
 export function languageOf(path, text) {
   const name = path.slice(path.lastIndexOf("/") + 1);

@@ -3,12 +3,24 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { lineEnd, lineStarts, scanFiles } from "./grants/lex.mjs";
+import { languageOf, lineEnd, lineStarts, scanFiles } from "./grants/lex.mjs";
 
 export const LEDGER = "grants.json";
-export const PROSE = /\.(md|mdx|markdown|rst|adoc|txt)$/i;
+export const PROSE = /(\.(md|mdx|markdown|rst|adoc|asciidoc|txt|text|org|html?)|(^|\/)(LICENSE|COPYING|NOTICE)(-[^/]*)?)$/i;
+export const DATA = [
+  {
+    path: /(^|\/)Cargo\.lock$/,
+    reason: "Cargo writes it from Cargo.toml and nobody edits it by hand; a change to it is reviewed through the manifest that caused it",
+  },
+  {
+    path: /(^|\/)patches\/[^/]+\.patch$/,
+    reason: "pnpm applies it to a published package; its lines are that package's source in that package's language, not this repository's code",
+  },
+];
 const KINDS = new Set(["comment", "suppression", "document"]);
 const GRANT_COMMAND = "node " + relative(process.cwd(), fileURLToPath(import.meta.url)) + " grant";
+const READERS = relative(process.cwd(), fileURLToPath(new URL("./grants/lex.mjs", import.meta.url)));
+const DATA_LIST = relative(process.cwd(), fileURLToPath(import.meta.url));
 
 const DIRECTIVES = [
   (unit) => unit.line === 1 && unit.raw.startsWith("#!"),
@@ -51,6 +63,12 @@ const FIXES = {
     "A comment. If it states a constraint, encode it as a type, an assertion or a test that fails when it is broken. If it explains why, put that in the commit message. If it excuses a workaround, fix the cause.",
   suppression:
     "A suppression. Fix what the check found and delete the suppression. A skipped or focused test: make it pass in the gate, or delete it. A sleep in a test or script: wait on the event if the system offers one; otherwise poll the real condition in a loop whose bound the lint can see, a counted for loop or one that reads the clock, and that re-checks the condition each attempt.",
+  unread:
+    "A text file of a type the lint has no reader for, so it cannot see what the file says. Add a reader for the type to languageOf in " +
+    READERS +
+    ", or, if the file is data that carries no words of ours, add it to DATA in " +
+    DATA_LIST +
+    " with the reason.",
   document:
     "A new prose file. Say it where it is enforced or read instead: a rule becomes a check or a test, history goes in the commit message, and design goes in the section of an existing document that docs/ROUTING.md names.",
 };
@@ -249,6 +267,21 @@ function asText(buffer) {
   return buffer.includes(0) ? null : buffer.toString("utf8");
 }
 
+export function classOf(path, text) {
+  if (text === null) return "binary";
+  if (languageOf(path, text)) return "code";
+  if (PROSE.test(path)) return "prose";
+  if (DATA.some((entry) => entry.path.test(path))) return "data";
+  if (text.trim() === "") return "empty";
+  return null;
+}
+
+function touchedPaths(repo, base, head, changes) {
+  const args = ["diff", "-M", "--name-only", "--diff-filter=ACMRT", "--no-ext-diff", base];
+  if (head) args.push(head);
+  return new Set([...changes.keys(), ...git(repo, args).split("\n").filter(Boolean)]);
+}
+
 export function upstreamOf(ledger) {
   const entries = ledger?.upstream ?? [];
   return (path) =>
@@ -325,8 +358,13 @@ export function check(repo, { base, head = null, ledgerOverride, proseByDiff = f
   const changes = changedLines(repo, base, head);
   const grants = ledger?.grants ?? [];
   const grantFiles = grants.filter((grant) => grant.kind !== "document").map((grant) => grant.path);
-  const wanted = [...new Set([...changes.keys(), ...grantFiles])].filter((path) => !upstream(path));
+  const touched = [...touchedPaths(repo, base, head, changes)].filter((path) => !upstream(path));
+  const wanted = [...new Set([...touched, ...grantFiles])].filter((path) => !upstream(path));
   const blobs = readBlobs(repo, head, wanted);
+  for (const path of touched) {
+    const blob = blobs.get(path);
+    if (blob && classOf(path, asText(blob)) === null) findings.push({ path, line: null, kind: "unread", what: "no reader for this type" });
+  }
   const texts = [];
   for (const [path, blob] of blobs) {
     const text = asText(blob);
@@ -495,6 +533,7 @@ export function report(result, base) {
   for (const problem of problems) out.push(problem.path + "  " + problem.message);
   const kinds = new Set(findings.map((finding) => finding.kind));
   if (kinds.size > 0) out.push("");
+  if (kinds.has("unread")) out.push(FIXES.unread);
   for (const kind of ["comment", "suppression", "document"]) {
     if (!kinds.has(kind)) continue;
     const target = kind === "document" ? "<file>" : "<file>:<line>";
@@ -507,7 +546,11 @@ function annotate(result) {
   if (!process.env.GITHUB_ACTIONS) return;
   for (const finding of result.findings) {
     const line = finding.line ? ",line=" + finding.line : "";
-    console.log("::error file=" + finding.path + line + "::" + (finding.kind === "document" ? "new document" : finding.what) + " needs the owner's grant");
+    const message =
+      finding.kind === "unread"
+        ? "no reader for this file type; add one, or list the file as data with the reason"
+        : (finding.kind === "document" ? "new document" : finding.what) + " needs the owner's grant";
+    console.log("::error file=" + finding.path + line + "::" + message);
   }
   if (result.ledgerChanges?.length) {
     console.log("::warning file=" + LEDGER + ",title=Grants changed::" + result.ledgerChanges.length + " ledger changes; read them before merging");
