@@ -168,14 +168,11 @@ pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
     let builder = builder.activate_ignoring_other_apps(false);
-    builder
+    let app = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .on_window_event(hide_rather_than_quit)
         .setup(|app| {
-            if let Err(err) = crate::notifications::install(app.handle()) {
-                tracing::warn!(%err, "banner clicks will not reach the window this session");
-            }
             let journal = app.path().app_data_dir()?.join("host-update.json");
             std::fs::create_dir_all(journal.parent().unwrap())?;
             app.manage(
@@ -224,17 +221,24 @@ pub fn run() {
             save_group_export,
         ])
         .build(tauri::generate_context!())
-        .expect("could not run Guaca")
-        .run(|app, event| {
-            if let tauri::RunEvent::Exit = event {
-                crate::notifications::shutdown(app);
+        .expect("could not run Guaca");
+    let mut observer = crate::notifications::install(app.handle())
+        .inspect_err(|err| {
+            tracing::warn!(%err, "banner clicks will not reach the window this session");
+        })
+        .ok();
+    app.run(move |app, event| {
+        if let tauri::RunEvent::Exit = event {
+            if let Some(observer) = observer.take() {
+                crate::notifications::shutdown(observer);
             }
-            if let tauri::RunEvent::ExitRequested { api, .. } = event {
-                if app.state::<LocalHost>().is_updating() {
-                    api.prevent_exit();
-                }
+        }
+        if let tauri::RunEvent::ExitRequested { api, .. } = event {
+            if app.state::<LocalHost>().is_updating() {
+                api.prevent_exit();
             }
-        });
+        }
+    });
 }
 
 #[derive(serde::Serialize)]
