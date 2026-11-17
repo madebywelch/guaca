@@ -5980,6 +5980,13 @@ input[type="file"]:disabled {
   user-select: all;
 }
 
+.webhook__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
 .history {
   list-style: none;
   margin: 0;

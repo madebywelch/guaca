@@ -453,6 +453,7 @@ export const api = {
   routineRuns: (id: RoutineId) => invoke<RoutineRun[]>("routine_runs", { id }),
 
   webhookAddress: () => invoke<WebhookAddress>("webhook_address"),
+  revealWebhookSecret: () => invoke<string>("reveal_webhook_secret"),
 
   deleteRoutine: (id: RoutineId) => invoke<void>("delete_routine", { id }),
   usageSummary: () => invoke<GroupUsage[]>("usage_summary"),

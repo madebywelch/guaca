@@ -579,10 +579,10 @@ fn build(
             d.system_prompt = member.prompt.to_string();
         }
         let card = store.create_agent(&d).unwrap();
-        if !e2b.api_key.trim().is_empty() {
+        if !e2b.api_key.expose().trim().is_empty() {
             store.set_has_computer(card.id, true).unwrap();
         }
-        if !kernel.api_key.trim().is_empty() {
+        if !kernel.api_key.expose().trim().is_empty() {
             store.set_has_browser(card.id, true).unwrap();
         }
         ids.insert(member.name.to_string(), card.id);

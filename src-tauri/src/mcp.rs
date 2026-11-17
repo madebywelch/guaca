@@ -95,7 +95,7 @@ pub enum Transport {
 pub struct Dial<'a> {
     pub endpoint: &'a str,
     pub token: Option<&'a str>,
-    pub headers: &'a [(String, String)],
+    pub headers: &'a [(String, crate::secrets::Secret)],
     pub legacy_transport: bool,
 }
 
@@ -113,7 +113,7 @@ impl<'a> Dial<'a> {
 pub struct Session {
     pub endpoint: String,
     pub token: Option<crate::secrets::Secret>,
-    headers: Vec<(String, String)>,
+    headers: Vec<(String, crate::secrets::Secret)>,
     pub era: Era,
     pub transport: Transport,
     pub session_id: Option<String>,
@@ -600,7 +600,7 @@ fn client_info() -> serde_json::Value {
 struct Wire<'a> {
     endpoint: &'a str,
     token: Option<&'a str>,
-    extra: &'a [(String, String)],
+    extra: &'a [(String, crate::secrets::Secret)],
     version: String,
     modern: bool,
     session_id: Option<&'a str>,
@@ -649,7 +649,7 @@ async fn post(
         .header("accept", "application/json, text/event-stream")
         .header("mcp-protocol-version", &wire.version);
     for (name, value) in wire.extra {
-        request = request.header(name.as_str(), value.as_str());
+        request = request.header(name.as_str(), value.expose());
     }
     if let Some(token) = wire.token {
         request = request.header("authorization", format!("Bearer {token}"));
@@ -775,7 +775,7 @@ async fn notify(
         .header("accept", "application/json, text/event-stream")
         .header("mcp-protocol-version", session.version());
     for (name, value) in &session.headers {
-        request = request.header(name.as_str(), value.as_str());
+        request = request.header(name.as_str(), value.expose());
     }
     if let Some(token) = &session.token {
         request = request.header("authorization", format!("Bearer {}", token.expose()));
@@ -803,7 +803,7 @@ async fn sse_exchange(
     let work = async {
         let mut request = http.get(endpoint).header("accept", "text/event-stream");
         for (name, value) in dial.headers {
-            request = request.header(name.as_str(), value.as_str());
+            request = request.header(name.as_str(), value.expose());
         }
         if let Some(token) = dial.token {
             request = request.header("authorization", format!("Bearer {token}"));
@@ -923,7 +923,7 @@ async fn post_message(
         .header("content-type", "application/json")
         .header("accept", "application/json, text/event-stream");
     for (name, value) in dial.headers {
-        request = request.header(name.as_str(), value.as_str());
+        request = request.header(name.as_str(), value.expose());
     }
     if let Some(token) = dial.token {
         request = request.header("authorization", format!("Bearer {token}"));
@@ -1227,6 +1227,13 @@ fn decode(content_type: &str, body: &str) -> Option<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_dial_carries_header_values_as_secrets() {
+        let headers = [("x-api-key".to_string(), crate::secrets::Secret::new("abc"))];
+        let dial = Dial { headers: &headers, ..Dial::to("https://mcp.example") };
+        assert_eq!(dial.headers[0].1.expose(), "abc");
+    }
 
     #[test]
     fn discovery_page_transitions_are_bounded() {

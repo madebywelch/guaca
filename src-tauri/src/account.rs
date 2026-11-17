@@ -484,16 +484,16 @@ impl Account {
 
     pub async fn connectors(&self) -> Result<Connectors, AccountError> {
         let token = self.access().await?;
-        self.fetch_connectors(&token).await
+        self.fetch_connectors(token.expose()).await
     }
 
-    pub async fn access(&self) -> Result<String, AccountError> {
+    pub async fn access(&self) -> Result<Secret, AccountError> {
         if self.has_broker() {
-            return Ok(self.broker_token()?.to_owned());
+            return Ok(self.broker_token()?.into());
         }
         let stored = self.tokens.lock().stored().cloned().ok_or(AccountError::NotSignedIn)?;
         if !stored.expiring() {
-            return Ok(stored.access_token.expose().to_string());
+            return Ok(stored.access_token.clone());
         }
 
         let _gate = self.renewing.lock().await;
@@ -503,11 +503,11 @@ impl Account {
             (state.stored().cloned().ok_or(AccountError::NotSignedIn)?, state.generation)
         };
         if !stored.expiring() {
-            return Ok(stored.access_token.expose().to_string());
+            return Ok(stored.access_token.clone());
         }
 
         let Some(refresh_token) = stored.refresh_token.clone() else {
-            return Ok(stored.access_token.expose().to_string());
+            return Ok(stored.access_token.clone());
         };
 
         match self.refresh(&stored, refresh_token.expose(), generation).await {
@@ -517,7 +517,7 @@ impl Account {
                     %err,
                     "using the stored account token: its refresh could not be reached"
                 );
-                Ok(stored.access_token.expose().to_string())
+                Ok(stored.access_token.clone())
             }
             Err(err) => {
                 tracing::warn!(%err, origin = %self.origin, "the account refused to renew");
@@ -531,7 +531,7 @@ impl Account {
         stored: &Stored,
         refresh_token: &str,
         generation: u64,
-    ) -> Result<String, AccountError> {
+    ) -> Result<Secret, AccountError> {
         let issued = oauth::post_token(
             &oauth::http()?,
             &stored.token_endpoint,
@@ -544,7 +544,7 @@ impl Account {
         )
         .await?;
 
-        let access_token = issued.access_token.expose().to_string();
+        let access_token = issued.access_token.clone();
         self.store(
             false,
             generation,

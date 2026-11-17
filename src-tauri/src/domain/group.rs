@@ -196,7 +196,7 @@ impl GroupInference {
             out.base_url = url.clone();
         }
         if let Some(key) = &self.api_key {
-            out.api_key = key.expose().to_string();
+            out.api_key = key.clone();
         }
         if let Some(model) = &self.overrides.default_model {
             out.default_model = model.clone();
@@ -535,7 +535,7 @@ mod tests {
 
         assert_eq!(resolved.provider, Provider::Compatible);
         assert_eq!(resolved.base_url, "http://localhost:1234/v1");
-        assert_eq!(resolved.api_key, "group-key");
+        assert_eq!(resolved.api_key.expose(), "group-key");
         assert_eq!(resolved.default_model, "anthropic/claude-sonnet-4.5");
     }
 
@@ -609,11 +609,11 @@ mod tests {
             },
             api_key: Some("crew-key".into()),
         };
-        let app = InferenceConfig { api_key: String::new(), ..on_subscription() };
+        let app = InferenceConfig { api_key: Default::default(), ..on_subscription() };
 
         let lent = crew.endpoint(&app);
         assert_eq!(lent.base_url, "https://openrouter.ai/api/v1");
-        assert_eq!(lent.api_key, "crew-key");
+        assert_eq!(lent.api_key.expose(), "crew-key");
         assert_eq!(lent.default_model, "deepseek/deepseek-v4.1-flash");
         assert_eq!(lent.active_model(), "deepseek/deepseek-v4.1-flash");
         assert_eq!(crew.apply(&app).provider, Provider::Chatgpt);
@@ -623,7 +623,7 @@ mod tests {
     #[test]
     fn a_group_with_no_key_of_its_own_lends_the_apps() {
         let lent = GroupInference::default().endpoint(&on_subscription());
-        assert_eq!(lent.api_key, "app-key");
+        assert_eq!(lent.api_key.expose(), "app-key");
         assert_eq!(lent.base_url, on_subscription().base_url);
         assert_eq!(lent.default_model, "anthropic/claude-sonnet-4.5");
     }

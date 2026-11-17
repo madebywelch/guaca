@@ -30,7 +30,7 @@ fn app_dir() -> Option<std::path::PathBuf> {
 fn configured() -> Option<guac_lib::config::AppConfig> {
     let raw = std::fs::read_to_string(app_dir()?.join("config.json")).ok()?;
     let config: guac_lib::config::AppConfig = serde_json::from_str(&raw).ok()?;
-    (!config.e2b.api_key.trim().is_empty()).then_some(config)
+    (!config.e2b.api_key.expose().trim().is_empty()).then_some(config)
 }
 
 fn credentials_holding(var: &str) -> Option<ProcessEnv> {
@@ -46,11 +46,11 @@ fn credentials_holding(var: &str) -> Option<ProcessEnv> {
 struct Machine {
     client: E2bClient,
     id: String,
-    token: String,
+    token: guac_lib::secrets::Secret,
 }
 
 impl Machine {
-    async fn start(env: ProcessEnv, key: &str) -> Machine {
+    async fn start(env: ProcessEnv, key: &guac_lib::secrets::Secret) -> Machine {
         let client = E2bClient::new(key).expect("an E2B key is configured").with_env(env);
         let sandbox = client.create("connector-test", 300).await.expect("a machine to work on");
         Machine { client, id: sandbox.id, token: sandbox.envd_token }

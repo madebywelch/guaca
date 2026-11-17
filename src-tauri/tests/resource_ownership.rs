@@ -101,11 +101,13 @@ async fn operator_deletion_never_clears_a_concurrent_replacement() {
 
     assert!(
         computer_after.sandbox_id.as_deref() == Some("new-computer")
-            && computer_after.sandbox_envd_token.as_deref() == Some("new")
+            && computer_after.sandbox_envd_token.as_ref().map(guac_lib::secrets::Secret::expose)
+                == Some("new")
             && browser_after.browser_id.as_deref() == Some("new-browser"),
         "computer: {:?}, token present: {}, browser: {:?}",
         computer_after.sandbox_id,
-        computer_after.sandbox_envd_token.as_deref() == Some("new"),
+        computer_after.sandbox_envd_token.as_ref().map(guac_lib::secrets::Secret::expose)
+            == Some("new"),
         browser_after.browser_id
     );
 }

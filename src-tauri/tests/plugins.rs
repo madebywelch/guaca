@@ -774,7 +774,10 @@ mod account_backed {
             group,
             &PluginKind::Google,
             &format!("{}/mcp", server.base()),
-            plugins::Credential::Account(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            plugins::Credential::Account(plugins::AccountUse {
+                token: &ACCOUNT.into(),
+                connection: "",
+            }),
             &Headers::none(),
             &Landing::Loopback,
             |_| panic!("an account-backed plugin must not send anyone to a browser"),
@@ -803,7 +806,7 @@ mod account_backed {
             &PluginKind::Google,
             &endpoint,
             plugins::Credential::Account(plugins::AccountUse {
-                token: ACCOUNT,
+                token: &ACCOUNT.into(),
                 connection: "work",
             }),
             &Headers::none(),
@@ -823,7 +826,7 @@ mod account_backed {
             &PluginKind::Google,
             &endpoint,
             plugins::Credential::Account(plugins::AccountUse {
-                token: ACCOUNT,
+                token: &ACCOUNT.into(),
                 connection: "personal",
             }),
             &Headers::none(),
@@ -855,7 +858,10 @@ mod account_backed {
             group,
             &PluginKind::Google,
             &endpoint,
-            plugins::Credential::Account(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            plugins::Credential::Account(plugins::AccountUse {
+                token: &ACCOUNT.into(),
+                connection: "",
+            }),
             &Headers::none(),
             &Landing::Loopback,
             |_| Ok(()),
@@ -909,7 +915,10 @@ mod account_backed {
             group,
             &PluginKind::Google,
             &endpoint,
-            plugins::Credential::Account(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            plugins::Credential::Account(plugins::AccountUse {
+                token: &ACCOUNT.into(),
+                connection: "",
+            }),
             &Headers::none(),
             &Landing::Loopback,
             |_| Ok(()),
@@ -925,7 +934,7 @@ mod account_backed {
                 kind: &PluginKind::Google,
                 endpoint: &endpoint,
                 account: plugins::Held::Token(plugins::AccountUse {
-                    token: ACCOUNT,
+                    token: &ACCOUNT.into(),
                     connection: "",
                 }),
             },
@@ -949,7 +958,10 @@ mod account_backed {
             group,
             &PluginKind::Google,
             &endpoint,
-            plugins::Credential::Account(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            plugins::Credential::Account(plugins::AccountUse {
+                token: &ACCOUNT.into(),
+                connection: "",
+            }),
             &Headers::none(),
             &Landing::Loopback,
             |_| Ok(()),
@@ -986,7 +998,10 @@ mod account_backed {
             group,
             &PluginKind::Google,
             &endpoint,
-            plugins::Credential::Account(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            plugins::Credential::Account(plugins::AccountUse {
+                token: &ACCOUNT.into(),
+                connection: "",
+            }),
             &Headers::none(),
             &guac_lib::oauth::Landing::Loopback,
             |_| Ok(()),
@@ -1029,7 +1044,10 @@ mod account_backed {
             group,
             &PluginKind::Google,
             &endpoint,
-            plugins::Credential::Account(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            plugins::Credential::Account(plugins::AccountUse {
+                token: &ACCOUNT.into(),
+                connection: "",
+            }),
             &Headers::none(),
             &Landing::Loopback,
             |_| Ok(()),
@@ -1052,7 +1070,7 @@ mod account_backed {
                 kind: &PluginKind::Google,
                 endpoint: &endpoint,
                 account: plugins::Held::Token(plugins::AccountUse {
-                    token: ACCOUNT,
+                    token: &ACCOUNT.into(),
                     connection: "",
                 }),
             },
@@ -1078,6 +1096,7 @@ async fn the_real_account_server_still_speaks_what_this_client_sends() {
     let Ok(token) = std::env::var("GUACA_ACCOUNT_TOKEN") else {
         panic!("set GUACA_ACCOUNT_TOKEN to an account access token");
     };
+    let token = guac_lib::secrets::Secret::from(token);
     let origin = std::env::var("GUACA_ACCOUNT_ORIGIN")
         .unwrap_or_else(|_| guac_lib::account::DEFAULT_ORIGIN.to_string());
     let endpoint = format!("{}/mcp", origin.trim_end_matches('/'));

@@ -98,8 +98,8 @@ pub enum SandboxState {
 #[derive(Clone, PartialEq)]
 pub struct Sandbox {
     pub id: String,
-    pub envd_token: String,
-    pub traffic_token: String,
+    pub envd_token: crate::secrets::Secret,
+    pub traffic_token: crate::secrets::Secret,
 }
 
 impl std::fmt::Debug for Sandbox {
@@ -163,8 +163,8 @@ pub struct E2bClient {
 }
 
 impl E2bClient {
-    pub fn new(api_key: &str) -> Option<Self> {
-        let api_key = api_key.trim();
+    pub fn new(api_key: &crate::secrets::Secret) -> Option<Self> {
+        let api_key = api_key.expose().trim();
         if api_key.is_empty() {
             return None;
         }
@@ -231,8 +231,8 @@ impl E2bClient {
             self.control(self.http.post(format!("{}/sandboxes", self.base)).json(&body)).await?;
         Ok(Sandbox {
             id: row.sandbox_id,
-            envd_token: row.envd_token.unwrap_or_default().expose().to_string(),
-            traffic_token: row.traffic_token.unwrap_or_default().expose().to_string(),
+            envd_token: row.envd_token.unwrap_or_default(),
+            traffic_token: row.traffic_token.unwrap_or_default(),
         })
     }
 
@@ -294,8 +294,8 @@ impl E2bClient {
             .await?;
         Ok(Sandbox {
             id: row.sandbox_id,
-            envd_token: row.envd_token.unwrap_or_default().expose().to_string(),
-            traffic_token: row.traffic_token.unwrap_or_default().expose().to_string(),
+            envd_token: row.envd_token.unwrap_or_default(),
+            traffic_token: row.traffic_token.unwrap_or_default(),
         })
     }
 
@@ -357,7 +357,7 @@ impl E2bClient {
     pub async fn run(
         &self,
         sandbox: &str,
-        envd_token: &str,
+        envd_token: &crate::secrets::Secret,
         command: &str,
     ) -> Result<Output, E2bError> {
         let request = process_body(command, &self.env);
@@ -367,7 +367,7 @@ impl E2bClient {
             .post(format!("{}/process.Process/Start", envd_base(sandbox)))
             .header("content-type", "application/connect+json")
             .header("connect-protocol-version", "1")
-            .header("X-Access-Token", envd_token)
+            .header("X-Access-Token", envd_token.expose())
             .body(envelope(&serde_json::to_vec(&request).unwrap_or_default()))
             .send()
             .await
@@ -385,7 +385,11 @@ impl E2bClient {
         collect_private(&body, &self.env)
     }
 
-    pub async fn start_desktop(&self, sandbox: &str, envd_token: &str) -> Result<(), E2bError> {
+    pub async fn start_desktop(
+        &self,
+        sandbox: &str,
+        envd_token: &crate::secrets::Secret,
+    ) -> Result<(), E2bError> {
         for command in [
             install_browser_shims(),
             evict_other_browsers(),
@@ -423,7 +427,7 @@ impl E2bClient {
     pub async fn open_on_desktop(
         &self,
         sandbox: &str,
-        envd_token: &str,
+        envd_token: &crate::secrets::Secret,
         program: &str,
     ) -> Result<Output, E2bError> {
         self.start_desktop(sandbox, envd_token).await?;
@@ -441,7 +445,7 @@ impl E2bClient {
     pub async fn look_at_screen(
         &self,
         sandbox: &str,
-        envd_token: &str,
+        envd_token: &crate::secrets::Secret,
         action: Option<&DesktopAction>,
     ) -> Result<Screen, E2bError> {
         self.start_desktop(sandbox, envd_token).await?;
@@ -481,7 +485,7 @@ impl E2bClient {
     pub async fn describe(
         &self,
         sandbox: &str,
-        envd_token: &str,
+        envd_token: &crate::secrets::Secret,
         viewer_port: u16,
     ) -> Result<Computer, E2bError> {
         let state = self.state(sandbox).await?;
@@ -546,7 +550,7 @@ fn process_body(command: &str, env: &crate::secrets::ProcessEnv) -> serde_json::
 pub async fn signed_in_state(
     client: &E2bClient,
     sandbox: &str,
-    envd_token: &str,
+    envd_token: &crate::secrets::Secret,
 ) -> Result<crate::domain::signin::BrowserState, E2bError> {
     let script = base64_encode(SESSION_READER.as_bytes());
     let out = client
@@ -936,6 +940,17 @@ pub fn decode_bytes(raw: &str) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_sandbox_holds_its_tokens_as_secrets() {
+        let sandbox = Sandbox {
+            id: "sbx".into(),
+            envd_token: "envd".into(),
+            traffic_token: "traffic".into(),
+        };
+        let held: [&crate::secrets::Secret; 2] = [&sandbox.envd_token, &sandbox.traffic_token];
+        assert_eq!(held.map(crate::secrets::Secret::expose), ["envd", "traffic"]);
+    }
+
     async fn state_server(response: Option<String>) -> E2bClient {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -951,7 +966,7 @@ mod tests {
                 std::future::pending::<()>().await;
             }
         });
-        let mut client = E2bClient::new("test").unwrap();
+        let mut client = E2bClient::new(&"test".into()).unwrap();
         client.base = format!("http://{address}");
         client.http =
             reqwest::Client::builder().timeout(Duration::from_millis(100)).build().unwrap();
@@ -1387,13 +1402,13 @@ mod tests {
 
     #[test]
     fn a_blank_key_means_not_configured_rather_than_a_client_that_always_fails() {
-        assert!(E2bClient::new("   ").is_none());
-        assert!(E2bClient::new("e2b_x").is_some());
+        assert!(E2bClient::new(&"   ".into()).is_none());
+        assert!(E2bClient::new(&"e2b_x".into()).is_some());
     }
 
     #[test]
     fn a_client_and_a_sandbox_debug_without_their_credentials() {
-        let client = E2bClient::new("e2b_hunter2").unwrap();
+        let client = E2bClient::new(&"e2b_hunter2".into()).unwrap();
         let sandbox = Sandbox {
             id: "sbx".into(),
             envd_token: "envd-hunter2".into(),

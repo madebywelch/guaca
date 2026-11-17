@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
+import { COPIED_MS } from "../lib/routine";
 import type { Routine, RoutineDraft, RoutineRun, WebhookAddress } from "../lib/types";
 import { RoutineDetail } from "./RoutineDetail";
 
@@ -12,6 +12,7 @@ const setRoutineActive = vi.fn<(id: string, active: boolean) => Promise<Routine>
 const testRoutine = vi.fn<(id: string) => Promise<string>>();
 const deleteRoutine = vi.fn<(id: string) => Promise<void>>();
 const webhookAddress = vi.fn<() => Promise<WebhookAddress>>();
+const revealWebhookSecret = vi.fn<() => Promise<string>>();
 
 vi.mock("../lib/ipc", () => ({
   api: {
@@ -23,6 +24,7 @@ vi.mock("../lib/ipc", () => ({
     testRoutine: (id: string) => testRoutine(id),
     deleteRoutine: (id: string) => deleteRoutine(id),
     webhookAddress: () => webhookAddress(),
+    revealWebhookSecret: () => revealWebhookSecret(),
   },
 }));
 
@@ -69,10 +71,8 @@ describe("RoutineDetail", () => {
     setRoutineActive.mockImplementation(async (_id, active) => routine({ active }));
     testRoutine.mockResolvedValue("run-1");
     deleteRoutine.mockResolvedValue(undefined);
-    webhookAddress.mockResolvedValue({
-      url: "http://127.0.0.1:4711/events",
-      secret: "s3cr3t-s3cr3t",
-    });
+    webhookAddress.mockResolvedValue({ url: "http://127.0.0.1:4711/events" });
+    revealWebhookSecret.mockResolvedValue("s3cr3t-s3cr3t");
   });
 
   afterEach(() => {
@@ -283,15 +283,106 @@ describe("RoutineDetail", () => {
     expect(line.textContent).toContain(
       "http://127.0.0.1:4711/events/stripe/invoice.payment_failed",
     );
-    expect(line.textContent).toContain("Authorization: Bearer s3cr3t-s3cr3t");
+    expect(line.textContent).not.toContain("s3cr3t");
+    expect(revealWebhookSecret).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Show secret" }));
+    await waitFor(() => expect(line.textContent).toContain("Authorization: Bearer s3cr3t-s3cr3t"));
+    expect(revealWebhookSecret).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Show secret" })).toBeNull();
     expect(screen.queryByLabelText("Time of day")).toBeNull();
     expect(screen.queryByLabelText("Date")).toBeNull();
     expect(screen.getByRole("button", { name: "Test run" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Save changes" })).toBeNull();
   });
 
+  it("gives the curl line's actions a row of their own between the line and its hint", async () => {
+    open({ trigger: "event:stripe/invoice.payment_failed", nextRunAt: null });
+
+    const line = await screen.findByText(/curl -X POST/);
+    const actions = line.nextElementSibling as HTMLElement;
+    expect(
+      within(actions)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Show secret", "Copy"]);
+    expect(actions.nextElementSibling).toBe(screen.getByText(/The body, if there is one/));
+  });
+
+  it("hides the secret again once it has been shown", async () => {
+    open({ trigger: "event:stripe/invoice.payment_failed", nextRunAt: null });
+
+    const line = await screen.findByText(/curl -X POST/);
+    fireEvent.click(screen.getByRole("button", { name: "Show secret" }));
+    await waitFor(() => expect(line.textContent).toContain("Authorization: Bearer s3cr3t-s3cr3t"));
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide secret" }));
+    expect(line.textContent).not.toContain("s3cr3t");
+    expect(line.textContent).toContain("Authorization: Bearer ••••••••");
+    expect(screen.queryByRole("button", { name: "Hide secret" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show secret" }));
+    await waitFor(() => expect(line.textContent).toContain("Authorization: Bearer s3cr3t-s3cr3t"));
+    expect(revealWebhookSecret).toHaveBeenCalledTimes(2);
+  });
+
+  it("copies the curl line with the real secret while the line stays masked", async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    open({ trigger: "event:stripe/invoice.payment_failed", nextRunAt: null });
+
+    const line = await screen.findByText(/curl -X POST/);
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(writeText).toHaveBeenCalledWith(
+      [
+        "curl -X POST http://127.0.0.1:4711/events/stripe/invoice.payment_failed \\",
+        "  -H 'Authorization: Bearer s3cr3t-s3cr3t' \\",
+        '  -d \'{"any":"body"}\'',
+      ].join("\n"),
+    );
+    expect(revealWebhookSecret).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole("button", { name: "Copied" })).toBeTruthy();
+    expect(line.textContent).not.toContain("s3cr3t");
+    expect(screen.getByRole("button", { name: "Show secret" })).toBeTruthy();
+  });
+
+  it("goes back to Copy once the copy has been acknowledged for its while", async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    open({ trigger: "event:stripe/invoice.payment_failed", nextRunAt: null });
+    await act(async () => {});
+    await act(async () => {});
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+    await act(async () => {});
+    await act(async () => {});
+    expect(screen.getByRole("button", { name: "Copied" })).toBeTruthy();
+
+    await act(async () => vi.advanceTimersByTime(COPIED_MS - 1));
+    expect(screen.getByRole("button", { name: "Copied" })).toBeTruthy();
+    await act(async () => vi.advanceTimersByTime(1));
+    expect(screen.getByRole("button", { name: "Copy" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Copied" })).toBeNull();
+  });
+
+  it("says why the line was not copied when the secret cannot be fetched", async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    revealWebhookSecret.mockRejectedValue(new Error("The Host is not answering."));
+    open({ trigger: "event:stripe/invoice.payment_failed", nextRunAt: null });
+
+    await screen.findByText(/curl -X POST/);
+    fireEvent.click(screen.getByRole("button", { name: "Copy" }));
+
+    expect(await screen.findByText("The Host is not answering.")).toBeTruthy();
+    expect(writeText).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Copied" })).toBeNull();
+  });
+
   it("says an event can only be posted to a Host when there is no address", async () => {
-    webhookAddress.mockResolvedValue({ secret: "s3cr3t-s3cr3t" });
+    webhookAddress.mockResolvedValue({});
     open({ trigger: "event:stripe/invoice.payment_failed", nextRunAt: null });
 
     expect(

@@ -220,7 +220,7 @@ impl Runtime {
             let request = push::request(
                 delivery.format,
                 &push,
-                Some(&delivery.token),
+                Some(delivery.token.expose()),
                 Some(&delivery.link_base),
             );
             let next =
@@ -253,8 +253,12 @@ impl Runtime {
             status: None,
             created_at: now_ms(),
         };
-        let request =
-            push::request(delivery.format, &test, Some(&delivery.token), Some(&delivery.link_base));
+        let request = push::request(
+            delivery.format,
+            &test,
+            Some(delivery.token.expose()),
+            Some(&delivery.link_base),
+        );
         match send(&delivery.url, request).await {
             Answer::Accepted if delivery.format == Format::Ntfy => Ok("Sent, and the server took \
                 it. If your phone shows nothing, check that the ntfy app is subscribed to this \

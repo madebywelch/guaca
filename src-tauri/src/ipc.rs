@@ -242,6 +242,7 @@ surface! {
     pin_artifact(id: crate::domain::ids::ArtifactId, width: crate::domain::widget::Width) -> RedactedConfig,
     unpin_artifact(id: crate::domain::ids::ArtifactId) -> RedactedConfig,
     webhook_address() -> crate::commands::WebhookAddress,
+    reveal_webhook_secret() -> String,
 
     report_view(view: crate::domain::view::OperatorView, focused: Option<bool>, client: Option<String>) -> (),
     builtin_tools() -> Vec<crate::llm::tools::ToolSummary>,

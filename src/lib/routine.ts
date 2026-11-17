@@ -7,6 +7,8 @@ const MAX_EVENT_SERVICE = 48;
 const MAX_EVENT_TOPIC = 120;
 const MAX_GAP_SECS = 4_294_967_295;
 
+export const COPIED_MS = 1800;
+
 export const EVENT_CHOICE: TriggerSpec = `${EVENT_PREFIX}/`;
 
 export function eventSpec(service: string, topic: string): TriggerSpec {

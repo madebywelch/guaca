@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../lib/ipc";
 import {
   anchorFor,
+  COPIED_MS,
   choiceFor,
   clockTime,
   eventFields,
@@ -47,6 +48,8 @@ interface Editing {
 }
 
 const DEFAULT_TRIGGER = "daily";
+
+const HIDDEN_SECRET = "••••••••";
 
 function editingFor(routine: Routine): Editing {
   return {
@@ -102,6 +105,8 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
   const [note, setNote] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [address, setAddress] = useState<WebhookAddress | null>(null);
+  const [secret, setSecret] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const now = useNow(30_000);
 
   const load = useCallback(async () => {
@@ -127,6 +132,12 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), COPIED_MS);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
 
   const run = async (action: () => Promise<unknown>) => {
     setBusy(true);
@@ -431,8 +442,44 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
         {event && address?.url && parseTrigger(draft.trigger).kind === "event" && (
           <>
             <pre className="webhook">
-              {webhookLine(address.url, address.secret, event.service, event.topic)}
+              {webhookLine(address.url, secret ?? HIDDEN_SECRET, event.service, event.topic)}
             </pre>
+            <div className="webhook__actions">
+              <button
+                type="button"
+                className="btn btn--small btn--ghost"
+                onClick={() => {
+                  if (secret !== null) {
+                    setSecret(null);
+                    return;
+                  }
+                  api
+                    .revealWebhookSecret()
+                    .then(setSecret)
+                    .catch((caught) => setError(errorMessage(caught)));
+                }}
+              >
+                {secret === null ? "Show secret" : "Hide secret"}
+              </button>
+              <button
+                type="button"
+                className="btn btn--small btn--ghost"
+                onClick={() => {
+                  const url = address.url;
+                  if (!url) return;
+                  (secret === null ? api.revealWebhookSecret() : Promise.resolve(secret))
+                    .then((shown) =>
+                      navigator.clipboard.writeText(
+                        webhookLine(url, shown, event.service, event.topic),
+                      ),
+                    )
+                    .then(() => setCopied(true))
+                    .catch((caught) => setError(errorMessage(caught)));
+                }}
+              >
+                {copied ? "Copied" : "Copy"}
+              </button>
+            </div>
             <span className="field__hint">
               The body, if there is one, reaches the agent under the instruction as data. Guaca
               calls nobody and polls nothing: whatever posts this is yours to wire.

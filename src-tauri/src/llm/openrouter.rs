@@ -640,7 +640,7 @@ impl LlmClient {
         let response = self
             .http
             .post(&url)
-            .bearer_auth(cfg.api_key.trim())
+            .bearer_auth(cfg.api_key.expose().trim())
             .header("HTTP-Referer", &cfg.referer)
             .header("X-Title", &cfg.title)
             .header("Accept", "text/event-stream")

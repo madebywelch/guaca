@@ -12,7 +12,13 @@ async fn workspace() -> (SocketAddr, tempfile::TempDir) {
 }
 
 async fn workspace_beside(updater: Option<std::path::PathBuf>) -> (SocketAddr, tempfile::TempDir) {
-    let dir = tempfile::tempdir().expect("a temporary workspace");
+    workspace_in(tempfile::tempdir().expect("a temporary workspace"), updater).await
+}
+
+async fn workspace_in(
+    dir: tempfile::TempDir,
+    updater: Option<std::path::PathBuf>,
+) -> (SocketAddr, tempfile::TempDir) {
     let bound = guac_lib::server::bind(guac_lib::server::Settings {
         root: dir.path().to_path_buf(),
         bind: "127.0.0.1:0".parse().expect("a loopback address"),
@@ -172,6 +178,16 @@ async fn next_of_kind(
     >,
     wanted: &str,
 ) -> Value {
+    next_where(socket, wanted, |event| event["type"] == wanted).await
+}
+
+async fn next_where(
+    socket: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    wanted: &str,
+    matches: impl Fn(&Value) -> bool,
+) -> Value {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         let left = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -181,7 +197,7 @@ async fn next_of_kind(
         };
         let Ok(text) = message.into_text() else { continue };
         let Ok(event) = serde_json::from_str::<Value>(&text) else { continue };
-        if event["type"] == wanted {
+        if matches(&event) {
             return event;
         }
     }
@@ -822,7 +838,9 @@ async fn main_calendar_and_webhook_commands_work_on_the_remote_backend() {
     let (_, address) = call(addr, "webhook_address", json!({})).await;
     assert_eq!(address["ok"]["url"], format!("http://{addr}/events"));
     assert!(address["ok"].get("port").is_none(), "{address}");
-    let secret = address["ok"]["secret"].as_str().unwrap();
+    assert!(address["ok"].get("secret").is_none(), "{address}");
+    let (_, revealed) = call(addr, "reveal_webhook_secret", json!({})).await;
+    let secret = revealed["ok"].as_str().unwrap();
     assert!(!secret.is_empty() && secret != TOKEN);
     let client = reqwest::Client::new();
     let url = format!("http://{addr}/events/test/event");
@@ -863,13 +881,16 @@ async fn hosted_webhooks_share_delivery_keys_and_authenticate_before_validation(
         "name": "Orders", "what": "Check the order", "trigger": "event:shop/order", "inSecs": null
     }})).await;
     let routine = routine["ok"]["id"].as_str().unwrap();
-    let (_, address) = call(addr, "webhook_address", json!({})).await;
-    let secret = address["ok"]["secret"].as_str().unwrap();
+    let (_, revealed) = call(addr, "reveal_webhook_secret", json!({})).await;
+    let secret = revealed["ok"].as_str().unwrap();
     let url = format!("http://{addr}/events/shop/order");
     let client = reqwest::Client::new();
+    let unsigned = client.post(&url).header("webhook-id", "x".repeat(201)).send().await.unwrap();
+    assert_eq!(unsigned.status(), 401);
     assert_eq!(
-        client.post(&url).header("webhook-id", "x".repeat(201)).send().await.unwrap().status(),
-        401
+        unsigned.json::<Value>().await.unwrap()["error"],
+        "Send Guaca's webhook secret as `Authorization: Bearer <secret>`. It is on the page of \
+         any routine that waits on an event, under Show secret."
     );
     assert_eq!(
         client
@@ -1792,4 +1813,131 @@ async fn the_dev_ports_origin_gets_no_socket_without_the_token() {
     admitted.headers_mut().insert("Origin", "http://localhost:1420".parse().unwrap());
     let admitted = tokio_tungstenite::connect_async(admitted).await;
     assert!(admitted.is_ok(), "the token opens the channel from the app's own origin");
+}
+
+const ON_PURPOSE: [&str; 5] = [
+    "last-four hints",
+    "the local daemon token",
+    "the menu bar host token",
+    "the subscription poll handle",
+    "the webhook secret on request",
+];
+
+const REACHES_OUT: [&str; 7] = [
+    "begin_claude_signin",
+    "begin_subscription_signin",
+    "sign_in_account",
+    "account_connectors",
+    "subscription_models",
+    "test_connection",
+    "test_push",
+];
+
+#[tokio::test]
+async fn no_answer_or_event_carries_a_secret_except_the_webhook_secret_asked_for() {
+    let webhook = "webhook-secret-e8c1d4a7b9f2";
+    let dir = tempfile::tempdir().expect("a temporary workspace");
+    std::fs::create_dir_all(dir.path().join("config")).unwrap();
+    std::fs::write(
+        dir.path().join("config/config.json"),
+        json!({ "version": 1, "webhook": { "secret": webhook } }).to_string(),
+    )
+    .unwrap();
+    let (addr, _dir) = workspace_in(dir, None).await;
+    let (mut socket, _) =
+        tokio_tungstenite::connect_async(format!("ws://{addr}/v1/events?token={TOKEN}"))
+            .await
+            .expect("the event socket opens");
+
+    let keys = [
+        ("apiKey", "sk-inference-key-7k2p"),
+        ("e2bApiKey", "e2b-computer-key-9q4w"),
+        ("kernelApiKey", "sk-kernel-key-3m8x"),
+    ];
+    let mut patch = serde_json::Map::new();
+    for (field, key) in keys {
+        patch.insert(field.into(), json!(key));
+    }
+    patch.insert(
+        "delivery".into(),
+        json!({ "url": "http://127.0.0.1:9/topic", "token": "tk-delivery-token-5r1v" }),
+    );
+    let (status, _) = call(addr, "update_settings", json!({ "patch": patch })).await;
+    assert_eq!(status, 200);
+    let (_, agent) = call(addr, "create_agent", json!({ "draft": {
+        "name": "Clerk", "avatar": "avocado", "color": "#7ab55c", "model": "", "systemPrompt": "Check."
+    }})).await;
+    let agent = agent["ok"]["id"].as_str().expect("an agent").to_string();
+    call(addr, "create_routine", json!({ "agentId": agent, "draft": {
+        "name": "Orders", "what": "Check the order", "trigger": "event:shop/order", "inSecs": null
+    }}))
+    .await;
+
+    let mut answers = Vec::new();
+    for name in guac_lib::ipc::NAMES.iter().filter(|name| !REACHES_OUT.contains(name)) {
+        let (_, body) = call(addr, name, json!({})).await;
+        answers.push((name.to_string(), body));
+    }
+    call(addr, "update_settings", json!({ "patch": { "operatorName": "Last of the run" } })).await;
+    let mut events = Vec::new();
+    loop {
+        let event = next_where(&mut socket, "any", |_| true).await;
+        let last = event["type"] == "settingsChanged"
+            && event["settings"]["operatorName"] == "Last of the run";
+        events.push(event);
+        if last {
+            break;
+        }
+    }
+    let _ = socket.close(None).await;
+
+    let secrets = [
+        webhook,
+        TOKEN,
+        "sk-inference-key-7k2p",
+        "e2b-computer-key-9q4w",
+        "sk-kernel-key-3m8x",
+        "tk-delivery-token-5r1v",
+    ];
+    for (name, body) in &answers {
+        let text = body.to_string();
+        for secret in secrets {
+            if name == "reveal_webhook_secret" && secret == webhook {
+                assert_eq!(body["ok"], webhook, "the webhook secret is answered on request");
+                continue;
+            }
+            assert!(!text.contains(secret), "{name} answered with a secret: {text}");
+        }
+    }
+    for event in &events {
+        let text = event.to_string();
+        for secret in secrets {
+            assert!(!text.contains(secret), "an event carried a secret: {text}");
+        }
+    }
+    let settings = &answers.iter().find(|(name, _)| name == "get_settings").unwrap().1["ok"];
+    assert_eq!(settings["apiKeyHint"], "...7k2p");
+    assert_eq!(settings["e2bKeyHint"], "...9q4w");
+    assert_eq!(settings["kernelKeyHint"], "...3m8x");
+    assert_eq!(settings["delivery"]["tokenHint"], "...5r1v");
+    assert!(events.iter().any(|event| event["type"] == "settingsChanged"));
+}
+
+#[test]
+fn the_secret_rule_names_exactly_the_values_that_reach_the_page_on_purpose() {
+    let invariants =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/INVARIANTS.md"))
+            .expect("docs/INVARIANTS.md");
+    let rule = invariants
+        .split("\n\n")
+        .find(|paragraph| paragraph.starts_with("**A secret never reaches a model.**"))
+        .expect("the secret rule")
+        .replace('\n', " ");
+    let (_, list) = rule
+        .split_once("reach the page on purpose: ")
+        .expect("the rule names what reaches the page");
+    let (list, _) = list.split_once('.').expect("the list ends a sentence");
+    let named: std::collections::BTreeSet<&str> =
+        list.split(", ").map(|item| item.trim_start_matches("and ")).collect();
+    assert_eq!(named, ON_PURPOSE.into_iter().collect());
 }

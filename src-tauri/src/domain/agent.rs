@@ -84,9 +84,9 @@ pub struct AgentCard {
     pub skills: Vec<String>,
     pub sandbox_id: Option<String>,
     #[serde(skip_serializing)]
-    pub sandbox_envd_token: Option<String>,
+    pub sandbox_envd_token: Option<crate::secrets::Secret>,
     #[serde(skip_serializing)]
-    pub sandbox_traffic_token: Option<String>,
+    pub sandbox_traffic_token: Option<crate::secrets::Secret>,
     pub browser_id: Option<String>,
     pub has_computer: bool,
     pub has_browser: bool,
@@ -357,6 +357,21 @@ fn normalize_color(input: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_card_holds_its_sandbox_tokens_as_secrets_and_never_serializes_them() {
+        let card = AgentCard {
+            sandbox_id: Some("sbx".into()),
+            sandbox_envd_token: Some("envd-hunter2".into()),
+            sandbox_traffic_token: Some("traffic-hunter2".into()),
+            ..card()
+        };
+        let held: [Option<&crate::secrets::Secret>; 2] =
+            [card.sandbox_envd_token.as_ref(), card.sandbox_traffic_token.as_ref()];
+        assert!(held.iter().all(Option::is_some));
+        let json = serde_json::to_string(&card).unwrap();
+        assert!(json.contains("sbx") && !json.contains("hunter2"), "{json}");
+    }
 
     fn draft() -> AgentDraft {
         AgentDraft {

@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::secrets::Secret;
+
 use crate::runtime::guard::GuardLimits;
 
 pub const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
@@ -40,14 +42,14 @@ impl Provider {
     }
 }
 
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InferenceConfig {
     #[serde(default)]
     pub provider: Provider,
     pub base_url: String,
     #[serde(default)]
-    pub api_key: String,
+    pub api_key: Secret,
     pub default_model: String,
     #[serde(default = "default_subscription_model")]
     pub subscription_model: String,
@@ -86,7 +88,7 @@ impl Default for InferenceConfig {
         Self {
             provider: Provider::default(),
             base_url: DEFAULT_BASE_URL.to_string(),
-            api_key: String::new(),
+            api_key: Secret::default(),
             default_model: DEFAULT_MODEL.to_string(),
             subscription_model: default_subscription_model(),
             reasoning_effort: ReasoningEffort::default(),
@@ -122,7 +124,7 @@ impl InferenceConfig {
         match self.provider {
             Provider::Chatgpt | Provider::Claude => true,
             Provider::Compatible => {
-                !self.api_key.trim().is_empty() && !self.base_url.trim().is_empty()
+                !self.api_key.expose().trim().is_empty() && !self.base_url.trim().is_empty()
             }
         }
     }
@@ -154,7 +156,7 @@ const V0_LIMITS: GuardLimits = GuardLimits {
     max_tool_rounds: 4,
 };
 
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppConfig {
     pub version: u32,
@@ -178,11 +180,11 @@ pub struct AppConfig {
     pub delivery: DeliveryConfig,
 }
 
-#[derive(Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct DeliveryConfig {
     pub url: String,
-    pub token: String,
+    pub token: Secret,
     pub format: crate::push::Format,
     pub content: crate::push::Content,
     pub link_base: String,
@@ -206,10 +208,10 @@ impl std::fmt::Debug for DeliveryConfig {
     }
 }
 
-#[derive(Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct WebhookConfig {
-    pub secret: String,
+    pub secret: Secret,
 }
 
 impl std::fmt::Debug for WebhookConfig {
@@ -218,10 +220,10 @@ impl std::fmt::Debug for WebhookConfig {
     }
 }
 
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct E2bConfig {
-    pub api_key: String,
+    pub api_key: Secret,
     #[serde(default = "default_idle_minutes")]
     pub idle_minutes: u32,
 }
@@ -241,14 +243,14 @@ pub fn default_idle_minutes() -> u32 {
 
 impl Default for E2bConfig {
     fn default() -> Self {
-        Self { api_key: String::new(), idle_minutes: default_idle_minutes() }
+        Self { api_key: Secret::default(), idle_minutes: default_idle_minutes() }
     }
 }
 
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct KernelConfig {
-    pub api_key: String,
+    pub api_key: Secret,
     #[serde(default = "default_browser_idle_minutes")]
     pub idle_minutes: u32,
     #[serde(default)]
@@ -272,7 +274,7 @@ pub fn default_browser_idle_minutes() -> u32 {
 impl Default for KernelConfig {
     fn default() -> Self {
         Self {
-            api_key: String::new(),
+            api_key: Secret::default(),
             idle_minutes: default_browser_idle_minutes(),
             stealth: false,
         }
@@ -351,11 +353,11 @@ impl AppConfig {
     pub fn redacted(&self) -> RedactedConfig {
         RedactedConfig {
             operator_name: self.operator_name.clone(),
-            e2b_key_set: !self.e2b.api_key.trim().is_empty(),
-            e2b_key_hint: hint_for(&self.e2b.api_key),
+            e2b_key_set: !self.e2b.api_key.expose().trim().is_empty(),
+            e2b_key_hint: hint_for(self.e2b.api_key.expose()),
             computer_idle_minutes: self.e2b.idle_minutes,
-            kernel_key_set: !self.kernel.api_key.trim().is_empty(),
-            kernel_key_hint: hint_for(&self.kernel.api_key),
+            kernel_key_set: !self.kernel.api_key.expose().trim().is_empty(),
+            kernel_key_hint: hint_for(self.kernel.api_key.expose()),
             browser_idle_minutes: self.kernel.idle_minutes,
             browser_stealth: self.kernel.stealth,
             provider: self.inference.provider,
@@ -363,8 +365,8 @@ impl AppConfig {
             default_model: self.inference.default_model.clone(),
             subscription_model: self.inference.subscription_model.clone(),
             reasoning_effort: self.inference.reasoning_effort,
-            api_key_set: !self.inference.api_key.trim().is_empty(),
-            api_key_hint: hint_for(&self.inference.api_key),
+            api_key_set: !self.inference.api_key.expose().trim().is_empty(),
+            api_key_hint: hint_for(self.inference.api_key.expose()),
             request_timeout_secs: self.inference.request_timeout_secs,
             limits: self.limits,
             subscription_models: vec![crate::llm::codex::DEFAULT_MODEL.to_string()],
@@ -374,8 +376,8 @@ impl AppConfig {
             delivery: RedactedDelivery {
                 url_set: self.delivery.is_on(),
                 url_hint: url_hint(&self.delivery.url),
-                token_set: !self.delivery.token.trim().is_empty(),
-                token_hint: hint_for(&self.delivery.token),
+                token_set: !self.delivery.token.expose().trim().is_empty(),
+                token_hint: hint_for(self.delivery.token.expose()),
                 format: self.delivery.format,
                 content: self.delivery.content,
                 link_base: self.delivery.link_base.clone(),
@@ -518,13 +520,13 @@ impl AppConfig {
             self.inference.base_url = normalize_base_url(&base_url)?;
         }
         if let Some(key) = patch.e2b_api_key {
-            self.e2b.api_key = key.expose().trim().to_string();
+            self.e2b.api_key = key.expose().trim().into();
         }
         if let Some(minutes) = patch.computer_idle_minutes {
             self.e2b.idle_minutes = minutes.clamp(1, 24 * 60);
         }
         if let Some(key) = patch.kernel_api_key {
-            self.kernel.api_key = key.expose().trim().to_string();
+            self.kernel.api_key = key.expose().trim().into();
         }
         if let Some(minutes) = patch.browser_idle_minutes {
             self.kernel.idle_minutes = minutes.clamp(1, 72 * 60);
@@ -547,7 +549,7 @@ impl AppConfig {
                 };
             }
             if let Some(token) = delivery.token {
-                now.token = token.expose().trim().to_string();
+                now.token = token.expose().trim().into();
             }
             now.format = delivery.format.unwrap_or(now.format);
             now.content = delivery.content.unwrap_or(now.content);
@@ -559,7 +561,7 @@ impl AppConfig {
             }
         }
         if let Some(api_key) = patch.api_key {
-            self.inference.api_key = api_key.expose().trim().to_string();
+            self.inference.api_key = api_key.expose().trim().into();
         }
         if let Some(model) = patch.default_model {
             let trimmed = model.trim();
@@ -787,13 +789,140 @@ pub fn load(path: &Path) -> Result<AppConfig, ConfigError> {
     Ok(config)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OnDisk<'a> {
+    version: u32,
+    operator_name: &'a str,
+    inference: InferenceOnDisk<'a>,
+    limits: GuardLimits,
+    e2b: E2bOnDisk<'a>,
+    kernel: KernelOnDisk<'a>,
+    webhook: WebhookOnDisk<'a>,
+    quick_actions: &'a [crate::domain::quick::QuickAction],
+    widgets: &'a [crate::domain::widget::Widget],
+    attention: crate::domain::outbox::Attention,
+    delivery: DeliveryOnDisk<'a>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InferenceOnDisk<'a> {
+    provider: Provider,
+    base_url: &'a str,
+    api_key: &'a str,
+    default_model: &'a str,
+    subscription_model: &'a str,
+    reasoning_effort: ReasoningEffort,
+    referer: &'a str,
+    title: &'a str,
+    request_timeout_secs: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct E2bOnDisk<'a> {
+    api_key: &'a str,
+    idle_minutes: u32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KernelOnDisk<'a> {
+    api_key: &'a str,
+    idle_minutes: u32,
+    stealth: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebhookOnDisk<'a> {
+    secret: &'a str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeliveryOnDisk<'a> {
+    url: &'a str,
+    token: &'a str,
+    format: crate::push::Format,
+    content: crate::push::Content,
+    link_base: &'a str,
+}
+
+impl<'a> OnDisk<'a> {
+    fn of(config: &'a AppConfig) -> Self {
+        let AppConfig {
+            version,
+            operator_name,
+            inference,
+            limits,
+            e2b,
+            kernel,
+            webhook,
+            quick_actions,
+            widgets,
+            attention,
+            delivery,
+        } = config;
+        let InferenceConfig {
+            provider,
+            base_url,
+            api_key,
+            default_model,
+            subscription_model,
+            reasoning_effort,
+            referer,
+            title,
+            request_timeout_secs,
+        } = inference;
+        let E2bConfig { api_key: e2b_key, idle_minutes: computer_idle } = e2b;
+        let KernelConfig { api_key: kernel_key, idle_minutes: browser_idle, stealth } = kernel;
+        let WebhookConfig { secret } = webhook;
+        let DeliveryConfig { url, token, format, content, link_base } = delivery;
+        OnDisk {
+            version: *version,
+            operator_name,
+            inference: InferenceOnDisk {
+                provider: *provider,
+                base_url,
+                api_key: api_key.expose(),
+                default_model,
+                subscription_model,
+                reasoning_effort: *reasoning_effort,
+                referer,
+                title,
+                request_timeout_secs: *request_timeout_secs,
+            },
+            limits: *limits,
+            e2b: E2bOnDisk { api_key: e2b_key.expose(), idle_minutes: *computer_idle },
+            kernel: KernelOnDisk {
+                api_key: kernel_key.expose(),
+                idle_minutes: *browser_idle,
+                stealth: *stealth,
+            },
+            webhook: WebhookOnDisk { secret: secret.expose() },
+            quick_actions,
+            widgets,
+            attention: *attention,
+            delivery: DeliveryOnDisk {
+                url,
+                token: token.expose(),
+                format: *format,
+                content: *content,
+                link_base,
+            },
+        }
+    }
+}
+
 pub fn save(path: &Path, config: &AppConfig) -> Result<(), ConfigError> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|source| ConfigError::Io { path: parent.to_path_buf(), source })?;
     }
 
-    let json = serde_json::to_string_pretty(config)
+    let json = serde_json::to_string_pretty(&OnDisk::of(config))
         .map_err(|source| ConfigError::Parse { path: path.to_path_buf(), source })?;
 
     let tmp = path.with_extension("json.tmp");
@@ -819,6 +948,145 @@ fn restrict_permissions(_path: &Path) -> Result<(), ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const RELEASED_SETTINGS: &str = r#"{
+  "version": 1,
+  "operatorName": "Ada",
+  "inference": {
+    "provider": "compatible",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "apiKey": "sk-or-inference-0001",
+    "defaultModel": "anthropic/claude-sonnet-4.5",
+    "subscriptionModel": "gpt-5.1-codex",
+    "reasoningEffort": "high",
+    "referer": "https://github.com/madebywelch/guac",
+    "title": "Guac",
+    "requestTimeoutSecs": 300
+  },
+  "limits": {
+    "maxHops": 9,
+    "maxStepsPerRun": 120,
+    "maxFanoutPerCall": 6,
+    "maxSendsPerPair": 5,
+    "maxToolRounds": 30
+  },
+  "e2b": {
+    "apiKey": "e2b_computer_0002",
+    "idleMinutes": 20
+  },
+  "kernel": {
+    "apiKey": "sk_kernel_0003",
+    "idleMinutes": 90,
+    "stealth": true
+  },
+  "webhook": {
+    "secret": "webhook-secret-0004"
+  },
+  "quickActions": [
+    {
+      "id": "qa1",
+      "label": "Standup",
+      "does": {
+        "kind": "open",
+        "place": {
+          "kind": "calendar"
+        }
+      },
+      "addedBy": "operator"
+    }
+  ],
+  "widgets": [],
+  "attention": {
+    "needsYou": true,
+    "failures": false,
+    "finished": true
+  },
+  "delivery": {
+    "url": "https://ntfy.sh/guaca-topic",
+    "token": "tk_delivery_0005",
+    "format": "json",
+    "content": "generic",
+    "linkBase": "https://box.example"
+  }
+}"#;
+
+    const RELEASED_BLANK_SETTINGS: &str = r#"{
+  "version": 1,
+  "operatorName": "",
+  "inference": {
+    "provider": "compatible",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "apiKey": "",
+    "defaultModel": "anthropic/claude-sonnet-4.5",
+    "subscriptionModel": "gpt-5.6-luna",
+    "reasoningEffort": "auto",
+    "referer": "https://github.com/madebywelch/guac",
+    "title": "Guac",
+    "requestTimeoutSecs": 120
+  },
+  "limits": {
+    "maxHops": 8,
+    "maxStepsPerRun": 60,
+    "maxFanoutPerCall": 8,
+    "maxSendsPerPair": 6,
+    "maxToolRounds": 24
+  },
+  "e2b": {
+    "apiKey": "",
+    "idleMinutes": 15
+  },
+  "kernel": {
+    "apiKey": "",
+    "idleMinutes": 60,
+    "stealth": false
+  },
+  "webhook": {
+    "secret": ""
+  },
+  "quickActions": [],
+  "widgets": [],
+  "attention": {
+    "needsYou": true,
+    "failures": true,
+    "finished": true
+  },
+  "delivery": {
+    "url": "",
+    "token": "",
+    "format": "ntfy",
+    "content": "outcome",
+    "linkBase": ""
+  }
+}"#;
+
+    #[test]
+    fn a_settings_file_is_read_and_written_byte_for_byte_as_released() {
+        let dir = std::env::temp_dir().join(format!("guaca-settings-{}", uuid::Uuid::new_v4()));
+        for (name, bytes) in [("full", RELEASED_SETTINGS), ("blank", RELEASED_BLANK_SETTINGS)] {
+            let path = dir.join(format!("{name}.json"));
+            let config: AppConfig = serde_json::from_str(bytes).unwrap();
+            save(&path, &config).unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), bytes, "{name}");
+            assert_eq!(load(&path).unwrap(), config, "{name}");
+        }
+        let config: AppConfig = serde_json::from_str(RELEASED_SETTINGS).unwrap();
+        assert_eq!(config.inference.api_key.expose(), "sk-or-inference-0001");
+        assert_eq!(config.e2b.api_key.expose(), "e2b_computer_0002");
+        assert_eq!(config.kernel.api_key.expose(), "sk_kernel_0003");
+        assert_eq!(config.webhook.secret.expose(), "webhook-secret-0004");
+        assert_eq!(config.delivery.token.expose(), "tk_delivery_0005");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_config_that_holds_a_key_cannot_be_serialized() {
+        crate::secrets::assert_lacks!(serde::Serialize, AppConfig);
+        crate::secrets::assert_lacks!(serde::Serialize, InferenceConfig);
+        crate::secrets::assert_lacks!(serde::Serialize, E2bConfig);
+        crate::secrets::assert_lacks!(serde::Serialize, KernelConfig);
+        crate::secrets::assert_lacks!(serde::Serialize, WebhookConfig);
+        crate::secrets::assert_lacks!(serde::Serialize, DeliveryConfig);
+    }
 
     #[test]
     fn an_agent_may_ask_for_a_limit_and_never_for_the_endpoint_or_a_key() {
@@ -1016,7 +1284,7 @@ mod tests {
             config.delivery.url, "https://ntfy.example/t",
             "a patch that names it not keeps it"
         );
-        assert_eq!(config.delivery.token, "tk_a");
+        assert_eq!(config.delivery.token.expose(), "tk_a");
 
         let refused = config.apply(patch(serde_json::json!({ "url": "ntfy.sh/my-private-topic" })));
         let said = refused.unwrap_err().to_string();
@@ -1138,7 +1406,7 @@ mod tests {
         cfg.inference.api_key = "sk-kept".into();
         cfg.limits.max_hops = 7;
         cfg.webhook.secret = "kept-secret".into();
-        let mut older = serde_json::to_value(&cfg).unwrap();
+        let mut older = serde_json::to_value(OnDisk::of(&cfg)).unwrap();
         older["webhook"]["port"] = serde_json::json!(4711);
         fs::write(&path, older.to_string()).unwrap();
 
