@@ -1,0 +1,106 @@
+[
+  {
+    "input": "directory",
+    "expected": null
+  },
+  {
+    "input": "send_message",
+    "expected": null
+  },
+  {
+    "input": "update_memory",
+    "expected": null
+  },
+  {
+    "input": "note_progress",
+    "expected": null
+  },
+  {
+    "input": "run_command",
+    "expected": "computer"
+  },
+  {
+    "input": "open_on_desktop",
+    "expected": "computer"
+  },
+  {
+    "input": "use_screen",
+    "expected": "computer"
+  },
+  {
+    "input": "browse",
+    "expected": "browser"
+  },
+  {
+    "input": "schedule",
+    "expected": null
+  },
+  {
+    "input": "calendar",
+    "expected": null
+  },
+  {
+    "input": "artifact",
+    "expected": null
+  },
+  {
+    "input": "skill",
+    "expected": null
+  },
+  {
+    "input": "settings",
+    "expected": null
+  },
+  {
+    "input": "notebook",
+    "expected": null
+  },
+  {
+    "input": "create_agent",
+    "expected": null
+  },
+  {
+    "input": "request_permission",
+    "expected": null
+  },
+  {
+    "input": "decision",
+    "expected": null
+  },
+  {
+    "input": "ask_operator",
+    "expected": null
+  },
+  {
+    "input": "escalate",
+    "expected": null
+  },
+  {
+    "input": "attach_file",
+    "expected": null
+  },
+  {
+    "input": "write_document",
+    "expected": null
+  },
+  {
+    "input": "read_file",
+    "expected": null
+  },
+  {
+    "input": "errand",
+    "expected": null
+  },
+  {
+    "input": "google__gmail_search",
+    "expected": null
+  },
+  {
+    "input": "update_notes",
+    "expected": null
+  },
+  {
+    "input": "nonsense",
+    "expected": null
+  }
+]

@@ -3,8 +3,9 @@ import { describe, expect, it } from "vitest";
 import { ACCENTS, CHARACTERS, lookupCharacter } from "../avatars/catalog";
 import { HIREABLE, pick, STARTER_CREW, STATIONS, toDraft } from "./cafeteria";
 import { matchMentions, mentionAt } from "./mentions";
+import constants from "./mirrors/constants.json";
 
-const MAX_NAME_LEN = 48;
+const MAX_NAME_LEN = constants.maxAgentNameLength;
 
 describe("the cafeteria catalog", () => {
   it("has presets to hire", () => {

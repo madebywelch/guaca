@@ -1,0 +1,15 @@
+{
+  "stdio": "stdio:",
+  "notificationClicked": "notification-clicked",
+  "maxAgentNameLength": 48,
+  "catalog": [
+    "neon",
+    "cloudflare",
+    "linear",
+    "stripe",
+    "agentmail",
+    "supermemory",
+    "firecrawl",
+    "google"
+  ]
+}

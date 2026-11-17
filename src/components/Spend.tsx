@@ -8,11 +8,20 @@ const BARS = 32;
 
 const DWELL_MS = 260;
 
+const EXACT_DIGITS = 100;
+
+function fixed(value: number, digits: number): string {
+  const exact = value.toFixed(EXACT_DIGITS);
+  const end = exact.indexOf(".") + 1 + digits;
+  const halfway = /^50*$/.test(exact.slice(end));
+  return halfway && Number(exact[end - 1]) % 2 === 0 ? exact.slice(0, end) : value.toFixed(digits);
+}
+
 export function money(dollars: number): string {
   if (dollars >= 100) return `$${Math.round(dollars)}`;
-  if (dollars >= 1) return `$${dollars.toFixed(2)}`;
-  if (dollars >= 0.01) return `$${dollars.toFixed(3)}`;
-  return `$${dollars.toFixed(4)}`;
+  if (dollars >= 1) return `$${fixed(dollars, 2)}`;
+  if (dollars >= 0.01) return `$${fixed(dollars, 3)}`;
+  return `$${fixed(dollars, 4)}`;
 }
 
 const MIN_PRICE = 0.0001;

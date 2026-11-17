@@ -115,7 +115,7 @@ fn is_build(s: &str) -> bool {
     commit(s.strip_suffix("-dirty").unwrap_or(s))
 }
 
-fn different_builds(a: &str, b: &str) -> bool {
+pub fn different_builds(a: &str, b: &str) -> bool {
     let same = a == b || (commit(a) && commit(b) && (a.starts_with(b) || b.starts_with(a)));
     is_build(a) && is_build(b) && !same
 }

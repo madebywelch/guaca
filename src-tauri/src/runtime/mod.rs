@@ -5078,7 +5078,7 @@ impl Runtime {
         )
     }
 
-    fn credentials_named_in(&self, card: &AgentCard, command: &str) -> String {
+    pub fn credentials_named_in(&self, card: &AgentCard, command: &str) -> String {
         let named: Vec<String> = self
             .inner
             .store

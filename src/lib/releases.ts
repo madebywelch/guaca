@@ -142,7 +142,7 @@ export function sameBuild(a: string, b: string): boolean {
 
 const BUILD = /^[a-f0-9]{7,40}(-dirty)?$/;
 
-function otherBuild(a: string, b: string): boolean {
+export function otherBuild(a: string, b: string): boolean {
   return BUILD.test(a) && BUILD.test(b) && a !== b && !sameBuild(a, b);
 }
 
