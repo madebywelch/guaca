@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 import struct
 import sys
 import zlib
@@ -11,15 +12,43 @@ from pathlib import Path
 SIZE = 1024
 SUPERSAMPLE = 3
 
-PAPER = (0xFB, 0xF9, 0xF3, 255)
-INK = (0x18, 0x16, 0x10, 255)
-AMBER = (0x86, 0x56, 0x00, 255)
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def light_tokens() -> dict[str, str]:
+    css = (ROOT / "src" / "styles.css").read_text()
+    root = re.search(r"^:root \{\n(.*?)^\}", css, re.M | re.S)
+    if root is None:
+        raise SystemExit("src/styles.css has no :root block to read the icon's colors from")
+    return dict(re.findall(r"^\s*--([a-z-]+): (#[0-9a-fA-F]{6});$", root.group(1), re.M))
+
+
+def token(tokens: dict[str, str], name: str) -> tuple[int, int, int, int]:
+    if name not in tokens:
+        raise SystemExit(f"src/styles.css has no --{name} in its :root block, and the icon is drawn in it")
+    value = tokens[name]
+    return (int(value[1:3], 16), int(value[3:5], 16), int(value[5:7], 16), 255)
+
+
+TOKENS = light_tokens()
+PAPER = token(TOKENS, "ground")
+INK = token(TOKENS, "text")
+AMBER = token(TOKENS, "attention")
 
 CONTENT = 824 / 1024
 
-BOX = 64.0
-CENTER = 32.0
-RADIUS = 20.0
+def form() -> dict[str, float]:
+    ts = (ROOT / "src" / "avatars" / "form.ts").read_text()
+    block = re.search(r"^export const FORM = \{\n(.*?)^\}", ts, re.M | re.S)
+    if block is None:
+        raise SystemExit("src/avatars/form.ts has no FORM to read the icon's box from")
+    return {name: float(value) for name, value in re.findall(r"^\s*(\w+): ([0-9.]+),$", block.group(1), re.M)}
+
+
+FORM = form()
+BOX = FORM["box"]
+CENTER = FORM["center"]
+RADIUS = FORM["radius"]
 
 CORNER_N = 5.0
 
@@ -28,7 +57,7 @@ RIM = 0.6
 AX, AY = 0.80, 1.10
 SIG = ((1, 0.105, 0.0), (2, 0.022, 0.0))
 
-SWELL, FLATTEN, LEAN, WIDTH = 0.8, 0.32, 0.1, 0.7
+SWELL, FLATTEN, WIDTH = 0.8, 0.32, 0.7
 
 BIG = {
     "span": 29.0,
@@ -76,9 +105,8 @@ class Body:
 
     def __init__(self, spec: dict) -> None:
         self.gaze = spec["gaze"]
-        gx, gy = self.gaze
-        self.cx = CENTER + gx * RADIUS * LEAN
-        self.cy = CENTER + gy * RADIUS * LEAN
+        self.cx = CENTER
+        self.cy = CENTER
 
         xs, ys = [], []
         for i in range(720):

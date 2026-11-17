@@ -31,11 +31,7 @@ pub async fn find() -> Vec<Pickup> {
 }
 
 pub(crate) async fn from_claude(program: &str) -> Option<Pickup> {
-    let output = answer(program, &["auth", "status"]).await?;
-    let said = String::from_utf8_lossy(&output.stdout);
-    let document = &said[said.find('{')?..];
-    let document = &document[..=document.rfind('}')?];
-    let status: ClaudeStatus = serde_json::from_str(document).ok()?;
+    let status = answer(program, &["auth", "status"]).await?.claude_status()?;
     if !status.logged_in || !matches!(status.auth_method.as_str(), "claude.ai" | "oauth_token") {
         return None;
     }
@@ -47,18 +43,32 @@ pub(crate) async fn from_claude(program: &str) -> Option<Pickup> {
 }
 
 async fn from_codex(program: &str) -> Option<Pickup> {
-    let output = answer(program, &["login", "status"]).await?;
-    if ![&output.stdout, &output.stderr].iter().any(|stream| {
-        String::from_utf8_lossy(stream)
-            .lines()
-            .any(|line| line.trim().eq_ignore_ascii_case(CODEX_PLAN))
-    }) {
+    if !answer(program, &["login", "status"]).await?.says_line(CODEX_PLAN) {
         return None;
     }
     Some(Pickup { program: Program::Codex, account: String::new(), plan: String::new() })
 }
 
-async fn answer(program: &str, args: &[&str]) -> Option<std::process::Output> {
+struct Answer(std::process::Output);
+
+impl Answer {
+    fn claude_status(&self) -> Option<ClaudeStatus> {
+        let said = String::from_utf8_lossy(&self.0.stdout);
+        let document = &said[said.find('{')?..];
+        let document = &document[..=document.rfind('}')?];
+        serde_json::from_str(document).ok()
+    }
+
+    fn says_line(&self, expected: &str) -> bool {
+        [&self.0.stdout, &self.0.stderr].iter().any(|stream| {
+            String::from_utf8_lossy(stream)
+                .lines()
+                .any(|line| line.trim().eq_ignore_ascii_case(expected))
+        })
+    }
+}
+
+async fn answer(program: &str, args: &[&str]) -> Option<Answer> {
     let asked = tokio::process::Command::new(program)
         .args(args)
         .stdin(Stdio::null())
@@ -66,7 +76,7 @@ async fn answer(program: &str, args: &[&str]) -> Option<std::process::Output> {
         .kill_on_drop(true)
         .output();
     let answered = tokio::time::timeout(WITHIN, asked).await.ok()?.ok()?;
-    answered.status.success().then_some(answered)
+    answered.status.success().then_some(Answer(answered))
 }
 
 #[derive(Debug, Deserialize)]
@@ -96,6 +106,12 @@ mod tests {
         );
         let path = at.to_string_lossy().into_owned();
         (dir, path)
+    }
+
+    #[test]
+    fn a_program_answer_cannot_be_formatted_into_a_log_or_a_sentence() {
+        crate::secrets::assert_lacks!(std::fmt::Debug, Answer);
+        crate::secrets::assert_lacks!(std::fmt::Display, Answer);
     }
 
     #[tokio::test]

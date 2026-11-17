@@ -50,6 +50,17 @@ check "a newer pnpm passes"         "$(pnpm_verdict 10.34.1 10.33.0)" ""
 check "no pin says nothing"         "$(pnpm_verdict 8.15.4 "")" ""
 check "no version says nothing"     "$(pnpm_verdict "" 10.33.0)" ""
 
+say "the Rust version"
+floor="$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml)"
+toolchain="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+check "Cargo.toml declares a rust-version" "$([ -n "$floor" ] && echo declared)" "declared"
+check "rust-toolchain.toml pins the rust-version" "$(printf '%s' "$toolchain" | cut -d. -f1,2)" "$floor"
+images="$(git ls-files '*Dockerfile*' | xargs grep -l '^FROM rust:')"
+check "both Dockerfiles build on Rust" "$(printf '%s\n' "$images" | sort | tr '\n' ' ')" "Dockerfile Dockerfile.ci "
+for dockerfile in $images; do
+  check "$dockerfile builds on the rust-version" "$(sed -n 's/^FROM rust:\([0-9.]*\)-.*/\1/p' "$dockerfile")" "$floor"
+done
+
 if [ "$failures" -ne 0 ]; then
   printf '\n\033[1m%d version check(s) failed\033[0m\n' "$failures" >&2
   exit 1

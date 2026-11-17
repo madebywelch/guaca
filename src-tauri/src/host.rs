@@ -12,6 +12,8 @@ pub const IMAGE: &str = match option_env!("GUACA_BACKEND_IMAGE") {
     None => concat!("ghcr.io/madebywelch/guaca/guacad:", env!("CARGO_PKG_VERSION")),
 };
 
+pub const STOP_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub const UPDATER_SOCKET: &str = "/run/guaca-updater/updater.sock";
 const UPDATER_DIR: &str = "/run/guaca-updater";
 
@@ -228,11 +230,27 @@ pub fn docker_binary() -> PathBuf {
         .unwrap_or_else(|| "docker".into())
 }
 
+const STATED_ENV: [&str; 2] = ["TZ", "GUACA_UPDATER_SOCKET"];
+
+fn states_a_value(args: &[&str]) -> bool {
+    let stated = |assignment: &str| {
+        assignment.split_once('=').is_some_and(|(name, _)| !STATED_ENV.contains(&name))
+    };
+    args.windows(2).any(|pair| matches!(pair[0], "--env" | "-e") && stated(pair[1]))
+        || args.iter().any(|arg| arg.strip_prefix("--env=").is_some_and(stated))
+}
+
 pub(crate) async fn run_docker(
     binary: &Path,
     args: &[&str],
     seconds: u64,
 ) -> Result<String, String> {
+    if states_a_value(args) {
+        return Err(
+            "Guaca refused to put a variable's value on Docker's command line. Pass it by name."
+                .into(),
+        );
+    }
     let mut command = Command::new(binary);
     command.args(args).kill_on_drop(true);
     let output = tokio::time::timeout(Duration::from_secs(seconds), command.output())
@@ -900,6 +918,7 @@ impl LocalHost {
             port.map(|p| format!("127.0.0.1:{p}:8787")).unwrap_or_else(|| "127.0.0.1::8787".into());
         let label = format!("{}={}", self.spec.owner, self.spec.name);
         let workspace = format!("type=volume,src={},dst=/var/lib/guaca", self.spec.volume);
+        let stop_timeout = STOP_TIMEOUT.as_secs().to_string();
         let mut args = vec![
             "run",
             "--detach",
@@ -911,7 +930,7 @@ impl LocalHost {
             "--restart",
             "unless-stopped",
             "--stop-timeout",
-            "30",
+            &stop_timeout,
             "--publish",
             &binding,
             "--mount",
@@ -1093,8 +1112,44 @@ fn bridge_address(value: &Value) -> Result<String, String> {
 pub(crate) mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn docker_is_never_handed_a_value_it_could_echo_back() {
+        let absent = Path::new("/guaca-no-such-docker");
+        for args in [
+            ["run", "--env", "GITHUB_TOKEN=ghp_hunter2", "image"],
+            ["run", "-e", "GITHUB_TOKEN=ghp_hunter2", "image"],
+            ["run", "--env=GITHUB_TOKEN=ghp_hunter2", "--rm", "image"],
+        ] {
+            let refused = run_docker(absent, &args, 5).await.unwrap_err();
+            assert!(refused.starts_with("Guaca refused"), "{args:?} reached Docker: {refused}");
+        }
+        for args in [
+            ["run", "--env", "GITHUB_TOKEN", "image"],
+            ["run", "--env", "TZ=America/New_York", "image"],
+            ["run", "--env", "GUACA_UPDATER_SOCKET=/run/guaca-updater/updater.sock", "image"],
+        ] {
+            let error = run_docker(absent, &args, 5).await.unwrap_err();
+            assert!(error.starts_with("Docker is not installed"), "{args:?} was refused: {error}");
+        }
+    }
     async fn docker(args: &[&str], seconds: u64) -> Result<String, String> {
         run_docker(&docker_binary(), args, seconds).await
+    }
+
+    #[test]
+    fn every_way_the_daemon_is_run_gives_it_the_same_stop_timeout() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let read = |file: &str| std::fs::read_to_string(root.join(file)).unwrap();
+        let setting = |text: &str, key: &str| -> u64 {
+            let line = text.lines().map(str::trim).find_map(|line| line.strip_prefix(key));
+            let value = line.unwrap_or_else(|| panic!("no {key} line"));
+            value.trim().trim_end_matches('s').parse().unwrap()
+        };
+        let compose = setting(&read("docker-compose.yml"), "stop_grace_period:");
+        let unit = setting(&read("deploy/guacad.service"), "TimeoutStopSec=");
+        assert_eq!(compose, STOP_TIMEOUT.as_secs(), "stop_grace_period in docker-compose.yml");
+        assert_eq!(unit, STOP_TIMEOUT.as_secs(), "TimeoutStopSec in deploy/guacad.service");
     }
     #[cfg(unix)]
     async fn simulated(

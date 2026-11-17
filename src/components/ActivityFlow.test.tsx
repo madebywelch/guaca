@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { AgentCard, Envelope } from "../lib/types";
+import type { AgentCard, Envelope, Part } from "../lib/types";
 import { ActivityFlow } from "./ActivityFlow";
 
 vi.mock("../lib/ipc", () => ({
@@ -178,6 +178,31 @@ describe("ActivityFlow", () => {
     render(<ActivityFlow messages={CONVERSATION} byId={byId} />);
     expect(screen.getByText(/please review/)).toBeTruthy();
     expect(screen.getByText(/here are the holes/)).toBeTruthy();
+  });
+
+  it("names a tidy run and an event-fired routine in words written for a person", () => {
+    const system = { kind: "system" } as const;
+    const opened = (runId: string, part: Part): Envelope => ({
+      ...msg(system, agent("manager"), "", 0, runId),
+      parts: [part],
+    });
+    const { container } = render(
+      <ActivityFlow
+        messages={[
+          opened("tidy", { type: "tidy", reported: ["Sent the weekly report."], notes: [] }),
+          opened("event", {
+            type: "routine",
+            routineId: "rt1",
+            name: "Triage",
+            what: "Triage the new issue.",
+            payload: '{"title":"Login fails"}',
+          }),
+        ]}
+        byId={byId}
+      />,
+    );
+    const openers = [...container.querySelectorAll(".run__opener")].map((n) => n.textContent);
+    expect(openers).toEqual(["Triage the new issue.", "Overnight memory tidy"]);
   });
 
   it("invites a first message when nothing has happened", () => {

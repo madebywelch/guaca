@@ -27,6 +27,7 @@ pub mod plugins;
 #[cfg(any(test, feature = "probe"))]
 pub mod probe;
 pub mod probe_clock;
+#[cfg(feature = "desktop")]
 pub mod programs;
 pub mod proxy;
 pub mod push;

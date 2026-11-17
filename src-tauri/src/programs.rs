@@ -7,7 +7,7 @@ const MARK: &str = "__guaca_path__";
 
 const FLAGS: [&str; 3] = ["-l", "-i", "-c"];
 
-pub fn adopt_operator_path() {
+pub(crate) unsafe fn adopt_operator_path_while_single_threaded() {
     if cfg!(windows) {
         return;
     }
@@ -36,7 +36,7 @@ fn command() -> String {
 fn probe(shell: &str, patience: Duration) -> Option<String> {
     let (answer, wait) = std::sync::mpsc::channel();
     let running = shell.to_string();
-    std::thread::spawn(move || {
+    let asking = std::thread::spawn(move || {
         let out = std::process::Command::new(&running)
             .args(FLAGS)
             .arg(command())
@@ -48,6 +48,7 @@ fn probe(shell: &str, patience: Duration) -> Option<String> {
 
     match wait.recv_timeout(patience) {
         Ok(Ok(out)) => {
+            let _ = asking.join();
             let printed = String::from_utf8_lossy(&out.stdout);
             let found = path_in(&printed).map(str::to_string);
             if found.is_none() {
@@ -56,6 +57,7 @@ fn probe(shell: &str, patience: Duration) -> Option<String> {
             found
         }
         Ok(Err(err)) => {
+            let _ = asking.join();
             tracing::debug!(%shell, %err, "could not run the shell; keeping this app's own PATH");
             None
         }

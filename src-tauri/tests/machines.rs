@@ -1,6 +1,8 @@
 mod harness;
 
 use std::collections::HashMap;
+use std::panic::AssertUnwindSafe;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
@@ -12,6 +14,9 @@ use parking_lot::Mutex;
 use serde_json::{json, Value};
 use std::sync::OnceLock;
 
+use futures_util::FutureExt;
+use guac_lib::domain::ids::RunId;
+use guac_lib::runtime::events::{EventSink, UiEvent};
 use guac_lib::runtime::guard::GuardLimits;
 
 use harness::*;
@@ -228,6 +233,32 @@ async fn listen(app: Router) -> String {
 
 async fn quiet() -> Stub {
     serve(|_| Script::Say("nothing to say".into())).await
+}
+
+#[tokio::test]
+async fn a_run_whose_settling_panics_still_releases_its_machines() {
+    let stub = quiet().await;
+    let h = harness(&stub, &["Scout"], GuardLimits::default());
+    let run = RunId::new();
+    for _ in 0..2 {
+        h.sink.emit(UiEvent::RunSettled { run_id: run, steps_used: 0 });
+    }
+    let released = Arc::new(AtomicBool::new(false));
+    let machines = {
+        let released = released.clone();
+        live::Machines::releasing(move || released.store(true, Ordering::SeqCst))
+    };
+
+    let settling =
+        AssertUnwindSafe(live::settle_and_release(&h, run, 1, tokio::spawn(async {}), machines))
+            .catch_unwind()
+            .await;
+
+    assert!(settling.is_err(), "a run that settled twice must fail its settle check");
+    assert!(
+        released.load(Ordering::SeqCst),
+        "the settle check panicked and the machines this run started were never released"
+    );
 }
 
 #[tokio::test]

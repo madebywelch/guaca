@@ -1,6 +1,7 @@
 use chrono::{Datelike, Duration, NaiveDate, Weekday};
 use serde::{Deserialize, Serialize};
 
+use super::connector::MAX_SERVICE_LEN;
 use super::ids::{AgentId, GroupId, RoutineId, RunId};
 use super::{instant, local};
 
@@ -26,7 +27,6 @@ pub struct EventTrigger {
     pub topic: String,
 }
 
-pub const MAX_EVENT_SERVICE_LEN: usize = 48;
 pub const MAX_EVENT_TOPIC_LEN: usize = 120;
 
 impl EventTrigger {
@@ -39,7 +39,7 @@ impl EventTrigger {
         let sound = |part: &str, max: usize| {
             !part.is_empty() && part.chars().count() <= max && !part.contains(char::is_whitespace)
         };
-        if !sound(&service, MAX_EVENT_SERVICE_LEN) || !sound(&topic, MAX_EVENT_TOPIC_LEN) {
+        if !sound(&service, MAX_SERVICE_LEN) || !sound(&topic, MAX_EVENT_TOPIC_LEN) {
             return None;
         }
         Some(EventTrigger { service, topic })
@@ -544,6 +544,14 @@ mod tests {
     use super::*;
     use crate::domain::usage::Tokens;
     use chrono::NaiveTime;
+
+    #[test]
+    fn an_event_service_is_held_to_the_length_a_connector_service_is() {
+        let longest = "s".repeat(MAX_SERVICE_LEN);
+        let longer = "s".repeat(MAX_SERVICE_LEN + 1);
+        assert!(EventTrigger::parse(&format!("{longest}/push")).is_some());
+        assert!(EventTrigger::parse(&format!("{longer}/push")).is_none());
+    }
 
     fn at(y: i32, m: u32, d: u32, hour: u32, minute: u32) -> i64 {
         let date = NaiveDate::from_ymd_opt(y, m, d).unwrap();

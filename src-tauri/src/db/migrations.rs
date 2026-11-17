@@ -2232,10 +2232,108 @@ fn apply(conn: &mut Connection, target: i32) -> Result<i32, MigrationError> {
 
 #[cfg(test)]
 mod tests {
+    use sha2::{Digest, Sha256};
+
     use super::*;
+
+    const SHIPPED: &[(i32, &str)] = &[
+        (1, "6a984cc487bc5647932cec3aad2cbd58359290b7797100c4ea9251fe4bb851eb"),
+        (2, "dcbcd1421101cb230c404fd2361857082554b5a130b331e8ab90aa5705980828"),
+        (3, "523f865331509e413a9fa3f86f4b6322656af0c0bc2eb20a0d89bdb340fb97c3"),
+        (4, "74c16598ee3fc26ec8bcf28659c32eace110f8411d14534dba1730003fdc7207"),
+        (5, "35ad2c5de7a9d749b4f936ff74013e002d37d31faa7fcb6aadd2e8954907dcb6"),
+        (6, "5cf53b9b53d2f7a3a51e101b4c5ca087c3630798bb57fbae4a5c3487d55f2d76"),
+        (7, "8a35dcd5fb8943d6ea322c3ee08365d6a78167bd45b30f638fec6bee67196523"),
+        (8, "7022cb15242902fa65dffd35282713f4e77ac4428d281eab391dcec1d3ca572e"),
+        (9, "3f73ce773bfe321c89cba58eb00cbe3ec000160dce9b2251464c3fb422f934dc"),
+        (10, "ac70c6bfba910dcc11ef56242b35ab97ecb8b4651491a8ee9d036c6ebaeb6d12"),
+        (11, "266484c92f6022cb8b53eeb38f6fabb12d9586749165086907a78c3ff3c012b6"),
+        (12, "be222fcd66ab452c5b29267637b0203a6b0c82f6555f35d852f39c1e90e3ab26"),
+        (13, "53c14b1735d8f5f4386c97e8c4ed5dd6bcfbf4f0fc929716695a3db0aa4ea78e"),
+        (14, "f98f1ca920fc25c6dba8940f9b16687e053cb474e3f8c67d1136902a8946c7cb"),
+        (15, "a7930c1b9d8422865d8fd07667bf951c16f12a9368620be7d0d5d68057fbf85c"),
+        (16, "795ee36fa35b4f889be62f1a6abfc10b14d393f7311ef18ab9dd7c4ae64b8bd3"),
+        (17, "2278fc1d279ea6d867c112d5dc7afac14dcd21caffff933ac85552c2678ef465"),
+        (18, "4413427d31695a194b5d076da900fb69f4cf17f17bb8994218a8709de6150454"),
+        (19, "935158f1f50f0baa2879ddd31aead2e95579628c540cdf30c16bcc7a4212e0a1"),
+        (20, "19c24bf43fa70e735a75a22839c5bce18018c5a6485a9785f1e975461ec637e6"),
+        (21, "2777afafab7c674f770919bb6018e3f196846418d6b90fa04e9b9eb06169155f"),
+        (22, "6e371da188a98d7895ced49b816cb73486bf5fae5947db0804b5cfc491bae4c3"),
+        (23, "5984b9a700da8ad5711925979f3cc6eded552ee98b1830dcd42cfc5a5e1094db"),
+        (24, "83869063015527e8b66d6290a4ea9b1add68348566b1f39dfe12c5ea6ac5cb21"),
+        (25, "a2990dc780c1561fc312f3526b033edf271763ba246c64f87c12b9f0d0611714"),
+        (26, "0f8d7aa1387fd000e1ef2184da981b5944409b6e316d6996438f09a6f70990ab"),
+        (27, "2b4824f288e2ab2f11fb385857ad68639920220e2634fd4d5da488289ead3af3"),
+        (28, "c3016b9cfef9115df93bfc52c23330836e4a9e2e766f0d1a2c897295d5e51db1"),
+        (29, "1b1c77dc40d4d8662e65fd61e26de203d7008969e5916f14a705bada63c4980f"),
+        (30, "8ec350fa71c5c4c4f36dd5be8dc6c1502a03cb322e7327a17d6987ef9f927bac"),
+        (31, "df536302a76787050cb93a8a05fafb370f6ca58cae97e01bd9efb58c25ef31b4"),
+        (32, "e6b61c7201e9b4a634413e92e83996402def84ac0f16cde896914252099a72f2"),
+        (33, "af78e5919839786f959f3e0e950cc1fc6a736bb3d9529c0465f8508837bd64b1"),
+        (34, "4603ed626208cd5da0617261da90b828aa6c459591432681cf93a40a4ac862ab"),
+        (35, "ec15b62c84fa7d2eb1ccec6881420ecaa62d9e03f6e583972477159349f3cae9"),
+        (36, "e919b785d09f9aa6a5db930c8f575f3910ca9eb2e46ec0cb1c0b81955aac58e9"),
+        (37, "e930578adb5423a51f053462a897da33e9dbbdedf0123c33b9407be9b1ea53af"),
+        (38, "49315f4f60bbe7557b55917c5e2331d9cb63fe831f5800ec9715317a46de9c3d"),
+        (39, "bb37b5279ee64f3df34e0d09d07ba4c785a6bf84c6c9121fb27ae7d1ec2adecb"),
+        (40, "fb34a0348cea907c2de417633b2e18804d856c39f02444205211d207ed0398a2"),
+        (41, "912160045314e652e496e1c01451e335784f67f3ef98dfe4c7471ba333294ccc"),
+        (42, "d6d2c4218bdcbe0d5e05858c04a5a521997de17838ae9b2ced90504c11331fd3"),
+        (43, "5c3e2d4f1c5d0b7330fd9ccbe5e6c91e443b10828fc7436b5c7d2a7eddfcb5e3"),
+        (44, "4cbde248656b3bd75587346cfcaae00ea99161ee6205e209b685fb202b36db75"),
+        (45, "a945038da4fda22e9491d2fc36829e062f67508b0a76f5c4561f13712cee741c"),
+        (46, "e3bd5b9611e5fcbe9cb7d55acdf93343774db988f711d950602b70d94c921178"),
+        (47, "e3c9028b394c6b17487576a4d443b26304732fb9c014490f73ff848e8d49a0c2"),
+        (48, "46e62c0da668d820b68b86adf5bb26feae7fd1655ec8847e02e9d31efb2ab4bc"),
+        (49, "f990316558a91c118948006ba4d316ac656359a382c285f332c31e0bb066c837"),
+        (50, "0e52692e123098439d7ba9116ef48ea55cce42ebc6ffb34642593b38e640ac82"),
+        (51, "fe8c735cd1020598a3e7d256d3bbae9dd096522289f88cd71ff0296de9539c16"),
+        (52, "c5c96c8ab9dbbc1add1ada732005b8e4c5fc8ad451d52def1fb4f25c19c3deb2"),
+        (53, "cddfc174fa882473ae5758cf19939ca51100c3fc8a22494bd5191b5fe9afd441"),
+        (54, "169f08478086fb3114c22e97cab917e3a43bd817d46c1e9b1db5d530796b3f4b"),
+        (55, "a3274d914e764fafb0d27215625b3bcbd39518ac4b3fcd8f41862fe00f6e1697"),
+        (56, "95255c1336fc799e8f87364fb2c94e823099208426a5b98d5a8c4513dd9f5c72"),
+        (57, "f32377c01b68ee006c76e2e6f8bca1d9eb1cda617cb76e02d842411be66edfc6"),
+        (58, "7e4d837aad41f2ea81abc25d236e4f4fb13ab3b83460d13dd3a91695593f4a8b"),
+        (59, "a14b8e213249fe76f96a80201265bbc005846e37f24bc023e5d7f74b48a69ea6"),
+        (60, "8a1e86df9623ae5b53df07745b1fa67fd7de0d69213aa51b6e56462f0bf6d78d"),
+        (61, "8a3fc408e6ce6368cf95fe7dfee0fbc2405f1b9ff072c7a739aa9ec7ad3068cd"),
+        (62, "20acbbe8e39335fe0ec5e87edbc2f1de70a0f57524f74d3995c93b08800009ea"),
+        (63, "0b9f5833935a9bd53e1eb3ca62457566bd4561fa0b8e3328fb16ce54011a200f"),
+        (64, "48c5a2251ecef6f4e7756e2c8278df6517b5f4f7ff48ad100351526c7e6091c4"),
+        (65, "31faf76ccf557ed3944c48af4e9a876a1318ac0cb17da630fa14725e5be7f2ae"),
+        (66, "8233ae8683b9ad7d3b8cf31f78135ef2eb984ad07f504b8e272f57e3833d34ac"),
+        (67, "6e2536e0d553f5f2a83802d1db3f6afa752c9211d4e7ae7084c56b5c8290c103"),
+        (68, "d7cde8ec16835521384e8cac3184d19e18d861726c64206ba97d913544aa0495"),
+        (69, "074679cc92ab20d20b345a0017b1fae1eb077d313c480832de805f71034ecdea"),
+        (70, "46abf7cf6a95134a6129eaa4f81bb1d07ff1078b298e245a31a4b98679f041e0"),
+        (71, "80068e13462a6b5993c518081eec46283cca62ccdb04e9b687005baf8025b37d"),
+        (72, "2a1918451f4dd9c19675e5426158cd57694446b796dac352159c7853351b3d78"),
+        (73, "3f9b707b4dbb236177ae9d4241f7357bf256a8d4006dc34b8c57fe65c9b4da5c"),
+        (74, "49f7d0cbb84c98f6fb36d7e8f731d8e86692ac12f7eea43376dd14f43d7bd84f"),
+        (75, "9a30d07aa20886f0f09b961e1f85de7aa9cb62ff26c6ecbe4f9547b2e04b4771"),
+        (76, "dae436854f1fd4212d46ede62e65b957e757abb1e9caf09b8bd385f202113c47"),
+        (77, "868e1c3a757dc982e46c4300d6422f5d96991751fb310d6b8c7eb7ffa8be9156"),
+        (78, "fc778794fb370b571ac5821e98c871c8172fa9f933bb1bd99ca48b4b6b617b67"),
+        (79, "554ec9b4ff4a5bc9998ea33a07febc1abff3b79c452f248276987f15b1105348"),
+    ];
 
     fn memory() -> Connection {
         Connection::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn a_shipped_migration_is_never_edited() {
+        assert!(MIGRATIONS.len() >= SHIPPED.len(), "a shipped migration was removed");
+        for ((version, sql), (shipped, pinned)) in MIGRATIONS.iter().zip(SHIPPED) {
+            let digest: String =
+                Sha256::digest(sql.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect();
+            assert_eq!(
+                (*version, digest.as_str()),
+                (*shipped, *pinned),
+                "migration {shipped} has shipped and is never edited; append a new one instead"
+            );
+        }
     }
 
     #[test]
