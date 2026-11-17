@@ -325,18 +325,24 @@ async fn relay(socket: &std::path::Path, request: crate::updater::Request) -> Re
     #[cfg(unix)]
     let answer = crate::updater::ask(socket, &request).await;
     #[cfg(not(unix))]
-    let answer: Result<Value, String> = {
+    let answer: Result<Value, crate::updater::Failure> = {
         let _ = (socket, request);
-        Err("An updater is reached over a Unix socket, which this system does not have.".into())
+        Err(crate::updater::Failure::unanswered(
+            "An updater is reached over a Unix socket, which this system does not have.",
+        ))
     };
     match answer {
         Ok(mut report) => {
             report["managed"] = json!(true);
             Json(report).into_response()
         }
-        Err(message) => (
+        Err(failure) => (
             StatusCode::CONFLICT,
-            Json(json!({ "err": { "kind": "updater", "message": message } })),
+            Json(json!({ "err": {
+                "kind": "updater",
+                "reason": failure.reason,
+                "message": failure.message,
+            }})),
         )
             .into_response(),
     }

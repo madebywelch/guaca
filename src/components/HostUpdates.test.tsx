@@ -602,6 +602,7 @@ describe("a box that updates itself", () => {
         {
           err: {
             kind: "updater",
+            reason: "refused",
             message:
               "The latest release is Guaca 0.3.0, not 0.2.0. Check for updates and review it again.",
           },
@@ -616,6 +617,27 @@ describe("a box that updates itself", () => {
     expect(
       screen.getByRole("button", { name: "Back up and update host" }).hasAttribute("disabled"),
     ).toBe(false);
+  });
+
+  it("keeps the outcome unknown when the updater did not answer, whatever the host said", async () => {
+    serve(() =>
+      json(
+        {
+          err: {
+            kind: "updater",
+            reason: "unanswered",
+            message: "The updater on this box took too long to answer. Try again.",
+          },
+        },
+        409,
+      ),
+    );
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Back up and update host" }));
+    await screen.findByText(
+      "Guaca lost the Host's reply, so it can't tell whether the update started.",
+    );
+    expect(screen.queryByRole("button", { name: "Back up and update host" })).toBeNull();
   });
 
   it("does not offer a desktop a release it could not talk to afterward", async () => {
@@ -741,6 +763,10 @@ describe("a box that follows main", () => {
       "the other update was already running",
       "An update is already running. Wait for it to finish.",
     ],
+    [
+      "the updater refused in words this panel has never seen",
+      "The box is resting. Ask again later.",
+    ],
   ])(
     "shows the update another client started, and why this one did not, when %s",
     async (_, refusal) => {
@@ -762,10 +788,13 @@ describe("a box that follows main", () => {
           };
           (release as { latest: Record<string, unknown> }).latest.commit = moved;
           return Promise.resolve(
-            new Response(JSON.stringify({ err: { kind: "updater", message: refusal } }), {
-              status: 409,
-              headers: { "content-type": "application/json" },
-            }),
+            new Response(
+              JSON.stringify({ err: { kind: "updater", reason: "refused", message: refusal } }),
+              {
+                status: 409,
+                headers: { "content-type": "application/json" },
+              },
+            ),
           );
         }
         if (url.endsWith("/health")) return json(health);

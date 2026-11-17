@@ -22,6 +22,8 @@ export interface DockerStatus {
   operation?: HostOperation | null;
 }
 
+export type UpdateFailure = "refused" | "unanswered";
+
 export interface Manager {
   channel?: Channel;
   updating: boolean;
