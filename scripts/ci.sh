@@ -8,7 +8,6 @@
 #   ./scripts/ci.sh scripts  installer checks, probe unit tests, disk image layout
 #   ./scripts/ci.sh rust     just the Rust suite
 #   ./scripts/ci.sh web      just the frontend
-#   ./scripts/ci.sh formal   the model of conversation recovery across restarts
 
 set -euo pipefail
 
