@@ -23,6 +23,7 @@ what holds everywhere, are in [docs/INVARIANTS.md](docs/INVARIANTS.md).
 - Every length is named: sizes, spaces, radii, durations, easings, shadows are tokens.
 - New behavior needs a test that would fail without it. Failure paths first.
 - American spelling, everywhere this repo writes its own words.
+- No new comment, suppression or prose file without the owner's grant; `./scripts/ci.sh grants` names the fix.
 - No machine signature: no `Co-authored-by` trailer, no "Generated with" footer.
 
 ## Verify
