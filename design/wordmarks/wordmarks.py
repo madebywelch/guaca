@@ -1,6 +1,7 @@
 import base64
 import json
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -14,7 +15,36 @@ from fontTools.varLib import instancer
 ROOT = Path(__file__).resolve().parents[2]
 HERE = ROOT / "design" / "wordmarks"
 FONTS = ROOT / "node_modules" / "@fontsource-variable"
-DISPLAY = FONTS / "literata" / "files" / "literata-latin-opsz-normal.woff2"
+
+
+def covers(face: str, text: str) -> bool:
+    found = re.search(r"unicode-range: ([^;]+);", face)
+    if not found:
+        return True
+    spans = []
+    for part in found.group(1).split(","):
+        low, _, high = part.strip().removeprefix("U+").partition("-")
+        spans.append((int(low, 16), int(high or low, 16)))
+    return all(any(low <= ord(ch) <= high for low, high in spans) for ch in text)
+
+
+def display_face() -> Path:
+    tokens = re.search(r"^:root \{\n(.*?)^\}$", (ROOT / "src" / "styles.css").read_text(), re.M | re.S)
+    family = tokens and re.search(r'^  --font-display: "([^"]+)"', tokens.group(1), re.M)
+    if not family:
+        raise SystemExit("src/styles.css has no --font-display naming a family in its first :root block")
+    page = (ROOT / "src" / "page.ts").read_text()
+    for sheet in re.findall(r'^import "(@fontsource-variable/[^"]+)";$', page, re.M):
+        css = ROOT / "node_modules" / (sheet if sheet.endswith(".css") else f"{sheet}/index.css")
+        for face in re.findall(r"@font-face \{(.*?)\}", css.read_text(), re.S):
+            if (f"font-family: '{family.group(1)}';" in face and "font-style: normal;" in face
+                    and covers(face, "Guaca guaca")):
+                return css.parent / re.search(r"src: url\(\./([^)]+)\)", face).group(1)
+    raise SystemExit(f"src/page.ts loads no upright Latin face of {family.group(1)}, "
+                     "the --font-display family in src/styles.css")
+
+
+DISPLAY = display_face()
 SILHOUETTES = json.loads((ROOT / "node_modules" / ".cache" / "silhouettes.json").read_text())
 
 PAPER = {"ground": "#F5F3EE", "edge": "#E5E2DA", "raised": "#FFFFFF", "ink": "#0B0B0A",
