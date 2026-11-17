@@ -6,8 +6,14 @@
 #   ./scripts/ci.sh          everything
 #   ./scripts/ci.sh assets   just the icons and tray glyphs against their scripts
 #   ./scripts/ci.sh scripts  installer checks, probe unit tests, disk image layout
-#   ./scripts/ci.sh rust     just the Rust suite
+#   ./scripts/ci.sh rust     just the Rust suite: desktop, then daemon
+#   ./scripts/ci.sh desktop  the Rust suite with the desktop features on
+#   ./scripts/ci.sh daemon   the Rust suite built as the daemon, without Tauri
 #   ./scripts/ci.sh web      just the frontend
+#   ./scripts/ci.sh connector  the self-hosted Google connector
+#
+# CI runs these as parallel jobs (.github/workflows/ci.yml), and together they
+# are exactly `all`: a part added here and not there is a part CI never runs.
 
 set -euo pipefail
 
@@ -85,7 +91,7 @@ run_web() {
   pnpm test
 }
 
-run_rust() {
+run_desktop() {
   ensure_dist
 
   step "Rust format"
@@ -101,7 +107,9 @@ run_rust() {
     step "Native notification action ordering and shutdown"
     python3 scripts/test-notification-actions.py
   fi
+}
 
+run_daemon() {
   # The daemon is a second host over the same library, and it is built without
   # Tauri on purpose: `app.rs` expands a macro that reads dist/, so a server
   # that needed the desktop feature could not be built in a container that has
@@ -122,11 +130,19 @@ run_rust() {
   cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --features server
 }
 
+run_rust() {
+  run_desktop
+  run_daemon
+}
+
 case "${1:-all}" in
   assets) run_assets ;;
   scripts) run_scripts ;;
   web) run_web ;;
   rust) run_rust ;;
+  desktop) run_desktop ;;
+  daemon) run_daemon ;;
+  connector) run_connector ;;
   all)
     run_assets
     run_scripts
@@ -135,7 +151,7 @@ case "${1:-all}" in
     run_connector
     ;;
   *)
-    echo "usage: $0 [all|assets|scripts|web|rust]" >&2
+    echo "usage: $0 [all|assets|scripts|web|rust|desktop|daemon|connector]" >&2
     exit 2
     ;;
 esac

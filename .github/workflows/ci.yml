@@ -1,0 +1,143 @@
+# The gate, ./scripts/ci.sh, on every pull request and every push to main.
+#
+# Each job runs one part of the gate the way a laptop does, so a job that
+# passes here passes there and the other way round. The parts are the ones
+# `ci.sh` names, and together they are exactly `./scripts/ci.sh`: `web` takes
+# the parts with no Rust in them, and the Rust suite is split into the desktop
+# build and the daemon build, which share no compilation and so run side by
+# side. `image` builds the two Dockerfiles, which nothing in `ci.sh` does.
+#
+# The jobs run on the runner rather than inside Dockerfile.ci. The container
+# would rebuild its own apt layer and compile every dependency on each run,
+# while on the runner the cargo registry and target and the pnpm store are
+# cached between runs. The toolchain is the same either way: Rust from
+# rust-toolchain.toml, Node 22 as in both Dockerfiles, pnpm from package.json,
+# and the Tauri headers Dockerfile.ci installs.
+#
+# GitHub-hosted Linux runners, never the repository's own machines: a pull
+# request from a fork runs its own code here, and a fresh machine per job is
+# the only kind that code cannot leave anything behind on.
+#
+# `gate` is the one check to require. It passes only when every other job
+# passed, so a new job is a block below plus its name under `gate`'s needs,
+# and the required check never changes. docs/TESTING.md, *Continuous
+# integration*, has the rest.
+
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A newer push to a pull request cancels the run it supersedes. Every commit on
+# main keeps its own run, so each one gets a verdict.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+  # Debug info is most of a cold target's size and none of what a test asserts:
+  # a panic still names its file and line. Without it the cache stays small
+  # enough to restore quickly and the build fits the runner's disk.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  web:
+    name: web, scripts, assets, connector
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            connectors/google/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: ./scripts/ci.sh assets
+      - run: ./scripts/ci.sh scripts
+      - run: ./scripts/ci.sh web
+      - run: ./scripts/ci.sh connector
+
+  desktop:
+    name: rust desktop
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The packages Dockerfile.ci installs: Tauri's Linux backend needs them to
+      # compile even though no window opens.
+      - name: Install the Tauri headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev pkg-config
+      - run: rustup toolchain install
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: src-tauri
+      - run: ./scripts/ci.sh desktop
+
+  # Without the Tauri headers or a frontend, on purpose: the daemon promises to
+  # build without either, and a job that had them could not notice it stop.
+  daemon:
+    name: rust daemon
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: src-tauri
+      - run: ./scripts/ci.sh daemon
+
+  image:
+    name: images
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the verification image
+        run: docker build -f Dockerfile.ci -t guac-ci .
+      - name: Build the daemon image and prove it answers
+        run: ./scripts/image.sh
+
+  gate:
+    if: always()
+    needs: [web, desktop, daemon, image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Every job passed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$NEEDS" | jq -e 'all(.[]; .result == "success")' > /dev/null
