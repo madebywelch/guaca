@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { check, hashText, PROSE, report, sweep, unitsOf } from "./check-grants.mjs";
+import { approvalFor, check, hashText, PROSE, report, sweep, unitsOf } from "./check-grants.mjs";
 import { scanFiles } from "./grants/lex.mjs";
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), "check-grants.mjs");
@@ -362,7 +362,7 @@ function scenario(files, body) {
 
 const SOURCE = "export function a() {\n  const b = 1;\n  return 1;\n}\n";
 const OLD = "export function a() {\n  // an old comment\n  return 1;\n}\n";
-const approvalOf = (repo) => "grants-approved-" + hashText(readFileSync(join(repo.dir, "grants.json"), "utf8")).slice(0, 12);
+const approvalOf = (repo) => approvalFor(JSON.parse(readFileSync(join(repo.dir, "grants.json"), "utf8")));
 const grantOf = (kind, path, text, words = "keep it") => ({ kind, path, sha256: hashText(text), words, date: "2026-11-17" });
 
 describe("a change", () => {
@@ -617,6 +617,26 @@ describe("a change", () => {
     }),
   );
   it(
+    "keeps an approval when only the ledger's formatting changes",
+    scenario({ "src/a.ts": OLD }, (repo) => {
+      setLedger(repo.dir, (ledger) => ledger.grants.push(grantOf("comment", "src/a.ts", "// an old comment")));
+      const approved = approvalOf(repo);
+      const ledger = JSON.parse(readFileSync(join(repo.dir, "grants.json"), "utf8"));
+      writeFileSync(join(repo.dir, "grants.json"), JSON.stringify({ grants: ledger.grants, upstream: ledger.upstream, existing: ledger.existing }) + "\n");
+      assert.deepEqual(check(repo.dir, { base: repo.base, approvals: [approved] }).problems, []);
+    }),
+  );
+  it(
+    "treats a ledger whose formatting alone changed as unchanged",
+    scenario({ "src/a.ts": SOURCE }, (repo) => {
+      const ledger = JSON.parse(readFileSync(join(repo.dir, "grants.json"), "utf8"));
+      writeFileSync(join(repo.dir, "grants.json"), JSON.stringify({ grants: ledger.grants, upstream: ledger.upstream, existing: ledger.existing }, null, 4));
+      const result = check(repo.dir, { base: repo.base });
+      assert.deepEqual([...result.findings, ...result.problems], []);
+      assert.equal(result.approval, null);
+    }),
+  );
+  it(
     "prints a grant it removes or rewords",
     scenario({ "src/a.ts": OLD }, (repo, run) => {
       write(repo.dir, { "src/a.ts": OLD + "// an old comment\n" });
@@ -804,6 +824,156 @@ describe("the command", () => {
       const out = cli(repo, ["--base", repo.base], { GRANTS_APPROVALS: "other-label " + approvalOf(repo) });
       assert.equal(out.status, 0, out.stdout);
       assert.match(out.stdout, /GRANTS CHANGED[\s\S]*\/\/ the owner wants this/);
+    }),
+  );
+});
+
+describe("judge", () => {
+  const judgeOf = (repo, approvals = []) => check(repo.dir, { base: repo.base, head: "HEAD", approvals, judge: true }).problems;
+  const labelIn = (problems) => /judge-approved-[0-9a-f]{12}/.exec(problems.map((p) => p.message).join("\n"))?.[0];
+  for (const [what, path, text] of [
+    ["the lint", "scripts/check-grants.mjs", "export const weaker = true;\n"],
+    ["a helper of the lint", "scripts/grants/lex.mjs", "export const weaker = true;\n"],
+    ["a workflow", ".github/workflows/ci.yml", "name: ci\n"],
+    ["a new workflow", ".github/workflows/other.yml", "name: other\n"],
+  ]) {
+    it(
+      "fails a change to " + what + " until the owner approves that judge",
+      scenario({ "src/a.ts": SOURCE, "scripts/check-grants.mjs": "export const a = 1;\n", "scripts/grants/lex.mjs": "export const b = 1;\n", ".github/workflows/ci.yml": "name: gate\n" }, (repo) => {
+        write(repo.dir, { [path]: text });
+        git(repo.dir, "add", "-A");
+        git(repo.dir, "commit", "-qm", "judge");
+        const refused = judgeOf(repo);
+        assert.equal(refused.length, 1);
+        assert.equal(refused[0].path, path);
+        assert.match(refused[0].message, /never approves their own/);
+        assert.deepEqual(judgeOf(repo, [labelIn(refused)]), []);
+      }),
+    );
+  }
+  it(
+    "fails a judge deleted",
+    scenario({ "src/a.ts": SOURCE, "scripts/grants/lex.mjs": "export const b = 1;\n" }, (repo) => {
+      git(repo.dir, "rm", "-q", "scripts/grants/lex.mjs");
+      git(repo.dir, "commit", "-qm", "delete");
+      assert.match(labelIn(judgeOf(repo)) ?? "", /judge-approved-/);
+    }),
+  );
+  it(
+    "fails again when the judge changes after its approval",
+    scenario({ "src/a.ts": SOURCE, "scripts/check-grants.mjs": "export const a = 1;\n" }, (repo) => {
+      write(repo.dir, { "scripts/check-grants.mjs": "export const a = 2;\n" });
+      git(repo.dir, "commit", "-qam", "first");
+      const approved = labelIn(judgeOf(repo));
+      write(repo.dir, { "scripts/check-grants.mjs": "export const a = 3;\n" });
+      git(repo.dir, "commit", "-qam", "second");
+      const refused = judgeOf(repo, [approved]);
+      assert.equal(refused.length, 1);
+      assert.notEqual(labelIn(refused), approved);
+    }),
+  );
+  it(
+    "passes a change that leaves the judge alone",
+    scenario({ "src/a.ts": SOURCE, "scripts/check-grants.mjs": "export const a = 1;\n" }, (repo) => {
+      write(repo.dir, { "src/a.ts": SOURCE + "export const c = 3;\n" });
+      git(repo.dir, "commit", "-qam", "ordinary");
+      assert.deepEqual(judgeOf(repo), []);
+    }),
+  );
+  it(
+    "judges every commit of the pull request under pull_request_target, where the ref is main's",
+    scenario({ "src/a.ts": SOURCE, "scripts/check-grants.mjs": "export const a = 1;\n" }, (repo) => {
+      git(repo.dir, "update-ref", "refs/remotes/origin/main", "main");
+      write(repo.dir, { "scripts/check-grants.mjs": "export const a = 2;\n" });
+      git(repo.dir, "commit", "-qam", "first");
+      write(repo.dir, { "src/b.ts": SOURCE });
+      git(repo.dir, "add", "-A");
+      git(repo.dir, "commit", "-qm", "second");
+      const out = cli(repo, ["judge"], { GITHUB_EVENT_NAME: "pull_request_target", GITHUB_REF: "refs/heads/main", GITHUB_BASE_REF: "main" });
+      assert.equal(out.status, 1, out.stdout);
+      assert.match(out.stdout, /scripts\/check-grants\.mjs {2}changes the lint/);
+      assert.match(out.stdout, /the merge base with origin\/main/);
+    }),
+  );
+  it(
+    "judges the committed head from the command, not the files on disk",
+    scenario({ "src/a.ts": SOURCE, "scripts/check-grants.mjs": "export const a = 1;\n" }, (repo) => {
+      write(repo.dir, { "scripts/check-grants.mjs": "export const a = 2;\n" });
+      git(repo.dir, "commit", "-qam", "judge");
+      write(repo.dir, { "src/a.ts": SOURCE + "// only on disk\n" });
+      const refused = cli(repo, ["judge", "--base", repo.base]);
+      assert.equal(refused.status, 1, refused.stdout);
+      assert.doesNotMatch(refused.stdout, /only on disk/);
+      const label = /judge-approved-[0-9a-f]{12}/.exec(refused.stdout)[0];
+      const approved = cli(repo, ["judge", "--base", repo.base], { GRANTS_APPROVALS: "other " + label });
+      assert.equal(approved.status, 0, approved.stdout);
+    }),
+  );
+});
+
+describe("the judge workflow", () => {
+  const WORKFLOW = join(dirname(CLI), "..", ".github", "workflows", "judge.yml");
+  const unsafeIn = (text) => {
+    const lines = text.split("\n");
+    const count = (pattern) => lines.filter((line) => pattern.test(line)).length;
+    return [
+      [/^\s+(pull_request|push|workflow_run|workflow_dispatch|issue_comment|schedule):/m.test(text), "runs on an event other than pull_request_target"],
+      [!/^on:\n {2}pull_request_target:\n {4}branches: \[main\]\n/m.test(text), "is not defined by main for pull requests to main"],
+      [count(/permissions:/) !== 1 || !/^permissions:\n {2}contents: read\n\n/m.test(text), "holds a token that can do more than read the repository"],
+      [/secrets/.test(text), "names a secret"],
+      [count(/uses: actions\/checkout@/) !== count(/^\s+persist-credentials: false$/), "leaves a token in a checkout"],
+      [count(/^\s+(- )?run: \S/) !== count(/^\s+- working-directory: main$/), "runs a command outside main's checkout"],
+      [lines.some((line) => /^\s+(- )?run:.*\$\{\{/.test(line)), "expands an expression inside a command"],
+      [!/^ {10}ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}\n {10}path: head$/m.test(text), "does not read the pull request's head as data"],
+      [!/^ {8}run: node scripts\/check-grants\.mjs judge --repo \.\.\/head$/m.test(text), "does not run main's judge on the head"],
+      [!/^ {4}name: judge \(main's grants lint on the pull request\)$/m.test(text), "renames the check branch protection requires"],
+    ]
+      .filter(([broken]) => broken)
+      .map(([, reason]) => reason);
+  };
+  it("judges the head with main's lint, as data, with a read-only token and no secret", () => {
+    assert.deepEqual(unsafeIn(readFileSync(WORKFLOW, "utf8")), []);
+  });
+  for (const [reason, from, to] of [
+    ["runs on an event other than pull_request_target", "  pull_request_target:\n", "  pull_request_target:\n  push:\n"],
+    ["holds a token that can do more than read the repository", "  contents: read\n", "  contents: write\n"],
+    ["holds a token that can do more than read the repository", "    runs-on:", "    permissions:\n      pull-requests: write\n    runs-on:"],
+    ["names a secret", "GRANTS_APPROVALS: ", "TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          GRANTS_APPROVALS: "],
+    ["leaves a token in a checkout", "          path: head\n          persist-credentials: false\n", "          path: head\n"],
+    ["runs a command outside main's checkout", "      - working-directory: main\n        run: pnpm", "      - working-directory: head\n        run: pnpm"],
+    ["expands an expression inside a command", "judge --repo ../head\n", "judge --repo ../head\n      - working-directory: main\n        run: echo ${{ github.event.pull_request.title }}\n"],
+    ["does not read the pull request's head as data", "pull_request.head.sha", "pull_request.base.sha"],
+    ["does not run main's judge on the head", "judge --repo ../head", "--repo ../head"],
+    ["renames the check branch protection requires", "name: judge (main", "name: lint (main"],
+  ]) {
+    it("refuses a workflow that " + reason + " (" + to.trim().split("\n").pop().trim() + ")", () => {
+      const text = readFileSync(WORKFLOW, "utf8");
+      assert.ok(text.includes(from), from);
+      assert.ok(unsafeIn(text.replace(from, to)).includes(reason));
+    });
+  }
+});
+
+describe("hash", () => {
+  it(
+    "prints the approval a ledger needs, from its content with keys in sorted order",
+    scenario({ "src/a.ts": SOURCE }, (repo) => {
+      writeFileSync(
+        join(repo.dir, "grants.json"),
+        '{\n  "grants": [{ "words": "caf\\u00e9 \\"ok\\"", "date": "2026-11-17" }],\n  "existing": { "files": ["README.md"], "commit": "abc" }\n}\n',
+      );
+      const out = cli(repo, ["hash"]);
+      assert.equal(out.status, 0, out.stderr);
+      assert.equal(out.stdout, "grants-approved-b97fbc127c67\n");
+    }),
+  );
+  it(
+    "prints the label the check asks for",
+    scenario({ "src/a.ts": OLD }, (repo) => {
+      setLedger(repo.dir, (ledger) => ledger.grants.push(grantOf("comment", "src/a.ts", "// an old comment")));
+      const label = cli(repo, ["hash"]).stdout.trim();
+      assert.match(cli(repo, ["--base", repo.base]).stdout, new RegExp(label));
+      assert.equal(cli(repo, ["--base", repo.base], { GRANTS_APPROVALS: label }).status, 0);
     }),
   );
 });
