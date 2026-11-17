@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { money } from "../components/Spend";
+import { fieldDate } from "./calendar";
 import { readableSize } from "./files";
 import { LIMITS } from "./limits";
 import { allows } from "./plugins";
@@ -76,6 +77,19 @@ const CHECKS: Record<string, Check> = {
     );
   },
   money: each(money),
+  "occasion-field": each(
+    ({ date: [year, month, day], time }: { date: number[]; time: number[] | null }) =>
+      fieldDate({
+        startsAt: new Date(
+          year ?? 0,
+          (month ?? 1) - 1,
+          day,
+          time?.[0] ?? 0,
+          time?.[1] ?? 0,
+        ).getTime(),
+        allDay: time === null,
+      }),
+  ),
   "plain-text": (file) => {
     for (const { input, expected, rust, web } of file as {
       input: Part[];

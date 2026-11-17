@@ -6,6 +6,7 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use chrono::{Local, NaiveDate, TimeZone};
 use guac_lib::config::AppConfig;
 use guac_lib::db::Store;
 use guac_lib::domain::agent::{CleanDraft, MAX_NAME_LEN};
@@ -13,6 +14,7 @@ use guac_lib::domain::attachment::Attachment;
 use guac_lib::domain::connector::CleanConnector;
 use guac_lib::domain::envelope::Envelope;
 use guac_lib::domain::ids::AgentId;
+use guac_lib::domain::occasion::{parse_when, When};
 use guac_lib::domain::plugin::{PluginAccess, PluginKind, STDIO};
 use guac_lib::domain::routine::{human_gap, Cadence, EventTrigger, Trigger};
 use guac_lib::llm::modality::Modalities;
@@ -31,6 +33,7 @@ const CHECKS: &[(&str, Check)] = &[
     ("human-gap", gap),
     ("limits", limits),
     ("money", money),
+    ("occasion-field", occasion_field),
     ("plain-text", plain_text),
     ("plugin-access", plugin_access),
     ("plugin-call", plugin_call),
@@ -243,6 +246,34 @@ fn sizes(file: &Value) {
     each(file, |bytes: u64| {
         Attachment { digest: String::new(), name: String::new(), mime: String::new(), bytes }.size()
     });
+}
+
+#[derive(Deserialize)]
+struct Wall {
+    date: (i32, u32, u32),
+    time: Option<(u32, u32)>,
+}
+
+fn occasion_field(file: &Value) {
+    for case in file.as_array().expect("a vector file is a list of cases") {
+        let wall: Wall = parsed(&case["input"]);
+        let field: String = parsed(&case["expected"]);
+        let (year, month, day) = wall.date;
+        let (hour, minute) = wall.time.unwrap_or((0, 0));
+        let naive = NaiveDate::from_ymd_opt(year, month, day)
+            .and_then(|date| date.and_hms_opt(hour, minute, 0))
+            .expect("a vector names a real wall time");
+        let starts_at = Local
+            .from_local_datetime(&naive)
+            .single()
+            .expect("a vector names an unambiguous wall time")
+            .timestamp_millis();
+        assert_eq!(
+            parse_when(&field).unwrap_or_else(|e| panic!("{field}: {e}")),
+            When { starts_at, all_day: wall.time.is_none() },
+            "field {field}"
+        );
+    }
 }
 
 fn constants(file: &Value) {
