@@ -848,8 +848,8 @@ async fn routine_event(
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({
-                "error": "Send Guaca's webhook secret as `Authorization: Bearer <secret>`. It is \
-                          shown on any routine that waits on an event."
+                "error": "Send Guaca's webhook secret as `Authorization: Bearer <secret>`. It is on \
+                          the page of any routine that waits on an event, under Show secret."
             })),
         )
             .into_response();

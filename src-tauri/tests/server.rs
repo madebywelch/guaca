@@ -885,9 +885,12 @@ async fn hosted_webhooks_share_delivery_keys_and_authenticate_before_validation(
     let secret = revealed["ok"].as_str().unwrap();
     let url = format!("http://{addr}/events/shop/order");
     let client = reqwest::Client::new();
+    let unsigned = client.post(&url).header("webhook-id", "x".repeat(201)).send().await.unwrap();
+    assert_eq!(unsigned.status(), 401);
     assert_eq!(
-        client.post(&url).header("webhook-id", "x".repeat(201)).send().await.unwrap().status(),
-        401
+        unsigned.json::<Value>().await.unwrap()["error"],
+        "Send Guaca's webhook secret as `Authorization: Bearer <secret>`. It is on the page of \
+         any routine that waits on an event, under Show secret."
     );
     assert_eq!(
         client
