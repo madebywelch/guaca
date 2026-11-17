@@ -188,12 +188,17 @@ or an exit under a condition (an `if`, a `match` arm, a `case`, a `catch` or an
 `&&`); an exit at the top of the loop body checks nothing and does not count.
 Lines a tool reads and that silence nothing pass by rule
 (shebangs, `# syntax=`, `/// <reference>`, `@vitest-environment`, SPDX
-identifiers, `# shellcheck source=`, the version beside a pinned action, and
-`SAFETY:` directly above an `unsafe` block). Everything else needs the owner,
-and only the owner, recorded in `grants.json` by path and a hash of the exact
-text, so an unrelated edit keeps a grant and a reworded comment loses it; a
-grant that matches nothing fails, and a change to the ledger is printed for
-whoever merges. The error says what to do instead: encode a constraint as a
+identifiers, `# shellcheck source=` and the version beside a pinned action); a
+`SAFETY:` comment is a comment like any other. Everything else needs the
+owner, and only the owner, recorded in `grants.json` by path and a hash of the
+exact text, so an unrelated edit keeps a grant and a reworded comment loses it,
+and a grant that matches nothing fails. A change to the ledger fails the check
+until the owner approves that exact ledger: the approval is the pull request
+label `grants-approved-` followed by the first 12 hex digits of the SHA-256 of
+`grants.json`, which lives outside the diff, so any later edit to the ledger
+needs a new one and the author never approves their own. A push to `main`
+prints the change and passes, since `main` only takes a pull request whose
+gate was green. The error says what to do instead: encode a constraint as a
 type, an assertion or a test, put the why in the commit message, fix the cause
 of a workaround, and put a document's knowledge where it is enforced.
 

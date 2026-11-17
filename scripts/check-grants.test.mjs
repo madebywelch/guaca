@@ -35,6 +35,7 @@ const LANGUAGES = [
       ["#[rustfmt::skip]\nfn a() {}", "#[rustfmt::skip]"],
       ["#[cfg(test)]\nmod tests {\n    fn t() { std::thread::sleep(D); }\n}", "sleep"],
       ["// SAFETY: not followed by unsafe\nfn a() {}", "comment"],
+      ["fn a(p: *const u8) -> u8 {\n    // SAFETY: the caller hands a valid pointer\n    unsafe { *p }\n}", "comment"],
       ["#[test]\nfn t() { loop { if ready() { break; } std::thread::sleep(D); } }", "sleep"],
       ["#[test]\nfn t() { for _ in 0..3 { std::thread::sleep(D); } }", "sleep"],
       ["#[test]\nfn t() { for _ in 0..1 { std::thread::sleep(D); break; } }", "sleep"],
@@ -48,7 +49,6 @@ const LANGUAGES = [
       'fn a() { let r = r#"// no "quote" /* no */"#; let b = br"//"; }',
       "fn a<'a>(s: &'a str) -> char { let c = '\"'; let d = '/'; '#' }",
       '#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]\nfn a() {}',
-      "fn a(p: *const u8) -> u8 {\n    // SAFETY: the caller hands a valid pointer\n    unsafe { *p }\n}",
       "fn a() { std::thread::sleep(D); }",
       "#[cfg(test)]\nmod tests {\n    fn t() { for _ in 0..50 { if ready() { break; } std::thread::sleep(D); } }\n}",
       "#[test]\nfn t() {\n    while !check() {\n        assert!(Instant::now() < deadline);\n        std::thread::sleep(D);\n    }\n}",
@@ -352,6 +352,7 @@ function scenario(files, body) {
 }
 
 const SOURCE = "export function a() {\n  // an old comment\n  return 1;\n}\n";
+const approvalOf = (repo) => "grants-approved-" + hashText(readFileSync(join(repo.dir, "grants.json"), "utf8")).slice(0, 12);
 const grantOf = (kind, path, text, words = "keep it") => ({ kind, path, sha256: hashText(text), words, date: "2026-11-17" });
 
 describe("a change", () => {
@@ -544,11 +545,65 @@ describe("a change", () => {
     scenario({ "src/a.ts": SOURCE }, (repo, run) => {
       write(repo.dir, { "src/a.ts": SOURCE + "// granted reason\nexport const b = 2;\n" });
       setLedger(repo.dir, (ledger) => ledger.grants.push(grantOf("comment", "src/a.ts", "// granted reason", "I said so")));
-      const result = run();
+      const result = check(repo.dir, { base: repo.base, approvals: [approvalOf(repo)] });
       assert.deepEqual([...result.findings, ...result.problems], []);
       const printed = report(result, { rev: repo.base, label: "test" });
       assert.match(printed, /GRANTS CHANGED/);
       assert.match(printed, /\+ added {4}comment in src\/a\.ts:5, 2026-11-17, "I said so"\n {6}\/\/ granted reason/);
+    }),
+  );
+  it(
+    "fails on a ledger change nobody approved, and names the approval and who may give it",
+    scenario({ "src/a.ts": SOURCE }, (repo, run) => {
+      setLedger(repo.dir, (ledger) => ledger.grants.push(grantOf("comment", "src/a.ts", "// an old comment")));
+      const result = run();
+      assert.deepEqual(result.findings, []);
+      const printed = report(result, { rev: repo.base, label: "test" });
+      assert.match(printed, new RegExp("grants\\.json .*" + approvalOf(repo)));
+      assert.match(printed, /report the exact text/);
+      assert.match(printed, /never approves their own/);
+    }),
+  );
+  it(
+    "fails on a new ledger nobody approved",
+    scenario({ "src/a.ts": SOURCE }, (repo) => {
+      const result = check(repo.dir, { base: git(repo.dir, "rev-parse", "HEAD~1") });
+      assert.match(
+        result.problems.map((p) => p.message).join("\n"),
+        new RegExp(approvalOf(repo)),
+      );
+    }),
+  );
+  it(
+    "passes a ledger change approved for exactly that ledger",
+    scenario({ "src/a.ts": SOURCE }, (repo) => {
+      setLedger(repo.dir, (ledger) => ledger.grants.push(grantOf("comment", "src/a.ts", "// an old comment")));
+      const result = check(repo.dir, { base: repo.base, approvals: ["grants-approved-000000000000", approvalOf(repo)] });
+      assert.deepEqual([...result.findings, ...result.problems], []);
+    }),
+  );
+  it(
+    "fails again when the ledger changes after its approval",
+    scenario({ "src/a.ts": SOURCE }, (repo) => {
+      setLedger(repo.dir, (ledger) => ledger.grants.push(grantOf("comment", "src/a.ts", "// an old comment")));
+      const approved = approvalOf(repo);
+      setLedger(repo.dir, (ledger) => {
+        ledger.grants[0].words = "reworded after the approval";
+      });
+      const result = check(repo.dir, { base: repo.base, approvals: [approved] });
+      assert.equal(result.problems.length, 1);
+      assert.match(result.problems[0].message, new RegExp(approvalOf(repo)));
+    }),
+  );
+  it(
+    "fails on a committed ledger change nobody approved",
+    scenario({ "src/a.ts": SOURCE }, (repo) => {
+      setLedger(repo.dir, (ledger) => ledger.grants.push(grantOf("comment", "src/a.ts", "// an old comment")));
+      const label = approvalOf(repo);
+      git(repo.dir, "add", "-A");
+      git(repo.dir, "commit", "-qm", "grant");
+      assert.equal(check(repo.dir, { base: repo.base, head: "HEAD" }).problems.length, 1);
+      assert.deepEqual(check(repo.dir, { base: repo.base, head: "HEAD", approvals: [label] }).problems, []);
     }),
   );
   it(
@@ -647,12 +702,36 @@ describe("the command", () => {
     }),
   );
   it(
+    "fails on a ledger change in a local run, and passes it with the approval",
+    scenario({ "src/a.ts": SOURCE }, (repo) => {
+      setLedger(repo.dir, (ledger) => ledger.grants.push(grantOf("comment", "src/a.ts", "// an old comment")));
+      const refused = cli(repo, ["--base", repo.base]);
+      assert.equal(refused.status, 1, refused.stdout);
+      assert.match(refused.stdout, new RegExp(approvalOf(repo)));
+      const approved = cli(repo, ["--base", repo.base], { GRANTS_APPROVALS: approvalOf(repo) });
+      assert.equal(approved.status, 0, approved.stdout);
+    }),
+  );
+  it(
+    "prints a ledger change on a push to main and passes it",
+    scenario({ "src/a.ts": SOURCE }, (repo) => {
+      git(repo.dir, "checkout", "-q", "main");
+      setLedger(repo.dir, (ledger) => ledger.grants.push(grantOf("comment", "src/a.ts", "// an old comment")));
+      commitAll(repo, "grant");
+      const pushed = cli(repo, [], { GITHUB_BASE_REF: "", GRANTS_BASE: "", GITHUB_EVENT_NAME: "push", GITHUB_REF: "refs/heads/main" });
+      assert.equal(pushed.status, 0, pushed.stdout);
+      assert.match(pushed.stdout, /GRANTS CHANGED/);
+      const local = cli(repo, [], { GITHUB_BASE_REF: "", GRANTS_BASE: "", GITHUB_EVENT_NAME: "", GITHUB_REF: "" });
+      assert.equal(local.status, 1, local.stdout);
+    }),
+  );
+  it(
     "records a grant that then covers exactly that comment",
     scenario({ "src/a.ts": SOURCE }, (repo) => {
       write(repo.dir, { "src/a.ts": SOURCE + "// the owner wants this\n" });
       const granted = cli(repo, ["grant", "src/a.ts:5", "--words", "keep it", "--date", "2026-11-17"]);
       assert.equal(granted.status, 0, granted.stderr);
-      const out = cli(repo, ["--base", repo.base]);
+      const out = cli(repo, ["--base", repo.base], { GRANTS_APPROVALS: "other-label " + approvalOf(repo) });
       assert.equal(out.status, 0, out.stdout);
       assert.match(out.stdout, /GRANTS CHANGED[\s\S]*\/\/ the owner wants this/);
     }),

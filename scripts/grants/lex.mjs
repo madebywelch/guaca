@@ -56,7 +56,7 @@ export function scanFiles(files) {
   for (const file of files) {
     const kind = languageOf(file.path, file.text);
     if (!kind) continue;
-    const out = { lang: kind.lang, comments: [], marks: [], unsafeOffsets: [], error: null };
+    const out = { lang: kind.lang, comments: [], marks: [], error: null };
     results.set(file.path, out);
     const wait = isTestOrScript(file.path, kind.lang);
     try {
@@ -288,7 +288,6 @@ function rustStructure(tokens, out, ctx) {
       continue;
     }
     if (token.t === "ident") {
-      if (token.v === "unsafe") out.unsafeOffsets.push(token.s);
       if (token.v === "impl") inImpl = true;
       const loopWord = token.v === "loop" || token.v === "while" || token.v === "for";
       if (loopWord && !(token.v === "for" && (inImpl || tokens[k + 1]?.v === "<"))) {

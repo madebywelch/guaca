@@ -2,6 +2,7 @@ name: ci
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
 
@@ -36,7 +37,9 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: ./scripts/ci.sh grants
+      - env:
+          GRANTS_APPROVALS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
+        run: ./scripts/ci.sh grants
 
   web:
     name: web, scripts, assets, connector
