@@ -5,6 +5,7 @@ import { ABSENT_ACCENT } from "../avatars/catalog";
 import { needsAnswer } from "../lib/decisions";
 import { api } from "../lib/ipc";
 import { drawnThrough, finished, statusWord } from "../lib/outcomes";
+import { groupNamed } from "../lib/presence";
 import { useStore } from "../lib/store";
 import { clockLabel, useNow } from "../lib/time";
 import { errorMessage, type Outcome } from "../lib/types";
@@ -123,7 +124,7 @@ export function Home({ onSearch, onManageGroups }: Props) {
               <ul className="home__list">
                 {news.map((outcome) => {
                   const agent = agents.find((one) => one.id === outcome.agentId);
-                  const group = groups.find((one) => one.id === outcome.groupId);
+                  const group = groupNamed(groups, outcome.groupId);
                   const word = statusWord(outcome.status);
                   return (
                     <li key={outcome.runId}>
@@ -143,8 +144,7 @@ export function Home({ onSearch, onManageGroups }: Props) {
                         <span className="home__rowtext">
                           <span className="home__meta">
                             <strong>{agent?.name ?? "A deleted agent"}</strong>
-                            {group && groups.length > 1 ? ` ${group.name},` : ""}{" "}
-                            {clockLabel(outcome.finishedAt)}
+                            {group ? ` ${group},` : ""} {clockLabel(outcome.finishedAt)}
                             {word ? `, ${word}` : ""}
                           </span>
                           <span className="home__headline">{outcome.headline}</span>

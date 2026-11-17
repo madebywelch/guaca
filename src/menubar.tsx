@@ -1,6 +1,5 @@
 import "./page";
 
-import { invoke } from "@tauri-apps/api/core";
 import React, { useEffect, useMemo, useState } from "react";
 import ReactDOM from "react-dom/client";
 
@@ -88,9 +87,8 @@ api
       return;
     }
     adoptRemote(host);
-    const generation = (host as typeof host & { generation: number }).generation;
-    if (!(await invoke<boolean>("report_host", { host, generation }))) return;
-    guardPanelHost(host, () => invoke<boolean>("report_host", { host, generation }));
+    if (!(await api.reportHost(host, host.generation))) return;
+    guardPanelHost(host, () => api.reportHost(host, host.generation));
     draw(<Panel />);
   })
   .catch((error) => draw(<Nowhere text={`The panel could not start: ${errorMessage(error)}`} />));

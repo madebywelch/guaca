@@ -2,20 +2,24 @@ import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { money } from "../components/Spend";
+import { compact, money } from "../components/Spend";
+import { HIREABLE } from "./cafeteria";
 import { fieldDate } from "./calendar";
 import { readableSize } from "./files";
 import { LIMITS } from "./limits";
 import { allows } from "./plugins";
+import { groupNamed } from "./presence";
 import { inferenceOf } from "./providers";
 import { otherBuild } from "./releases";
-import { eventSpec, humanGap, parseTrigger, repeats } from "./routine";
+import { eventSpec, humanGap, parseTrigger, repeats, titled } from "./routine";
 import { attachedFiles, sendRecipients } from "./toolArgs";
 import { readSpent, splitPluginTool, surfaceOf } from "./trail";
 import {
   type AgentId,
   CATALOG,
   type Envelope,
+  type Group,
+  type GroupId,
   type Part,
   type PluginAccess,
   type Provider,
@@ -58,6 +62,10 @@ const ENVELOPE: Envelope = {
 
 const CHECKS: Record<string, Check> = {
   builds: each(([a, b]: [string, string]) => otherBuild(a, b)),
+  compact: each(compact),
+  "crew-name": each(({ groups, group }: { groups: Pick<Group, "id" | "name">[]; group: GroupId }) =>
+    groupNamed(groups, group),
+  ),
   constants: (file) => {
     expect((file as { catalog: string[] }).catalog).toEqual([...CATALOG]);
   },
@@ -72,6 +80,9 @@ const CHECKS: Record<string, Check> = {
   "event-spec": each(({ service, topic }: { service: string; topic: string }) =>
     eventSpec(service, topic),
   ),
+  hireable: (file) => {
+    expect(HIREABLE).toEqual(file);
+  },
   "human-gap": each(humanGap),
   inference: each(
     ({
@@ -128,6 +139,7 @@ const CHECKS: Record<string, Check> = {
   ),
   "plugin-call": each(splitPluginTool),
   sizes: each(readableSize),
+  titled: each(titled),
   "tool-names": each(({ tool, args }: { tool: string; args: unknown }) =>
     tool === "attach_file" ? attachedFiles(args) : sendRecipients(args),
   ),

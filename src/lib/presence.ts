@@ -1,4 +1,4 @@
-import type { Activity, AgentCard, AgentId, Escalation } from "./types";
+import type { Activity, AgentCard, AgentId, Escalation, Group, GroupId } from "./types";
 
 export interface Presence {
   blocked: number;
@@ -6,6 +6,14 @@ export interface Presence {
 }
 
 export const QUIET: Presence = { blocked: 0, working: false };
+
+export function groupNamed(
+  groups: readonly Pick<Group, "id" | "name">[],
+  id: GroupId | null | undefined,
+): string | null {
+  if (groups.length < 2) return null;
+  return groups.find((group) => group.id === id)?.name ?? null;
+}
 
 export function presenceOf(
   members: AgentCard[],

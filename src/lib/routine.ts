@@ -104,8 +104,9 @@ export function choiceFor(spec: TriggerSpec): TriggerSpec {
   return eventFields(spec) ? EVENT_CHOICE : spec;
 }
 
-function titled(word: string): string {
-  return word ? word[0]!.toUpperCase() + word.slice(1) : word;
+export function titled(word: string): string {
+  const [first = "", ...rest] = word;
+  return first.toUpperCase() + rest.join("");
 }
 
 export function repeatLabel(spec: TriggerSpec): string {

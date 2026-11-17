@@ -427,12 +427,11 @@ export interface Computer {
   vncUrl: string | null;
 }
 
-export interface Browser {
-  sessionId: string;
-  state: string;
-  liveViewUrl: string | null;
-  unwatchable: string | null;
-}
+export type Browser = { sessionId: string; state: string } & (
+  | { liveViewUrl: string; unwatchable: null }
+  | { liveViewUrl: null; unwatchable: string }
+  | { liveViewUrl: null; unwatchable: null }
+);
 
 export interface Output {
   stdout: string;
