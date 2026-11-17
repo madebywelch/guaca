@@ -11,9 +11,6 @@
 #   ./scripts/ci.sh daemon   the Rust suite built as the daemon, without Tauri
 #   ./scripts/ci.sh web      just the frontend
 #   ./scripts/ci.sh connector  the self-hosted Google connector
-#
-# CI runs these as parallel jobs (.github/workflows/ci.yml), and together they
-# are exactly `all`: a part added here and not there is a part CI never runs.
 
 set -euo pipefail
 
@@ -56,6 +53,10 @@ run_scripts() {
   # opening a packaged image is a release step in docs/RELEASING.md.
   step "Release disk image layout"
   python3 scripts/package-dmg.test.py
+
+  step "CI runs every part of this gate"
+  python3 scripts/check-ci-parts.test.py
+  python3 scripts/check-ci-parts.py
 }
 
 run_connector() {
