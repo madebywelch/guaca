@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +20,7 @@ export const DATA = [
   },
 ];
 const KINDS = new Set(["comment", "suppression", "document"]);
+const QUOTED = /["\\\u0000-\u001f\u007f]/;
 const GRANT_COMMAND = "node " + relative(process.cwd(), fileURLToPath(import.meta.url)) + " grant";
 const HASH_COMMAND = "node " + relative(process.cwd(), fileURLToPath(import.meta.url)) + " hash";
 const READERS = relative(process.cwd(), fileURLToPath(new URL("./grants/lex.mjs", import.meta.url)));
@@ -34,6 +35,7 @@ const DIRECTIVES = [
   (unit) => unit.lang === "shell" && /^shellcheck\s+(shell|source|source-path|external-sources)=\S+$/.test(unit.body),
   (unit) => unit.lang === "yaml" && /^yaml-language-server:\s*\$schema=\S+$/.test(unit.body),
   (unit) => unit.lang === "swift" && unit.line === 1 && /^swift-tools-version:/.test(unit.body),
+  (unit) => unit.lang === "markup" && /^<!--[a-z][a-z0-9-]*-->$/.test(unit.raw),
   (unit) =>
     unit.lang === "yaml" &&
     /^#\s*v\d+(\.\d+)*$/.test(unit.raw) &&
@@ -72,6 +74,7 @@ const FIXES = {
     ", or, if the file is data that carries no words of ours, add it to DATA in " +
     DATA_LIST +
     " with the reason.",
+  name: "A file name with a double quote, a backslash or a control character, which git quotes, so the lint cannot match the file to its lines. Rename the file.",
   document:
     "A new prose file. Say it where it is enforced or read instead: a rule becomes a check or a test, history goes in the commit message, and design goes in the section of an existing document that docs/ROUTING.md names.",
 };
@@ -181,7 +184,7 @@ export function unitsOf(path, text, scan) {
 }
 
 function git(repo, args, input) {
-  return execFileSync("git", args, { cwd: repo, encoding: "utf8", maxBuffer: 1 << 30, input, stdio: ["pipe", "pipe", "pipe"] });
+  return execFileSync("git", ["-c", "core.quotePath=false", ...args], { cwd: repo, encoding: "utf8", maxBuffer: 1 << 30, input, stdio: ["pipe", "pipe", "pipe"] });
 }
 
 function gitOk(repo, args) {
@@ -221,7 +224,7 @@ export function changedLines(repo, base, head) {
   for (const line of git(repo, args).split("\n")) {
     if (line.startsWith("diff --git ")) current = null;
     else if (line.startsWith("+++ ")) {
-      current = line === "+++ /dev/null" ? null : line.slice(6);
+      current = line === "+++ /dev/null" || line.startsWith('+++ "') ? null : line.slice(6);
       if (current && !changes.has(current)) changes.set(current, new Set());
     } else if (line.startsWith("@@") && current) {
       const hunk = /\+(\d+)(?:,(\d+))?/.exec(line);
@@ -231,7 +234,7 @@ export function changedLines(repo, base, head) {
     }
   }
   if (!head) {
-    for (const path of git(repo, ["ls-files", "--others", "--exclude-standard"]).split("\n").filter(Boolean)) {
+    for (const path of git(repo, ["ls-files", "-z", "--others", "--exclude-standard"]).split("\u0000").filter(Boolean)) {
       changes.set(path, "all");
     }
   }
@@ -291,9 +294,9 @@ function linksAmong(repo, rev, paths) {
 }
 
 function touchedPaths(repo, base, head, changes) {
-  const args = ["diff", "-M", "--name-only", "--diff-filter=ACMRT", "--no-ext-diff", base];
+  const args = ["diff", "-z", "-M", "--name-only", "--diff-filter=ACMRT", "--no-ext-diff", base];
   if (head) args.push(head);
-  return new Set([...changes.keys(), ...git(repo, args).split("\n").filter(Boolean)]);
+  return new Set([...changes.keys(), ...git(repo, args).split("\u0000").filter(Boolean)]);
 }
 
 export function upstreamOf(ledger) {
@@ -343,9 +346,9 @@ function parseLedger(text, problems) {
 }
 
 function listFiles(repo, rev) {
-  if (rev) return git(repo, ["ls-tree", "-r", "--name-only", rev]).split("\n").filter(Boolean);
-  return git(repo, ["ls-files", "--cached", "--others", "--exclude-standard"])
-    .split("\n")
+  if (rev) return git(repo, ["ls-tree", "-r", "-z", "--name-only", rev]).split("\u0000").filter(Boolean);
+  return git(repo, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
+    .split("\u0000")
     .filter((path) => path && existsSync(join(repo, path)));
 }
 
@@ -436,9 +439,12 @@ export function check(repo, { base, head = null, ledgerOverride, proseByDiff = f
   const grants = ledger?.grants ?? [];
   const grantFiles = grants.filter((grant) => grant.kind !== "document").map((grant) => grant.path);
   const shipped = shippedMigrations(repo, ledger, head, problems);
-  const judgedWhole = (path) => !PROSE.test(path) && !shipped.has(path);
-  const candidates = [...touchedPaths(repo, base, head, changes)].filter((path) => !upstream(path));
-  const tree = listFiles(repo, head).filter((path) => !upstream(path) && judgedWhole(path));
+  const judgedWhole = (path) => !shipped.has(path);
+  const named = (path) => !upstream(path) && !QUOTED.test(path);
+  const files = listFiles(repo, head).filter((path) => !upstream(path));
+  for (const path of files.filter((path) => QUOTED.test(path))) findings.push({ path, line: null, kind: "name", what: "a file name git quotes" });
+  const candidates = [...touchedPaths(repo, base, head, changes)].filter(named);
+  const tree = files.filter((path) => named(path) && judgedWhole(path));
   const links = linksAmong(repo, head, [...new Set([...candidates, ...tree])]);
   const touched = candidates.filter((path) => !links.has(path));
   const wanted = [...new Set([...touched, ...grantFiles, ...tree])].filter((path) => !upstream(path) && !links.has(path));
@@ -531,7 +537,8 @@ export function check(repo, { base, head = null, ledgerOverride, proseByDiff = f
   }
   const baseText = readLedger(repo, base);
   let approval = null;
-  if (ledgerGate && ledger !== null && canonical(ledger) !== contentOf(baseText)) {
+  const content = contentOf(ledgerText);
+  if (ledgerGate && (ledgerText === null || content !== null) && content !== contentOf(baseText)) {
     approval = approvalFor(ledger);
     if (!approvals.includes(approval)) {
       problems.push({
@@ -632,7 +639,7 @@ export function report(result, base) {
   }
   out.push("grants: " + (findings.length + problems.length) + " to fix since " + base.rev.slice(0, 12) + " (" + base.label + ")", "");
   for (const finding of findings) {
-    const where = finding.line ? finding.path + ":" + finding.line : finding.path;
+    const where = finding.kind === "name" ? JSON.stringify(finding.path) : finding.line ? finding.path + ":" + finding.line : finding.path;
     const label = finding.kind === "document" ? "new document" : finding.what;
     const first = finding.raw ? "  " + finding.raw.split("\n")[0].trim().slice(0, 100) : "";
     out.push(where + "  " + label + first);
@@ -641,12 +648,21 @@ export function report(result, base) {
   const kinds = new Set(findings.map((finding) => finding.kind));
   if (kinds.size > 0) out.push("");
   if (kinds.has("unread")) out.push(FIXES.unread);
+  if (kinds.has("name")) out.push(FIXES.name);
   for (const kind of ["comment", "suppression", "document"]) {
     if (!kinds.has(kind)) continue;
     const target = kind === "document" ? "<file>" : "<file>:<line>";
     out.push(FIXES[kind] + " Only if none of that can work, ask the owner, then record their words: " + GRANT_COMMAND + " " + target + ' --words "<the owner\'s words>"');
   }
   return out.join("\n");
+}
+
+function escapeData(text) {
+  return text.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+}
+
+function escapeProperty(text) {
+  return escapeData(text).replace(/:/g, "%3A").replace(/,/g, "%2C");
 }
 
 function annotate(result) {
@@ -656,8 +672,10 @@ function annotate(result) {
     const message =
       finding.kind === "unread"
         ? "no reader for this file type; add one, or list the file as data with the reason"
-        : (finding.kind === "document" ? "new document" : finding.what) + " needs the owner's grant";
-    console.log("::error file=" + finding.path + line + "::" + message);
+        : finding.kind === "name"
+          ? "a file name git quotes; rename the file"
+          : (finding.kind === "document" ? "new document" : finding.what) + " needs the owner's grant";
+    console.log("::error file=" + escapeProperty(finding.path) + line + "::" + escapeData(message));
   }
   if (result.ledgerChanges?.length) {
     console.log("::warning file=" + LEDGER + ",title=Grants changed::" + result.ledgerChanges.length + " ledger changes; read them before merging");
@@ -699,7 +717,7 @@ export function sweep(repo, { only = [] } = {}) {
   const upstream = upstreamOf(ledger);
   const migrations = new Set(ledger?.migrations?.files ?? []);
   const wanted = (path) => only.length === 0 || only.some((prefix) => path === prefix || path.startsWith(prefix.replace(/\/?$/, "/")));
-  const candidates = listFiles(repo, null).filter((path) => wanted(path) && !upstream(path) && !PROSE.test(path) && !migrations.has(path));
+  const candidates = listFiles(repo, null).filter((path) => wanted(path) && !upstream(path) && !migrations.has(path));
   const links = linksAmong(repo, null, candidates);
   const texts = [];
   for (const path of candidates) {
@@ -776,7 +794,7 @@ function main() {
     return 0;
   }
   if (options.positional[0] === "hash") {
-    console.log(approvalFor(JSON.parse(readFileSync(join(repo, LEDGER), "utf8"))));
+    console.log(approvalFor(JSON.parse(readLedger(repo, null) ?? "null")));
     return 0;
   }
   if (options.positional[0] === "strip") {
@@ -797,7 +815,10 @@ function main() {
   const head = options.head ?? (judge ? "HEAD" : null);
   const result = check(repo, { base: base.rev, head, approvals: approvalsFrom(), ledgerGate: !pushToMain, judge });
   annotate(result);
-  console.log(report(result, base));
+  if (process.env.GITHUB_ACTIONS) {
+    const resume = randomUUID();
+    console.log("::stop-commands::" + resume + "\n" + report(result, base) + "\n::" + resume + "::");
+  } else console.log(report(result, base));
   return result.findings.length + result.problems.length > 0 ? 1 : 0;
 }
 
