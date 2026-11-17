@@ -19,6 +19,10 @@ const DIRECTIVES = [
   (unit) => unit.lang === "yaml" && /^yaml-language-server:\s*\$schema=\S+$/.test(unit.body),
   (unit) => unit.lang === "swift" && unit.line === 1 && /^swift-tools-version:/.test(unit.body),
   (unit) =>
+    unit.lang === "yaml" &&
+    /^#\s*v\d+(\.\d+)*$/.test(unit.raw) &&
+    /\buses:\s*[\w.-]+\/[\w./-]+@[0-9a-f]{40}\s*$/.test(unit.before.slice(unit.before.lastIndexOf("\n") + 1)),
+  (unit) =>
     unit.lang === "dockerfile" &&
     /^#\s*(syntax|escape|check)\s*=\s*\S+$/.test(unit.raw) &&
     unit.before.split("\n").every((line) => line === "" || /^#\s*(syntax|escape|check)\s*=/.test(line)),

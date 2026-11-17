@@ -169,6 +169,28 @@ providers, unrelated cookie jars, separate sign-ins, either configurable without
 the other. Anything that describes one to a model has to disclaim the other, or
 the model takes a screenshot to see what `browse` did.
 
+**A comment, a suppression or a new prose file needs the owner's grant.** A
+comment that excuses a workaround, a document that records a gotcha instead of
+making it impossible, and a suppression that silences a check are the same
+move, so `scripts/check-grants.mjs` refuses all three in what a change adds or
+modifies: every kind of comment, docstrings included; `#[allow]`, `#[expect]`,
+`#[ignore]`, `@ts-ignore`, `@ts-expect-error`, `biome-ignore`, lint-disable
+lines, `noqa`, `type: ignore`, `.skip`, `.only` and `.todo`; a sleep standing in
+for a check in a test or script; and any new `.md`, `.mdx`, `.markdown`, `.rst`,
+`.adoc` or `.txt` file. What is already there stays until its line is touched.
+A poll is not a sleep: a loop whose bound the lint can see (a counted `for`, or
+one that reads the clock) and that re-checks its condition each attempt may wait
+between attempts. Lines a tool reads and that silence nothing pass by rule
+(shebangs, `# syntax=`, `/// <reference>`, `@vitest-environment`, SPDX
+identifiers, `# shellcheck source=`, the version beside a pinned action, and
+`SAFETY:` directly above an `unsafe` block). Everything else needs the owner,
+and only the owner, recorded in `grants.json` by path and a hash of the exact
+text, so an unrelated edit keeps a grant and a reworded comment loses it; a
+grant that matches nothing fails, and a change to the ledger is printed for
+whoever merges. The error says what to do instead: encode a constraint as a
+type, an assertion or a test, put the why in the commit message, fix the cause
+of a workaround, and put a document's knowledge where it is enforced.
+
 ## Conventions
 
 - Match the surrounding code. Comments explain why, never what.

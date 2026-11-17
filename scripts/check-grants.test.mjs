@@ -155,10 +155,13 @@ const LANGUAGES = [
     fail: [
       ["on: push # trailing", "comment"],
       ["# own line\non: push", "comment"],
+      ["steps:\n  - uses: actions/checkout@v7 # v7.0.1", "comment"],
       ["jobs:\n  a:\n    steps:\n      - run: |\n          echo hi # in the script\n", "comment"],
       ["jobs:\n  a:\n    steps:\n      - run: |\n          # shellcheck disable=SC2046\n          echo $(x)\n", "shellcheck disable"],
     ],
-    pass: ['name: "a # no"', "name: 'it''s # no'", "url: http://x#fragment", "body: |\n  # data, not a comment\nnext: 1"],
+    pass: [
+      "steps:\n  - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+      'name: "a # no"', "name: 'it''s # no'", "url: http://x#fragment", "body: |\n  # data, not a comment\nnext: 1"],
   },
   {
     path: "Cargo.toml",

@@ -139,6 +139,7 @@ lists what has already been broken by changing it.
 | Whether a model can be shown a picture: an attachment, a screen, what an agent is told it is | *What a model can be sent is asked of the endpoint, not assumed* in `docs/ARCHITECTURE.md`, then `llm/modality.rs` and the four places `Modalities` is spent from `Runtime::run_turn` |
 | A prompt, or anything that changes how much a group talks | *Three test suites, asking different questions*, then run the live evals |
 | What a real group of eight does with one directive, and what is different when you ask twice | *A group is watched rather than asserted*, then `src-tauri/tests/crew.rs` |
+| A comment, a suppression, a new Markdown file, a grant in `grants.json`, or the lint that refuses them | *A comment, a suppression or a new prose file needs the owner's grant* in `docs/INVARIANTS.md`, then `scripts/check-grants.mjs` and `scripts/grants/lex.mjs`, and run `./scripts/ci.sh grants` |
 
 Unqualified section names are headings in `docs/ARCHITECTURE.md`. Every row
 also has a shorter companion under `docs/gotchas/`, indexed below: the doc
