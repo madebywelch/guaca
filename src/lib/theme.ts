@@ -1,6 +1,5 @@
+import type { Surface } from "./appearance";
 import { colorblindDistance, contrast, distance, hex, solve } from "./color";
-
-type Surface = "light" | "dark";
 
 export type GrayKey = "neutral" | "warm" | "avocado" | "slate";
 export type AttentionKey = "amber" | "orange" | "blue" | "violet";
