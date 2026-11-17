@@ -28,6 +28,7 @@ function olderHost(name: string): Promise<unknown> {
           "this build has no command called `upcoming_runs`. This app is Guaca 0.5.0 and the host is 0.4.0; update the host",
       });
     case "calendar":
+    case "list_outcomes":
       return Promise.resolve([]);
     default:
       return Promise.resolve({});

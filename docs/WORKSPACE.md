@@ -1139,7 +1139,11 @@ The scale is bent rather than linear. The stretch before the last hour or so is
 compressed, the hours either side of now are wide, the rest of today is narrow,
 and a day column spends its width on 6 AM to 9 PM. A linear day would spend most
 of the strip on hours where nothing happened. The layout takes `now` as input and
-keeps no clock, so `ribbon.test.ts` can stand at 9:12 on a Monday.
+keeps no clock, so `ribbon.test.ts` can stand at 9:12 on a Monday. The clock it is
+handed ticks once a minute, so the layout moves `now` up to the latest run or
+request it is given: what has happened is placed at once, never after the tick.
+`Timeline.tsx` reads today's runs, seen ones included, beside the unseen ones the
+store keeps, because a face rests on the last thing its agent did today.
 
 **Each face is a button named with the agent, its state and its time:** "Dara,
 needs you, asked 9:05 AM", "Dara, working now", "Dara, finished 2:56 AM", "Dara,

@@ -581,6 +581,20 @@ describe("App", () => {
       expect(currentTab("Manager")).toBe("Now");
     });
 
+    it("drops a reveal that Today cancels before it renders, so a later click opens Now", async () => {
+      const reveal = await workingWindow();
+
+      act(() => {
+        reveal({ kind: "agent", id: "id-Manager" });
+        useStore.getState().leaveChannel();
+      });
+      expect(useStore.getState().selected).toBeNull();
+      expect(screen.queryByRole("navigation", { name: "Manager's page" })).toBeNull();
+
+      fireEvent.click(railRow("Manager"));
+      expect(currentTab("Manager")).toBe("Now");
+    });
+
     it("opens a working agent on Now after leaving a revealed conversation for Today", async () => {
       const reveal = await workingWindow();
       fireEvent.click(railRow("Manager"));

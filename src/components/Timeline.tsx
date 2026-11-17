@@ -3,8 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/ipc";
 import { layoutRibbon, RIBBON_CHAR_PX, RIBBON_FACE_PX } from "../lib/ribbon";
 import { useStore } from "../lib/store";
-import { useNow } from "../lib/time";
-import { errorMessage, type Occasion, type UpcomingRun } from "../lib/types";
+import { midnight, useNow } from "../lib/time";
+import { errorMessage, type Occasion, type Outcome, type UpcomingRun } from "../lib/types";
 import { Ribbon } from "./Ribbon";
 
 interface Props {
@@ -14,6 +14,7 @@ interface Props {
 }
 
 const AHEAD_MS = 8 * 86_400_000;
+const TODAY_RUNS = 100;
 
 export function Timeline({ onOpenAgent, onOpenPile, openAgentId }: Props) {
   const agents = useStore((state) => state.agents);
@@ -26,7 +27,29 @@ export function Timeline({ onOpenAgent, onOpenPile, openAgentId }: Props) {
   const [upcoming, setUpcoming] = useState<UpcomingRun[]>([]);
   const [occasions, setOccasions] = useState<Occasion[]>([]);
   const [width, setWidth] = useState(0);
+  const [today, setToday] = useState<Outcome[]>([]);
   const hour = Math.floor(now / 3_600_000);
+  const day = midnight(now);
+
+  useEffect(() => {
+    let current = true;
+    api
+      .listOutcomes({ since: day, limit: TODAY_RUNS })
+      .then((rows) => {
+        if (current) setToday(rows);
+      })
+      .catch((error: unknown) => {
+        console.warn(`Today's finished runs could not be read: ${errorMessage(error)}`);
+      });
+    return () => {
+      current = false;
+    };
+  }, [day, outcomes]);
+
+  const runs = useMemo(() => {
+    const unseen = new Set(outcomes.map((one) => one.runId));
+    return [...outcomes, ...today.filter((one) => !unseen.has(one.runId))];
+  }, [outcomes, today]);
 
   useEffect(() => {
     let current = true;
@@ -52,14 +75,14 @@ export function Timeline({ onOpenAgent, onOpenPile, openAgentId }: Props) {
         now,
         agents: agents.filter((agent) => agent.lifecycle !== "terminated"),
         activity,
-        outcomes,
+        outcomes: runs,
         approvals: pending,
         upcoming,
         occasions,
         faceSpan: width > 0 ? RIBBON_FACE_PX / width : 0,
         charSpan: width > 0 ? RIBBON_CHAR_PX / width : 0,
       }),
-    [now, agents, activity, outcomes, pending, upcoming, occasions, width],
+    [now, agents, activity, runs, pending, upcoming, occasions, width],
   );
 
   return (
