@@ -10,6 +10,7 @@ use guac_lib::config::AppConfig;
 use guac_lib::db::Store;
 use guac_lib::domain::agent::CleanDraft;
 use guac_lib::domain::connector::CleanConnector;
+use guac_lib::domain::envelope::Envelope;
 use guac_lib::domain::ids::AgentId;
 use guac_lib::domain::plugin::{PluginAccess, PluginKind};
 use guac_lib::domain::routine::{human_gap, Cadence, EventTrigger, Trigger};
@@ -26,6 +27,7 @@ const CHECKS: &[(&str, Check)] = &[
     ("event-spec", event_spec),
     ("human-gap", gap),
     ("limits", limits),
+    ("plain-text", plain_text),
     ("plugin-access", plugin_access),
     ("plugin-call", plugin_call),
     ("tool-names", tool_names),
@@ -194,6 +196,26 @@ fn plugin_call(file: &Value) {
             .collect();
         tools::split_plugin_tool(&name, &connected)
             .map(|(kind, tool)| json!({ "server": kind.slug(), "tool": tool }))
+    });
+}
+
+fn plain_text(file: &Value) {
+    each(file, |parts: Value| {
+        let envelope: Envelope = parsed(&json!({
+            "id": "00000000-0000-4000-8000-000000000010",
+            "runId": "00000000-0000-4000-8000-000000000011",
+            "channelId": "00000000-0000-4000-8000-000000000001",
+            "from": { "kind": "human" },
+            "to": { "kind": "agent", "id": "00000000-0000-4000-8000-000000000001" },
+            "parts": parts,
+            "trust": "operator",
+            "hop": 0,
+            "expectsReply": true,
+            "intent": "work",
+            "cause": null,
+            "createdAt": 0
+        }));
+        envelope.plain_text()
     });
 }
 

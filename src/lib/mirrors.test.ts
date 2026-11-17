@@ -7,7 +7,7 @@ import { allows } from "./plugins";
 import { eventSpec, humanGap, parseTrigger, repeats } from "./routine";
 import { attachedFiles, sendRecipients } from "./toolArgs";
 import { readSpent, splitPluginTool, surfaceOf } from "./trail";
-import { type AgentId, type PluginAccess } from "./types";
+import { type AgentId, type Envelope, type Part, type PluginAccess, plainText } from "./types";
 
 const MIRRORS = resolve(__dirname, "mirrors");
 
@@ -25,6 +25,23 @@ function each<I, E>(actual: (input: I) => E): Check {
     }
   };
 }
+
+const AGENT: AgentId = "00000000-0000-4000-8000-000000000001";
+
+const ENVELOPE: Envelope = {
+  id: "00000000-0000-4000-8000-000000000010",
+  runId: "00000000-0000-4000-8000-000000000011",
+  channelId: AGENT,
+  from: { kind: "human" },
+  to: { kind: "agent", id: AGENT },
+  parts: [],
+  trust: "operator",
+  hop: 0,
+  expectsReply: true,
+  intent: "work",
+  cause: null,
+  createdAt: 0,
+};
 
 const CHECKS: Record<string, Check> = {
   credentials: (file) => {
@@ -44,6 +61,7 @@ const CHECKS: Record<string, Check> = {
       file,
     );
   },
+  "plain-text": each((parts: Part[]) => plainText({ ...ENVELOPE, parts })),
   "plugin-access": each(({ access, agent }: { access: PluginAccess; agent: AgentId }) =>
     allows(access, agent),
   ),
