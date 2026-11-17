@@ -29,30 +29,8 @@ import { FinishedLine } from "./ForYou";
 import { Markdown } from "./Markdown";
 import { compact, money, priced } from "./Spend";
 
-/**
- * How many of the last things said a conversation opens on.
- *
- * Enough to pick a conversation back up, which is what the panel is for. The
- * window has the rest, one click away, and a panel that scrolled back through a
- * transcript would be the window drawn smaller.
- */
 const RECENT = 3;
 
-/**
- * Guaca under the menu bar icon.
- *
- * What a glance at the corner of the screen is for, and nothing past it: what
- * is waiting on the operator, answerable where it is seen; who is doing what;
- * and a line to any one of them without bringing the window back. Everything
- * else is the window's, and every surface here has a way into it.
- *
- * A second client of the host the window is attached to, with a store of its
- * own, rather than a view the window feeds. Answering a request here goes
- * through the same store action the window's desk does, so both copies of a
- * request settle together, and nothing here raises a notification or reports
- * to the icon: those are the window's, and two pages doing them is every
- * interruption twice.
- */
 export function MenubarPanel({ ready }: { ready: boolean }) {
   const agents = useLiveAgents();
   const activity = useStore((s) => s.activity);
@@ -100,13 +78,8 @@ export function MenubarPanel({ ready }: { ready: boolean }) {
   const content = useRef<HTMLDivElement>(null);
   useFit(root, body, content);
 
-  // An agent deleted while its conversation was open takes the conversation
-  // with it, and the list is what is left.
   const talking = open ? agents.find((agent) => agent.id === open) : undefined;
 
-  // A conversation follows its end and the list is read from the top, and the
-  // two share one scroller, so coming back to the list is coming back to its
-  // top rather than to wherever the conversation was left.
   const scroller = useCallback(() => body.current, []);
   const listing = talking === undefined;
   useLayoutEffect(() => {
@@ -191,20 +164,12 @@ export function MenubarPanel({ ready }: { ready: boolean }) {
   );
 }
 
-/**
- * What this session has spent, in the width a footer has.
- *
- * The price when there is one worth drawing and the tokens when there is not,
- * under the same floor the window's meters use: a local server or a plan
- * prices nothing, and `$0.0000` is seven characters saying so.
- */
 function spent(session: Tokens): string {
   if (session.calls === 0) return "Nothing spent yet";
   if (priced(session.cost)) return `${money(session.cost)} this session`;
   return `${compact(session.prompt + session.completion)} tokens this session`;
 }
 
-/** The list: what is waiting, then everybody. */
 function Overview({ agents, onOpen }: { agents: AgentCard[]; onOpen: (id: AgentId) => void }) {
   const decisions = useStore((s) => s.decisions);
   const groups = useStore((s) => s.groups);
@@ -221,8 +186,6 @@ function Overview({ agents, onOpen }: { agents: AgentCard[]; onOpen: (id: AgentI
   const open = decisions.filter(needsAnswer).length;
   const news = finished(outcomes);
   const more = moreLine(news.length, PANEL_LINES);
-  // A crew is named only when there is another to tell it from, which is the
-  // rule the crews' column and the icon's tooltip are drawn by.
   const crewOf = (agent: AgentCard) =>
     groups.length > 1 ? groups.find((group) => group.id === agent.groupId)?.name : undefined;
 
@@ -241,11 +204,6 @@ function Overview({ agents, onOpen }: { agents: AgentCard[]; onOpen: (id: AgentI
 
       <Desk onOpenChannel={(id) => void api.openWindow({ kind: "agent", id })} />
 
-      {/* Under the requests, in the list's own type and never the attention
-          color: finished work is read when there is time. A line brings the
-          window back at that agent's channel, which marks the run seen there
-          too; it is marked here as well, so the line goes whether or not the
-          window is the one in front. */}
       {news.length > 0 && (
         <section className="menubar__finished" aria-labelledby="menubar-finished">
           <h3 id="menubar-finished">Finished</h3>
@@ -321,7 +279,6 @@ function Overview({ agents, onOpen }: { agents: AgentCard[]; onOpen: (id: AgentI
   );
 }
 
-/** One agent: the last few things said, what it is writing now, and a line back. */
 function Conversation({
   agent,
   scroller,
@@ -330,9 +287,7 @@ function Conversation({
   onBack,
 }: {
   agent: AgentCard;
-  /** The panel's scrolling body, which this follows to its end while it is open. */
   scroller: () => HTMLElement | null;
-  /** Unsent words, by agent, kept by the panel so leaving is not discarding. */
   drafts: Map<AgentId, string>;
   saveDrafts: () => void;
   onBack: () => void;
@@ -369,8 +324,6 @@ function Conversation({
     field.current?.focus();
   }, [agent.id, loadChannel]);
 
-  // The panel is hidden rather than closed, so the field it was hidden with is
-  // the field it comes back with, and the keyboard should be in it.
   useEffect(() => {
     const shown = () => field.current?.focus();
     window.addEventListener("focus", shown);
@@ -381,10 +334,6 @@ function Conversation({
   const live = liveReply(streams, agent.id);
   const label = doing(agent.id, { activity, stuck, trail, lastActive, finished: news }, now);
 
-  // The newest line in view, by the transcript's own rule: followed for
-  // whoever is at the end, and left alone for whoever scrolled up to read.
-  // Attached to the panel's body only while a conversation is open, because
-  // the list under it is read from the top.
   const { ref: followRef, follow, pin } = useFollowBottom();
   useLayoutEffect(() => {
     const detach = followRef(scroller());
@@ -404,8 +353,6 @@ function Conversation({
       await api.sendMessage(agent.id, text);
       setDraft("");
     } catch (cause) {
-      // The draft is kept. A message that failed to send and took the words
-      // with it is a message the operator has to write twice.
       setError(errorMessage(cause));
     } finally {
       setSending(false);
@@ -413,8 +360,6 @@ function Conversation({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    // Enter sends and Shift+Enter is a new line, as in the window's composer.
-    // Not while an input method is composing: that Enter picks a character.
     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
     event.preventDefault();
     void send();
@@ -517,20 +462,10 @@ function Conversation({
   );
 }
 
-/**
- * A message cut to the height a panel can spare, and a way to the rest of it.
- *
- * Measured rather than assumed: a short reply is drawn whole with no fade and
- * no link, because a "read the rest" under a message that has no rest is a
- * promise the window cannot keep.
- */
 function Clamped({ children, onMore }: { children: ReactNode; onMore: () => void }) {
   const box = useRef<HTMLDivElement>(null);
   const [clipped, setClipped] = useState(false);
 
-  // Once, rather than on every render: a reply being written re-renders on
-  // every token, and the body it is written into is one element whose size is
-  // what changes. Observing that element is what catches it.
   useLayoutEffect(() => {
     const node = box.current;
     if (!node) return;
@@ -556,23 +491,6 @@ function Clamped({ children, onMore }: { children: ReactNode; onMore: () => void
   );
 }
 
-/**
- * Keeps the window exactly as tall as what it is showing.
- *
- * The panel's height is its content's, up to what the screen under the icon
- * can hold: a quiet workspace is a short panel rather than a tall one with a
- * sentence at the top. What the content wants is the chrome around the body
- * plus the body's own content, which is measured inside the scrolling box so
- * that a panel already at its ceiling still knows how much taller it would be.
- * Rust clamps it and keeps the top edge under the icon.
- *
- * Measured on every commit as well as on a resize, and that is not
- * belt-and-braces. The panel spends most of its life hidden, and a hidden
- * window draws nothing, so nothing observes its size change and the height it
- * would open at is whatever was measured before it was hidden. A commit still
- * lays the page out when it is asked to, so the height is current by the time
- * the icon is clicked.
- */
 function useFit(
   root: RefObject<HTMLElement | null>,
   body: RefObject<HTMLElement | null>,

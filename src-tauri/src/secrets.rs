@@ -1,8 +1,5 @@
-//! Process credentials. Values are never serialized; grants are resolved by the store.
 use std::collections::BTreeMap;
 
-/// Exact values and their common serialized forms. This limits accidental disclosure;
-/// an authorized program can still transform or transmit credentials it holds.
 pub fn redact(text: &str, values: &BTreeMap<String, String>) -> String {
     let (bytes, _) = Redactor::new(values).take(text.as_bytes(), true);
     String::from_utf8_lossy(&bytes).into_owned()
@@ -35,7 +32,6 @@ impl Redactor {
         Self { patterns, longest }
     }
 
-    /// Keep incomplete matches for the next read. Scrub before any output cap.
     pub(crate) fn take(&self, input: &[u8], finished: bool) -> (Vec<u8>, usize) {
         let limit =
             if finished { input.len() } else { input.len().saturating_sub(self.longest - 1) };

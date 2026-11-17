@@ -1,33 +1,3 @@
-//! An agent's notebook: a small folder of its own files, read when it needs
-//! them.
-//!
-//! Memory is one page that is in front of the agent on every turn, and it is
-//! bounded because every turn pays for it. What an agent keeps beyond that
-//! page had nowhere to go: a tracker of leads, a log of what was tried, a
-//! customer's history, a draft half written. Pushed into memory it crowds out
-//! the page; left out it is forgotten. Hermes answers this by giving its agent
-//! the host's file tools, and the useful half of that answer is the space
-//! rather than the host.
-//!
-//! So each agent has a folder, shaped however it likes, and only the list of
-//! what is in it is in its prompt. A file is read with the `notebook` tool when
-//! the turn needs it. That keeps the property memory was built around (the
-//! prompt is small and the agent decides what matters) and gives the agent a
-//! place to keep everything else.
-//!
-//! Four stores, and each answers a different question: memory is what the agent
-//! needs every turn, working notes are where its work stands, the notebook is
-//! anything longer it wants to come back to, and a skill is how its crew does
-//! something. The notebook is private to the agent; the operator can read it.
-//!
-//! ## Bounds, and who forgets
-//!
-//! Files are text, a file is at most [`MAX_FILE`] characters, a folder holds at
-//! most [`MAX_FILES`], and nesting stops at [`MAX_DEPTH`]. Nothing expires on
-//! its own: unlike a working note, a notebook file is something the agent
-//! chose to keep. The tool says what a stale file costs, and deleting one is
-//! one call.
-
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -36,20 +6,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::domain::ids::AgentId;
 
-/// A file's size limit, in characters. Room for a long log or a real document;
-/// past it the agent should split the file.
 pub const MAX_FILE: usize = 64_000;
 
-/// How many files one notebook holds.
 pub const MAX_FILES: usize = 200;
 
-/// How deep folders nest.
 pub const MAX_DEPTH: usize = 4;
 
-/// How many files the prompt names before it says how many more there are.
 pub const LISTED: usize = 40;
 
-/// What a file may be. Text an agent writes and a person can open.
 const EXTENSIONS: [&str; 4] = ["md", "txt", "json", "csv"];
 
 #[derive(Debug, thiserror::Error)]
@@ -85,7 +49,6 @@ fn io(path: &Path) -> impl FnOnce(io::Error) -> NotebookError + '_ {
     move |source| NotebookError::Io { path: path.to_path_buf(), source }
 }
 
-/// One file, as a listing shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Entry {
@@ -94,7 +57,6 @@ pub struct Entry {
     pub updated_at: i64,
 }
 
-/// What a write left behind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Written {
     pub path: String,
@@ -102,11 +64,6 @@ pub struct Written {
     pub created: bool,
 }
 
-/// Turns what a model typed into a path inside a notebook, or says why not.
-///
-/// A leading `/` or `./` is dropped rather than refused: it is how a model
-/// writes a path it means relatively. Everything that could leave the folder
-/// is refused. A name with no extension becomes markdown.
 pub fn clean_path(raw: &str) -> Result<String, NotebookError> {
     let given = raw.trim();
     let bad = |why| NotebookError::BadPath { given: given.to_string(), why };
@@ -153,9 +110,6 @@ impl Notebooks {
         self.root.join(agent.to_string())
     }
 
-    /// Where a clean path lives, refusing one that reaches through a link. An
-    /// agent cannot make a link, and one somebody put there must not become a
-    /// way out of the folder.
     fn locate(&self, agent: AgentId, clean: &str) -> Result<PathBuf, NotebookError> {
         let dir = self.dir(agent);
         let mut at = dir.clone();
@@ -174,7 +128,6 @@ impl Notebooks {
         Ok(at)
     }
 
-    /// Every file, in path order.
     pub fn list(&self, agent: AgentId) -> Vec<Entry> {
         let dir = self.dir(agent);
         let mut out = Vec::new();
@@ -183,7 +136,6 @@ impl Notebooks {
         out
     }
 
-    /// A file's text.
     pub fn read(&self, agent: AgentId, raw: &str) -> Result<String, NotebookError> {
         let clean = clean_path(raw)?;
         let path = self.locate(agent, &clean)?;
@@ -196,7 +148,6 @@ impl Notebooks {
         }
     }
 
-    /// Creates or replaces a file.
     pub fn write(
         &self,
         agent: AgentId,
@@ -208,8 +159,6 @@ impl Notebooks {
         self.store(agent, &clean, body)
     }
 
-    /// Adds to the end of a file, creating it if it is new. The one write that
-    /// does not need the file read first, which is what a log wants.
     pub fn append(
         &self,
         agent: AgentId,
@@ -250,7 +199,6 @@ impl Notebooks {
         Ok(Written { path: clean.to_string(), chars, created })
     }
 
-    /// Renames a file, never over another.
     pub fn rename(&self, agent: AgentId, from: &str, to: &str) -> Result<String, NotebookError> {
         let (from, to) = (clean_path(from)?, clean_path(to)?);
         let (source, target) = (self.locate(agent, &from)?, self.locate(agent, &to)?);
@@ -268,7 +216,6 @@ impl Notebooks {
         Ok(to)
     }
 
-    /// Removes a file. False when there was none.
     pub fn delete(&self, agent: AgentId, raw: &str) -> Result<bool, NotebookError> {
         let clean = clean_path(raw)?;
         let path = self.locate(agent, &clean)?;
@@ -282,8 +229,6 @@ impl Notebooks {
         }
     }
 
-    /// A folder emptied by a delete or a move goes with its last file, so the
-    /// listing never shows folders that hold nothing.
     fn prune(&self, agent: AgentId, mut folder: Option<&Path>) {
         let dir = self.dir(agent);
         while let Some(at) = folder.filter(|at| at.starts_with(&dir) && *at != dir) {
@@ -294,7 +239,6 @@ impl Notebooks {
         }
     }
 
-    /// Everything an agent kept, when the agent is gone for good.
     pub fn remove_all(&self, agent: AgentId) {
         let dir = self.dir(agent);
         if let Err(err) = fs::remove_dir_all(&dir) {
@@ -317,8 +261,6 @@ fn walk(root: &Path, at: &Path, depth: usize, out: &mut Vec<Entry>) {
         } else if kind.is_file() {
             let Ok(relative) = path.strip_prefix(root) else { continue };
             let relative = relative.to_string_lossy().replace('\\', "/");
-            // Only what a write could have made, so a stray temporary file or
-            // something an operator dropped in is not offered as a note.
             if clean_path(&relative).ok().as_deref() != Some(relative.as_str()) {
                 continue;
             }
@@ -385,7 +327,6 @@ mod tests {
         assert!(!books.delete(me, "log").unwrap());
         assert!(matches!(books.read(me, "log"), Err(NotebookError::NotFound(_))));
 
-        // Another agent's folder is another folder.
         assert!(books.list(AgentId::new()).is_empty());
     }
 

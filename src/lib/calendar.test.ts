@@ -14,7 +14,6 @@ import {
 } from "./calendar";
 import type { GroupId, Occasion } from "./types";
 
-/** A local wall-clock moment, so every assertion here survives any timezone. */
 function at(year: number, month: number, day: number, hour = 0, minute = 0): number {
   return new Date(year, month - 1, day, hour, minute, 0, 0).getTime();
 }
@@ -46,9 +45,6 @@ describe("a month", () => {
   });
 
   it("moves a month at a time without walking off the end of a short one", () => {
-    // The 31st of a 31-day month stepped forward into a 30-day one lands on the
-    // 1st of the month after that, which is how a "next month" button skips
-    // one. The day is set before the month for exactly this.
     const window = monthOf(at(2026, 1, 31), 1);
     expect(window.from).toBe(at(2026, 2, 1));
     expect(window.until).toBe(at(2026, 3, 1));
@@ -60,9 +56,6 @@ describe("a month", () => {
   });
 
   it("opens on this month and the rest of the next", () => {
-    // A calendar opened on the 29th and showing only the calendar month is a
-    // calendar showing two days, and "what is coming" at the end of a month is
-    // mostly next month.
     const window = openingWindow(at(2026, 9, 29, 10));
     expect(window.from).toBe(at(2026, 9, 1));
     expect(window.until).toBe(at(2026, 11, 1));
@@ -71,8 +64,6 @@ describe("a month", () => {
 
 describe("grouping into days", () => {
   it("gives every day in the window a place, including the empty ones", () => {
-    // An empty Thursday is information. A list of only the busy days cannot say
-    // that nothing is happening on one.
     const days = daysIn([occasion({ startsAt: at(2026, 9, 14, 15) })], monthOf(at(2026, 9, 1)));
     expect(days).toHaveLength(30);
     expect(days[0]!.at).toBe(at(2026, 9, 1));
@@ -81,7 +72,6 @@ describe("grouping into days", () => {
   });
 
   it("drops what is outside the window rather than clamping it into view", () => {
-    // A view showing September must not draw an August meeting on the 1st.
     const days = daysIn(
       [
         occasion({ startsAt: at(2026, 8, 31, 15) }),
@@ -95,9 +85,6 @@ describe("grouping into days", () => {
   });
 
   it("puts the day's frame before its appointments", () => {
-    // An all-day occasion is what the day is, not the first thing in it.
-    // Sorted against timed ones by `startsAt`, a deadline at local midnight
-    // reads as the first appointment of the morning.
     const day = daysIn(
       [
         occasion({ title: "Nine o'clock", startsAt: at(2026, 9, 14, 9) }),
@@ -126,8 +113,6 @@ describe("grouping into days", () => {
   });
 
   it("counts the days of a month a clock change runs through", () => {
-    // March has 31 days whether or not one of them is 23 hours long. Stepped by
-    // 86,400,000 the short day is skipped and the month comes out at 30.
     const days = daysIn([], monthOf(at(2026, 3, 1)));
     expect(days).toHaveLength(31);
     expect(days.every((day) => day.at === dayOf(day.at))).toBe(true);
@@ -160,8 +145,6 @@ describe("when an occasion happens", () => {
     expect(timeLabel(occasion({ startsAt: at(2026, 9, 14, 15), minutes: 60 }))).toBe(
       "3:00 – 4:00 PM",
     );
-    // Most of what lands here is a deadline. A range invented for one would say
-    // a filing takes half an hour.
     expect(timeLabel(occasion({ startsAt: at(2026, 9, 14, 15), minutes: null }))).toBe("3:00 PM");
   });
 
@@ -172,8 +155,6 @@ describe("when an occasion happens", () => {
   });
 
   it("says a whole day is one rather than drawing midnight", () => {
-    // Midnight is a time somebody chose, and a filing shown as 12:00 AM is a
-    // filing nobody reads as a deadline.
     expect(timeLabel(occasion({ allDay: true, minutes: null }))).toBe("All day");
   });
 });
@@ -209,8 +190,6 @@ describe("the next thing coming", () => {
   });
 
   it("is nothing when a whole calendar is behind us", () => {
-    // Which is not the same as an empty calendar, and a badge counting down to
-    // last month's meeting is worse than no badge.
     expect(nextUp([occasion({ startsAt: at(2026, 8, 1, 9) })], now)).toBeNull();
     expect(nextUp([], now)).toBeNull();
   });
@@ -218,8 +197,6 @@ describe("the next thing coming", () => {
 
 describe("the crews you can filter to", () => {
   it("offers every crew, including the ones with an empty calendar", () => {
-    // A chip that appeared only once somebody wrote a date is a filter you
-    // cannot use until you no longer need it.
     const groups = [
       { id: "crew-1" as GroupId, name: "Ops" },
       { id: "crew-2" as GroupId, name: "Legal" },

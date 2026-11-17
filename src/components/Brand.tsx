@@ -6,25 +6,11 @@ import type { Point } from "../avatars/form";
 import { brandAt, toward } from "../lib/brand";
 import { prefersReducedMotion } from "../lib/motion";
 
-/**
- * The icon's two, in the icon's two colors: a pigment every agent can have,
- * and ink, which none can. The ink is a rail token because the icon's ink
- * body disappears against the dark rail, and paper is its opposite there.
- */
 const SEATS = [
   { seed: "guaca-left", color: ACCENTS.find((a) => a.name === "Terracotta")?.value ?? "" },
   { seed: "guaca-right", color: "var(--rail-pair)" },
 ] as const;
 
-/**
- * The corner of the rail: the icon's pair, and the name while it is worth
- * reading. `lib/brand.ts` decides what happens when; this renders at the beats
- * it names and at nothing in between, and turns a look at the pointer into a
- * direction, which only the page can do.
- *
- * The name stays in the document when it is folded away, so the rail is named
- * for a screen reader whether or not anybody is pointing at it.
- */
 export function Brand({ waiting }: { waiting: boolean }) {
   const born = useRef(performance.now());
   const [, beat] = useReducer((n: number) => n + 1, 0);
@@ -53,7 +39,6 @@ export function Brand({ waiting }: { waiting: boolean }) {
   });
   useEffect(() => () => cancelAnimationFrame(frame.current), []);
 
-  /* Once a frame at most, and only while the pointer is over the corner. */
   const aim = (x: number, y: number) => {
     cancelAnimationFrame(frame.current);
     frame.current = requestAnimationFrame(() => {

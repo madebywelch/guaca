@@ -7,14 +7,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentCard } from "../lib/types";
 import { aGroup, DEFAULT_GROUP } from "../test-fixtures";
 
-/**
- * The compost, over a mocked store.
- *
- * What is worth checking here is what a click actually sends, because the two
- * buttons on a row do opposite things and one of them destroys a memory. The
- * arithmetic behind the clock is `lib/compost`'s, and is tested there.
- */
-
 const restoreAgent = vi.fn<(id: string) => Promise<AgentCard>>();
 const purgeAgent = vi.fn<(id: string) => Promise<void>>(async () => {});
 const select = vi.fn(async () => {});
@@ -75,7 +67,6 @@ function open(agents: AgentCard[]) {
   return render(<Compost />);
 }
 
-/** Deleted this many days ago. */
 const thrownOut = (name: string, daysAgo: number) => agent(name, Date.now() - daysAgo * DAY);
 
 beforeEach(() => {
@@ -92,10 +83,6 @@ describe("the compost", () => {
   });
 
   it("says what a restore would get back, once, at the top", () => {
-    // The one thing that is invisible everywhere else, on the one screen where
-    // somebody is deciding whether they meant it. Once rather than per row:
-    // the same sentence three times is wallpaper, and it would be read as
-    // three rows of gray beside the one number that differs.
     const { container } = open([thrownOut("Scribe", 2), thrownOut("Paralegal", 4)]);
 
     expect(
@@ -114,8 +101,6 @@ describe("the compost", () => {
     fireEvent.click(screen.getByRole("button", { name: /put back/i }));
 
     await waitFor(() => expect(restoreAgent).toHaveBeenCalledWith("id-Scribe"));
-    // Opened rather than only restored: the agent comes back paused and may
-    // come back renamed, so nothing about it would otherwise draw attention.
     await waitFor(() => expect(select).toHaveBeenCalledWith("id-Scribe copy"));
   });
 
@@ -146,11 +131,6 @@ describe("the compost", () => {
   });
 
   it("draws the wait the runtime actually enforces", () => {
-    // The one number in this file that is somebody else's. Read out of the
-    // Rust rather than trusted: this panel tells the operator when their
-    // agent's memory will be deleted, and nothing else in the build compares
-    // the two. Both sides compile, both sides pass, and the only symptom is a
-    // countdown that is not the one being counted down.
     const rust = readFileSync(resolve(__dirname, "../../src-tauri/src/domain/agent.rs"), "utf8");
     const declared = rust.match(/pub const COMPOST_DAYS: i64 = ([\d_]+)/);
     expect(
@@ -163,8 +143,6 @@ describe("the compost", () => {
   it("marks the last week and leaves the rest of the wait unmarked", () => {
     const { container } = open([thrownOut("Going", COMPOST_DAYS - 2), thrownOut("Waiting", 1)]);
 
-    // Newest first, so the one with weeks to go is drawn above the one that is
-    // about to be swept. The mark is what says which is which.
     const marked = [...container.querySelectorAll(".compost__clock")].map((node) =>
       node.getAttribute("data-soon"),
     );

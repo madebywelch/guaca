@@ -19,7 +19,6 @@ type Editor =
   | { kind: "add"; service: string; envVar: string; secret: string; agents: AgentId[] }
   | { kind: "edit"; connector: Connector; replacement: string; agents: AgentId[] };
 
-/** Values are write-only. Grants and rotation take effect on the next command or job. */
 export function CredentialList({ groupId, crew = [] }: Props) {
   const [connectors, setConnectors] = useState<Connector[] | null>(null);
   const [editor, setEditor] = useState<Editor>({ kind: "closed" });

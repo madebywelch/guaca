@@ -191,9 +191,6 @@ describe("StatusBar", () => {
   });
 
   it("names which host it is, and flags an app older than it", () => {
-    // It said "Host 0.1.0": a version, which is the least useful half of what
-    // the bar knows, and clickable, so it was a status somebody was meant to
-    // read. Which host, and whether the two builds agree, is the status.
     seed([]);
     const { rerender } = render(<StatusBar onOpen={onOpen} onMessage={onMessage} />);
     const label = screen.getByRole("button", { name: "This Mac" });
@@ -210,8 +207,6 @@ describe("StatusBar", () => {
   });
 
   it("says which build a host on the same version is, without a hover", () => {
-    // The label read "This Mac" for either build once the version left it, and
-    // the only difference would be a color and a title nobody hovers for.
     seed([]);
     host.build = "a".repeat(40);
     const { rerender } = render(<StatusBar onOpen={onOpen} onMessage={onMessage} />);
@@ -229,9 +224,6 @@ describe("StatusBar", () => {
   });
 
   it("names the two things that can live on it while there is nothing on it", () => {
-    // It said "Add a quick action" and nothing else, and a pinned page has no
-    // door on the bar at all: the way to learn that one can live there was
-    // Artifacts -> a page -> the Status bar row.
     seed([]);
     render(<StatusBar onOpen={onOpen} onMessage={onMessage} />);
     expect(screen.getByText("A kept page can be pinned here, from Artifacts.")).toBeTruthy();
@@ -307,7 +299,6 @@ describe("a pinned page", () => {
       if (!found) throw new Error("no frame yet");
       return found;
     });
-    // Scripts and nothing else, and never a target for the pointer.
     expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
     expect(container.querySelector(".widget")?.getAttribute("data-width")).toBe("wide");
     const framed = frameArtifact.mock.calls[0]?.[0] ?? "";

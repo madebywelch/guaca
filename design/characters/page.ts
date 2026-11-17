@@ -1,9 +1,3 @@
-/**
- * The review page: the cast as it ships beside three redesigns, all live.
- *
- *   ./design/make-characters.sh
- */
-
 import { ACCENTS, CHARACTERS } from "../../src/avatars/catalog";
 import { baseline } from "./baseline";
 import { gel } from "./gel";
@@ -25,7 +19,6 @@ const DESIGNS = [baseline, lids, gel, ink];
 
 const PIGMENT = Object.fromEntries(ACCENTS.map((a) => [a.name, a.value])) as Record<string, string>;
 
-/** One character per mood, the same in every design, so a column compares like with like. */
 const BY_MOOD: Record<Mood, { who: string; color: string }> = {
   idle: { who: "orb", color: PIGMENT.Olive as string },
   listening: { who: "bead", color: PIGMENT.Rose as string },
@@ -39,7 +32,6 @@ const BY_MOOD: Record<Mood, { who: string; color: string }> = {
   surprised: { who: "lobe", color: PIGMENT.Verdigris as string },
 };
 
-/** What the stage offers: one of each shape, and one with a single eye. */
 const STAGE_CAST: { who: string; color: string; label: string }[] = [
   { who: "orb", color: PIGMENT.Olive as string, label: "circle" },
   { who: "puck", color: PIGMENT.Indigo as string, label: "octagon" },
@@ -184,8 +176,6 @@ const COPY: Record<string, Copy> = {
   },
 };
 
-/* --- building blocks ---------------------------------------------------------- */
-
 function h<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   attrs: Record<string, string> = {},
@@ -205,8 +195,6 @@ function spot(design: Design, who: string, color: string, px: number, mood: Mood
   const handle = mount(host, design, { who, color, px, mood, follow, seed });
   return { host, handle };
 }
-
-/* --- the stage ----------------------------------------------------------------- */
 
 const LADDER = [68, 44, 32, 24];
 
@@ -322,8 +310,6 @@ function stage(design: Design): HTMLElement {
   );
 }
 
-/* --- ten moods ------------------------------------------------------------------ */
-
 function moods(design: Design): HTMLElement {
   const big = h("div", { class: "moods" });
   const small = h("div", { class: "moods moods--small" });
@@ -341,8 +327,6 @@ function moods(design: Design): HTMLElement {
   }
   return h("div", { class: "block" }, h("h3", {}, "Ten moods, at 68px and at 24px"), big, small);
 }
-
-/* --- a rail, with a conversation in it ------------------------------------------ */
 
 const CREW: { who: string; color: string; name: string }[] = [
   { who: "husk", color: PIGMENT.Indigo as string, name: "Planner" },
@@ -445,8 +429,6 @@ function rail(design: Design): HTMLElement {
     h("div", {}, h("h3", {}, "The whole cast, idle, at 32px"), crowd),
   );
 }
-
-/* --- sections ------------------------------------------------------------------- */
 
 function section(design: Design): HTMLElement {
   const copy = COPY[design.key] as Copy;

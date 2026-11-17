@@ -8,7 +8,6 @@ import { MOODS, type Mood } from "./moods";
 
 const MOOD_KEYS = Object.keys(MOODS) as Mood[];
 
-/** Whether a point is enclosed by the outline. Ray cast, so concavity counts. */
 function encloses(pts: [number, number][], px: number, py: number): boolean {
   let hit = false;
   for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
@@ -19,7 +18,6 @@ function encloses(pts: [number, number][], px: number, py: number): boolean {
   return hit;
 }
 
-/** How far a point is inside the outline, less a pad. Negative is outside. */
 function room(pts: [number, number][], px: number, py: number, pad: number): number {
   let near = Number.POSITIVE_INFINITY;
   for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
@@ -35,10 +33,6 @@ function room(pts: [number, number][], px: number, py: number, pad: number): num
 }
 
 describe("the drawn face", () => {
-  // The same gate the cut cast has, for the strokes this one adds: a brow is
-  // above the eye and a mouth below it, and both have to land on the creature
-  // they belong to in every mood, at every size a mouth is drawn at, wherever
-  // the eyes have gone.
   it("keeps every stroke of the face inside the body", () => {
     for (const lump of CHARACTERS) {
       for (const key of MOOD_KEYS) {
@@ -65,7 +59,6 @@ describe("the drawn face", () => {
     }
   }, 30_000);
 
-  // A mouth at 22px is a smudge, which is why the cut cast has none.
   it("draws a mouth only where there is room for one", () => {
     const lump = CHARACTERS[0];
     if (!lump) throw new Error("no cast");
@@ -77,8 +70,6 @@ describe("the drawn face", () => {
     expect(faceAt(lump, DRAWN.surprised, { ...at, px: 68 }, pts).o).not.toBeNull();
   });
 
-  // A large look is a cut hidden by a blink, the way an animator hides a head
-  // turn; a glance is a snap with the eyes open.
   it("hides a large look behind shut eyes and leaves a glance open", () => {
     const lump = CHARACTERS[0];
     if (!lump) throw new Error("no cast");
@@ -114,9 +105,6 @@ describe("the drawn face", () => {
 });
 
 describe("the drawn line", () => {
-  // The line is a channel of its own only if the calm moods leave it alone: a
-  // rail of idle creatures whose outlines crawl is the screensaver this design
-  // exists to avoid.
   it("holds a calm line still from one drawing to the next and boils a busy one", () => {
     const lump = CHARACTERS[0];
     if (!lump) throw new Error("no cast");
@@ -145,8 +133,6 @@ describe("the drawn line", () => {
 });
 
 describe("the drawn timing", () => {
-  // Five drawings, one of them past the new pose. A smoothstep would never
-  // overshoot, and an overshoot is the whole of what pose to pose adds.
   it("changes mood in five drawings, one of them past the target", () => {
     expect(POSES).toHaveLength(5);
     expect(poseAt(0)).toBe(0);
@@ -154,7 +140,6 @@ describe("the drawn timing", () => {
     expect(Math.max(...POSES)).toBeGreaterThan(1);
     expect(poseAt(4 / FPS)).toBe(1);
     expect(poseAt(Number.POSITIVE_INFINITY)).toBe(1);
-    // Held between drawings: the pose does not move inside one twelfth.
     expect(poseAt(2.1 / FPS)).toBe(poseAt(2.9 / FPS));
   });
 });
@@ -166,7 +151,6 @@ describe("the drawn table", () => {
     expect(MOODS.blocked.mark).toBe("bang");
   });
 
-  // A mark nobody wears is one that could break with nothing on screen to show it.
   it("gives every character a mark for life, and uses every kind", () => {
     const kinds = new Set(CHARACTERS.map((c) => tuftOf(c.key)));
     for (const c of CHARACTERS) expect(tuftOf(c.key)).toBe(tuftOf(c.key));

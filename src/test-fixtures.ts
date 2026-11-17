@@ -1,12 +1,3 @@
-/**
- * Shapes that tests need whole but only care about a field or two of.
- *
- * A group is the first of them. Five test files each built one by hand, so
- * adding a setting to a group meant editing five fixtures that had nothing to
- * do with the change and nothing to say about it. Imported only by tests, so
- * nothing here reaches the bundle.
- */
-
 import type {
   AgentCard,
   Approval,
@@ -17,10 +8,8 @@ import type {
   WorkDecision,
 } from "./lib/types";
 
-/** The group the migration creates, which the UI hides while it is the only one. */
 export const DEFAULT_GROUP: GroupId = "00000000-0000-4000-8000-000000000001";
 
-/** A group that inherits everything, with whatever the test cares about on top. */
 export function aGroup(over: Partial<Group> = {}): Group {
   return {
     id: DEFAULT_GROUP,
@@ -49,7 +38,6 @@ export function aGroup(over: Partial<Group> = {}): Group {
   };
 }
 
-/** A durable decision with enough context to answer away from its conversation. */
 export function aDecision(over: Partial<WorkDecision> = {}): WorkDecision {
   return {
     id: "decision-1",
@@ -77,7 +65,6 @@ export function aDecision(over: Partial<WorkDecision> = {}): WorkDecision {
   };
 }
 
-/** An active agent in the default group, named for its id unless a test says otherwise. */
 export function anAgent(id: string, over: Partial<AgentCard> = {}): AgentCard {
   return {
     id,
@@ -106,7 +93,6 @@ export function anAgent(id: string, over: Partial<AgentCard> = {}): AgentCard {
   };
 }
 
-/** A run that finished and that nobody has looked at yet. */
 export function anOutcome(over: Partial<Outcome> & Pick<Outcome, "agentId">): Outcome {
   return {
     runId: `run-${over.agentId}`,
@@ -125,7 +111,6 @@ export function anOutcome(over: Partial<Outcome> & Pick<Outcome, "agentId">): Ou
   };
 }
 
-/** A permission request still waiting on the operator, with no deadline. */
 export function anApproval(over: Partial<Approval> & Pick<Approval, "agentId">): Approval {
   return {
     id: `req-${over.agentId}` as ApprovalId,

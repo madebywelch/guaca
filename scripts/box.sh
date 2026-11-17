@@ -1,20 +1,4 @@
 #!/usr/bin/env bash
-#
-# Installs a box on this machine's Docker the way deploy/box/install.sh does on
-# a server, and proves the parts no fake Docker can: that the updater, inside
-# its own container, can make the host, reach it, share a socket with it, and
-# replace itself; and that the host relays it behind the workspace's token.
-#
-#   IMAGE=guacad:abc1234 ./scripts/box.sh     an image scripts/image.sh built
-#
-# It does not install an update. The updater installs only a release this
-# build's key signed, from GitHub, so what is checked instead is that the
-# release there now is refused before anything stops. The sequence itself is
-# the desktop's, and `host::tests` and the ignored Docker test in host.rs run it.
-# It also moves the box onto main and back, which is the one setting that
-# crosses all three containers: the installer's, the updater's and the host's.
-#
-# The names are a box's own, so it refuses to run beside a box that exists.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -113,8 +97,6 @@ done
 curl -fsS -H "authorization: Bearer ${TOKEN}" "${BASE}/v1/host" | grep -q '"managed":true' \
   || fail "the host lost its updater when the updater was replaced"
 
-# Reinstalls with the settings the box already has and `GUACA_CHANNEL` as given,
-# then waits for the replacement updater to answer through the host.
 reinstall() {
   env -u GUACA_CHANNEL "$@" GUACA_IMAGE="$IMAGE" GUACA_ENV="$SETTINGS" GUACA_PORT="$PORT" GUACA_VOLUME="$WORKSPACE" \
     sh deploy/box/install.sh >/dev/null
@@ -138,8 +120,6 @@ if GUACA_CHANNEL=nightly GUACA_IMAGE="$IMAGE" GUACA_ENV="$SETTINGS" GUACA_PORT="
   sh deploy/box/install.sh >/dev/null 2>&1; then
   fail "the installer accepted a channel nobody can read"
 fi
-# The updater refuses it too, for the replacement it makes of itself, and says
-# so before it asks Docker for anything.
 if said="$(docker run --rm --env GUACA_CHANNEL=nightly --entrypoint /usr/local/bin/guaca-updater "$IMAGE" install "$IMAGE" 2>&1)"; then
   fail "the updater would replace itself on a channel nobody can read"
 fi

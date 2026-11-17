@@ -1,5 +1,3 @@
-// One zone on every machine, so "9:12 on a Monday" and its labels are the same
-// moment wherever the suite runs. Set before anything here makes a Date.
 process.env.TZ = "America/New_York";
 
 import { describe, expect, it } from "vitest";
@@ -8,7 +6,6 @@ import { anAgent, anApproval, anOutcome } from "../test-fixtures";
 import { BAND_LABEL, layoutRibbon, type RibbonInput, spread, xAt } from "./ribbon";
 import type { Occasion, UpcomingRun } from "./types";
 
-/** Monday, November 16, 2026, local time, so the suite holds in every zone. */
 const at = (day: number, hour: number, minute = 0) =>
   new Date(2026, 10, day, hour, minute).getTime();
 const NOW = at(16, 9, 12);
@@ -39,7 +36,6 @@ function occasion(over: Partial<Occasion>): Occasion {
   };
 }
 
-/** The approved mock's morning: away overnight, three runs unseen, one question. */
 function morning(over: Partial<RibbonInput> = {}): RibbonInput {
   return {
     now: NOW,
@@ -73,7 +69,6 @@ const face = (input: RibbonInput, id: string) =>
 
 describe("the pile", () => {
   it("takes an agent with nothing live, unseen or from today", () => {
-    // Kit's last run was yesterday and was seen, so nothing pulls it onto the strip.
     const ribbon = layoutRibbon(morning());
     expect(ribbon.pile).toEqual(["kit", "wren", "pip"]);
     expect(ribbon.faces.map((one) => one.agentId)).not.toContain("kit");
@@ -87,7 +82,6 @@ describe("the pile", () => {
 
 describe("where a face goes", () => {
   it("draws each agent once, however many things pull at it", () => {
-    // Dara is asking, working and has an unseen run all at once.
     const input = morning({
       activity: { dara: { state: "thinking" }, marlow: { state: "thinking" } },
       outcomes: [...morning().outcomes, anOutcome({ agentId: "dara", finishedAt: at(16, 8) })],
@@ -114,11 +108,6 @@ describe("where a face goes", () => {
   });
 
   it("keeps what has already happened left of now when the clock it is drawn with lags", () => {
-    // The strip's clock moves once a minute and a question lands whenever it
-    // is asked, so one asked at 9:12:30 is drawn with a now of 9:12. It was
-    // still asked before now, and its face goes on the side of the line it
-    // takes once the clock catches up, not on the side of the line that is
-    // still to come.
     const asked = NOW + 30_000;
     const input = morning({
       approvals: [anApproval({ agentId: "dara", createdAt: asked })],
@@ -203,8 +192,6 @@ describe("the band", () => {
   });
 
   it("holds every unseen face as drawn, a crowd pushed left of its moment included", () => {
-    // Seen a minute ago, three runs since: drawn a face apart, the crowd ends
-    // up left of the moment the band starts at.
     const outcomes = [
       anOutcome({
         agentId: "kit",
@@ -323,7 +310,6 @@ describe("crowding", () => {
     "Builder",
   ];
 
-  /** Who finished within six minutes of now, as at the window's own sizes. */
   function crowd(names: string[], width: number) {
     const agents = names.map((name) => anAgent(name.toLowerCase(), { name }));
     const outcomes = agents.map((agent, i) =>
@@ -374,7 +360,6 @@ describe("crowding", () => {
         const off = Math.abs(face.x - ribbon.now.x);
         expect(off).toBeGreaterThanOrEqual(half(face.agentId) - 1e-9);
       }
-      // Nobody is lost: whoever does not fit is in the pile, newest kept.
       expect([...faces.map((face) => face.agentId), ...ribbon.pile].sort()).toEqual(
         agents.map((agent) => agent.id).sort(),
       );
@@ -382,7 +367,6 @@ describe("crowding", () => {
     });
   }
 
-  /** Faces of one kind, all at once, as the window's own sizes draw them. */
   function live(kind: "working" | "needsYou", count: number, width: number) {
     const agents = NAMES_12.slice(0, count).map((name) => anAgent(name.toLowerCase(), { name }));
     const faceSpan = 52 / width;
@@ -431,7 +415,6 @@ describe("crowding", () => {
           const b = drawn[i] as (typeof drawn)[number];
           expect(b.x - a.x).toBeGreaterThanOrEqual(half(a.text) + half(b.text) + charSpan - 1e-9);
         }
-        // Everyone is drawn or counted, and nobody who needs you is piled.
         const counted = ribbon.counts.flatMap((one) => one.agentIds);
         expect([...ribbon.faces.map((face) => face.agentId), ...counted].sort()).toEqual(
           agents.map((agent) => agent.id).sort(),
@@ -451,7 +434,6 @@ describe("crowding", () => {
   });
 
   it("piles a resting face before an unseen failure, whatever their times", () => {
-    // A failure from 3 AM nobody has seen is news; a run seen at 8 AM is not.
     const agents = NAMES.map((name) => anAgent(name.toLowerCase(), { name }));
     const outcomes = [
       anOutcome({
@@ -587,8 +569,6 @@ describe("what is scheduled", () => {
   });
 
   it("is one item when the same routine is due for several agents at once", () => {
-    // Nine copies side by side pushed the last of them days past the moment
-    // all nine were due at.
     const upcoming = ["dara", "kit", "wren"].map((agentId) =>
       run({ agentId, routineId: `review-${agentId}`, name: "Page review", nextRunAt: at(16, 10) }),
     );
@@ -605,8 +585,6 @@ describe("what is scheduled", () => {
   });
 
   it("gives way to the faces on a strip too narrow for both", () => {
-    // A phone's strip holds five faces' width. Five faces and four items
-    // drawn on it overlapped every name; the faces are what it is for.
     const ribbon = layoutRibbon(morning({ faceSpan: 0.2 }));
     const drawn = ribbon.faces.map((one) => one.agentId);
     for (const one of layoutRibbon(morning()).faces) {
@@ -655,13 +633,10 @@ describe("what is scheduled", () => {
 });
 
 describe("labels", () => {
-  /** A character a hundredth of the strip: a 1,000 pixel ribbon at 10 a letter. */
   const CHAR = 0.01;
   const half = (text: string) => Math.max(SPAN, text.length * CHAR) / 2;
 
   it("keeps every name and every coming item off the now line", () => {
-    // Marlow works at 9:12 and Dara asked at 9:05: drawn at their moments, the
-    // line ran through the M of one name and the middle of the other.
     const input = morning({ charSpan: CHAR });
     const ribbon = layoutRibbon(input);
     const name = (id: string) => AGENTS.find((one) => one.id === id)?.name ?? "";
@@ -672,7 +647,6 @@ describe("labels", () => {
       const text = one.what.length > one.when.length ? one.what : one.when;
       expect(Math.abs(one.x - ribbon.now.x)).toBeGreaterThanOrEqual(half(text));
     }
-    // Who is at work goes after the line, who asked before it.
     expect(face(input, "marlow")?.x).toBeGreaterThan(ribbon.now.x);
     expect(face(input, "dara")?.x).toBeLessThan(ribbon.now.x);
   });
@@ -705,7 +679,6 @@ describe("labels", () => {
     expect(note?.align).toBe("end");
     const tomas = ribbon.faces[0];
     expect((tomas?.x ?? 0) - half("Tomás Villanueva-Ortega")).toBeGreaterThanOrEqual(-1e-9);
-    // Hung from the mark's edge, each label then ends a half face from it.
     expect((note?.x ?? 1) + SPAN / 2).toBeLessThanOrEqual(1);
     expect((tomas?.x ?? 0) - SPAN / 2).toBeGreaterThanOrEqual(0);
   });
@@ -717,8 +690,6 @@ describe("labels", () => {
 });
 
 describe("a quiet afternoon", () => {
-  // Everything seen and nobody working: the faces rest where they last did
-  // anything today, with no marks and no band.
   const quiet = morning({
     now: at(16, 14, 40),
     activity: {},

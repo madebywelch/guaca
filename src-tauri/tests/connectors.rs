@@ -1,42 +1,13 @@
-//! What a credential actually reaches, against the real service.
-//!
-//! The scripted suites prove the plumbing: a secret goes into the environment
-//! of a sandbox command and never anywhere else. They cannot prove the thing an
-//! operator cares about, which is that an agent handed a key can do the work the
-//! key is for. That needs the real machine and the real API, so it costs money
-//! and lives behind `#[ignore]`.
-//!
-//! Run with `./scripts/connectors.sh`.
-//!
-//! The credential is read from the app's own database and put into the sandbox
-//! the way the runtime puts it there. It is never printed, never asserted on,
-//! and never written to the sandbox's disk: if one of these tests fails, the
-//! output says which step failed and not what the token was.
-
 use std::collections::BTreeMap;
 
 use guac_lib::db::Store;
 use guac_lib::e2b::E2bClient;
 
-/// Two real documents, and something in each that OCR has to come back with.
-///
-/// arXiv because the papers are stable, public, and already cited by this
-/// project: `docs/PROTOCOL.md` argues from both of them.
 const DOCUMENTS: [(&str, &str, &str); 2] = [
     ("beyond-browsing.pdf", "https://arxiv.org/pdf/2410.16464", "Beyond Browsing"),
     ("attention.pdf", "https://arxiv.org/pdf/1706.03762", "Attention Is All You Need"),
 ];
 
-/// One local file, read by Mistral OCR: upload, sign, read.
-///
-/// Written as shell rather than as Rust HTTP calls on purpose. This is the
-/// sequence an agent will run through `run_command`, in the same login shell,
-/// reaching the credential by the same variable name, so what passes here is
-/// what an agent can do rather than something only the test can.
-///
-/// `DOCUMENT` is replaced with the file name. Not a `format!`: the body is
-/// mostly braces and escaping every one of them makes it unreadable and
-/// unpasteable into a terminal, which is where it was worked out.
 const OCR_ONE_FILE: &str = r#"set -e
 file_id=$(curl -sS --max-time 120 https://api.mistral.ai/v1/files \
   -H "Authorization: Bearer $MISTRAL_API_KEY" \
@@ -62,10 +33,6 @@ fn configured() -> Option<guac_lib::config::AppConfig> {
     (!config.e2b.api_key.trim().is_empty()).then_some(config)
 }
 
-/// The group environment holding `var`, exactly as the runtime would build it.
-///
-/// Whichever group the operator put the credential in: it is one workspace and
-/// the test should not care which crew holds the key.
 fn credentials_holding(var: &str) -> Option<BTreeMap<String, String>> {
     let store = Store::open(&app_dir()?.join("guac.db")).ok()?;
     store
@@ -76,7 +43,6 @@ fn credentials_holding(var: &str) -> Option<BTreeMap<String, String>> {
         .find(|env| env.contains_key(var))
 }
 
-/// A machine with the group's credentials in its environment.
 struct Machine {
     client: E2bClient,
     id: String,
@@ -104,9 +70,6 @@ impl Machine {
         out.stdout
     }
 
-    /// Never left running. A sandbox nobody holds a reference to bills exactly
-    /// like a used one, and a failing assertion takes the rest of the test with
-    /// it, so this is called before anything that can panic.
     async fn release(&self) {
         if let Err(err) = self.client.kill(&self.id).await {
             eprintln!("could not release {}: {err}", self.id);
@@ -117,10 +80,6 @@ impl Machine {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "live: costs money, needs the E2B and Mistral keys the app is configured with"]
 async fn an_agent_can_read_a_folder_of_documents_it_downloaded() {
-    // The whole path an operator asked for, end to end: a machine with the
-    // group's credentials in its environment downloads a folder of PDFs and
-    // turns them into text with Mistral OCR. Everything here is what an agent
-    // would do with `run_command`, in the same shell, with the same variable.
     let Some(config) = configured() else {
         eprintln!("no E2B key configured; skipping");
         return;
@@ -132,7 +91,6 @@ async fn an_agent_can_read_a_folder_of_documents_it_downloaded() {
 
     let machine = Machine::start(env, &config.e2b.api_key).await;
 
-    // 1. The folder. Downloaded the way an agent would, with the tool it has.
     let mut downloaded = String::new();
     for (name, url) in DOCUMENTS.map(|(name, url, _)| (name, url)) {
         machine
@@ -142,13 +100,9 @@ async fn an_agent_can_read_a_folder_of_documents_it_downloaded() {
     }
     assert!(downloaded.contains("beyond-browsing.pdf"), "the folder is not there: {downloaded}");
 
-    // 2. The credential reaches the shell under the name the catalog promised,
-    // and only as a name: what is asserted is that it is set, never its value.
     let present = machine.run("test -n \"$MISTRAL_API_KEY\" && echo set || echo missing").await;
     assert_eq!(present.trim(), "set", "the credential never reached the machine's environment");
 
-    // 3. OCR, per file: upload, sign, read. This is the sequence the catalog
-    // note tells an agent about, run exactly as written there.
     let mut text = String::new();
     for (name, _, expected) in DOCUMENTS {
         let extracted = machine.run(&OCR_ONE_FILE.replace("DOCUMENT", name)).await;
@@ -163,7 +117,5 @@ async fn an_agent_can_read_a_folder_of_documents_it_downloaded() {
 
     machine.release().await;
 
-    // The value must not have traveled with the result. Cheap to check and the
-    // one mistake in this flow that would matter.
     assert!(!text.contains("MISTRAL_API_KEY="), "the environment leaked into the output");
 }

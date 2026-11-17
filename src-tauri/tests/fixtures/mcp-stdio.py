@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""A stdio MCP server for tests: one JSON-RPC message per line."""
 import json
 import os
 import sys
@@ -9,14 +8,11 @@ if MODE == "die":
     print("fixture: cannot find its configuration", file=sys.stderr, flush=True)
     sys.exit(3)
 if MODE == "closes-first":
-    # Its output is closed before it says why, as a program that tears down
-    # its transport before logging the reason does.
     os.close(1)
     sys.stdin.readline()
     print("fixture: lost its configuration on the way out", file=sys.stderr, flush=True)
     sys.exit(3)
 if MODE == "once":
-    # Shakes hands, then is gone before anything else is asked of it.
     asked = json.loads(sys.stdin.readline())
     sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": asked["id"], "result": {
         "protocolVersion": "2025-06-18", "capabilities": {"tools": {}},
@@ -26,7 +22,6 @@ if MODE == "once":
     print("fixture: gone after one answer", file=sys.stderr, flush=True)
     sys.exit(3)
 
-# Plenty of real servers print a banner before speaking MCP.
 print("fixture server starting", flush=True)
 print("fixture: stderr is for people", file=sys.stderr, flush=True)
 
@@ -54,8 +49,6 @@ for line in sys.stdin:
     elif method == "tools/list":
         send({"jsonrpc": "2.0", "id": message["id"], "result": {"tools": TOOLS}})
     elif method == "tools/call":
-        # A server may ask its client something mid-call; Guaca offers nothing
-        # and must say so rather than leave it waiting.
         send({"jsonrpc": "2.0", "id": "srv-1", "method": "roots/list", "params": {}})
         answer = json.loads(sys.stdin.readline())
         refused = "error" in answer

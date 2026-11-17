@@ -1,7 +1,3 @@
-/**
- * The composer under Now: what an agent is doing is what a person most often
- * wants to say something about, so the box to say it in stays on that tab.
- */
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -45,8 +41,6 @@ describe("an agent's page on Now", () => {
     expect(box.closest("[hidden]")).toBeNull();
   });
   it("keeps only the step count and Stop on the line above the composer", async () => {
-    // Now already says who is working, on what, and each step. The face and
-    // the tail of the model's working belong to the conversation's line.
     const agent = anAgent("manager", { name: "Manager" });
     const args = { action: "open", url: "https://plumbers.example" };
     useStore.setState({

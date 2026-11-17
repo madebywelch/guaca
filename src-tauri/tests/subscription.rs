@@ -1,24 +1,3 @@
-//! End-to-end runtime tests for the ChatGPT subscription path.
-//!
-//! A sibling of `cascade.rs`, and deliberately not part of it. Those tests drive
-//! the runtime against a scripted OpenAI-compatible server, which is the only
-//! endpoint shape the app spoke until subscriptions existed. These drive the same
-//! runtime against a scripted *Responses* server, because that is a different
-//! request body, a different item model and a different set of stream events for
-//! the same conversation.
-//!
-//! What is being tested is the seam rather than the translation: `llm/codex.rs`
-//! has unit tests for the body it assembles and the stream it reads, and those
-//! would all pass with the provider never dispatched, the credential never
-//! reached and the model resolved from the wrong field. Everything here goes
-//! through `Runtime`, so a turn only works if the dispatch, the sign-in store,
-//! the model resolution, the tool loop and the accounting all agree.
-//!
-//! The stub asserts the parts of the protocol that were learned the hard way
-//! against the real endpoint: no `temperature`, `instructions` present, tools
-//! flat. A regression in any of those is a 400 in production and a silent pass
-//! in a test that only checked the reply.
-
 mod harness;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -41,34 +20,16 @@ use guac_lib::subscription::Subscription;
 
 use harness::{draft, frame};
 
-/// What every scripted call reports having cost, in this protocol's spelling.
 const CALL_TOKENS: (u32, u32) = (120, 30);
-/// Of the input above, what the backend says it read from its cache.
 const CACHED_TOKENS: u32 = 96;
 
-/// What the stub should do for one request.
 #[derive(Debug, Clone)]
 enum Say {
     Text(String),
-    /// Working first, then an answer. What a reasoning model sends.
-    Thinking {
-        about: String,
-        then: String,
-    },
-    /// A `send_message` call, as the Responses API delivers one.
-    SendTo {
-        to: Vec<String>,
-        text: String,
-    },
+    Thinking { about: String, then: String },
+    SendTo { to: Vec<String>, text: String },
 }
 
-/// Renders a turn as the Codex backend really streams one.
-///
-/// The event names and their nesting are the protocol, and the shape here is
-/// what a live call was observed to send: text arrives as `output_text.delta`,
-/// a tool call is announced, streamed as argument fragments and then repeated
-/// whole in `output_item.done`, and the usage rides inside `response.completed`
-/// rather than in a frame of its own. Nothing says `[DONE]`.
 fn render(say: &Say) -> String {
     let mut body = String::new();
     body.push_str(&frame(serde_json::json!({
@@ -99,8 +60,6 @@ fn render(say: &Say) -> String {
                     "name": "send_message", "arguments": "",
                 },
             })));
-            // In fragments, as they really arrive. The runtime must not read
-            // these as a second call on top of the finished item below.
             for piece in args.as_bytes().chunks(11) {
                 body.push_str(&frame(serde_json::json!({
                     "type": "response.function_call_arguments.delta",
@@ -145,7 +104,6 @@ fn push_text(body: &mut String, text: &str) {
     })));
 }
 
-/// A scripted Codex backend, and what it saw.
 struct Stub {
     backend: String,
     seen: Arc<Mutex<Vec<serde_json::Value>>>,
@@ -154,7 +112,6 @@ struct Stub {
 }
 
 impl Stub {
-    /// Every request body it was sent, in order.
     fn bodies(&self) -> Vec<serde_json::Value> {
         self.seen.lock().clone()
     }
@@ -163,7 +120,6 @@ impl Stub {
         self.headers(name).into_iter().next()
     }
 
-    /// Every request's value for one header, in order.
     fn headers(&self, name: &str) -> Vec<String> {
         self.headers
             .lock()
@@ -174,10 +130,6 @@ impl Stub {
     }
 }
 
-/// Which agent is asking, read out of `instructions` rather than out of a
-/// message. That relocation is the single biggest difference between the two
-/// protocols, so a stub that could not find the name here would not have been
-/// testing the thing most likely to be wrong.
 fn speaker(body: &serde_json::Value) -> String {
     let instructions = body["instructions"].as_str().unwrap_or_default();
     instructions
@@ -188,7 +140,6 @@ fn speaker(body: &serde_json::Value) -> String {
         .to_string()
 }
 
-/// Whether this call is the model being handed its own tool result back.
 fn has_tool_result(body: &serde_json::Value) -> bool {
     body["input"]
         .as_array()
@@ -203,12 +154,6 @@ where
     serve_refusing(0, decide).await
 }
 
-/// The same backend, with the first `refusals` calls answered 401.
-///
-/// What an access token the backend has stopped accepting looks like from here:
-/// a well-formed request, a credential that is not, and nothing about it
-/// visible on this machine. The refusal is counted and recorded like any other
-/// call, so a test can say what the retry sent as well as that it happened.
 async fn serve_refusing<F>(refusals: usize, decide: F) -> Stub
 where
     F: Fn(&serde_json::Value) -> Say + Clone + Send + Sync + 'static,
@@ -237,11 +182,6 @@ where
                     let bytes = axum::body::to_bytes(body, 8 * 1024 * 1024).await.unwrap();
                     let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
 
-                    // The three things a live call refused, asserted here so a
-                    // regression is a failing test rather than a 400 in
-                    // production. `temperature` in particular: the endpoint
-                    // rejects the parameter outright, and the runtime's own
-                    // probe sets one.
                     assert!(
                         parsed.get("temperature").is_none(),
                         "the endpoint rejects temperature outright: {parsed}"
@@ -283,23 +223,11 @@ where
     Stub { backend: format!("http://{addr}"), seen, headers, calls }
 }
 
-/// The sign-in service, as far as a running turn ever touches it.
-///
-/// Only `/oauth/token`, and only the refresh grant: the device flow that put
-/// the file there has its own tests in `subscription.rs`, and driving it again
-/// here would make every test below depend on a second stub answering a browser
-/// nobody is at.
 struct Signin {
     issuer: String,
     refreshes: Arc<AtomicUsize>,
 }
 
-/// A sign-in service that either mints a new token or says the refresh token is
-/// finished.
-///
-/// The two are the whole fork after a 401: one is a token the backend quietly
-/// stopped accepting, which the operator should never hear about, and the other
-/// is a sign-in they have to repeat by hand.
 async fn signin_service(refusing: bool) -> Signin {
     let refreshes = Arc::new(AtomicUsize::new(0));
 
@@ -321,9 +249,6 @@ async fn signin_service(refusing: bool) -> Signin {
                             .into_response();
                     }
                     axum::Json(serde_json::json!({
-                        // A different token every time, as a real service
-                        // issues them, so a test can see which one a call
-                        // carried.
                         "access_token": format!("refreshed-token-{nth}"),
                         "refresh_token": format!("refresh-token-{nth}"),
                     }))
@@ -343,8 +268,6 @@ struct Signed {
     runtime: Runtime,
     sink: Arc<RecordingSink>,
     ids: std::collections::HashMap<String, AgentId>,
-    /// The same store the runtime is spending, so a test can ask whether a
-    /// refused sign-in was kept.
     subscription: Arc<Subscription>,
     _dir: tempfile::TempDir,
 }
@@ -358,7 +281,6 @@ impl Signed {
         self.runtime.send_from_human(self.id(name), text).unwrap()
     }
 
-    /// Everything in one agent's channel that has words in it.
     fn texts(&self, name: &str) -> Vec<String> {
         self.runtime
             .store()
@@ -370,11 +292,6 @@ impl Signed {
             .collect()
     }
 
-    /// Every part of every message, including the ones with no text.
-    ///
-    /// A guard refusal and a failed call are notices rather than prose, so the
-    /// two failures worth reading a transcript for are exactly the ones
-    /// `plain_text` returns nothing for.
     fn everything(&self, name: &str) -> String {
         self.runtime
             .store()
@@ -386,7 +303,6 @@ impl Signed {
             .join("\n")
     }
 
-    /// Waits for a run to go quiet, and insists it reports so exactly once.
     async fn settle(&self, run: guac_lib::domain::ids::RunId) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         loop {
@@ -394,7 +310,6 @@ impl Signed {
                 |e| matches!(e, guac_lib::runtime::events::UiEvent::RunSettled { run_id, .. } if *run_id == run),
             );
             if settled > 0 {
-                // Let the last write land before anything reads the store.
                 tokio::time::sleep(std::time::Duration::from_millis(60)).await;
                 assert_eq!(settled, 1, "RunSettled must fire exactly once per run");
                 return;
@@ -405,34 +320,16 @@ impl Signed {
     }
 }
 
-/// A runtime already signed in to a subscription, pointed at the stub.
-///
-/// The sign-in is written as the file the store reads rather than performed,
-/// because the flow that produces that file has its own tests and repeating it
-/// here would make every one of these depend on a second stub.
 fn signed_in(stub: &Stub, names: &[&str], plan: &str) -> Signed {
     signed_in_where(stub, names, plan, false, NO_SIGNIN_SERVICE)
 }
 
-/// A closed port, for every test whose turn is never refused.
-///
-/// Reaching it at all is a failure the test should see: a sign-in service is
-/// only touched when a token needs replacing, and one being replaced under a
-/// test that did not arrange for it is the thing worth finding out about.
 const NO_SIGNIN_SERVICE: &str = "http://127.0.0.1:1";
 
-/// Signed in, and able to refresh: the arrangement a stale token needs.
 fn signed_in_at(stub: &Stub, names: &[&str], plan: &str, signin: &Signin) -> Signed {
     signed_in_where(stub, names, plan, false, &signin.issuer)
 }
 
-/// The same, with the choice of who pays made by the group rather than the app.
-///
-/// `by_the_group` puts the crew in a group that names the subscription while the
-/// app settings still say a pasted key, which is the arrangement that has to
-/// work: one sign-in on the machine, and each crew deciding whether to spend it.
-/// The app's endpoint is left pointing at a closed port either way, so a
-/// resolution that read the wrong layer fails rather than passing quietly.
 fn signed_in_where(
     stub: &Stub,
     names: &[&str],
@@ -459,9 +356,6 @@ fn signed_in_where(
 
     let mut ids = std::collections::HashMap::new();
     for name in names {
-        // A blank model, which is how an agent says "whatever the app is using".
-        // The point of the test is that what it inherits is the subscription's
-        // model and not the endpoint's.
         let mut d = draft(name, &["testing"]);
         d.model = String::new();
         d.group_id = group;
@@ -476,8 +370,6 @@ fn signed_in_where(
             "refresh_token": "refresh-token-for-tests",
             "id_token": jwt(plan),
             "account_id": "acct-test",
-            // Far enough out that nothing tries to refresh mid-test, which
-            // would reach a sign-in service this stub does not run.
             "expires_at": chrono::Utc::now().timestamp() + 86_400,
             "email": "operator@example.com",
             "plan": plan,
@@ -494,8 +386,6 @@ fn signed_in_where(
         operator_name: String::new(),
         inference: InferenceConfig {
             provider: if by_the_group { Provider::Compatible } else { Provider::Chatgpt },
-            // Deliberately left pointing at a URL and a model that would fail if
-            // either were used. Nothing in a subscription turn may read them.
             base_url: "http://127.0.0.1:1/v1".into(),
             api_key: String::new(),
             default_model: "endpoint/model-that-would-fail".into(),
@@ -526,7 +416,6 @@ fn signed_in_where(
     Signed { runtime, sink, ids, subscription, _dir: dir }
 }
 
-/// An unsigned id token carrying the claims the store reads.
 fn jwt(plan: &str) -> String {
     let claims = serde_json::json!({
         "email": "operator@example.com",
@@ -542,8 +431,6 @@ fn jwt(plan: &str) -> String {
     format!("header.{payload}.signature")
 }
 
-// ---- tests ---------------------------------------------------------------
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_turn_runs_on_the_subscription_and_bills_what_it_spent() {
     let stub = serve(|_| Say::Text("Reporting in.".into())).await;
@@ -555,8 +442,6 @@ async fn a_turn_runs_on_the_subscription_and_bills_what_it_spent() {
     let texts = app.texts("Manager");
     assert!(texts.iter().any(|t| t.contains("Reporting in")), "got {texts:?}");
 
-    // The tokens are counted and the call carries no price. Zero would read as a
-    // free call in the usage view; a subscription call is unpriced, not free.
     let usage = app.runtime.store().usage_by_run(&[run]).unwrap();
     let tokens = *usage.get(&run).expect("the run was billed");
     assert_eq!(tokens.calls, 1);
@@ -573,8 +458,6 @@ async fn a_turn_is_keyed_to_its_agent_and_reports_what_the_cache_served() {
     let run = app.ask("Manager", "Go.");
     app.settle(run).await;
 
-    // The backend sends requests with one key to the machine already holding
-    // that prefix, so every turn of one agent carries the same one: its id.
     let body = stub.bodies().first().cloned().expect("the endpoint was called");
     assert_eq!(body["prompt_cache_key"], app.id("Manager").to_string(), "{body}");
 
@@ -601,19 +484,12 @@ async fn the_call_carries_the_subscription_model_not_the_endpoint_one() {
     app.settle(run).await;
 
     let body = stub.bodies().first().cloned().expect("the endpoint was called");
-    // The app holds a model for each provider and everything downstream reads
-    // one field. Resolving the wrong one is a turn the backend refuses by name.
     assert_eq!(body["model"], "gpt-5.6-luna");
     assert_eq!(body["store"], false, "a conversation lives in Guaca, not upstream");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_group_can_spend_the_subscription_while_the_app_pays_with_a_key() {
-    // The sign-in is one credential on this machine, so choosing it is a
-    // setting rather than a second account, and a crew can be moved onto it on
-    // its own. The app is left on an endpoint that is not listening: a turn
-    // that resolved the app's provider instead of the group's cannot reach
-    // anything, and this test would fail rather than pass by accident.
     let stub = serve(|_| Say::Text("On the plan.".into())).await;
     let app = signed_in_where(&stub, &["Manager"], "pro", true, NO_SIGNIN_SERVICE);
 
@@ -640,17 +516,12 @@ async fn the_call_is_authorized_by_the_sign_in_and_billed_to_its_account() {
         Some("Bearer first-token-for-tests"),
         "the stored token has to reach the request"
     );
-    // Dropping this header is a 403 from the backend, which reads as a rejected
-    // sign-in rather than as a missing header.
     assert_eq!(stub.header("chatgpt-account-id").as_deref(), Some("acct-test"));
     assert_eq!(stub.header("originator").as_deref(), Some("codex_cli_rs"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_tool_call_and_its_result_survive_the_round_trip() {
-    // The whole loop: the model asks for a tool, the runtime runs it, and the
-    // model is handed the result back in the shape this protocol wants. This is
-    // the one that fails if `function_call_output` is filed under the wrong id.
     let stub = serve(|body| {
         if speaker(body) == "Manager" && !has_tool_result(body) {
             Say::SendTo { to: vec!["Chef".into()], text: "Please prep service.".into() }
@@ -666,13 +537,9 @@ async fn a_tool_call_and_its_result_survive_the_round_trip() {
     let run = app.ask("Manager", "Get service ready.");
     app.settle(run).await;
 
-    // Chef heard about it, which only happens if the tool call was assembled
-    // from the finished item and dispatched.
     let chef = app.texts("Chef");
     assert!(chef.iter().any(|t| t.contains("prep service")), "Chef never heard: {chef:?}");
 
-    // And the second call to the Manager carried the result as an item rather
-    // than as a `role: "tool"` message, matched to the call it answers.
     let manager_second = stub
         .bodies()
         .into_iter()
@@ -687,8 +554,6 @@ async fn a_tool_call_and_its_result_survive_the_round_trip() {
         .expect("no result in the history");
     assert_eq!(call["call_id"], output["call_id"], "a result filed elsewhere answers nothing");
     assert_eq!(call["name"], "send_message");
-    // Not a role. Chat completions send `role: "tool"`; this protocol does not
-    // have one, and sending it is a 400 about the role.
     assert!(output.get("role").is_none(), "{output}");
 
     assert!(stub.calls.load(Ordering::SeqCst) >= 3, "manager twice and chef once, at least");
@@ -709,9 +574,6 @@ async fn what_an_agent_already_said_goes_back_as_output_text() {
     let run = app.ask("Manager", "Go.");
     app.settle(run).await;
 
-    // Chef's own turn replays the operator's message and its own answer. Text a
-    // model wrote is `output_text` and text going to it is `input_text`, and
-    // getting them the wrong way round is a 400 about the content type.
     let assistant_turns: Vec<serde_json::Value> = stub
         .bodies()
         .into_iter()
@@ -739,25 +601,17 @@ async fn reasoning_is_shown_and_never_written_down() {
     let texts = app.texts("Manager");
     let all = texts.join("\n");
     assert!(all.contains("All quiet"), "the answer is missing: {texts:?}");
-    // The summary is streamed to the operator and dropped. Persisting it is the
-    // one thing `Token::Reasoning` exists to prevent.
     assert!(!all.contains("status line"), "reasoning reached the transcript: {texts:?}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_finished_run_leaves_nothing_open() {
-    // The accounting is provider-agnostic and has to stay that way: a new
-    // transport that leaks a placeholder or double-reports a run fails here
-    // rather than in the field. `settle` already insists RunSettled fired
-    // exactly once, which is the other half of the same question.
     let stub = serve(|_| Say::Text("Working.".into())).await;
     let app = signed_in(&stub, &["Manager"], "pro");
 
     let run = app.ask("Manager", "Go.");
     app.settle(run).await;
 
-    // The call really went to the subscription. Without this the rest of the
-    // test passes just as well on a turn that never reached the backend at all.
     assert_eq!(stub.calls.load(Ordering::SeqCst), 1, "the turn did not reach the backend");
     assert_eq!(
         app.runtime.store().usage_by_run(&[run]).unwrap().get(&run).map(|t| t.calls),
@@ -765,26 +619,17 @@ async fn a_finished_run_leaves_nothing_open() {
         "one call, billed once"
     );
 
-    // Stopping a run that has already finished changes nothing, and asking is
-    // how a leaked placeholder would show.
     assert!(!app.runtime.stop_run(run), "a settled run has nothing left to stop");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn testing_the_connection_reaches_the_subscription() {
-    // The Test connection button, which is the first thing an operator presses
-    // after signing in. It is also the one path that sets a temperature, and
-    // this endpoint rejects that parameter outright rather than ignoring it, so
-    // a regression here is a working sign-in that reports itself broken. The
-    // stub asserts the absence; this is what makes it run.
     let stub = serve(|_| Say::Text("ok".into())).await;
     let app = signed_in(&stub, &["Manager"], "pro");
 
     let reported = app.runtime.probe(&app.runtime.config()).await.expect("the probe must succeed");
 
     assert_eq!(stub.calls.load(Ordering::SeqCst), 1);
-    // What it reports has to be where the call went, not the endpoint field it
-    // never touched: a URL the request never used reads as a misconfiguration.
     assert!(reported.contains("chatgpt.com/backend-api/codex"), "got {reported}");
     assert!(reported.contains("gpt-5.6-luna"), "got {reported}");
     assert!(!reported.contains("127.0.0.1"), "the unused endpoint leaked in: {reported}");
@@ -792,11 +637,6 @@ async fn testing_the_connection_reaches_the_subscription() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_token_the_backend_has_stopped_accepting_is_replaced_mid_turn() {
-    // The failure this exists for. OpenAI mints a ChatGPT access token with ten
-    // days on its `exp` claim and the backend stops accepting one after about
-    // three, with `token_expired`. Nothing on this machine can tell, so a build
-    // that trusted the claim refused every turn for a week while Settings went
-    // on reporting a healthy sign-in.
     let signin = signin_service(false).await;
     let stub = serve_refusing(1, |_| Say::Text("Working on it.".into())).await;
     let app = signed_in_at(&stub, &["Manager"], "pro", &signin);
@@ -804,7 +644,6 @@ async fn a_token_the_backend_has_stopped_accepting_is_replaced_mid_turn() {
     let run = app.ask("Manager", "Go.");
     app.settle(run).await;
 
-    // The operator sees a reply, not a sign-in they have to repeat.
     let said = app.texts("Manager").join("\n");
     assert!(said.contains("Working on it."), "the turn has to survive the refusal: {said}");
     let all = app.everything("Manager");
@@ -816,8 +655,6 @@ async fn a_token_the_backend_has_stopped_accepting_is_replaced_mid_turn() {
     assert_eq!(signin.refreshes.load(Ordering::SeqCst), 1, "one refusal, one refresh");
     assert_eq!(stub.calls.load(Ordering::SeqCst), 2, "the refused call and the retry");
 
-    // The retry is the same request under a new credential, which is what makes
-    // it safe to send twice: nothing had streamed when the refusal landed.
     let bodies = stub.bodies();
     assert_eq!(bodies[0], bodies[1], "the retry must not be a different question");
     let bearers = stub.headers("authorization");
@@ -827,10 +664,6 @@ async fn a_token_the_backend_has_stopped_accepting_is_replaced_mid_turn() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_sign_in_that_cannot_be_refreshed_is_forgotten_and_says_so() {
-    // A 401 the refresh token cannot fix is the one case the operator has to
-    // act on. It is also a sign-in to repeat, not a key to check: an operator
-    // sent to the API key field they have never used does not get back on their
-    // feet.
     let signin = signin_service(true).await;
     let app = signed_in_at(&refusing(401).await, &["Manager"], "pro", &signin);
 
@@ -838,16 +671,10 @@ async fn a_sign_in_that_cannot_be_refreshed_is_forgotten_and_says_so() {
     app.settle(run).await;
 
     assert!(signin.refreshes.load(Ordering::SeqCst) >= 1, "the refresh token has to be tried");
-    // And the dead sign-in is gone, so Settings offers signing in rather than
-    // signing out. Claiming a credential every turn has already been told is
-    // dead is the disagreement that leaves an operator with nothing to press.
     assert!(!app.subscription.is_signed_in(), "a refused sign-in must not be kept");
 
     let all = app.everything("Manager");
     assert!(all.to_lowercase().contains("sign in"), "the way out has to be in the message: {all}");
-    // And specifically not the other way out. A 401 on a pasted key means the
-    // key is wrong; a 401 here means a sign-in has to be repeated, and sending
-    // the operator to a field they have never used strands them.
     assert!(
         !all.to_lowercase().contains("paste"),
         "a refused sign-in must not read as a bad API key: {all}"
@@ -862,19 +689,10 @@ async fn a_model_the_plan_cannot_run_is_named_in_the_refusal() {
     app.settle(run).await;
 
     let all = app.everything("Manager");
-    // The backend's own sentence is the most useful thing an operator can read,
-    // so it is passed through rather than replaced with a generic upstream error.
     assert!(all.contains("gpt-5.6-luna"), "which model has to survive: {all}");
-    // The group chose this one, so the agent's settings are not where it is fixed.
     assert!(!all.contains("own setting"), "{all}");
 }
 
-/// An endpoint's model on the agent is not sent to the subscription.
-///
-/// The crew that found this: turns on a ChatGPT sign-in, pi on OpenRouter, and
-/// an OpenRouter slug on the agent itself. The agent had one model field and
-/// sent it to whichever provider paid, so ChatGPT refused every turn by name
-/// and the agent never got as far as starting a coding job.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_endpoint_model_on_the_agent_is_never_sent_to_the_subscription() {
     let stub = serve(|_| Say::Text("Cloning it now.".into())).await;
@@ -892,14 +710,10 @@ async fn an_endpoint_model_on_the_agent_is_never_sent_to_the_subscription() {
     assert_eq!(body["model"], "gpt-5.6-luna", "the group's subscription model runs");
     let said = app.texts("Engineer").join("\n");
     assert!(said.contains("Cloning it now."), "{}", app.everything("Engineer"));
-    // Kept for when a key pays again, not dropped.
     let kept = app.runtime.store().get_agent(card.id).unwrap().unwrap();
     assert_eq!(kept.model, "xiaomi/mimo-v2.6-pro");
 }
 
-/// A ChatGPT model an agent names for itself is refused with where it was
-/// named: ChatGPT's own sentence says "Codex", which reads as the coding
-/// harness, and nothing in it points at the agent's settings.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_model_an_agent_names_for_itself_is_refused_with_where_it_was_named() {
     let app = signed_in(&refusing(400).await, &["Engineer"], "pro");
@@ -918,7 +732,6 @@ async fn a_model_an_agent_names_for_itself_is_refused_with_where_it_was_named() 
     assert!(all.contains("use the group default"), "the way on: {all}");
 }
 
-/// A backend that refuses everything, in the two shapes this one refuses in.
 async fn refusing(status: u16) -> Stub {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let headers = Arc::new(Mutex::new(Vec::new()));
@@ -953,23 +766,6 @@ async fn refusing(status: u16) -> Stub {
     Stub { backend: format!("http://{addr}"), seen, headers, calls }
 }
 
-// ---- against the real endpoint -------------------------------------------
-
-/// A real turn, on the operator's own subscription.
-///
-/// `#[ignore]`d for the reason the live evals are: it costs quota and cannot be
-/// deterministic. It exists because everything above this line is a stub
-/// agreeing with the shape this app believes the protocol has, and the failure
-/// mode worth catching is that belief going stale. OpenAI can rename an event,
-/// require a field, or retire a model slug, and every test above would still
-/// pass while no agent could speak.
-///
-/// Run it after touching `llm/codex.rs`, or when a working sign-in stops
-/// working:
-///
-/// ```sh
-/// ./scripts/subscription.sh
-/// ```
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "makes a real model call against the operator's ChatGPT plan"]
 async fn a_real_subscription_answers_a_real_turn() {
@@ -986,8 +782,6 @@ async fn a_real_subscription_answers_a_real_turn() {
     d.model = String::new();
     let manager = store.create_agent(&d).unwrap().id;
 
-    // A copy, so a refresh performed here cannot rotate the token out from under
-    // the running app.
     let path = dir.path().join("subscription.json");
     std::fs::copy(&credentials, &path).unwrap();
 
@@ -1002,8 +796,6 @@ async fn a_real_subscription_answers_a_real_turn() {
         operator_name: String::new(),
         inference: InferenceConfig {
             provider: Provider::Chatgpt,
-            // A family the catalog has just started offering is the question
-            // this test gets asked most, and the default model cannot answer it.
             subscription_model: std::env::var("GUAC_SUBSCRIPTION_MODEL")
                 .unwrap_or_else(|_| guac_lib::llm::codex::DEFAULT_MODEL.into()),
             reasoning_effort: guac_lib::domain::effort::ReasoningEffort::Low,
@@ -1030,9 +822,6 @@ async fn a_real_subscription_answers_a_real_turn() {
     );
     runtime.start_all().unwrap();
 
-    // The probe first, because it is the one path that sets a temperature and
-    // this endpoint refuses the parameter outright. It is also the button an
-    // operator presses immediately after signing in.
     let reported = runtime
         .probe(&runtime.config())
         .await
@@ -1057,7 +846,6 @@ async fn a_real_subscription_answers_a_real_turn() {
         "the model did not answer through the subscription: {texts:?}"
     );
 
-    // And the plan was billed, which is the half a reply alone does not prove.
     let usage = app.runtime.store().usage_by_run(&[run]).unwrap();
     let tokens = *usage.get(&run).expect("the run was billed");
     eprintln!("spent {} in, {} out", tokens.prompt, tokens.completion);
@@ -1065,10 +853,6 @@ async fn a_real_subscription_answers_a_real_turn() {
     assert_eq!(tokens.cost, None, "a subscription call must carry no price");
 }
 
-/// The credential file to test against, if there is one.
-///
-/// The app's own by default, so what is measured is what the operator is
-/// actually running. Overridable so a copy can be tested without touching it.
 fn live_credentials() -> Option<std::path::PathBuf> {
     if let Ok(named) = std::env::var("GUAC_SUBSCRIPTION_JSON") {
         let path = std::path::PathBuf::from(named);

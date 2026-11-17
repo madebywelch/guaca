@@ -13,19 +13,6 @@ import {
 } from "../lib/trail";
 import { FootnoteRow, why } from "./WireRow";
 
-/**
- * The same work, as one line of a page's footnotes.
- *
- * A turn that reads a file, searches and runs a command is three things the
- * operator asked for by asking for the turn, and set as three chips they were
- * three blocks between two paragraphs. As a note they are one line under the
- * paragraph, in the size a note is set in, and the file names are what is read
- * at — which is what a footnote is for.
- *
- * What folds is unchanged: `foldTrail` decides the groups and `hasDetail` says
- * whether one opens, exactly as the chips do. This is a second drawing of the
- * same rule, not a second rule.
- */
 export function TrailFootnote({
   steps,
   number,
@@ -33,7 +20,6 @@ export function TrailFootnote({
 }: {
   steps: Step[];
   number: number;
-  /** When the turn that made them was written, where the note stands alone. */
   at?: number;
 }) {
   const groups = foldTrail(steps);
@@ -78,14 +64,6 @@ export function TrailFootnote({
   );
 }
 
-/**
- * One kind of work in a note: its label, what it was pointed at, and whether
- * there is more behind it.
- *
- * A single call whose whole content is the sentence on the line gets no
- * control, for the reason a chip with nothing behind it does not: a button
- * that does nothing is one the operator stops trusting the rest of them for.
- */
 function FootnoteGroup({
   group,
   id,
@@ -98,9 +76,6 @@ function FootnoteGroup({
   onToggle: () => void;
 }) {
   const only = group.steps.length === 1 ? group.steps[0]! : null;
-  // Only where nothing opens behind the line. A call with detail draws its
-  // target in the panel underneath, and printing it here as well said the same
-  // filename twice a line apart.
   const target =
     only &&
     !hasDetail(group) &&
@@ -109,15 +84,7 @@ function FootnoteGroup({
     !only.target.includes("\n")
       ? only.target
       : null;
-  // A failure that has detail behind it still says why on the line: a refusal
-  // is the one part of a note somebody may have to act on, and a footnote that
-  // hid the reason behind a click would be hiding the only thing worth reading.
   const failed = only ? stepReason(only) : null;
-  // The names a model calls this work by, on the words a person reads. A
-  // plugin's tool has no phrase this build can write — it is somebody else's
-  // function — so its wire name becomes words, and this is where the name
-  // itself survives: a note that said `Used mailbox__search_threads` last week
-  // says `Used Search threads on mailbox` and says the rest on hover.
   const tools = [...new Set(group.steps.map((step) => step.tool))].join(", ");
   const face = (
     <>
@@ -157,23 +124,6 @@ function FootnoteGroup({
   );
 }
 
-/**
- * What an agent did on its own turn, collapsed.
- *
- * The quietest row a channel draws, and the one that used to be the loudest by
- * volume: a browsing turn spends most of its twenty-four rounds in the browser,
- * and every one of those was a line of its own reading `Chef used browse`. Now
- * a turn is chips, one per kind of work, and the calls behind a chip open in
- * place.
- *
- * Nobody is named. There is exactly one agent whose own work this can be, its
- * portrait and name are at the top of the pane, and the row this replaced put
- * that name in front of every line.
- *
- * `lib/trail.ts` decides what folds and what a chip says. This decides only how
- * it is drawn and what a click opens, so the rules can be read and tested
- * without a DOM.
- */
 export function TrailRow({ steps }: { steps: Step[] }) {
   const groups = foldTrail(steps);
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
@@ -215,13 +165,6 @@ export function TrailRow({ steps }: { steps: Step[] }) {
   );
 }
 
-/**
- * One kind of work, and whether there is more of it to read.
- *
- * A chip is only a button where something opens: a directory lookup is one call
- * whose whole content is the sentence already on the chip, and a control that
- * does nothing is one the operator stops trusting the rest of.
- */
 function TrailChip({
   group,
   id,
@@ -234,19 +177,10 @@ function TrailChip({
   onToggle: () => void;
 }) {
   const only = group.steps.length === 1 ? group.steps[0]! : null;
-  // A refusal on the chip is a clipped copy of what the chip opens onto, which
-  // is the whole of it. Worth having shut, where it is the only thing saying
-  // what went wrong; a repeat of the paragraph directly under it once it is
-  // open.
   const previewed = only && saysMore(only) && !(open && stepReason(only));
   const face = (
     <>
       <span className="trail__label">{group.label}</span>
-      {/* Only where it belongs to one call and adds something the label has
-          not already said. Several calls have several answers, and a chip
-          quoting whichever happened to be first is a chip that is wrong about
-          the rest. The `title` is the part that was cut: a chip is one line,
-          and what a routine was set for or a page said does not fit in one. */}
       {previewed && (
         <>
           {only.failed && ": "}
@@ -288,54 +222,20 @@ function TrailChip({
   );
 }
 
-/**
- * One call, opened.
- *
- * The command, the URL or the memory that was written, as machine text and
- * exactly as it was: this is a record of what happened, so it is never markdown
- * and never anything a model could format its way out of. Long ones scroll
- * rather than push the transcript sideways.
- *
- * A call that overwrote something is drawn against what it overwrote instead,
- * however short it is: the whole reason to open a memory rewrite is to find out
- * what the agent changed its mind about, and the content alone never says.
- *
- * A call that went wrong and has nothing else to show is drawn as its reason,
- * for the plainer reason that the reason is what happened. Where that reason is
- * a translation of what the runtime wrote for the model, it is prose: the
- * runtime's own sentence said "`repeat` or `every_secs`", and a parameter name
- * in a monospace block reads as a traceback rather than as an answer. The
- * machine's version stays one click away, which is where somebody diagnosing a
- * refusal wants it and where nobody else has to read it.
- */
 function StepRow({ step }: { step: Step }) {
   const changed = stepDiff(step);
   const reason = stepReason(step);
-  // A url, a pair of coordinates or an element number is a few characters, and
-  // a few characters in a block of their own is a gray rectangle drawn around
-  // nothing. A command and a rewritten memory are the reason the block exists.
   const inline =
     !changed && step.target !== null && step.target.length <= 48 && !step.target.includes("\n");
 
   return (
     <li className="trail__step" data-failed={step.failed || undefined}>
       <div className="trail__step-head">
-        {/* The name a model calls this by, kept on the row that opens the note
-            rather than said on it. What a person reads is what the call was;
-            what a bug report or a schema needs is the wire name, and a pointer
-            over the phrase is where it lives now. */}
         <span className="trail__step-title" title={step.tool}>
           {step.title}
         </span>
         {inline && <span className="trail__inline">{step.target}</span>}
-        {/* In the place the runtime's own summary would have gone, and for a
-            memory rewrite that summary is a character count printed directly
-            above the characters. How much of the page moved is the thing the
-            operator came here to find out. */}
         {changed && <span className="trail__said">{diffSummary(changed)}</span>}
-        {/* Not twice. A refusal drawn below is not also a clipped copy of
-            itself on the line above the block holding it. The `title` is the
-            part a narrow row cut, for the reason the chip has one. */}
         {step.said && tellsMore(step) && !reason && (
           <span className="trail__said" title={step.said}>
             {step.said}
@@ -365,18 +265,6 @@ function StepRow({ step }: { step: Step }) {
   );
 }
 
-/**
- * Two versions of a page, drawn as the lines between them.
- *
- * Every line of both is here, unchanged ones included, so the panel answers
- * what the agent now believes as well as what it just decided. A page is short
- * enough to show whole; folding the parts that held still is a saving worth
- * making in a repository and not in a paragraph.
- *
- * The marker is a character rather than only a color, because red and green
- * either side of a line are the one distinction a reader may not have, and
- * because it is what makes a copied diff still read as one.
- */
 export function DiffBlock({ lines }: { lines: DiffLine[] }) {
   const mark = { same: " ", added: "+", removed: "-" };
   return (

@@ -35,8 +35,6 @@ describe("an artifact's history", () => {
   });
 
   it("only offers to open the rows that made a version", () => {
-    // A take-over has no page of its own. Offering to open one would open the
-    // version before it and call it something else.
     const rows = logRows([
       entry(1, "created", rae, 1, "Rae"),
       entry(2, "took", milo, 1, "Milo", "Mine now"),
@@ -57,8 +55,6 @@ describe("an artifact's history", () => {
 
 describe("who owns it", () => {
   it("still names an owner who left, and says so", () => {
-    // Ownership moves only by a decision. An owner that left is not replaced
-    // quietly, so the list has to say that nobody has decided yet.
     expect(ownerLabel({ id: "rae", name: "Rae", gone: true })).toBe("Rae, left the group");
     expect(ownerLabel({ id: "rae", name: "Rae", gone: false })).toBe("Rae");
     expect(ownerLabel(null)).toBe("Nobody");
@@ -89,8 +85,6 @@ describe("the line under a name", () => {
 
 describe("what a page is handed", () => {
   it("keys every read by its source's name, refused ones included", () => {
-    // A page can always say which of its numbers is missing and why, rather
-    // than failing on one it expected to find.
     expect(
       pageData([
         { name: "issues", data: [{ id: 1 }], text: '[{"id":1}]', error: null },

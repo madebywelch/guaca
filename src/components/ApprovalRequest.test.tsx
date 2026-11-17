@@ -53,7 +53,6 @@ const REQUEST: Extract<Part, { type: "approval" }> = {
   ],
 };
 
-/** The envelope the runtime writes: Guaca, in the asking agent's channel. */
 function asking(part: Extract<Part, { type: "approval" }> = REQUEST): Envelope {
   return {
     id: "m1",
@@ -71,7 +70,6 @@ function asking(part: Extract<Part, { type: "approval" }> = REQUEST): Envelope {
   };
 }
 
-/** The decision a lapse files in For you, under the request's own id. */
 function filedFor(id: string): WorkDecision {
   return {
     id: "d1",
@@ -112,8 +110,6 @@ describe("a request for permission", () => {
   });
 
   it("shows what was asked for, not just that something was", () => {
-    // The operator is deciding whether an agent should exist. A summary alone
-    // would have them approving a name with the instructions out of sight.
     draw("pending");
     expect(screen.getByText(REQUEST.summary)).toBeTruthy();
     expect(screen.getByText("You own the roadmap.")).toBeTruthy();
@@ -127,8 +123,6 @@ describe("a request for permission", () => {
   });
 
   it("says who a standing allow is for", () => {
-    // "Always" reads as a workspace setting. It is one agent being let off one
-    // question, and the operator has to know that before clicking it.
     draw("pending");
     expect(screen.getByText(/Always allow is for Manager only/)).toBeTruthy();
   });
@@ -146,8 +140,6 @@ describe("a request for permission", () => {
   });
 
   it("says a request that ran out of time is waiting in For you", () => {
-    // The lapse filed it as a decision, so "nothing happened" would send the
-    // operator away from the one place their answer still reaches the agent.
     useStore.setState({ decisions: [filedFor(REQUEST.id)] });
     draw("expired");
     expect(
@@ -157,7 +149,6 @@ describe("a request for permission", () => {
   });
 
   it("keeps saying nothing happened when the lapse filed nothing", () => {
-    // Browser consent, and a request a restart ended, are not filed anywhere.
     useStore.setState({ decisions: [filedFor("another")] });
     draw("expired");
     expect(screen.getByText("Nobody answered, so nothing happened.")).toBeTruthy();
@@ -165,16 +156,11 @@ describe("a request for permission", () => {
   });
 
   it("offers no decision for a request it has never heard of", () => {
-    // Older than the window the store loads, so nothing is waiting on it.
-    // Buttons here would offer an answer that reaches nobody.
     draw(undefined);
     expect(screen.queryByRole("button", { name: "Allow" })).toBeNull();
   });
 
   it("takes the server's answer when a decision is refused", async () => {
-    // The turn timed out while this was on screen, or it was answered in
-    // another window. Arguing with the store would leave live buttons on a
-    // request that is already settled.
     decideApproval.mockRejectedValue({
       kind: "alreadyAnswered",
       message: "that request was already answered (answered)",
@@ -185,15 +171,10 @@ describe("a request for permission", () => {
     });
 
     expect(approvalStates).toHaveBeenCalled();
-    // The runtime writes that sentence for a log; the banner finishes it, so
-    // the line the operator reads opens with a capital and ends with a stop.
     expect(useStore.getState().banner?.text).toBe("That request was already answered (answered).");
   });
 
   it("does not offer a standing yes for acting in the operator's name", () => {
-    // "Always allow" is scoped to an agent and an action, and this action is
-    // "act outside the workspace". A standing yes would cover every future
-    // send, submission and purchase rather than the one being asked about.
     draw("pending", {
       type: "approval",
       id: "ap2",
@@ -208,7 +189,6 @@ describe("a request for permission", () => {
     expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Always allow" })).toBeNull();
     expect(screen.getByText("Nothing here is remembered after this turn.")).toBeTruthy();
-    // And the waiting line says what has not happened, which is not a creation.
     expect(screen.getByText(/Nothing has been sent yet/)).toBeTruthy();
   });
 });

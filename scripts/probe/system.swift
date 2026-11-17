@@ -1,36 +1,8 @@
-// What macOS knows about the test app that the app itself cannot say, for
-// scripts/probe.py. Compiled by the probe on first use; no dependencies.
-//
-//   access                     whether this process may use Accessibility and
-//                              capture the screen, without asking for either,
-//                              and whether the screen is locked
-//   front                      the frontmost app
-//   watch-front                one line per app that becomes frontmost, until
-//                              stdin closes
-//   idle                       seconds since the last keyboard or pointer event
-//   windows <pid>              that process's windows on screen: id, layer, frame
-//   owner-windows <name>       the same, for a process by name
-//   press <pid> <role> <name> <scope>
-//                              presses the one element with that role and name
-//                              inside a group whose text contains <scope>
-//   press-group <pid> <scope>  presses the group itself (a banner)
-//   describe <pid> <scope>     what each group naming <scope> holds: roles,
-//                              text and actions, and nothing outside it
-//   capture <pid> <file>       one PNG of each of that process's windows
-//   click-icon <pid>           a real click, through the window server, on
-//                              that process's menu bar icon; the pointer is
-//                              put back where it was
-//   escape                     a real press of the Escape key
-//
-// Every answer is one JSON value on stdout. A refusal is {"error": "..."} and
-// exit status 2, so the caller can tell "no" from "could not ask".
-
 import AppKit
 import ApplicationServices
 import CoreGraphics
 import Foundation
 
-/// How far below an app's root an element is looked for.
 let deepest = 30
 
 func emit(_ value: Any) {
@@ -75,10 +47,6 @@ func text(_ element: AXUIElement) -> String {
         .joined(separator: " ")
 }
 
-/// An element's children, without the menu bar and without application
-/// elements. On macOS 27 Notification Center can list application elements among
-/// its own children that lead back to itself; followed, every level multiplies
-/// the walk, and none of it is a banner or a question.
 func children(_ element: AXUIElement) -> [AXUIElement] {
     (attribute(element, kAXChildrenAttribute as String) as? [AXUIElement] ?? []).filter {
         let role = attribute($0, kAXRoleAttribute as String) as? String
@@ -86,14 +54,11 @@ func children(_ element: AXUIElement) -> [AXUIElement] {
     }
 }
 
-/// Every text below an element, so a group can be recognized by what it says.
 func allText(_ element: AXUIElement, depth: Int = 0) -> String {
     if depth > deepest { return "" }
     return ([text(element)] + children(element).map { allText($0, depth: depth + 1) }).joined(separator: " ")
 }
 
-/// Groups whose text names the scope, innermost first: the banner or prompt
-/// that belongs to the test app, and never one that belongs to another.
 func scoped(_ root: AXUIElement, _ scope: String, depth: Int = 0) -> [AXUIElement] {
     if depth > deepest { return [] }
     let inner = children(root).flatMap { scoped($0, scope, depth: depth + 1) }
@@ -112,15 +77,11 @@ func find(_ root: AXUIElement, role: String, name: String, depth: Int = 0) -> [A
     return found + children(root).flatMap { find($0, role: role, name: name, depth: depth + 1) }
 }
 
-/// An action as it reads: Notification Center names its own actions
-/// "Name:Allow\nTarget:0x0\nSelector:(null)", and the name is the label.
 func actionName(_ raw: String) -> String {
     guard raw.hasPrefix("Name:") else { return raw }
     return String(raw.dropFirst(5).prefix { $0 != "\n" })
 }
 
-/// What is inside a group, as role, text and actions, so a press that found
-/// nothing says what it did find.
 func outline(_ element: AXUIElement, depth: Int = 0) -> [String] {
     if depth > deepest { return [] }
     let role = attribute(element, kAXRoleAttribute as String) as? String ?? "?"
@@ -131,8 +92,6 @@ func outline(_ element: AXUIElement, depth: Int = 0) -> [String] {
     return [line] + children(element).flatMap { outline($0, depth: depth + 1) }
 }
 
-/// Elements below a group that offer an action with that label, and the
-/// action's raw name.
 func actions(_ element: AXUIElement, named label: String, depth: Int = 0) -> [(AXUIElement, String)] {
     if depth > deepest { return [] }
     var names: CFArray?
@@ -171,9 +130,6 @@ case "watch-front":
     emit(["watching": true, "front": appSummary(NSWorkspace.shared.frontmostApplication)])
     RunLoop.main.run()
 case "idle":
-    // Keys, the pointer and the wheel, and nothing else: a display waking,
-    // which the probe does itself, resets the count of any event with
-    // nobody at the Mac.
     let input: [CGEventType] = [
         .keyDown, .flagsChanged, .mouseMoved, .scrollWheel,
         .leftMouseDown, .rightMouseDown, .otherMouseDown,
@@ -200,8 +156,6 @@ case "press", "press-group":
     if args.first == "press" {
         guard rest.count == 4 else { refuse("press needs a pid, a role, a name and a scope") }
         let matches = find(groups[0], role: rest[1], name: rest[2])
-        // macOS 27 draws the question's buttons only under the pointer; to
-        // assistive technology they are named actions on the group instead.
         let named = actions(groups[0], named: rest[2])
         if matches.count == 1 {
             target = matches[0]

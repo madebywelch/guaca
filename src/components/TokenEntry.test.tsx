@@ -2,24 +2,6 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-/**
- * The screen a browser sees before the workspace.
- *
- * Run hosted, which takes arranging: the setup file gives jsdom Tauri's bridge
- * so every other suite draws the desktop, and the transport reads `window`
- * once on import to decide which host it is in. The bridge comes off before
- * the import, and this is the only host the component draws anything in. What
- * matters is the order of decisions: a clicked invitation must never flash
- * the form, a wrong token must be refused here rather than by the app
- * underneath, and a token the box stops accepting must bring the form back
- * with the app unmounted.
- *
- * The credential never lands in script-readable storage. Every exchange below
- * is a request to the daemon, which answers with the HttpOnly cookie this
- * browser keeps, so `fetch` is stubbed for each one and the assertion is what
- * crossed the wire rather than what was written to the disk.
- */
-
 const capabilities = vi.fn<() => Promise<unknown>>();
 
 vi.mock("../lib/ipc", () => ({
@@ -41,19 +23,16 @@ const EVERYTHING = {
 
 const TOKEN_KEY = "guaca.workspace.token";
 
-/** A daemon that takes the token and sets the session cookie. */
 function signedIn() {
   fetched.mockResolvedValue(new Response(JSON.stringify({ ok: "signed in" })));
 }
 
-/** A daemon that turns the token away. */
 function turnedAway(message = "that token was not accepted") {
   fetched.mockResolvedValue(
     new Response(JSON.stringify({ err: { kind: "unauthorized", message } }), { status: 401 }),
   );
 }
 
-/** The one exchange request that crossed, if one did. */
 function exchange() {
   return fetched.mock.calls.find(([url]) => String(url).endsWith("/v1/auth/session"));
 }
@@ -66,7 +45,6 @@ function open() {
   );
 }
 
-/** A workspace whose first call is turned away as it mounts. */
 function RefusedOnArrival() {
   useEffect(() => {
     window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
@@ -75,8 +53,6 @@ function RefusedOnArrival() {
 }
 
 beforeEach(async () => {
-  // Stubbed before signing out: signing out is a request to the daemon now,
-  // and a real `fetch` in jsdom would only fail against nothing listening.
   vi.stubGlobal("fetch", fetched);
   fetched.mockResolvedValue(new Response(JSON.stringify({ ok: "signed out" })));
   await setToken("");
@@ -113,8 +89,6 @@ describe("TokenEntry", () => {
     open();
     await waitFor(() => expect(screen.getByLabelText("Host token")).toBeTruthy());
     expect(screen.queryByText("the workspace")).toBeNull();
-    // Nothing was stored to exchange, so the one question asked was whether the
-    // session the browser already had still opens the box.
     expect(capabilities).toHaveBeenCalledTimes(1);
     expect(fetched).not.toHaveBeenCalled();
   });
@@ -127,9 +101,6 @@ describe("TokenEntry", () => {
       }),
     );
     open();
-    // A browser holds a cookie it cannot read, and the daemon has not answered
-    // yet. Neither answer is known, so neither is drawn: a reload of a
-    // signed-in page must not ask for a token on its way to the workspace.
     expect(screen.queryByLabelText("Host token")).toBeNull();
     expect(screen.queryByText("the workspace")).toBeNull();
     expect(screen.getByRole("status").textContent).toContain("Opening Guaca");
@@ -144,7 +115,6 @@ describe("TokenEntry", () => {
     open();
     await waitFor(() => expect(screen.getByLabelText("Host token")).toBeTruthy());
 
-    // Same document, new fragment: no reload, so the mount has already run.
     window.history.replaceState(null, "", "/#token=late123");
     act(() => {
       window.dispatchEvent(new HashChangeEvent("hashchange"));
@@ -160,9 +130,6 @@ describe("TokenEntry", () => {
   it("does not accuse a first visitor of a session that stopped", async () => {
     capabilities.mockRejectedValue({ kind: "unauthorized", message: "needs the token" });
     open();
-    // The transport raises this for any refused call, and the first question a
-    // browser with no session asks is one of them. That is not an expiry, and
-    // saying so would name a problem this operator never had.
     act(() => {
       window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
     });
@@ -176,8 +143,6 @@ describe("TokenEntry", () => {
       message: "could not reach this host",
     });
     open();
-    // A box that is down is the app's own banner to draw. Asking for a token
-    // would name the wrong problem and hide the sentence that says which.
     await waitFor(() => expect(screen.getByText("the workspace")).toBeTruthy());
     expect(screen.queryByLabelText("Host token")).toBeNull();
   });
@@ -187,16 +152,13 @@ describe("TokenEntry", () => {
     open();
     await waitFor(() => expect(screen.getByText("the workspace")).toBeTruthy());
     expect(screen.queryByLabelText("Host token")).toBeNull();
-    // The credential must not survive in the URL.
     expect(window.location.hash).toBe("");
 
     const crossed = exchange();
     expect(crossed).toBeTruthy();
     expect((crossed![1]!.headers as Record<string, string>).authorization).toBe("Bearer abc123");
     expect(crossed![1]!.credentials).toBe("same-origin");
-    // Nor in script-readable storage: the cookie is the only copy.
     expect(window.localStorage.getItem(TOKEN_KEY)).toBeNull();
-    // The exchange admitted it, so nothing had to ask twice.
     expect(capabilities).not.toHaveBeenCalled();
   });
 
@@ -214,8 +176,6 @@ describe("TokenEntry", () => {
   it("lets a browser whose session cookie is still valid straight in", async () => {
     open();
     await waitFor(() => expect(screen.getByText("the workspace")).toBeTruthy());
-    // Nothing to exchange: no invitation and no stored token. The cookie was
-    // valid, and one cheap question proved it without asking for a token.
     expect(fetched).not.toHaveBeenCalled();
     expect(capabilities).toHaveBeenCalledTimes(1);
   });
@@ -232,10 +192,8 @@ describe("TokenEntry", () => {
     await waitFor(() => expect(screen.getByText("the workspace")).toBeTruthy());
     const crossed = exchange();
     expect(crossed).toBeTruthy();
-    // The whitespace a copy leaves behind is trimmed before the exchange.
     expect((crossed![1]!.headers as Record<string, string>).authorization).toBe("Bearer abc123");
     expect(window.localStorage.getItem(TOKEN_KEY)).toBeNull();
-    // Once to find the form, once to confirm the token it was given.
     expect(capabilities).toHaveBeenCalledTimes(2);
   });
 
@@ -247,18 +205,11 @@ describe("TokenEntry", () => {
     fireEvent.change(field, { target: { value: "wrong" } });
     fireEvent.click(screen.getByRole("button", { name: "Open Guaca" }));
 
-    // The hint above the field already says where the token comes from. What
-    // the operator does not know until this answers is that the one they
-    // pasted was turned away, and that is the whole of what it says now: the
-    // old sentence repeated the hint under it, in the daemon's voice, and
-    // never said the new fact at all.
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toBe("That token was not accepted.");
     expect(alert.textContent).not.toContain("logs");
     expect(alert.textContent).not.toContain("token file");
     expect(screen.queryByText("the workspace")).toBeNull();
-    // A refused token is not kept: the next reload would only refuse it again,
-    // with the app's own reads failing forty times before this form appeared.
     expect(window.localStorage.getItem(TOKEN_KEY)).toBeNull();
   });
 
@@ -268,7 +219,6 @@ describe("TokenEntry", () => {
     const button = (await screen.findByRole("button", { name: "Open Guaca" })) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
     fireEvent.submit(button.closest("form")!);
-    // The mount's own question was asked once; submitting added nothing.
     expect(capabilities).toHaveBeenCalledTimes(1);
     expect(fetched).not.toHaveBeenCalled();
   });
@@ -287,9 +237,6 @@ describe("TokenEntry", () => {
   });
 
   it("counts the browser as let in from the moment the workspace is drawn", async () => {
-    // The earliest a refusal can come is from something the workspace starts
-    // as it mounts. By then the browser has been let in, so the form has to
-    // say the session stopped rather than greet a first visitor.
     render(
       <TokenEntry>
         <RefusedOnArrival />

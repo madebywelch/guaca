@@ -244,10 +244,6 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
               >
                 Continue
               </button>
-              {/* A button that will not press and says nothing is the first
-                  thing this app does to a stranger. The reason sits here, on
-                  every state of it, and is the button's own description so a
-                  screen reader hears it too. */}
               <span id={continueHint}>
                 {!draft.brief.trim()
                   ? "Pick one of the tasks above, or write your own brief, to continue."
@@ -323,9 +319,6 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
                     ? "Your previous start may have created this agent. Retry with the same brief to continue safely."
                     : "Start task creates this agent and sends your brief using the provider you just connected. Other services can be connected later, when needed."}
             </p>
-            {/* The last step, and the last moment to say where Guaca goes when
-                the window does. A browser has no menu bar, so it is only said
-                where there is one to look at. */}
             {desktop && (
               <p className="onboarding-notice">
                 After you start, you can close this window: Guaca stays in the menu bar, and its

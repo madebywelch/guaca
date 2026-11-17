@@ -1,41 +1,3 @@
-//! Signing in to a ChatGPT subscription, so a plan pays for a turn instead of a
-//! key.
-//!
-//! This is a credential, not a protocol: what to do with the token once it is
-//! held is `llm/codex.rs`. The two are separate because they fail differently.
-//! A sign-in fails once, in front of the operator, and is fixed by signing in
-//! again. A model call fails mid-turn, in front of an agent, and has to say
-//! something an agent can act on.
-//!
-//! ## Why the device flow and not a loopback redirect
-//!
-//! The other half of OAuth's browser dance is a redirect back, and a desktop
-//! app has two ways to catch one: bind a localhost port, or register a URL
-//! scheme. Both put the app in the path of a credential arriving from a
-//! browser. A port that is already taken silently belongs to something else,
-//! and a scheme handler is claimed by whichever build of the app registered
-//! last, which on a developer's machine is not the one they are running.
-//!
-//! The device flow has no redirect. Guaca asks for a code, the operator carries
-//! it to a browser by hand, and Guaca polls for the answer. Nothing listens,
-//! nothing is claimed, and the same code path works on a machine with no
-//! browser at all.
-//!
-//! ## What is stored, and where
-//!
-//! Its own file, not `config.json`. The token set rotates on refresh, which is
-//! Guaca writing to it in the background, while `config.json` is rewritten
-//! wholesale every time the operator presses Save in Settings. Those two writers
-//! on one file lose a refreshed token to a stale in-memory copy, and the symptom
-//! is a sign-in that works until the operator changes an unrelated setting.
-//!
-//! Plaintext and 0600, for the reason `config.rs` gives about the API key: this
-//! is a local app, and a key encrypted beside its own key is theater. Worth
-//! being blunter here, though, because this credential is not Guaca's to lose:
-//! it belongs to a ChatGPT account that has more than Guaca behind it. The
-//! honest fix is the OS keychain, and it is the first thing to reach for if this
-//! file ever grows a second reader.
-
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -44,42 +6,14 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
-/// Where the sign-in happens.
-///
-/// Overridable through [`Subscription::open_at`] rather than through settings:
-/// there is no operator-facing reason to change it, and a mistyped sign-in
-/// service is a credential sent somewhere nobody chose.
 pub const DEFAULT_ISSUER: &str = "https://auth.openai.com";
 
-/// The public client the Codex CLI signs in as.
-///
-/// Not a secret, and not Guaca's: it identifies the ChatGPT device-code
-/// application that OpenAI operates, which is the one the subscription flow is
-/// published under. A PKCE public client has no client secret by construction,
-/// which is why this can be a constant in an app anybody can read.
 pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 
-/// Refresh this far ahead of expiry rather than on rejection.
-///
-/// A turn that discovers its token expired has already spent the operator's
-/// wait on a round trip that was never going to work, and the retry it triggers
-/// looks like an outage. Five minutes is long enough to cover a slow refresh
-/// and a clock that is a little wrong in either direction.
-///
-/// This is the optimization, not the guarantee. What decides whether a token
-/// still works is the backend refusing it: see [`Subscription::renew`].
 const REFRESH_SKEW: Duration = Duration::from_secs(5 * 60);
 
-/// How long the whole device flow may take before it is abandoned.
-///
-/// The code the operator is carrying expires at fifteen minutes, so polling past
-/// that is polling for something that cannot arrive.
 const MAX_WAIT: Duration = Duration::from_secs(15 * 60);
 
-/// Floor on the poll interval, whatever the server suggests.
-///
-/// A server that reports zero, or omits the field, would otherwise be polled in
-/// a tight loop for fifteen minutes.
 const MIN_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, thiserror::Error)]
@@ -116,9 +50,6 @@ pub enum SigninError {
 
 impl SigninError {
     fn upstream(status: u16, body: &str) -> Self {
-        // The sign-in service reports a refused refresh as an OAuth error
-        // object. Anything else is passed through truncated: an HTML error page
-        // from a proxy is still worth seeing the first line of.
         let message = serde_json::from_str::<serde_json::Value>(body)
             .ok()
             .and_then(|v| {
@@ -132,90 +63,45 @@ impl SigninError {
     }
 }
 
-/// What a started sign-in gives the operator to carry to a browser.
-///
-/// `device_auth_id` comes back so the polling half can be a second call: the
-/// dialog wants to draw the code immediately, and completing takes as long as
-/// the operator does.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceCode {
     pub verification_url: String,
     pub user_code: String,
     pub device_auth_id: String,
-    /// Seconds between polls, as the service asked for it.
     pub interval_secs: u64,
 }
 
-/// The token set, as stored. Never crosses IPC: see [`Status`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 struct Stored {
     access_token: String,
     refresh_token: String,
-    /// Kept for its claims: the plan and the account this token spends against.
     id_token: String,
-    /// The workspace a request is billed to, from the id token's claims.
     account_id: String,
-    /// Unix seconds, read from the access token rather than from a duration the
-    /// service quoted. A quoted lifetime plus the local clock at the moment of
-    /// exchange drifts.
-    ///
-    /// It is a floor on the token's life and not a ceiling: the backend stops
-    /// accepting one well before this, which is what [`Subscription::renew`]
-    /// exists for. A token observed three days old, with seven days of `exp`
-    /// still on it, was refused with `token_expired`.
     expires_at: i64,
-    /// Denormalized out of the id token so a signed-in status can be answered
-    /// without decoding a JWT on every read.
     #[serde(default)]
     email: String,
     #[serde(default)]
     plan: String,
 }
 
-/// What the webview is allowed to know about a sign-in.
-///
-/// No token, and no field one could arrive in. The plan and the email are here
-/// because "signed in" on its own is not enough to tell an operator whether
-/// they signed in to the account they meant to.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
     pub signed_in: bool,
     pub email: String,
-    /// As the service spells it: `plus`, `pro`, `team`, `enterprise`, `free`.
     pub plan: String,
-    /// Whether that plan includes Codex. A free plan signs in successfully and
-    /// then cannot make a single call, which is worth saying before a turn does.
     pub includes_codex: bool,
 }
 
-/// A signed-in ChatGPT subscription, and the file it lives in.
-///
-/// Cheap to clone: everything is behind the `Arc` its owner holds. The mutex is
-/// held only to read or replace the token set, never across a request, so a
-/// refresh cannot block a concurrent turn that already has a valid token.
 #[derive(Debug)]
 pub struct Subscription {
     path: PathBuf,
     issuer: String,
-    /// Where the credential is spent. Travels with the credential rather than
-    /// sitting in `codex.rs` as a constant, because an account and the backend
-    /// that will accept it are one fact, not two.
     backend: String,
     http: reqwest::Client,
     tokens: Mutex<Option<Stored>>,
     lifecycle: Mutex<Lifecycle>,
-    /// Held across a refresh, so a crew that all discover a dead token at once
-    /// spends one.
-    ///
-    /// The refresh token rotates, so concurrent refreshes race to retire each
-    /// other's: the losers are left holding one the service has already thrown
-    /// away, and the sign-in dies with nothing on screen able to say why.
-    /// Whoever gets in first refreshes, and everyone behind them finds the new
-    /// token already stored and takes it. Async rather than `parking_lot`
-    /// because it is held across an await, which is the one thing the other
-    /// lock here is careful never to be.
     renewing: tokio::sync::Mutex<()>,
 }
 
@@ -275,22 +161,10 @@ struct Lifecycle {
 }
 
 impl Subscription {
-    /// Opens the store at `path`, reading whatever is already there.
-    ///
-    /// A file that cannot be parsed is treated as "not signed in" rather than as
-    /// a failure to start: the app is still usable with an API key, and the
-    /// operator can sign in again, which overwrites it.
     pub fn open(path: PathBuf) -> Self {
         Self::open_at(path, DEFAULT_ISSUER, crate::llm::codex::DEFAULT_BASE_URL)
     }
 
-    /// The same, against a named sign-in service and backend.
-    ///
-    /// Public because the end-to-end suite drives the real transport against a
-    /// local stub, and a wire protocol that has to be right about two shapes at
-    /// once is not worth testing any other way. It is also the seam a deployment
-    /// that does not live at `chatgpt.com` would need, which is why it takes both
-    /// halves rather than being a test hook for one.
     pub fn open_at(path: PathBuf, issuer: impl Into<String>, backend: impl Into<String>) -> Self {
         let tokens = match fs::read_to_string(&path) {
             Ok(raw) => match serde_json::from_str::<Stored>(&raw) {
@@ -315,8 +189,6 @@ impl Subscription {
             issuer: issuer.into(),
             backend: backend.into(),
             http: reqwest::Client::builder()
-                // Long enough for a slow token exchange, short enough that a
-                // hung sign-in service does not park the dialog forever.
                 .timeout(Duration::from_secs(30))
                 .build()
                 .unwrap_or_default(),
@@ -330,7 +202,6 @@ impl Subscription {
         }
     }
 
-    /// Where a call made with this credential goes.
     pub fn backend(&self) -> &str {
         &self.backend
     }
@@ -351,7 +222,6 @@ impl Subscription {
         self.tokens.lock().is_some()
     }
 
-    /// Asks for a code the operator can carry to a browser.
     pub async fn begin(&self) -> Result<DeviceCode, SigninError> {
         let attempt = {
             let mut state = self.lifecycle.lock();
@@ -390,8 +260,6 @@ impl Subscription {
             return Err(SigninError::NotSignedIn);
         }
         Ok(DeviceCode {
-            // The page the operator opens, which is not the API they were just
-            // issued a code by.
             verification_url: format!("{base}/codex/device"),
             user_code: issued.user_code,
             device_auth_id: issued.device_auth_id,
@@ -399,12 +267,6 @@ impl Subscription {
         })
     }
 
-    /// Waits for the operator to enter the code, then stores the result.
-    ///
-    /// Long-running by design: it returns when the sign-in finishes, is
-    /// refused, or the code expires. The caller is an IPC command the dialog
-    /// awaits, so a sign-in that is abandoned costs one parked call and no
-    /// state.
     pub async fn complete(&self, code: &DeviceCode) -> Result<Status, SigninError> {
         let attempt = match &self.lifecycle.lock().attempt {
             Attempt::Waiting(id, device) if *device == code.device_auth_id => *id,
@@ -435,10 +297,6 @@ impl Subscription {
                 })?;
             }
 
-            // Not an error: the operator has not finished yet. Both spellings
-            // are treated as "still waiting" because the service has used each,
-            // and reading one of them as a refusal ends a sign-in that was
-            // about to succeed.
             if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::NOT_FOUND
             {
                 if tokio::time::Instant::now() + interval > deadline {
@@ -452,10 +310,6 @@ impl Subscription {
             return Err(SigninError::upstream(status.as_u16(), &body));
         };
 
-        // The verifier is the service's, not ours: this flow has it generate the
-        // PKCE pair and hand back both halves with the code, because the browser
-        // that authorized it and the app redeeming it are not the same process
-        // and could not otherwise share a secret.
         let tokens = self
             .exchange(
                 "authorization_code",
@@ -478,11 +332,6 @@ impl Subscription {
         Ok(status)
     }
 
-    /// Forgets the sign-in on this machine.
-    ///
-    /// Local only: it does not revoke the token at the service, because the
-    /// operator's other Codex clients are signed in with their own and revoking
-    /// centrally would sign them out of something Guaca does not own.
     pub fn sign_out(&self) -> Result<(), SigninError> {
         let mut state = self.lifecycle.lock();
         state.credential = state.credential.next(false);
@@ -499,12 +348,6 @@ impl Subscription {
         }
     }
 
-    /// A token that is good right now, and the workspace to bill it to.
-    ///
-    /// Refreshes when the stored one is close enough to expiry to be a risk.
-    /// Every caller is a turn about to make a model call, so this is the only
-    /// place that decides a token is too old, and it decides it before spending
-    /// anything.
     pub async fn access(&self) -> Result<Access, SigninError> {
         let (generation, stored) = {
             let state = self.lifecycle.lock();
@@ -518,11 +361,6 @@ impl Subscription {
             return Ok(Access { token: stored.access_token, account_id: stored.account_id });
         }
 
-        // A refresh that fails on the network leaves the stored token in place:
-        // it may still have minutes left, and a turn that could have run is
-        // worth more than a tidy cache. Every other failure surfaces, because
-        // the token it was called to replace is already inside its own last
-        // five minutes.
         match self.renew(&stored.access_token).await {
             Ok(access) => Ok(access),
             Err(err @ SigninError::Transport { .. }) => {
@@ -536,21 +374,6 @@ impl Subscription {
         }
     }
 
-    /// Trades the refresh token in for a new one, whatever the stored expiry
-    /// says, and hands back what to spend next.
-    ///
-    /// This is the recovery path, and it exists because `exp` is not the truth.
-    /// OpenAI mints a ChatGPT access token with ten days on its `exp` claim and
-    /// the backend stops accepting it long before that, with `token_expired`.
-    /// A build that believed the claim sat on a three-day-old token for a week,
-    /// refused every turn, and went on reporting a healthy sign-in in Settings
-    /// the whole time. So the backend is the authority: [`crate::llm::codex`]
-    /// calls this on a 401 and tries the call again.
-    ///
-    /// `refused` is the token that was just turned down. If somebody else
-    /// refreshed while this call was queued behind them, theirs is by
-    /// definition not the one that failed, and it is handed back untouched
-    /// rather than burned on a second refresh.
     pub async fn renew(&self, refused: &str) -> Result<Access, SigninError> {
         let _gate = self.renewing.lock().await;
 
@@ -568,10 +391,6 @@ impl Subscription {
         let fresh = match self.refresh(&held.refresh_token).await {
             Ok(fresh) => fresh,
             Err(err) => {
-                // A refused refresh is the end of this sign-in, and keeping the
-                // file is what let Settings claim a credential every turn had
-                // already been told was dead. Forgetting it is what makes "sign
-                // in again" a thing the operator can actually do.
                 if is_terminal(&err) {
                     let mut state = self.lifecycle.lock();
                     if state.credential == generation {
@@ -623,21 +442,12 @@ impl Subscription {
         let mut tokens: Tokens = serde_json::from_str(&body).map_err(|err| {
             SigninError::Malformed(format!("could not read the new token: {err}"))
         })?;
-        // A refresh that rotates the refresh token says so; one that does not
-        // expects the old one to keep working. Storing an empty string here
-        // signs the operator out at the next refresh.
         if tokens.refresh_token.is_empty() {
             tokens.refresh_token = refresh_token.to_string();
         }
         Ok(tokens)
     }
 
-    /// POSTs a grant to the token endpoint as form-encoded fields.
-    ///
-    /// Form-encoded rather than JSON because that is what the authorization-code
-    /// grant is defined as and what the service accepts for it; the refresh
-    /// grant is JSON. Two shapes on one endpoint is not a nicety anyone would
-    /// design, and sending the wrong one is a 400 that reads like a bad code.
     async fn exchange(
         &self,
         grant_type: &str,
@@ -667,13 +477,7 @@ impl Subscription {
             .map_err(|err| SigninError::Malformed(format!("could not read the token: {err}")))
     }
 
-    /// Records a token set, and reports what it turned out to be.
     fn store(&self, tokens: Tokens) -> Result<Status, SigninError> {
-        // A refresh does not have to re-issue the id token, and one that does
-        // not expects the old one to stand. Reading claims out of the empty
-        // string would blank the account every call is billed to, and the
-        // symptom is every agent being refused an hour after a working sign-in,
-        // with nothing in the settings looking wrong.
         let previous = self.tokens.lock().clone();
         let id_token = if tokens.id_token.is_empty() {
             previous.map(|held| held.id_token).unwrap_or_default()
@@ -684,10 +488,6 @@ impl Subscription {
         let claims = Claims::of(&id_token);
         let stored = Stored {
             expires_at: expiry_of(&tokens.access_token).unwrap_or(0),
-            // The account a request is billed to. Absent on a personal account
-            // that has never had a workspace, and the backend accepts the call
-            // without the header in that case, so an empty string is a real
-            // state rather than a failure.
             account_id: claims.account_id,
             email: claims.email,
             plan: claims.plan,
@@ -717,10 +517,6 @@ impl Subscription {
         let json = serde_json::to_string_pretty(stored)
             .map_err(|err| SigninError::Malformed(err.to_string()))?;
 
-        // Same temp-then-rename as the config, for the same reason: a crash
-        // mid-write must not leave a file that parses as a partial sign-in.
-        // Permissions go on before the rename, so the file is never briefly
-        // world-readable under its real name.
         let tmp = self.path.with_extension("json.tmp");
         fs::write(&tmp, json).map_err(|source| SigninError::Io { path: tmp.clone(), source })?;
         restrict(&tmp)?;
@@ -730,11 +526,9 @@ impl Subscription {
     }
 }
 
-/// A token and the workspace it spends against.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Access {
     pub token: String,
-    /// Empty when the account has no workspace, which is a valid call.
     pub account_id: String,
 }
 
@@ -743,8 +537,6 @@ struct UserCode {
     device_auth_id: String,
     #[serde(alias = "usercode")]
     user_code: String,
-    /// A string on the wire, not a number. Tolerating both is cheaper than
-    /// finding out which one a deployment sends by having sign-in fail.
     #[serde(default, deserialize_with = "seconds")]
     interval: u64,
 }
@@ -764,7 +556,6 @@ struct Tokens {
     id_token: String,
 }
 
-/// Reads a number that may have been sent as a JSON string.
 fn seconds<'de, D: serde::Deserializer<'de>>(de: D) -> Result<u64, D::Error> {
     #[derive(Deserialize)]
     #[serde(untagged)]
@@ -778,7 +569,6 @@ fn seconds<'de, D: serde::Deserializer<'de>>(de: D) -> Result<u64, D::Error> {
     })
 }
 
-/// The claims Guaca reads out of an id token.
 #[derive(Debug, Default, PartialEq)]
 struct Claims {
     email: String,
@@ -787,13 +577,6 @@ struct Claims {
 }
 
 impl Claims {
-    /// Reads what it can, and reports nothing for what it cannot.
-    ///
-    /// The signature is deliberately not verified. This token was just received
-    /// over TLS from the service that minted it, and nothing here is a security
-    /// decision: the claims are used to label the sign-in for the operator and
-    /// to fill in one request header. The thing that decides whether the
-    /// credential is real is the backend rejecting it.
     fn of(id_token: &str) -> Self {
         let Some(payload) = id_token.split('.').nth(1) else {
             return Self::default();
@@ -825,7 +608,6 @@ impl Claims {
     }
 }
 
-/// `exp` out of a JWT, as unix seconds.
 fn expiry_of(jwt: &str) -> Option<i64> {
     let payload = jwt.split('.').nth(1)?;
     let decoded = base64url_decode(payload)?;
@@ -834,39 +616,18 @@ fn expiry_of(jwt: &str) -> Option<i64> {
 }
 
 fn expiring_soon(expires_at: i64) -> bool {
-    // An unreadable expiry stored as zero refreshes on first use, which is the
-    // safe direction: one wasted round trip beats a turn spent on a dead token.
     let now = chrono::Utc::now().timestamp();
     expires_at <= now.saturating_add(REFRESH_SKEW.as_secs() as i64)
 }
 
-/// Whether a refused refresh means this sign-in is finished.
-///
-/// The token endpoint answers a refresh token it has retired with a 4xx and an
-/// `invalid_grant`, and that is the one case where the operator has to sign in
-/// again. A 5xx is the service having a bad minute and must not cost them a
-/// working sign-in; neither must a body this build could not read, which is a
-/// deployment that changed shape rather than a credential that expired.
 fn is_terminal(err: &SigninError) -> bool {
     matches!(err, SigninError::Upstream { status: 400 | 401 | 403, .. })
 }
 
-/// Whether a plan can call Codex at all.
-///
-/// A free account signs in perfectly well and then cannot make one model call.
-/// Naming the plans that work, rather than the ones that do not, means a plan
-/// nobody here has heard of is treated as working: the backend is the authority
-/// and a wrong "your plan cannot do this" is worse than a real error from it.
 fn plan_includes_codex(plan: &str) -> bool {
     !matches!(plan.trim().to_ascii_lowercase().as_str(), "" | "free" | "unknown")
 }
 
-/// Base64url without padding, which is how a JWT spells its segments.
-///
-/// Hand-rolled for the same reason the encoder in `e2b.rs` is: it is twenty
-/// lines and the alternative is a dependency. Tolerates padding and the
-/// standard alphabet too, because a service that pads is not wrong and a decode
-/// that fails here silently costs the operator the email beside their sign-in.
 fn base64url_decode(input: &str) -> Option<Vec<u8>> {
     fn sextet(byte: u8) -> Option<u32> {
         Some(match byte {
@@ -882,8 +643,6 @@ fn base64url_decode(input: &str) -> Option<Vec<u8>> {
     let raw: Vec<u8> = input.bytes().filter(|b| *b != b'=' && !b.is_ascii_whitespace()).collect();
     let mut out = Vec::with_capacity(raw.len() * 3 / 4);
     for chunk in raw.chunks(4) {
-        // A single sextet cannot encode any whole byte, so a trailing one is a
-        // truncated segment rather than something to salvage.
         if chunk.len() < 2 {
             return None;
         }
@@ -912,8 +671,6 @@ fn restrict(path: &Path) -> Result<(), SigninError> {
 
 #[cfg(not(unix))]
 fn restrict(_path: &Path) -> Result<(), SigninError> {
-    // As `config.rs` says: a per-user config directory is already scoped by
-    // Windows ACL defaults, and tightening further needs a platform crate.
     Ok(())
 }
 
@@ -929,8 +686,6 @@ mod tests {
     use axum::routing::post;
     use axum::Router;
 
-    /// A JWT with the given claims. Unsigned: nothing here verifies one, and a
-    /// test that signed them would be testing its own signer.
     fn jwt(claims: serde_json::Value) -> String {
         let payload = crate::e2b::encode(claims.to_string().as_bytes())
             .replace('+', "-")
@@ -949,9 +704,6 @@ mod tests {
         }))
     }
 
-    /// `nth` distinguishes one issue from the next, exactly as a real service's
-    /// tokens do. Two refreshes a millisecond apart otherwise mint the same
-    /// string, and a test about not refreshing twice cannot see the difference.
     fn access_token(expires_at: i64, nth: usize) -> String {
         jwt(serde_json::json!({ "exp": expires_at, "nth": nth }))
     }
@@ -960,17 +712,12 @@ mod tests {
         chrono::Utc::now().timestamp() + 3600
     }
 
-    /// The sign-in service, as much of it as the flow touches.
     #[derive(Clone, Default)]
     struct Stub {
-        /// Polls to refuse before reporting the code entered.
         pending: Arc<AtomicUsize>,
         polls: Arc<AtomicUsize>,
         refreshes: Arc<AtomicUsize>,
-        /// What the next refresh answers with, if it should not be a token.
         refresh_status: Arc<AtomicUsize>,
-        /// Whether a refresh re-issues the id token. Real services do not
-        /// promise to, and the claims have to survive one that does not.
         refresh_omits_id_token: Arc<AtomicUsize>,
         refresh_gate: Option<Arc<tokio::sync::Barrier>>,
         exchange_gate: Option<Arc<tokio::sync::Barrier>>,
@@ -987,7 +734,6 @@ mod tests {
                     axum::Json(serde_json::json!({
                         "device_auth_id": format!("dev-{}", nth + 1),
                         "user_code": "ABCD-EFGH",
-                        // A string, as the service sends it.
                         "interval": "1",
                     }))
                     .into_response()
@@ -1012,9 +758,6 @@ mod tests {
             .route(
                 "/oauth/token",
                 post(|State(stub): State<Stub>, body: String| async move {
-                    // The two grants arrive in different shapes, which is the
-                    // thing most worth pinning: form for the code exchange,
-                    // JSON for the refresh.
                     if body.contains("grant_type=authorization_code") {
                         let nth = stub.exchanges.fetch_add(1, Ordering::SeqCst);
                         if let Some(gate) = stub.exchange_gate.as_ref().filter(|_| nth == 0) {
@@ -1049,8 +792,6 @@ mod tests {
                     assert_eq!(parsed["grant_type"], "refresh_token");
                     let mut fresh = serde_json::json!({
                         "access_token": access_token(hour_ahead(), nth),
-                        // The refresh token is deliberately absent, to pin that
-                        // the old one is kept.
                     });
                     if stub.refresh_omits_id_token.load(Ordering::SeqCst) == 0 {
                         fresh["id_token"] = id_token("team", "acct-2", "b@example.com").into();
@@ -1222,8 +963,6 @@ mod tests {
         let code = subscription.begin().await.unwrap();
         assert_eq!(code.user_code, "ABCD-EFGH");
         assert!(code.verification_url.ends_with("/codex/device"), "got {}", code.verification_url);
-        // Floored, so a service that says one second is not polled faster than
-        // the floor allows.
         assert_eq!(code.interval_secs, MIN_INTERVAL.as_secs());
 
         let status = subscription.complete(&code).await.unwrap();
@@ -1277,14 +1016,12 @@ mod tests {
         let code = subscription.begin().await.unwrap();
         subscription.complete(&code).await.unwrap();
 
-        // Inside the skew, so still technically valid and still refreshed.
         subscription.tokens.lock().as_mut().unwrap().expires_at =
             chrono::Utc::now().timestamp() + 60;
 
         subscription.access().await.unwrap();
         assert_eq!(stub.refreshes.load(Ordering::SeqCst), 1);
 
-        // And the refreshed claims replace the old ones.
         assert_eq!(subscription.status().plan, "team");
         assert_eq!(subscription.access().await.unwrap().account_id, "acct-2");
         assert_eq!(
@@ -1306,11 +1043,8 @@ mod tests {
         subscription.tokens.lock().as_mut().unwrap().expires_at = 0;
         subscription.access().await.unwrap();
 
-        // The whole point: an empty refresh token stored here signs the
-        // operator out at the next refresh, silently, hours later.
         assert_eq!(subscription.tokens.lock().as_ref().unwrap().refresh_token, "refresh-1");
 
-        // Which is only provable by refreshing again.
         subscription.tokens.lock().as_mut().unwrap().expires_at = 0;
         subscription.access().await.unwrap();
         assert_eq!(stub.refreshes.load(Ordering::SeqCst), 2);
@@ -1329,9 +1063,6 @@ mod tests {
         subscription.tokens.lock().as_mut().unwrap().expires_at = 0;
         let access = subscription.access().await.unwrap();
 
-        // Reading claims out of an empty id token blanks all three of these,
-        // and the first symptom is every agent refused an hour after a sign-in
-        // that plainly worked.
         assert_eq!(access.account_id, "acct-1", "the billing account must survive a refresh");
         assert_eq!(subscription.status().plan, "pro");
         assert_eq!(subscription.status().email, "a@example.com");
@@ -1351,9 +1082,6 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("expired"), "the reason has to reach the operator: {message}");
 
-        // And it is forgotten, because it is finished. A stored sign-in the
-        // service has retired is what makes Settings say "signed in" while
-        // every turn says the opposite, with no way out of the disagreement.
         assert!(!subscription.is_signed_in());
         assert!(!dir.path().join("subscription.json").exists());
     }
@@ -1370,8 +1098,6 @@ mod tests {
         subscription.tokens.lock().as_mut().unwrap().expires_at = 0;
         subscription.access().await.unwrap_err();
 
-        // A 5xx is the service, not the credential. Signing the operator out
-        // over one turns a wait into a sign-in they have to do by hand.
         assert!(subscription.is_signed_in());
         assert!(dir.path().join("subscription.json").exists());
     }
@@ -1385,10 +1111,6 @@ mod tests {
         let code = subscription.begin().await.unwrap();
         subscription.complete(&code).await.unwrap();
 
-        // A whole week of `exp` left, which is exactly the state the live
-        // backend refuses: OpenAI mints ten days and stops accepting one after
-        // about three. Nothing local can tell, so the refusal is the only
-        // signal there is, and `renew` has to act on it.
         subscription.tokens.lock().as_mut().unwrap().expires_at =
             chrono::Utc::now().timestamp() + 7 * 86_400;
         let refused = subscription.access().await.unwrap();
@@ -1410,10 +1132,6 @@ mod tests {
 
         let refused = subscription.access().await.unwrap().token;
 
-        // Eight agents, one dead token, all of them told so at once. The
-        // refresh token rotates, so eight refreshes would race to retire each
-        // other's and the last seven would be holding one the service has
-        // already thrown away.
         let mut crew = Vec::new();
         for _ in 0..8 {
             let subscription = subscription.clone();
@@ -1436,8 +1154,6 @@ mod tests {
         let subscription = store(&dir, "http://unused");
         let err = subscription.renew("anything").await.unwrap_err();
         assert!(matches!(err, SigninError::NotSignedIn), "got {err}");
-        // The operator reads this one after the app has signed them out for
-        // them, so it has to say where to go rather than quote a status code.
         assert!(err.to_string().contains("Settings"), "{err}");
     }
 
@@ -1449,7 +1165,6 @@ mod tests {
         let code = subscription.begin().await.unwrap();
         subscription.complete(&code).await.unwrap();
 
-        // A token with time left, and a sign-in service that has gone away.
         let subscription = Subscription::open_at(
             dir.path().join("subscription.json"),
             "http://127.0.0.1:1",
@@ -1473,7 +1188,6 @@ mod tests {
         subscription.sign_out().unwrap();
         assert!(!subscription.is_signed_in());
         assert!(!dir.path().join("subscription.json").exists());
-        // Idempotent: signing out twice is not an error worth showing anyone.
         subscription.sign_out().unwrap();
     }
 
@@ -1485,11 +1199,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let subscription = store(&dir, &format!("http://{addr}"));
-        assert!(matches!(
-            subscription.begin().await,
-            Err(SigninError::NotAvailable { .. }),
-            // A bare "HTTP 404" here sends the operator looking at their network.
-        ));
+        assert!(matches!(subscription.begin().await, Err(SigninError::NotAvailable { .. }),));
     }
 
     #[test]
@@ -1511,7 +1221,6 @@ mod tests {
         assert!(plan_includes_codex("plus"));
         assert!(plan_includes_codex("pro"));
         assert!(plan_includes_codex("team"));
-        // A plan nobody here has heard of is the backend's call, not ours.
         assert!(plan_includes_codex("some-future-plan"));
     }
 
@@ -1541,10 +1250,8 @@ mod tests {
 
     #[test]
     fn base64url_round_trips_both_alphabets() {
-        // The standard alphabet, as `e2b::encode` produces it.
         let padded = crate::e2b::encode(b"any carnal pleasure?");
         assert_eq!(base64url_decode(&padded).unwrap(), b"any carnal pleasure?");
-        // And the url-safe one with the padding stripped, as a JWT carries it.
         let urlsafe = padded.replace('+', "-").replace('/', "_").replace('=', "");
         assert_eq!(base64url_decode(&urlsafe).unwrap(), b"any carnal pleasure?");
     }
@@ -1566,8 +1273,6 @@ mod tests {
 
     #[test]
     fn an_unreadable_expiry_is_treated_as_due() {
-        // Zero is what an unparseable token stores, and it has to refresh rather
-        // than be handed to a turn.
         assert!(expiring_soon(0));
         assert!(expiring_soon(chrono::Utc::now().timestamp() + 60));
         assert!(!expiring_soon(chrono::Utc::now().timestamp() + 3600));
@@ -1580,8 +1285,6 @@ mod tests {
         fs::write(&path, "{ not json").unwrap();
         assert!(!Subscription::open(path.clone()).is_signed_in());
 
-        // And so does a well-formed file with nothing to refresh with, which is
-        // what a half-written sign-in would leave.
         fs::write(&path, r#"{"access_token":"a","refresh_token":""}"#).unwrap();
         assert!(!Subscription::open(path).is_signed_in());
     }

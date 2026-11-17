@@ -39,10 +39,6 @@ export function ForYou({ onClose }: { onClose: () => void }) {
   const now = useNow(30_000);
   const panel = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<"needs" | "following" | "history">("needs");
-  // Asked to open while already open, from a notification or the menu bar
-  // panel, For you goes back to Needs you: that is where what the ask is about
-  // is drawn, Finished included. Set during render rather than in an effect,
-  // so the other view is never painted once more first.
   const asked = useStore((state) => state.forYouAsked);
   const [answered, setAnswered] = useState(asked);
   if (asked !== answered) {
@@ -57,9 +53,6 @@ export function ForYou({ onClose }: { onClose: () => void }) {
     void refresh();
     void refreshOutcomes();
   }, [refresh, refreshOutcomes]);
-  // Earlier is read here rather than kept in the store: nothing else draws it,
-  // and it changes only when something is seen or finishes, which is when the
-  // unseen list this follows changes. `outcomes` is the trigger, not an input.
   useEffect(() => {
     let current = true;
     void (async () => {
@@ -70,8 +63,6 @@ export function ForYou({ onClose }: { onClose: () => void }) {
         });
         if (current) setRecent(rows);
       } catch (error) {
-        // Earlier is a convenience under everything else, so a host that
-        // cannot answer it leaves it out rather than taking For you down.
         console.warn(`Earlier could not be read: ${errorMessage(error)}`);
       }
     })();
@@ -81,9 +72,6 @@ export function ForYou({ onClose }: { onClose: () => void }) {
   }, [outcomes]);
   const news = finished(outcomes);
   const past = earlier(recent, now);
-  // A line opens the note it came from, in its channel. A run with no note, or
-  // one whose note was cleared since, opens the channel at its end: the host
-  // reads a channel's newest messages when the one asked for is gone.
   const openOutcome = (outcome: Outcome) => {
     if (outcome.seenAt === null) void seeOutcomes({ runIds: [outcome.runId] });
     if (outcome.noteId) void openMessage(outcome.agentId, outcome.noteId);
@@ -293,7 +281,6 @@ export function ForYou({ onClose }: { onClose: () => void }) {
   );
 }
 
-/** A list of finished runs, under a heading per group when there is more than one. */
 function FinishedShelves({
   shelves,
   now,
@@ -320,15 +307,6 @@ function FinishedShelves({
   ));
 }
 
-/**
- * One finished run, as a line: who, what its closing note said first, how it
- * ended when that was not a plain finish, and how long ago.
- *
- * Drawn here and in the panel under the menu bar icon, which is why it takes
- * where a click goes rather than deciding. It is a line and not a card, and
- * nothing on it is in the attention color: it sits under what needs the
- * operator and must never read as one more of those.
- */
 export function FinishedLine({
   outcome,
   agent,

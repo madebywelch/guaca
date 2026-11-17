@@ -22,7 +22,6 @@ vi.mock("../lib/ipc", () => ({
   },
 }));
 
-/** The box, addressed the way a screen reader would. */
 function box(): HTMLTextAreaElement {
   return screen.getByRole("textbox", { name: "Memory" }) as HTMLTextAreaElement;
 }
@@ -262,10 +261,6 @@ describe("Memory", () => {
   });
 
   it("says there is nothing in one line, and explains itself in the title", async () => {
-    // What the store is for used to be three sentences under every empty
-    // memory, which is a paragraph the operator reads on every new agent and
-    // never again needs. The section says what it holds; the explanation is on
-    // the heading, read when somebody wonders rather than every time they look.
     render(<Memory agentId="a1" />);
     expect(await screen.findByText("Nothing yet.")).toBeTruthy();
     expect(screen.queryByText(/update_memory/)).toBeNull();
@@ -288,14 +283,11 @@ describe("Memory", () => {
     type("kept and more");
     expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
 
-    // Typed back to what is on disk is not an edit.
     type("kept");
     expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("puts back what was stored rather than what was typed", async () => {
-    // The runtime trims and cuts, so leaving what was typed on screen would
-    // show the operator a page their agent is never going to be given.
     setAgentMemory.mockResolvedValue("Smith handles verification.");
     render(<Memory agentId="a1" />);
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
@@ -311,8 +303,6 @@ describe("Memory", () => {
       "  Smith handles verification.\n\n",
       expect.any(String),
     );
-    // Trimming is not a cut, and reporting it as one would cry wolf on every
-    // save that ended with a newline.
     expect(screen.queryByText(/end was cut/)).toBeNull();
   });
 
@@ -330,8 +320,6 @@ describe("Memory", () => {
   });
 
   it("reads itself again when the agent rewrites its own memory", async () => {
-    // The operator reading a memory is most likely to be doing it while the
-    // agent is working, which is exactly when the agent rewrites the file.
     render(<Memory agentId="a1" />);
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     await waitFor(() => expect(box().value).toBe(""));
@@ -411,8 +399,6 @@ describe("Memory", () => {
   });
 
   it("draws the read that failed rather than an empty memory", async () => {
-    // An empty box is a claim that the agent remembers nothing, which is a
-    // different thing from not having been able to find out.
     agentMemory.mockRejectedValue(new Error("could not access the workspace"));
     render(<Memory agentId="a1" />);
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
@@ -495,8 +481,6 @@ describe("arrived", () => {
   });
 
   it("applies it over a draft typed back to what is on disk", () => {
-    // Otherwise the panel sits on a page the agent has replaced, with nothing
-    // of the operator's to lose by moving on from it.
     expect(arrived({ stored: "same", draft: "same", incoming: null }, "new")).toEqual({
       stored: "new",
       draft: null,
@@ -511,11 +495,6 @@ describe("arrived", () => {
 });
 
 describe("crowding", () => {
-  // Written against `CAP` rather than against the number it currently holds.
-  // These were spelled 3_900 and 4_050 and had to be rewritten the day the
-  // runtime went to four pages, which is the same drift the pinning test below
-  // exists to stop: a suite that hardcodes somebody else's constant is one more
-  // copy of it.
   it("says nothing about a memory with room in it", () => {
     expect(crowding("")).toBeNull();
     expect(crowding("a".repeat(CAP - 1_000))).toBeNull();
@@ -534,19 +513,10 @@ describe("crowding", () => {
   });
 
   it("counts what the runtime counts, not what `length` counts", () => {
-    // `Workspace::write` cuts on Unicode scalar values. A page of emoji is half
-    // the characters JavaScript reports, and warning at half the cap would be a
-    // warning about nothing.
     expect(crowding("🥑".repeat(CAP - 1_000))).toBeNull();
   });
 
   it("warns against the cap the runtime actually enforces", () => {
-    // The one number in this file that is somebody else's. Read out of the
-    // Rust rather than trusted, because the two sides drifted to 4,000 against
-    // 16,000 once already, and the panel spent that release telling operators
-    // their memory was about to be cut by a runtime that was storing it whole.
-    // Nothing else in the build compares them: both sides compile, both sides
-    // pass, and the only symptom is a sentence on screen that is not true.
     const rust = readFileSync(resolve(__dirname, "../../src-tauri/src/workspace.rs"), "utf8");
     const declared = rust.match(/pub const MAX_MEMORY: usize = ([\d_]+)/);
     expect(declared, "MAX_MEMORY has been renamed or moved out of workspace.rs").not.toBeNull();

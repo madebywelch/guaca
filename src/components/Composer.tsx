@@ -92,21 +92,10 @@ if (typeof window !== "undefined") {
 
 interface Props {
   placeholder: string;
-  /** The model that will answer, for the row under the line. */
   model?: string;
   draftKey?: string;
   recipient?: { id: string; name: string };
   onRecipientChange?: (id: string) => void;
-  /**
-   * The crew this channel belongs to, or null when it belongs to nobody.
-   *
-   * What an `@` here is allowed to name. `send_message` resolves a recipient
-   * inside the sender's own group and refuses every name outside it, without
-   * saying whether that name belongs to anybody, so a completion offered from
-   * another crew is a delivery the runtime will not make. Two crews can also
-   * hold two agents with one name and one face, which the workspace-wide list
-   * offered twice with nothing on either row to say which was meant.
-   */
   group: GroupId | null;
   disabled?: boolean;
   disabledReason?: string;
@@ -139,7 +128,6 @@ export function Composer({
   const [caret, setCaret] = useState(0);
   const [highlighted, setHighlighted] = useState(0);
   const [dismissed, setDismissed] = useState(false);
-  /** What was dropped and could not be taken, in the words the runtime used. */
   const [refused, setRefused] = useState<string[]>([]);
   const [dragging, setDragging] = useState(false);
   useEffect(() => {
@@ -164,21 +152,13 @@ export function Composer({
   const ref = useRef<HTMLTextAreaElement>(null);
   const mirror = useRef<HTMLDivElement>(null);
   const picker = useRef<HTMLInputElement>(null);
-  // A browser cannot be handed a path, so it is offered a button as well as
-  // the drop. On a desktop the drop is the whole of it: the window takes a
-  // path and the runtime reads the file, and a second door would be a picker
-  // that hands over bytes the runtime then has to be told about.
   const localFiles = useStore((s) => s.capabilities.localFiles);
 
-  /** What a drop or a pick became, folded into what is already attached. */
   const take = useCallback(
     (staging: Promise<Staged>) => {
       owner.dispatch({ type: "stage" });
       void staging
         .then((staged) => {
-          // The same file twice is one attachment, by content rather than by
-          // path: a second drop is a person making sure, and one document
-          // saved in two places is still one document.
           owner.dispatch({ type: "staged", files: staged.attached });
           setRefused(staged.refused);
         })
@@ -190,13 +170,6 @@ export function Composer({
     [owner],
   );
 
-  // Dropping anywhere on the window attaches to whatever channel is open,
-  // because the alternative is a small target the operator has to aim at while
-  // holding a file.
-  //
-  // The file is taken into the store on the drop rather than on the send, so a
-  // document too big to go is refused while they are still holding it and a
-  // picture can be shown back to them before it goes.
   useEffect(() => {
     if (disabled) return;
     const stopping = onFileDrop({ over: setDragging, dropped: take });
@@ -217,10 +190,6 @@ export function Composer({
   const showing = query !== null && matches.length > 0;
   const selected = matches.length > 0 ? Math.min(highlighted, matches.length - 1) : 0;
 
-  // Grow with the content instead of scrolling a three-line box. Past the cap
-  // it does scroll, which is why the layer under it is re-aligned here as well
-  // as on a scroll event: typing at the bottom of a full box moves the view
-  // without the operator having scrolled anything.
   useEffect(() => {
     const node = ref.current;
     if (!node) return;
@@ -234,8 +203,6 @@ export function Composer({
     const next = applyMention(text, query, name);
     setText(next.text);
     setDismissed(false);
-    // The caret has to move after React has written the new value, or the
-    // browser puts it back at the end of the textarea.
     requestAnimationFrame(() => {
       const node = ref.current;
       if (!node) return;
@@ -281,8 +248,6 @@ export function Composer({
     const current = owner.get();
     const { text, files } = current.draft;
     const body = text.trim();
-    // A file on its own is a message. "Read this" with nothing typed is how
-    // people actually hand over a document.
     if (
       (!body && files.length === 0) ||
       current.delivery.kind !== "idle" ||
@@ -303,12 +268,6 @@ export function Composer({
   };
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Not while an input method is composing. The Enter that ends a
-    // composition picks a candidate and Tab and the arrows move between them,
-    // and all of that has to reach the browser before the menu below claims it
-    // as a completion or the send above claims it as a message. Checked first,
-    // because a name being typed has the menu open and every one of those keys
-    // is also a mention control.
     if (event.nativeEvent.isComposing) return;
     if (showing) {
       if (event.key === "ArrowDown") {
@@ -411,9 +370,6 @@ export function Composer({
           {files.map((file) => (
             <li key={file.digest} className="chip">
               {previewKind(file.mime) === "image" && (
-                // The picture rather than its name: an operator who has dropped
-                // three screenshots cannot tell them apart from
-                // `Screenshot 2026-08-17 at 14.02.11.png` three times over.
                 <img className="chip__thumb" src={fileUrl(file)} alt="" />
               )}
               <span className="chip__name">{file.name}</span>
@@ -491,9 +447,6 @@ export function Composer({
         );
       })}
       {refused.length > 0 && (
-        // Said where the attachments are, not as a banner over the app: the
-        // operator is looking at what they just dropped, and the one that did
-        // not arrive belongs beside the ones that did.
         <ul className="composer__refused" aria-label="Files that could not be attached">
           {refused.map((why) => (
             <li key={why} className="chip chip--error">
@@ -511,9 +464,6 @@ export function Composer({
         </ul>
       )}
       {showing && (
-        // Focus stays in the textarea and `aria-activedescendant` names the
-        // highlighted option: the standard combobox arrangement, and the reason
-        // the options are not themselves focusable.
         <div className="mentions" role="listbox" id="mention-list" aria-label="Agents">
           {matches.map((name, index) => {
             const agent = crew.find((a) => a.name === name);
@@ -524,14 +474,10 @@ export function Composer({
                 id={`mention-${index}`}
                 className="mentions__item"
                 role="option"
-                // Programmatically focusable but out of the tab order, which is
-                // what a listbox option driven by aria-activedescendant wants.
                 tabIndex={-1}
                 aria-selected={active}
                 data-active={active}
                 onMouseEnter={() => setHighlighted(index)}
-                // `mousedown` fires before the textarea loses focus, so the
-                // menu is not torn down before the click lands.
                 onMouseDown={(event) => {
                   event.preventDefault();
                   choose(name);
@@ -555,12 +501,6 @@ export function Composer({
 
       <div className="composer__row">
         <div className="composer__field">
-          {/* The draft, with its mentions drawn, under the box it belongs to.
-              The operator's own characters are still the textarea's: this
-              paints the pill behind them and nothing else, so the caret, a
-              selection, undo and an input method are all left as they were.
-              `aria-hidden` because it is the same text twice, and the copy a
-              screen reader should read is the field. */}
           <div className="composer__mirror" aria-hidden="true" ref={mirror}>
             {splitMentions(text, names).map((run) =>
               run.kind === "mention" ? (
@@ -642,13 +582,6 @@ export function Composer({
         </button>
       </div>
 
-      {/* The row under the line. It used to appear only when there was a hint
-          to give, on the argument that the rest announces itself: the typeahead
-          shows up when you type @, the drop target says so while a file is over
-          the window, and Enter sends in every chat box ever written. What that
-          left out is the two things a reader of this particular box needs
-          first — that an @ names an agent at all, and where the commands are.
-          A page's own footnote to its field, permanent and quiet. */}
       <div className="composer__foot">
         <span className="hint">
           {hint ?? (

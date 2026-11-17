@@ -188,9 +188,6 @@ describe("BrowserScreen", () => {
   });
 
   it("says nothing at all when no browser provider is configured", async () => {
-    // Offering to give an agent a browser that cannot be made is worse than not
-    // mentioning browsers. It also must not ask, because the answer costs a
-    // round trip to a provider with no key.
     configure(false);
     const { container } = render(<BrowserScreen agent={card("a", "Cook")} />);
     await waitFor(() => expect(container.firstChild).toBeNull());
@@ -198,8 +195,6 @@ describe("BrowserScreen", () => {
   });
 
   it("never shows one agent's browser in another agent's panel", async () => {
-    // The lookup for the agent being left behind is the slower of the two, so
-    // it lands after the operator has already switched. That is the whole bug.
     let settle: (value: Browser | null) => void = () => {};
     agentBrowser.mockImplementation(
       (id) =>
@@ -401,9 +396,6 @@ describe("BrowserScreen", () => {
   });
 
   it("explains that signing the agent in is the operator's job", async () => {
-    // The one thing an agent cannot do for itself, and the pane is where it
-    // happens. An empty state that only said "no browser yet" left the operator
-    // with no idea that taking over was the point.
     agentBrowser.mockResolvedValue(null);
     render(<BrowserScreen agent={card("a", "Cook")} />);
 
@@ -412,9 +404,6 @@ describe("BrowserScreen", () => {
   });
 
   it("offers a browser to an agent that has not been given one, and asks nobody", async () => {
-    // A browser is a separate decision from a computer, and this panel is
-    // where it is made. Nothing is asked of the provider for an agent that may
-    // not have one: the answer could not change what is drawn.
     render(<BrowserScreen agent={card("a", "Cook", false)} />);
 
     const grant = await screen.findByRole("switch", { name: "Browser" });
@@ -426,10 +415,6 @@ describe("BrowserScreen", () => {
   });
 
   it("names an address it cannot frame, rather than drawing a black rectangle", async () => {
-    // What the window's CSP refuses draws as the surface behind the frame and
-    // reports nothing, so a provider moving its live view host looks exactly
-    // like a browser that failed to start. Kernel moved from `onkernel.com` to
-    // `kernel.sh` and the pane went black with the browser working throughout.
     agentBrowser.mockResolvedValue({
       sessionId: "kb-live",
       state: "running",
@@ -439,15 +424,11 @@ describe("BrowserScreen", () => {
     render(<BrowserScreen agent={card("a", "Cook")} />);
 
     expect(await screen.findByText(/prod-jfk-1\.example\.com:8443/)).toBeTruthy();
-    // The browser is fine and the agent can still use the web, so the pane must
-    // not read as one that has closed.
     expect(screen.getByText(/still use the web/)).toBeTruthy();
     expect(screen.queryByTitle("Cook's browser")).toBeNull();
   });
 
   it("takes it back from the switch beside its name, and from nowhere else", async () => {
-    // A decision about the agent, not about the browser in front of you, so it
-    // is not in the full-screen bar either.
     agentBrowser.mockResolvedValue(HAS_ONE);
     render(<BrowserScreen agent={card("a", "Cook")} />);
 
@@ -517,8 +498,6 @@ describe("BrowserScreen", () => {
   });
 
   it("keeps the same connection open across the change of size", async () => {
-    // Remounting the frame would drop the live view and reconnect, which loses
-    // whatever half-typed sign-in was on the screen.
     agentBrowser.mockResolvedValue(HAS_ONE);
     render(<BrowserScreen agent={card("a", "Cook")} />);
 
@@ -528,11 +507,6 @@ describe("BrowserScreen", () => {
   });
 
   it("hands the keyboard to the live view when the operator takes over", async () => {
-    // The bug this closes: the mouse worked and the keyboard did not, which
-    // read as a broken live view. A cross-origin frame gets key events only
-    // while it holds focus, and clicking the veil focuses the veil. It has to
-    // happen inside the click handler, because this webview is WebKit and
-    // WebKit honours a focus change only as part of a user gesture.
     agentBrowser.mockResolvedValue(HAS_ONE);
     render(<BrowserScreen agent={card("a", "Cook")} />);
 
@@ -544,8 +518,6 @@ describe("BrowserScreen", () => {
   });
 
   it("lets a paste reach the page, because signing in means pasting a password", async () => {
-    // Without the clipboard permission on the frame the paste silently does
-    // nothing, which reads as a password manager that will not fill.
     agentBrowser.mockResolvedValue(HAS_ONE);
     render(<BrowserScreen agent={card("a", "Cook")} />);
 
@@ -554,9 +526,6 @@ describe("BrowserScreen", () => {
   });
 
   it("offers the consent switch while the browser is working, not only when it is closed", async () => {
-    // The reason it is under the caption rather than in the offer above it. An
-    // operator deciding they are being asked too often is an operator watching
-    // an agent work, and the offer is drawn only when there is no live view.
     agentBrowser.mockResolvedValue(HAS_ONE);
     render(<BrowserScreen agent={card("a", "Cook")} />);
 
@@ -581,9 +550,6 @@ describe("BrowserScreen", () => {
   });
 
   it("says nothing about consent for an agent that has no browser", async () => {
-    // There is nothing to be asked about. The offer on screen is the browser
-    // itself, and a second decision beside it would read as a condition of the
-    // first.
     agentBrowser.mockResolvedValue(null);
     render(<BrowserScreen agent={card("a", "Cook", false)} />);
 
@@ -592,8 +558,6 @@ describe("BrowserScreen", () => {
   });
 
   it("does not close a browser on one click", async () => {
-    // Closing is how a sign-in is saved, but it is also the end of whatever the
-    // agent had open, so it asks first.
     agentBrowser.mockResolvedValue(HAS_ONE);
     render(<BrowserScreen agent={card("a", "Cook")} />);
 

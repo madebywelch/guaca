@@ -1,152 +1,40 @@
-//! An artifact: a page a crew keeps.
-//!
-//! A page in an ```html fence is drawn once, inside the reply that carried it,
-//! and leaves the operator's view when the conversation moves on. That is right
-//! for a picker or a one-off diagram and wrong for the thing an operator comes
-//! back to: the pipeline board, the hiring plan, the comparison they will want
-//! again next week. So an artifact is the same kind of page with an address. It
-//! belongs to a crew, it is listed in that crew's Artifacts where the operator
-//! opens it, and every change to it is a version with a sentence saying what
-//! changed.
-//!
-//! What runs is exactly what a fenced page runs: the same loopback origin in
-//! `crate::artifact`, the same content policy, reaching nothing. Keeping a page
-//! changes where it lives, not what it may do.
-//!
-//! ## A version can carry a second, condensed document
-//!
-//! The status bar draws a kept page one row high, and the page itself is the
-//! wrong thing to draw there: it can be half a megabyte of chart library, and a
-//! pinned widget runs all day. So a version may carry `condensed`, a separate
-//! document of at most [`MAX_CONDENSED`] bytes, written for the strip. Separate
-//! rather than one page that folds itself down, because the cap is what keeps
-//! it condensed: a responsive page can put a small copy of everything in the
-//! strip, and a sixteen-kilobyte document cannot. It shares the page's version,
-//! reads and history, so the number on the bar and the board behind it are
-//! always the same version of the same thing.
-//!
-//! ## Anyone in the crew edits it, and one agent owns it
-//!
-//! The two are separate on purpose. Editing is open to every agent in the crew
-//! because a crew works on shared things, and an artifact only its author could
-//! touch would be one the rest of them rebuild beside it. Ownership is who
-//! answers for it: the name on the list, the agent the others ask about it, the
-//! one whose prompt marks it as its own to keep current.
-//!
-//! So ownership changes only by a deliberate act. An agent takes one over with
-//! a reason, and the operator can hand one to any agent in the crew. Nothing
-//! moves it implicitly, not an edit, not the owner leaving: an owner that has
-//! been deleted or moved to another crew is still named, and said to be gone,
-//! until somebody decides to take it.
-//!
-//! An edit by somebody else is *read* by the owner, from its own list, never
-//! sent to it. A message would start a turn, which is paid for, and an owner
-//! woken by every edit edits back and wakes the editor: a cascade the guard
-//! would then have to stop. The log is there to be read.
-//!
-//! ## The log is the record, and it is written in the words of the moment
-//!
-//! Every row names who acted and who owned the page afterward by the names they
-//! had then, the way a routine's chip keeps the routine's name at the moment it
-//! fired. An agent renamed or deleted later does not rewrite what the log says
-//! happened, and a log that joined names in at read time would say that a
-//! deleted agent's edits were made by nobody.
-//!
-//! The rows that made a version carry the whole page, which is what lets the
-//! operator open any earlier one and put it back. The rows that did not, taking
-//! and handing, carry none: ownership is not content.
-//!
-//! ## Live data is declared, allowed, and then read without a model
-//!
-//! A page can say what it reads: a connector tool and the exact arguments to
-//! call it with, fixed when the page is written. The operator allows that list
-//! once, and from then on Guaca makes those calls every time the page is
-//! opened, as the page's owner, and hands the results to the page. No model is
-//! involved in a read, so opening a board costs a connector call and nothing
-//! else.
-//!
-//! The arguments being fixed is the whole of the safety argument. A page is
-//! the least trusted content in the app and it reaches no network, so the only
-//! way anything it read could leave is through something it can say. A read
-//! whose arguments the page chose would be one: a search whose query is the
-//! row it just read is a message to whoever runs the search. A page that can
-//! only replay reads somebody approved has nothing to say with. Changing the
-//! list is a new version, and a new version's reads wait for the operator
-//! again; the approval is of an exact list, compared as stored.
-//!
-//! ## Whose it is
-//!
-//! A crew's, enforced where the calendar enforces it: every read and write an
-//! agent makes is scoped to the group on its own card, in the WHERE clause, and
-//! an id from another crew is not refused but *not found*. The operator stands
-//! above that wall, as they do for the calendar.
-
 use serde::{Deserialize, Serialize};
 
 use super::cut_to;
 use super::ids::{AgentId, ArtifactId, GroupId};
 use super::worknote::how_long_ago;
 
-/// How long a title may be. The line in a list, not a description.
 pub const MAX_TITLE: usize = 120;
 
-/// The sentence that goes with a change. One line in a log, like a commit
-/// message: what changed and, where it matters, why.
 pub const MAX_NOTE: usize = 300;
 
-/// The most a page may be, in bytes.
-///
-/// Also what the frame server will hold for one, and the same number rather
-/// than two that agree today: a page kept here that the server then refused to
-/// frame would be a version nobody can open.
 pub const MAX_PAGE: usize = 512 * 1024;
 
-/// The most a condensed view may be, in bytes. A number, a state, a small
-/// sparkline drawn inline, and the script that picks them out of the reads.
 pub const MAX_CONDENSED: usize = 16 * 1024;
 
-/// How many a prompt names. The list is on every turn of every agent in the
-/// crew, so it is capped rather than scrolled; `list` has the rest.
 pub const LISTED: usize = 20;
 
-/// How much of the log `view` hands back, newest first.
 pub const LOG_SHOWN: usize = 20;
 
-/// How many reads one page may declare. A board reads a handful of things; a
-/// page declaring dozens is a page doing an agent's job on every open.
 pub const MAX_SOURCES: usize = 8;
 
-/// How long a source's name may be. It is a key the page's script reads, so it
-/// is an identifier rather than a description.
 pub const MAX_SOURCE_NAME: usize = 32;
 
-/// The most one source's arguments may be, serialized. Arguments are a query,
-/// not a payload.
 pub const MAX_SOURCE_ARGUMENTS: usize = 4 * 1024;
 
-/// One read a page declares: a connector tool, and exactly what to send it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Source {
-    /// The key the page reads the result under.
     pub name: String,
-    /// A connector's tool, named as an agent calls it: `linear__list_issues`.
     pub tool: String,
-    /// Fixed when the page is written. See the module note for why the page
-    /// can never choose these.
     pub arguments: serde_json::Value,
 }
 
-/// Who did something to an artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Actor {
     Operator,
-    /// An agent, by the name it had at the time.
-    Agent {
-        id: AgentId,
-        name: String,
-    },
+    Agent { id: AgentId, name: String },
 }
 
 impl Actor {
@@ -157,8 +45,6 @@ impl Actor {
         }
     }
 
-    /// The name stored beside the id. Empty for the operator, whose row carries
-    /// no id and needs no name.
     pub fn stored_name(&self) -> &str {
         match self {
             Actor::Operator => "",
@@ -166,7 +52,6 @@ impl Actor {
         }
     }
 
-    /// How an agent reading about this is told who did it.
     fn said_to(&self, reader: AgentId) -> String {
         match self {
             Actor::Operator => "the operator".to_string(),
@@ -176,20 +61,14 @@ impl Actor {
     }
 }
 
-/// What happened, one row of the log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Change {
     Created,
     Edited,
-    /// An earlier version put back, as a new version. History is never
-    /// rewound: what was there before the restore is still a version.
     Restored,
-    /// An agent took ownership, with a reason.
     Took,
-    /// The operator gave ownership to an agent.
     Handed,
-    /// The operator allowed the reads the current version declares.
     Allowed,
 }
 
@@ -217,55 +96,35 @@ impl Change {
         })
     }
 
-    /// Whether a row of this kind made a version, and so carries a page. The
-    /// table's CHECK constraint says the same thing, and a test holds the two
-    /// together.
     pub fn makes_version(self) -> bool {
         matches!(self, Change::Created | Change::Edited | Change::Restored)
     }
 }
 
-/// Who answers for an artifact, as the list reads it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Owner {
     pub id: AgentId,
     pub name: String,
-    /// Deleted, or moved to another crew. Still the owner until somebody takes
-    /// it: see the module note.
     pub gone: bool,
 }
 
-/// One artifact, as the list shows it. The page itself is read separately,
-/// since a list of forty would otherwise carry forty pages.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Artifact {
     pub id: ArtifactId,
     pub group_id: GroupId,
-    /// `None` only once the owning agent's row is gone for good.
     pub owner: Option<Owner>,
     pub title: String,
-    /// The current version. Starts at 1 and only goes up.
     pub version: u32,
-    /// Who made the current version.
     pub edited_by: Actor,
     pub created_at: i64,
-    /// When the current version was made. Ownership changes do not move it:
-    /// "last updated" is about the page.
     pub updated_at: i64,
-    /// The reads the current version declares. Empty for a page with no live
-    /// data, which is most of them.
     pub sources: Vec<Source>,
-    /// Whether the operator allowed exactly these reads. Never true for a page
-    /// with none.
     pub sources_allowed: bool,
-    /// Whether the current version has a condensed view, which is what the
-    /// status bar draws and so what a page needs before it can be pinned.
     pub condensed: bool,
 }
 
-/// One row of an artifact's log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Entry {
@@ -273,18 +132,11 @@ pub struct Entry {
     pub at: i64,
     pub change: Change,
     pub by: Actor,
-    /// The version once this was done. An ownership change leaves it where it
-    /// was.
     pub version: u32,
-    /// Who owned it once this was done, by the name they had then. `None` is
-    /// nobody.
     pub owner: Option<String>,
     pub note: String,
 }
 
-/// What a tool call made or changed, recorded on the call so the transcript can
-/// draw a card for it. The title is the one it had at that moment, as a
-/// routine's chip keeps the routine's name.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Made {
@@ -293,7 +145,6 @@ pub struct Made {
     pub title: String,
 }
 
-/// Why a write was not taken. Each says what to send instead.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Invalid {
     #[error("an artifact needs a `title`: what the page is, in a few words")]
@@ -339,7 +190,6 @@ pub enum Invalid {
     SourceArgumentsTooBig(String),
 }
 
-/// A title, trimmed and cut. The flag is handed back to whoever wrote it.
 pub fn title(raw: &str) -> Result<(String, bool), Invalid> {
     let (kept, cut) = cut_to(raw, MAX_TITLE);
     if kept.is_empty() {
@@ -348,8 +198,6 @@ pub fn title(raw: &str) -> Result<(String, bool), Invalid> {
     Ok((kept, cut))
 }
 
-/// A page, whole. Never cut: half a document is a broken one, so a page over
-/// the cap is refused rather than trimmed.
 pub fn page(raw: &str) -> Result<String, Invalid> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -361,8 +209,6 @@ pub fn page(raw: &str) -> Result<String, Invalid> {
     Ok(trimmed.to_string())
 }
 
-/// A condensed view, whole. Refused over the cap rather than cut, for the
-/// page's reason.
 pub fn condensed(raw: &str) -> Result<String, Invalid> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -374,10 +220,6 @@ pub fn condensed(raw: &str) -> Result<String, Invalid> {
     Ok(trimmed.to_string())
 }
 
-/// The sentence that goes with an edit or a take-over, which is required on
-/// both: an edit nobody explained is a version nobody can choose between, and
-/// ownership taken without a reason is the one change the log exists to
-/// explain.
 pub fn note(
     raw: Option<&str>,
     doing: &'static str,
@@ -390,14 +232,6 @@ pub fn note(
     Ok((kept, cut))
 }
 
-/// What one of a page's reads came back with, as the page is handed it.
-///
-/// Three fields rather than an enum, because they are what the page's script
-/// reads and the tool description names them: `data` is JSON when the tool
-/// answered with some, `text` is what it said, and `error` is why there is
-/// neither. A server that answered with `structuredContent` gave data outright;
-/// one that wrote JSON as text is parsed, because that is how most of them
-/// answer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Read {
@@ -418,14 +252,6 @@ impl Read {
     }
 }
 
-/// A page's declared reads, checked for shape.
-///
-/// Whether the crew has that connector and its owner may call that tool is a
-/// question for the store, asked where the refusal can say what to do about it.
-/// This is only what a list of reads has to be to mean anything: names a
-/// script can use, no two alike, and arguments that are an object of a sane
-/// size. Absent arguments are an empty object, which is what a tool that
-/// takes none is called with.
 pub fn sources(declared: Vec<Source>) -> Result<Vec<Source>, Invalid> {
     if declared.len() > MAX_SOURCES {
         return Err(Invalid::TooManySources);
@@ -462,12 +288,10 @@ pub fn sources(declared: Vec<Source>) -> Result<Vec<Source>, Invalid> {
 }
 
 impl Artifact {
-    /// The reference a tool call records, for the card.
     pub fn made(&self) -> Made {
         Made { id: self.id, version: self.version, title: self.title.clone() }
     }
 
-    /// Who owns it, as an agent reading its crew's list is told.
     pub fn owner_words(&self, reader: AgentId) -> String {
         match &self.owner {
             None => "owned by nobody".to_string(),
@@ -479,10 +303,6 @@ impl Artifact {
         }
     }
 
-    /// One line in the prompt and in `list`. Owner and last editor both, so an
-    /// owner reads that somebody else changed its page without being told, and
-    /// whether it is on the status bar, where its condensed view is what the
-    /// operator sees all day and so has to be kept as true as the page.
     pub fn index_line(&self, reader: AgentId, now: i64, pinned: bool) -> String {
         format!(
             "- {} \"{}\" v{}, {}, updated {} by {}{}",
@@ -497,11 +317,6 @@ impl Artifact {
     }
 }
 
-/// The log as lines, oldest first, for an agent.
-///
-/// Ownership changes are said with who held it before, which no single row
-/// records: it is the owner on the row before. That is why this walks the whole
-/// log in order rather than rendering rows one at a time.
 pub fn log_lines(entries: &[Entry], reader: AgentId, now: i64) -> Vec<String> {
     let mut before: Option<&str> = None;
     let mut out = Vec::with_capacity(entries.len());
@@ -555,8 +370,6 @@ mod tests {
 
     #[test]
     fn a_page_over_the_cap_is_refused_whole_rather_than_cut() {
-        // Half an HTML document is a broken one. Cutting it the way a title is
-        // cut would store a version that draws a blank frame.
         let big = format!("<p>{}</p>", "x".repeat(MAX_PAGE));
         assert!(matches!(page(&big), Err(Invalid::PageTooBig { .. })));
         assert_eq!(page("  <p>hi</p>\n").unwrap(), "<p>hi</p>");
@@ -565,8 +378,6 @@ mod tests {
 
     #[test]
     fn a_condensed_view_is_held_to_a_strip_and_never_cut() {
-        // The cap is the whole of what keeps it condensed. A page that fits in
-        // half a megabyte does not fit in one row of the status bar.
         let page_sized = format!("<p>{}</p>", "x".repeat(MAX_CONDENSED));
         assert!(page(&page_sized).is_ok(), "fine as a page");
         assert!(matches!(condensed(&page_sized), Err(Invalid::CondensedTooBig { .. })));
@@ -639,8 +450,6 @@ mod tests {
 
     #[test]
     fn a_read_hands_the_page_data_whichever_way_the_server_answered() {
-        // Most servers write their JSON as text. A page should not have to
-        // know which kind of server it is reading from.
         let parsed = Read::answered("issues", " [{\"id\": 1}] ".into(), None);
         assert_eq!(parsed.data, Some(serde_json::json!([{ "id": 1 }])));
         let structured =
@@ -661,9 +470,6 @@ mod tests {
 
     #[test]
     fn a_take_over_is_told_with_who_held_it_before() {
-        // No row records the previous owner. It is the owner on the row
-        // before, and a log rendered row by row would say "took it over from"
-        // and stop.
         let reader = AgentId::new();
         let lines = log_lines(
             &[
@@ -707,8 +513,6 @@ mod tests {
 
     #[test]
     fn an_owner_who_left_is_still_named_and_said_to_be_gone() {
-        // Ownership moves only by a decision. An owner that left is not
-        // silently replaced, so the list has to say that it left.
         let gone = Artifact {
             id: ArtifactId::new(),
             group_id: GroupId::new(),

@@ -1,42 +1,7 @@
-/**
- * How each plugin is drawn. Its mark, and nothing else.
- *
- * Everything a plugin *is* — its name, what it offers, where it signs in — comes
- * from Rust, because Rust is what dials the endpoint. A second copy of that here
- * would be a second place for it to be wrong. What is left on this side is the
- * part the runtime has no use for: a logo and a color.
- *
- * The marks are Simple Icons (https://simpleicons.org), CC0 1.0, copied in as
- * path data rather than pulled as a dependency: a handful of glyphs do not
- * justify a package carrying three thousand. Trademarks belong to their owners.
- *
- * AgentMail, Supermemory and Firecrawl are the exceptions and are drawn here,
- * because none of them is in that set. A generic envelope, memory chip and
- * flame rather than an approximation of any of their logos: a mark nobody can
- * check against the original is a mark that quietly becomes wrong.
- *
- * Google is the one row whose server is not the vendor's: the tools come from
- * the operator's own Guaca account, which holds the grant. The mark is still
- * Google's, because what the crew reaches is Google.
- *
- * A server the operator added has no mark here and cannot: nobody knows what it
- * is, and an approximation would be a logo this file invented for somebody
- * else's software. It gets a plug instead, in the app's own accent, which says
- * the one true thing about it — that it is a server somebody plugged in.
- *
- * `nameFor` is the one thing here that a plugin *is*, and it is here because of
- * where it has to be read rather than what it is. Everything with a row under
- * it reads the name off that row, and still should. A transcript has no row: it
- * draws a call made a month ago, by a plugin this crew may have disconnected
- * since, and all the message carries is the prefix the tool was called by.
- */
-
 import { type CatalogKind, errorMessage, type PluginKind, type ServerReport } from "./types";
 
 export interface Brand {
-  /** The `d` of a single path on a 24x24 viewBox, verbatim from Simple Icons. */
   path: string;
-  /** The brand's own color, which is what makes the row scannable. */
   color: string;
 }
 
@@ -75,42 +40,15 @@ export const BRANDS: Record<CatalogKind, Brand> = {
   },
 };
 
-/**
- * What a server the operator added is drawn as.
- *
- * A plug, from the same Simple Icons set as the rest, and the app's own accent
- * rather than a color pulled out of the address: a brand color for a server
- * nobody has heard of would be a claim this file cannot make.
- */
 const ADDED: Brand = {
   path: "M18.36 9 17 14.5a5 5 0 0 1-5 3.5 5 5 0 0 1-5-3.5L5.64 9H4V7h16v2ZM9 2v3H7V2Zm8 0v3h-2V2Zm-6 17h2v3h-2Z",
   color: "var(--accent)",
 };
 
-/**
- * Its mark, whichever kind it turns out to be.
- *
- * Keyed on what the backend said rather than on the shape of the slug: the
- * eight are the eight, and everything else is a server somebody added. A lookup that
- * missed would otherwise draw an empty square, which reads as a broken row.
- *
- * `Object.hasOwn` rather than a lookup with a fallback, because a name here is
- * an operator's word and the prototype chain answers to several of them. A
- * server called `constructor` or `toString` finds a truthy value that is not a
- * brand, so the fallback never fires and the row draws nothing at all.
- */
 export function markFor(kind: PluginKind): Brand {
   return Object.hasOwn(BRANDS, kind) ? BRANDS[kind as CatalogKind] : ADDED;
 }
 
-/**
- * The eight, spelled the way their vendors spell them.
- *
- * The spelling is the whole of what this adds: `agentmail` is AgentMail, and a
- * slug run through a capitalizer is a claim about somebody's name that nobody
- * checked. Eight strings, and the day one of them is wrong is the day the mark
- * beside it is wrong too.
- */
 const NAMES: Record<CatalogKind, string> = {
   neon: "Neon",
   cloudflare: "Cloudflare",
@@ -122,32 +60,13 @@ const NAMES: Record<CatalogKind, string> = {
   google: "Google",
 };
 
-/**
- * What to call a plugin where there is no row to read its name off.
- *
- * A server the operator added falls back to its slug, which is their own word
- * for it normalized: the same answer `PluginKind::label` gives, for the same
- * reason. `Object.hasOwn` for the reason `markFor` has it, and here it decides
- * more than a missing glyph: a server called `constructor` would otherwise be
- * drawn in a transcript as a function.
- */
 export function nameFor(kind: PluginKind): string {
   return Object.hasOwn(NAMES, kind) ? NAMES[kind as CatalogKind] : kind;
 }
 
-/**
- * The host a plugin's calls go to, for the line under its name.
- *
- * Read off the endpoint the backend reported rather than written down again
- * here: what an operator is about to authorize has to be the address that is
- * actually dialled, not a second copy of it that can drift.
- */
-/** The scheme of a server run as a program on the host. `domain::plugin::STDIO`. */
 export const STDIO = "stdio:";
 
 export function hostOf(endpoint: string): string {
-  // A server run as a program has no host to name; the program is what says
-  // which one it is.
   if (endpoint.startsWith(STDIO)) {
     const program = endpoint.slice(STDIO.length).trim().split(/\s+/)[0] ?? "";
     return `${program} on the host`;
@@ -159,16 +78,6 @@ export function hostOf(endpoint: string): string {
   }
 }
 
-/**
- * What a refused dial said, and the layer underneath's words where it kept any.
- *
- * Two fields rather than one string, because they are read at different times.
- * The sentence is for the operator and comes from Rust, which knows what failed
- * and what to check; the detail is what the transport underneath said, which is
- * worth nothing until somebody either cannot fix it or is writing a bug report,
- * and is therefore drawn folded away. A refusal with none is the ordinary case:
- * most of them are already a sentence for a person, with nothing under them.
- */
 export function refusalWords(error: unknown): { says: string; detail: string | null } {
   const kept =
     typeof error === "object" && error !== null && "detail" in error
@@ -180,20 +89,6 @@ export function refusalWords(error: unknown): { says: string; detail: string | n
   };
 }
 
-/**
- * What one dial of a server found out, as the sentence a person reads.
- *
- * Written here rather than assembled in the panel because it is a decision
- * rather than a layout: which of the four outcomes this was, and which of the
- * facts underneath are worth saying about each. A server that wants a sign-in
- * has no transport, no revision and no tools, and a line built by concatenating
- * whatever was set would say "answered over , MCP" about it.
- *
- * The two 401s get different sentences on purpose. They are one status code and
- * opposite problems: an operator who cannot tell them apart re-pastes a key at
- * a server that never wanted one, or goes hunting for a sign-in that is really
- * a typo. Each says what to do next rather than what went wrong.
- */
 export function reportLine(report: ServerReport): string {
   const took = `${report.ms} ms`;
   if (report.signin === "wanted") {
@@ -207,9 +102,6 @@ export function reportLine(report: ServerReport): string {
   const how = report.handshake
     ? `${report.transport}, MCP ${report.protocol}, with a handshake`
     : `${report.transport}, MCP ${report.protocol}`;
-  // Named rather than counted, because the operator is checking that the tools
-  // they expect are the ones this address publishes. A count answers a
-  // different question, and it is one nobody has.
   const offers =
     report.tools.length === 0
       ? "It published no tools, so a group connecting it would be offered nothing"

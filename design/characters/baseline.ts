@@ -1,12 +1,3 @@
-/**
- * The cast as it ships, drawn by `src/avatars` itself.
- *
- * Everything geometric is imported. What is ported is the frame loop from
- * `AgentAvatar.tsx`, which is a React component, and the three layers of
- * `Skin.tsx`, whose constants are not exported. Both are copied line for line
- * so the baseline on this page is the app's, not a sketch of it.
- */
-
 import { AIM, aimedEye, blendEyes, eyePath, eyesAt, gazeAt, settle } from "../../src/avatars/eyes";
 import { blend, bodyPoints, outline } from "../../src/avatars/form";
 import { MOODS, markFor, type Mood } from "../../src/avatars/moods";
@@ -23,7 +14,6 @@ const PAPER = {
   edge: { x: -0.4, y: -0.5, width: 0.55, opacity: 0.45 },
 };
 
-/** The three layers of `Skin.tsx`, over one outline. Returns the outline. */
 export function paper(svg: SVGSVGElement, id: string): SVGPathElement {
   const skin = el("g", { "clip-path": `url(#${id}-reach)` }, svg);
   const defs = el("defs", {}, skin);

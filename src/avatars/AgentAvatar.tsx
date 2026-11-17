@@ -20,56 +20,28 @@ interface Props {
   avatar: string;
   color: string;
   size?: Size;
-  /** What the runtime says it is doing. `moods.ts` turns these into a face. */
   activity?: Activity;
   lifecycle?: Lifecycle;
-  /** Its live tool calls, which say whether work is in flight or going badly. */
   work?: LiveCall[];
-  /** An escalation of its own is open on the desk. */
   escalated?: boolean;
-  /** When its last reply landed. Worth a couple of seconds of looking pleased. */
   finishedAt?: number;
-  /** Overrides everything above. For a preview, where there is no agent to read. */
   mood?: Mood;
-  /** Overrides the operator's choice of cast. For a preview of the other one. */
   cast?: Cast;
-  /** Where its own clock starts and how fast it runs. Pass the agent id. */
   seed?: string;
   look?: Look;
-  /**
-   * Where to look instead of wherever the mood would, in body radii. For a
-   * creature that is directed rather than read off an agent: the pair in the
-   * rail's corner, looking at each other or at the pointer. An aimed `look`
-   * still outranks it, because the point of that look is who it is for.
-   */
   gaze?: Point | null;
   gesture?: Gesture;
-  /** A short shout shown in a bubble, e.g. "!" when a message is thrown. */
   says?: string | null;
   title?: string;
 }
 
-/** What a throw and a catch do to the mass, in body radii. */
 const KNOCK = {
   send: { amp: 0.26, hz: 1.5, decay: 0.28, life: 0.9 },
   receive: { amp: 0.3, hz: 2.2, decay: 0.3, life: 0.8 },
 };
 
-/**
- * How far a directed gaze has to move to be a turn rather than a step. A turn
- * is blinked into, as a mood's own large saccade is; a gaze following the
- * pointer moves a little every frame, and blinking into each of those would
- * be a creature with its eyes shut.
- */
 const TURN = 0.2;
 
-/**
- * Which way a throw or a catch shoves the mass, as a unit vector: away from
- * whoever it is aimed at. An aimed look is up or down, so the shove is down or
- * up; a directed gaze can be any way; with nobody looked at, a parcel thrown
- * from above presses the creature down, which is the way an unexplained shove
- * reads best.
- */
 export function knockAway(look: Look, gaze: Point | null | undefined): Point {
   if (look) return [0, look === "down" ? -1 : 1];
   const l = gaze ? Math.hypot(gaze[0], gaze[1]) : 0;
@@ -77,17 +49,10 @@ export function knockAway(look: Look, gaze: Point | null | undefined): Point {
   return [0, 1];
 }
 
-/** Everything one avatar remembers between frames. */
 interface Cell {
   mood: Mood;
   from: Mood;
-  /**
-   * When the change to `mood` began, when a gesture did and when the aimed
-   * look last changed, all on the shared clock rather than the creature's own:
-   * how quickly a face reacts is not allowed to be a property of its id.
-   */
   at: number;
-  /** Where the look has got to, and how fast, in body radii. */
   gaze: Point;
   vel: Point;
   last: number;
@@ -95,22 +60,9 @@ interface Cell {
   gestureAt: number;
   look: Look;
   lookAt: number;
-  /** The directed gaze a blink was last cued for. */
   cued: Point | null;
 }
 
-/**
- * An agent's character.
- *
- * The drawing is one of two casts, `CutArt` or `DrawnArt`, over the same body
- * (`form.ts`), the same moods (`moods.ts`) and the same gaze (`eyes.ts`). This
- * owns the one thing none of those can: what is true right now. Every frame it
- * decides the mood from the signals it was given, follows the gaze with the
- * mass, adds whatever a message landing did to it, and hands the result to the
- * cast, which writes its own attributes. Nothing here re-renders: a mood that
- * lasts two seconds and a message landing are both decided inside the loop, so
- * a rail of a dozen agents reacting to each other costs React nothing at all.
- */
 export function AgentAvatar({
   avatar,
   color,
@@ -149,8 +101,6 @@ export function AgentAvatar({
     cued: null,
   });
 
-  /* Read by the painter rather than closed over, so the loop never holds a
-     stale render's props and never has to be re-registered to see new ones. */
   const props = useRef({
     activity,
     lifecycle,
@@ -165,8 +115,6 @@ export function AgentAvatar({
     size,
   });
 
-  /* Its own clock, so a crew of idle agents is not one animal breathing. Only
-     the cycles below are on it; every age is measured on the shared seconds. */
   const gait = gaitOf(seed ?? avatar);
 
   const paint = useRef<Painter>(() => {});
@@ -175,8 +123,6 @@ export function AgentAvatar({
     const state = cell.current;
     const t = seconds * gait.rate + gait.phase;
 
-    /* A catch is what makes an agent look surprised, and it is the only
-       transient the component raises for itself. */
     if (now.gesture !== state.gesture) {
       state.gesture = now.gesture;
       state.gestureAt = seconds;
@@ -217,8 +163,6 @@ export function AgentAvatar({
       box.current?.setAttribute("data-mood", want);
     }
 
-    /* Where it is asked to look. An aimed look at a peer outranks whatever the
-       mood would have done, because the point of that look is who it is for. */
     const since = seconds - state.at;
     const raw = live ? Math.min(1, since / MORPH) : 1;
     const u = raw * raw * (3 - 2 * raw);
@@ -235,10 +179,6 @@ export function AgentAvatar({
       eyeGaze = [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u];
     }
 
-    /* One look, smoothed once, read by the eyes and the body at the same
-       instant, so the body is pulled as the eyes go rather than after they
-       went. `eyes.ts` owns the smoother, and the outline is bounded whatever
-       it is handed. */
     const dt = live ? Math.min(0.05, Math.max(0, seconds - state.last)) : 0;
     state.last = seconds;
     if (live) settle(state, eyeGaze, dt);
@@ -249,8 +189,6 @@ export function AgentAvatar({
     eyeGaze = [state.gaze[0], state.gaze[1]];
     const bodyGaze: Point = [state.gaze[0], state.gaze[1]];
 
-    /* A throw and a catch are displacements, not transforms: the creature is
-       pulled away and comes back, and its outline is what shows it. */
     if (state.gesture) {
       const knock = KNOCK[state.gesture];
       const age = seconds - state.gestureAt;
@@ -261,11 +199,6 @@ export function AgentAvatar({
           state.gesture === "send"
             ? Math.sin(age * knock.hz * Math.PI * 2)
             : Math.cos(age * knock.hz * Math.PI * 2);
-        /* Away from the peer, which is the one direction both gestures need:
-           a parcel thrown from above presses the creature down and a throw
-           recoils against itself. The look is what says where the peer is, so
-           an exchange whose other end is not drawn in the rail falls back to
-           down. `knockAway` holds the rule. */
         const away = knockAway(now.look, now.gaze);
         const push = knock.amp * wave * Math.exp(-age / knock.decay);
         bodyGaze[0] += away[0] * push;
@@ -293,16 +226,11 @@ export function AgentAvatar({
     });
   };
 
-  /* Joined once. The painter is stable, so nothing here is torn down and set up
-     again on a render, and the observer is not asked the same question twice. */
   useEffect(() => {
     const el = box.current;
     return el ? join(el, (seconds, live) => paint.current(seconds, live)) : undefined;
   }, []);
 
-  /* And painted again after every render, at the time the clock last reached,
-     so a change of props (or of cast) is on screen whether or not anything is
-     moving. */
   useEffect(() => {
     props.current = {
       activity,
@@ -320,9 +248,6 @@ export function AgentAvatar({
     paint.current(cell.current.last, !prefersReducedMotion());
   });
 
-  /* The phase is handed to CSS as well, because the marks beside a head loop
-     there and would otherwise run on the document's clock, which every creature
-     shares. `styles.css` explains what that looks like. */
   const style = { "--accent": color, "--gait": `${gait.phase.toFixed(2)}s` } as CSSProperties;
 
   return (

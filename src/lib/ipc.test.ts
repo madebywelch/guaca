@@ -24,7 +24,6 @@ vi.mock("./transport", async (original) => ({
 }));
 
 it("reads a pending request from a host that never says when it lapses as one with no known lapse", async () => {
-  // A 0.4.0 host sends the request without the field at all.
   const { lapsesAt: _, ...older } = anApproval({ agentId: "dara", createdAt: 1_000 });
   vi.mocked(invoke).mockResolvedValue([older]);
   const [request] = await api.pendingApprovals();
@@ -51,8 +50,6 @@ it("downloads through the native client using the connected backend", async () =
 });
 
 it("forwards a file dropped on a desktop window to the host it shows", async () => {
-  // Every window is hosted now. Choosing the branch by `hosted` sent the
-  // desktop to the browser's DOM listeners, where Tauri's drop never arrives.
   vi.mocked(invokeLocal).mockResolvedValue({ attached: [], refused: [] });
   const dropped = vi.fn();
   const stop = await onFileDrop({ dropped, over: () => {} });

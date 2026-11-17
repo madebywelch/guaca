@@ -21,17 +21,14 @@ import { RoutineDetail } from "./RoutineDetail";
 import { RoutineList } from "./RoutineList";
 import { WorkingNotes } from "./WorkingNotes";
 
-/** Where on the page a tab of the agent's sends the reader. */
 export type AgentSection = "now" | "routines" | "memory" | "notebook" | "profile";
 
 interface Props {
   agent: AgentCard;
-  /** The section a tab asked for, scrolled to as it is asked. */
   section: AgentSection;
   onEditProfile: (agent: AgentCard) => void;
 }
 
-/** What an agent's activity is, said in the panel's own words. */
 const activityWords: Record<Exclude<Activity["state"], "idle">, string> = {
   thinking: "working",
   queued: "waiting its turn",
@@ -39,21 +36,6 @@ const activityWords: Record<Exclude<Activity["state"], "idle">, string> = {
   paused: "paused",
 };
 
-/**
- * Who the panel belongs to, at the top of it.
- *
- * The panel used to open on "Routines", under a gear and two arrows, and
- * nothing in it said whose routines. The sections below are all things one
- * agent carries, so the agent is the heading: its face, its name, the crew it
- * is in and what answers for it, which is the one fact about its setup that
- * is read constantly and was two clicks away in a dialog. Edit is here rather
- * than a gear in the corner because the gear said nothing about what it
- * opened, and sat beside the arrow that closes the panel.
- *
- * The model is drawn lighter when it is inherited: a group's default is a fact
- * about the group, and an operator reading the profile should be able to tell
- * which agents chose for themselves without opening each one.
- */
 function Profile({ agent, onEdit }: { agent: AgentCard; onEdit: () => void }) {
   const group = useStore((state) => state.groups.find((entry) => entry.id === agent.groupId));
   const settings = useStore((state) => state.settings);
@@ -61,8 +43,6 @@ function Profile({ agent, onEdit }: { agent: AgentCard; onEdit: () => void }) {
   const runs = runsOn(agent, group, settings);
   return (
     <div className="profile">
-      {/* The panel opens on a page about one agent, so it opens the way the
-          transcript does: what this is, then whose, then what it is set on. */}
       <p className="profile__kicker">The agent</p>
       <p className="profile__name" title={agent.name}>
         {agent.name}
@@ -86,20 +66,9 @@ function Profile({ agent, onEdit }: { agent: AgentCard; onEdit: () => void }) {
           {activityWords[activity.state]}
         </p>
       )}
-      {/* What it is set on, as a page's front matter is set: a table of the
-          facts that are read constantly and were two clicks away.
-
-          It used to hold the browser and the computer as well, and those were
-          the same two things the places below say, twice, one above the other,
-          because a fact and a control about one place are one row and not two.
-          A place is granted, watched and taken back, so it lives where its
-          switch is; what is left here is what has no control at all. */}
       <dl className="facts">
         <div className="fact">
           <dt>Model</dt>
-          {/* Lighter when inherited: a group's default is a fact about the
-              group, and an operator reading the profile should be able to tell
-              which agents chose for themselves without opening each one. */}
           <dd title={runs.model} data-inherited={runs.inherited || undefined}>
             {runs.model}
           </dd>
@@ -124,7 +93,6 @@ function Profile({ agent, onEdit }: { agent: AgentCard; onEdit: () => void }) {
   );
 }
 
-/** The last message in a channel that `test` holds for. */
 function latest(messages: Envelope[] | undefined, test: (one: Envelope) => boolean) {
   if (!messages) return undefined;
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -136,7 +104,6 @@ function latest(messages: Envelope[] | undefined, test: (one: Envelope) => boole
 
 const firstLine = (one: Envelope) => plainText(one).trim().split("\n")[0] ?? "";
 
-/** The notice Guaca writes when a run fails or is cut off, if this is one. */
 function ended(one: Envelope) {
   if (one.from.kind !== "system") return null;
   for (const part of one.parts) {
@@ -147,20 +114,11 @@ function ended(one: Envelope) {
   return null;
 }
 
-/** How a turn that has a request behind it is said ahead of whose it is. */
 const doingWords: Record<"thinking" | "queued", string> = {
   thinking: "Working on a request from",
   queued: "Waiting its turn, with a request from",
 };
 
-/**
- * What the agent is doing, at the top of Now: the request it is working on
- * and who it came from, then the steps it has taken on it so far. An agent
- * with nothing running says so, and what it last finished.
- *
- * Read from the conversation and the live trail rather than kept anywhere of
- * its own, so it says what the transcript says and cannot disagree with it.
- */
 function Doing({ agent }: { agent: AgentCard }) {
   const activity = useStore((state) => state.activity[agent.id]);
   const trail = useStore((state) => state.trail[agent.id]);
@@ -172,8 +130,6 @@ function Doing({ agent }: { agent: AgentCard }) {
   const state = activity?.state ?? "idle";
 
   if (state === "idle" || state === "paused") {
-    // A run that failed or was cut off ends in Guaca's notice, not in the
-    // agent's words, so that notice is where the last run ended.
     const said = latest(messages, (one) => own(one.from) || (own(one.to) && ended(one) !== null));
     const end = said && ended(said);
     return (
@@ -203,8 +159,6 @@ function Doing({ agent }: { agent: AgentCard }) {
     );
   }
 
-  // The request that started the run it is on: the first message to it in
-  // that run. A later message is something said while it works, not the task.
   const asked =
     run === undefined
       ? undefined
@@ -256,31 +210,13 @@ function Doing({ agent }: { agent: AgentCard }) {
   );
 }
 
-/**
- * What an agent has, beside what it says: one tab of it at a time.
- *
- * Now is what the agent is doing, and the two places it does it in, live.
- * Every store has a tab of its own and is drawn there only: the schedule
- * under Routines, the working notes and the memory under Memory, read against
- * each other, the notebook under Notebook, and what it is set up with under
- * Profile. A tab opens at its top.
- *
- * The agent's name, look and instructions are deliberately not editable here.
- * Those are edited rarely and all at once, which is what a dialog is for; the
- * profile is its summary, and its one button opens it.
- */
 export function AgentPanel({ agent, section, onEditProfile }: Props) {
   const [routine, setRoutine] = useState<RoutineId | "new" | null>(null);
 
-  // Switching agent comes back to the list. A routine id belongs to one
-  // agent, and leaving it open would show another agent's schedule under this
-  // agent's name until it failed to load.
   useEffect(() => {
     setRoutine(null);
   }, [agent.id]);
 
-  // A fired routine in the transcript, clicked. Cleared as it is taken, so the
-  // same chip can be clicked again after navigating away.
   const asked = useStore((state) => state.openingRoutine);
   const taken = useStore((state) => state.routineOpened);
   useEffect(() => {
@@ -289,8 +225,6 @@ export function AgentPanel({ agent, section, onEditProfile }: Props) {
     taken();
   }, [asked, taken]);
 
-  // A tab opens at its top, at once: a glide down from wherever the last tab
-  // was left is motion nobody asked for.
   const detail = section === "routines" && routine !== null;
   useEffect(() => {
     if (detail) return;
@@ -301,17 +235,6 @@ export function AgentPanel({ agent, section, onEditProfile }: Props) {
 
   return (
     <aside className="agent-panel" aria-label={`${agent.name}: details`}>
-      {/* Hidden rather than unmounted while a routine is open, so the list
-          keeps its place behind it.
-
-          The key is the whole mechanism for switching agent: every section
-          holds one agent's thing, a desktop connection, a browser, a list read
-          over IPC, and none of them may be left under the next agent's name.
-          One key on what they share says that once. Saying it once per section
-          collided: React indexes the outgoing children by key to decide what to
-          delete, so a duplicate overwrote the entry the screen would have been
-          deleted through, and the previous agent's screen stayed in the
-          document with its polling still running. */}
       <div className="agent-panel__level" hidden={detail} key={agent.id}>
         <div id={`agent-${section}`} className="agent-panel__anchor">
           {section === "now" && (
@@ -338,9 +261,6 @@ export function AgentPanel({ agent, section, onEditProfile }: Props) {
           key={`${agent.id}:${routine}`}
           agentId={agent.id}
           routineId={routine}
-          // A routine can come back renamed, retimed, switched off or gone.
-          // The list behind this reads itself again on the event every one of
-          // those emits, so there is nothing to bump here.
           onBack={() => setRoutine(null)}
         />
       )}

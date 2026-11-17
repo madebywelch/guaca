@@ -53,10 +53,7 @@ interface UpdateState {
   health: Health | null;
   release: ReleaseStatus | null;
   docker: DockerStatus | null;
-  /** The updater on a box, which this host relays. `null` is a host with none. */
   manager: Manager | null;
-  /** When the read that produced `manager` began, so an answer from before a
-   *  click is never taken for one after it. */
   managerAt: number;
   adoptManager: (manager: Manager) => void;
   error: string;
@@ -65,14 +62,10 @@ interface UpdateState {
 }
 const Context = createContext<UpdateState | null>(null);
 
-/** What the host monitor last learned, for a surface that summarizes it. */
 export function useHostState(): UpdateState | null {
   return useContext(Context);
 }
 const isManaged = () => desktop && hostMode() === "local";
-/** What the desktop also says about a Host it manages: the zone its clock is
- *  on, and whether that is this Mac's. Rust compares them, since UTC has more
- *  than one name. */
 type Zoned = DockerStatus & {
   hostZone?: string | null;
   macZone?: string | null;
@@ -99,7 +92,6 @@ export function HostMonitor({ children }: { children: ReactNode }) {
       return manual ? pending.current.then(() => refresh(true)) : pending.current;
     const run = async () => {
       setChecking(true);
-      // Docker remains reachable while the backend is stopped for replacement.
       if (isManaged())
         void localHost
           .status()
@@ -128,8 +120,6 @@ export function HostMonitor({ children }: { children: ReactNode }) {
             signal: AbortSignal.timeout(15000),
           }).then(async (response) => {
             if (response.status === 401) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
-            // A host older than this route that serves the page answers any
-            // unknown path with index.html, which is a 200 and not the answer.
             if (
               response.status === 404 ||
               (response.ok && !response.headers.get("content-type")?.includes("application/json"))
@@ -145,7 +135,6 @@ export function HostMonitor({ children }: { children: ReactNode }) {
             headers: bearer(),
             signal: AbortSignal.timeout(15000),
           }).then(async (response) => {
-            // Older than the route: a 404, or the page served in its place.
             if (
               response.status === 404 ||
               (response.ok && !response.headers.get("content-type")?.includes("application/json"))
@@ -157,9 +146,6 @@ export function HostMonitor({ children }: { children: ReactNode }) {
         ]);
         if (!mounted.current) return;
         const [updates, updater] = results;
-        // An updater that does not answer is kept as it was last seen: it is
-        // replacing itself, or its host is restarting, and the click that
-        // started that is waiting on the next answer rather than this one.
         if (updater.status === "fulfilled") {
           const value = updater.value;
           setManager((seen) => (asked >= seen.at ? { value, at: asked } : seen));
@@ -198,11 +184,6 @@ export function HostMonitor({ children }: { children: ReactNode }) {
       clearInterval(timer);
     };
   }, [refresh]);
-  // A host an update is stopping goes away on purpose, and the window is told so
-  // here, from the read that says an update is underway, so it does not raise a
-  // lost host over the panel that is drawing that restart. Extended on every
-  // read, because the last thing an update does before its host goes quiet is a
-  // thing a quiet host cannot be asked.
   useEffect(() => {
     if (docker?.updating || manager.value?.updating) expectRestart();
   }, [docker, manager]);
@@ -276,9 +257,7 @@ export function HostUpdateNotice({ onReview }: { onReview: () => void }) {
   let saved = dismissed;
   try {
     saved = sessionStorage.getItem("guaca.update.dismissed") ?? dismissed;
-  } catch {
-    /* Session-only fallback. */
-  }
+  } catch {}
   if (!notice || saved === key) return null;
   return (
     <div className="banner" role="status">
@@ -293,9 +272,7 @@ export function HostUpdateNotice({ onReview }: { onReview: () => void }) {
           setDismissed(key);
           try {
             sessionStorage.setItem("guaca.update.dismissed", key);
-          } catch {
-            /* See above. */
-          }
+          } catch {}
         }}
       >
         Later
@@ -304,20 +281,15 @@ export function HostUpdateNotice({ onReview }: { onReview: () => void }) {
   );
 }
 
-/** An update a box accepted: what it was asked for, and what to call it. */
 interface Accepted {
   at: number;
   attemptId: string;
   version: string;
-  /** The image, on main, where every build carries the same version. */
   image?: string;
   name: string;
 }
 
-/** What the operator is told when an update on a box has finished. */
 function outcome(manager: Manager, asked: Accepted): { result: string } | { failure: string } {
-  // The journal holds the last update that ran. One that never began leaves
-  // it holding an earlier one, whose outcome is not this one's.
   const ran = manager.operation;
   const op =
     (ran as typeof ran & { attemptId?: string })?.attemptId === asked.attemptId ? ran : null;
@@ -336,14 +308,6 @@ function outcome(manager: Manager, asked: Accepted): { result: string } | { fail
   return { failure: op.error ?? manager.error ?? "The update did not finish. Try again." };
 }
 
-/**
- * This app, rebuilt from the checkout it came from. A source build has no
- * release to download: its latest is the tip of the branch it follows.
- *
- * On a box that follows main, the host goes first. An app newer than its host
- * calls commands the host does not have, which is the failure the build
- * comparison above exists to name; a host newer than its app is only unused.
- */
 function AppRebuild({ hostFirst }: { hostFirst: boolean }) {
   const [source, setSource] = useState<AppSource | null>(null);
   const [failure, setFailure] = useState("");
@@ -365,7 +329,6 @@ function AppRebuild({ hostFirst }: { hostFirst: boolean }) {
     return () => clearInterval(timer);
   }, [running, read]);
   if (!source?.checkout || !source.upstream) return null;
-  // Edits on top of the branch's own commit are the operator's, not news.
   const current = sameBuild(COMMIT.replace(/-dirty$/, ""), source.upstream);
   const failed = failure || source.failure;
   if (current && !running && !failed) return null;
@@ -413,11 +376,6 @@ function AppRebuild({ hostFirst }: { hostFirst: boolean }) {
   );
 }
 
-/**
- * Where an update is, in the steps whatever runs it reports. The bar is the
- * words drawn: every segment is a step, and the status line says everything
- * it shows, so it is hidden from a screen reader rather than said twice.
- */
 function UpdateProgress({ progress, hint }: { progress: Progress; hint?: string }) {
   const { steps, done, now, label } = progress;
   return (
@@ -447,7 +405,6 @@ export function HostUpdatePanel() {
   const [result, setResult] = useState("");
   const [failure, setFailure] = useState("");
   const [instructions, setInstructions] = useState(false);
-  /** An update a box accepted from this panel, until it reports it finished. */
   const [accepted, setAccepted] = useState<Accepted | null>(() => {
     try {
       const saved = JSON.parse(
@@ -481,8 +438,6 @@ export function HostUpdatePanel() {
   const managerAt = state?.managerAt ?? 0;
   const answered = !!state?.health && !state?.error;
   useEffect(() => {
-    // Finished only by an answer read after the box accepted, from a host
-    // that is answering again: the one before the click also says "not updating".
     if (!accepted || !manager || manager.updating || managerAt <= accepted.at || !answered) return;
     const said = outcome(manager, accepted);
     if ("failure" in said && said.failure === "The update outcome is unknown. Check again.") {
@@ -501,8 +456,6 @@ export function HostUpdatePanel() {
   const canUpdate = managed && docker?.updateAvailable;
   const zoned: Zoned | null = managed ? docker : null;
   const otherZone = zoned?.zoneDiffers && zoned.macZone ? zoned : null;
-  // A box with an updater. A window only offers a release it can still talk
-  // to afterward; a browser is served the new release's own page.
   const latest = release?.latest ?? null;
   const reachable =
     !desktop ||
@@ -513,16 +466,11 @@ export function HostUpdatePanel() {
   const onMain = latest?.channel === "main";
   const target =
     latest && (onMain ? `main at ${shortBuild(latest.commit)}` : `Guaca ${latest.version}`);
-  // A box's updater installs only a signed release, so a source build on one
-  // is offered the release that makes it verified, not only a newer number.
-  // On main every build is the same version, and the commit is what moves.
   const order = latest && health?.version ? compareVersions(health.version, latest.version) : null;
   const boxNewer = onMain ? newer : order === -1 || (order === 0 && !health?.release);
   const canUpdateBox = boxed && boxNewer && reachable && match !== "clientOld";
   const pageChanged = pageStale(desktop, COMMIT, health);
   const drift = desktop ? skew({ version: VERSION, commit: COMMIT }, health) : "unknown";
-  // The API generation says this app can talk to the host at all. Commands
-  // added since the older build are missing whatever the generation says.
   const apart = drift === "otherBuild" || drift === "hostBehind" || drift === "clientBehind";
   const appBehind = desktop && (drift === "clientBehind" || clientUpdate(VERSION, release));
   const hostBuild = shortBuild(health?.build ?? "");
@@ -604,13 +552,9 @@ export function HostUpdatePanel() {
   ).length;
   const operation = docker?.operation ?? manager?.operation ?? null;
   const restarting = boxBusy && !answered;
-  // The journal of the update running now, and what it installs: on a box
-  // the updater's, and on this Mac this app's.
   const underway = boxed
     ? hostProgress(
         manager?.operation ?? null,
-        // A box installs only the latest build on its channel, so a panel
-        // opened after another client started the update knows its target.
         accepted ?? { image: onMain ? latest?.image : undefined, version: latest?.version },
         restarting,
       )

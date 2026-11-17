@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Check native notification actions against pristine and amended crate source."""
 
 import hashlib
 import os

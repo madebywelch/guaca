@@ -8,18 +8,12 @@ import { OrbTag, useOrbTag } from "./OrbTag";
 
 interface Props {
   group: Group;
-  /** Live members, in the order the rail arranged them. */
   members: AgentCard[];
   activity: Record<AgentId, Activity>;
-  /** Every open escalation in the workspace. Filtered to this crew inside. */
   stuck: readonly Escalation[];
-  /** Whether the rail is currently looking inside this group. */
   current: boolean;
-  /** Whether a dragged row would land here if it were dropped now. */
   over: boolean;
-  /** Whether this is the circle in the operator's hand. */
   held: boolean;
-  /** Which side of this circle a crew in hand would land on, if it would. */
   lands: "before" | "after" | undefined;
   onPress: (event: PointerEvent) => void;
   onOpen: () => void;
@@ -27,28 +21,10 @@ interface Props {
   onDragOut: () => void;
 }
 
-/** A seat's fraction of the ring, as a length the stylesheet can use. */
 function percent(fraction: number): string {
   return `${(fraction * 100).toFixed(2)}%`;
 }
 
-/**
- * A group, small enough to sit in a column and be aimed at.
- *
- * Faces rather than a name, because a crew is recognized by who is in it long
- * before its name is read. How they stand is the crew's size: `lib/orb.ts` owns
- * the seating and says why. The name is still not drawn *under* the circle,
- * because the column is four rem wide and a name cut to fit it is a name nobody
- * can read: it is drawn beside the circle, over the app, whenever the circle is
- * pointed at or focused. `OrbTag` has the rest of that argument, including why
- * faces alone were never enough to tell two crews apart.
- *
- * Two jobs in one control, which is why it is a circle and not a row in a menu.
- * Clicking opens the group. Dropping an agent on it puts the agent in the group,
- * so the shortest gesture for moving somebody between crews is the one that also
- * says which crew, and it is on screen the whole time you are dragging. And it
- * is its own handle: dragged along the column, it is how the crews are arranged.
- */
 export function GroupOrb({
   group,
   members,
@@ -66,9 +42,6 @@ export function GroupOrb({
   const { seats, rest } = cluster(members);
   const tag = useOrbTag();
 
-  // The two states worth interrupting a glance for, and why they are not one
-  // mark: `lib/presence.ts`. This column is the only thing on screen about the
-  // crews the operator is not looking at, so what it can say is all they get.
   const presence = presenceOf(members, activity, stuck);
 
   return (
@@ -86,9 +59,6 @@ export function GroupOrb({
       onClick={onOpen}
       onFocus={tag.open}
       onBlur={tag.close}
-      // Naming the crew and aiming a drag at it are the same gesture on
-      // purpose. A drag is when the operator most needs the circle to say which
-      // crew it is, and it is the one moment the native tooltip is suppressed.
       onPointerEnter={(event) => {
         tag.open(event);
         onDragOver();
@@ -130,10 +100,6 @@ export function GroupOrb({
         </span>
         {rest > 0 && <span className="orb__more">+{rest}</span>}
       </span>
-      {/* A number rather than a dot, because three parked turns and one are
-          different amounts of work. Outside the ring for the same reason the
-          overflow count is: a crew with a seat in every quarter has nowhere
-          inside it for an opaque chip that is not somebody's face. */}
       {presence.blocked > 0 && (
         <span className="orb__waiting" aria-hidden="true">
           {presence.blocked}

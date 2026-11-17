@@ -2,46 +2,10 @@ import type { ReactNode } from "react";
 
 import { SITE } from "../content.js";
 
-/**
- * The header and footer, shared by both halves of the origin.
- *
- * The marketing page and the signed-in area used to draw these separately, in
- * two languages, and it showed: signing in took a person from a site to a
- * form. They are the same site, so the chrome around them is one component and
- * the difference between the two is what goes in the nav.
- */
-
-/** The marketing page's column. The other two halves pass their own, narrower. */
 export const SHELL = "mx-auto w-full max-w-6xl px-6";
 
-/**
- * The reading column: the signed-in area's forms, and the legal pages.
- *
- * Both are things a person reads or fills in one line at a time, which wants a
- * measure the marketing page's six-column shell does not give. It lives here
- * rather than beside either of them because it is now shared by both.
- */
 export const COLUMN = "mx-auto w-full max-w-[46rem] px-6";
 
-/**
- * The wordmark, which is the logo.
- *
- * Ledger's identity is Eye contact: the word `guaca` drawn as circles and one
- * round stroke, with each a's bowl an eye and the two pupils meeting
- * across the c. It replaced the app's square icon beside a tracked name, which
- * was a mark *and* a word side by side and read as two things; the wordmark
- * already spells the name, so the name beside it would say it twice.
- *
- * Two files rather than one that recolors itself, because an `<img>` cannot
- * read `currentColor`. `prefers-color-scheme` picks the ink variant, which is
- * the same geometry drawn in the site's paper ink, and the browser only
- * fetches the one it draws. `alt` is empty because the link's own label is the
- * accessible name: a screen reader should hear "Guaca, home", not the mark
- * followed by the same word.
- *
- * Always a link home. The header stays on screen while the page scrolls, and
- * the logo is where a person reaches to get back to the top.
- */
 export function Brand() {
   return (
     <a className="brand" href="/" aria-label={`${SITE.name}, home`}>
@@ -60,7 +24,6 @@ export function Brand() {
   );
 }
 
-/** GitHub's own mark, from Octicons (MIT), for the buttons that go there. */
 export function GitHubMark() {
   return (
     <svg className="glyph" viewBox="0 0 16 16" aria-hidden="true">
@@ -72,11 +35,6 @@ export function GitHubMark() {
   );
 }
 
-/**
- * The right-hand side of every public page: the way to the app, and nothing
- * else. No "Sign in": the app needs no account, and a header offering one
- * tells a stranger it might.
- */
 export function PublicActions() {
   return (
     <a className="btn btn--primary btn--compact" href={SITE.repo}>
@@ -86,17 +44,6 @@ export function PublicActions() {
   );
 }
 
-/**
- * `nav` sits beside the logo and is the page's own sections; only the marketing
- * page has any, and below a tablet's width they go, because a phone scrolls to
- * them faster than it can aim at them. `actions` sits at the far end and never
- * goes: it is how a person leaves this page for the thing they came for.
- *
- * `shell` is the column, and it is a prop because the two halves do not share
- * one. The signed-in area is forms, which want a narrow measure, and a logo
- * sitting a hundred pixels left of the heading under it is most of what made
- * signing in feel like leaving the site.
- */
 export function SiteHeader({
   nav,
   actions,
@@ -121,13 +68,6 @@ export function SiteHeader({
   );
 }
 
-/**
- * What the footer lists, grouped the way a person looks for it.
- *
- * Paths into the marketing page are written from the root, because the footer
- * is also worn by the legal pages and the signed-in area, where a bare anchor
- * would point at nothing.
- */
 const FOOTER = [
   {
     heading: "Product",
@@ -135,7 +75,6 @@ const FOOTER = [
       { label: "Features", href: "/#features" },
       { label: "Install", href: SITE.install },
       { label: "Releases", href: `${SITE.repo}/releases` },
-      // The one door to the account, for the few services that need it.
       { label: "Connectors", href: SITE.signIn },
     ],
   },
@@ -148,9 +87,6 @@ const FOOTER = [
     ],
   },
   {
-    // The legal pages have nowhere else to be linked from. Every page on this
-    // origin wears this footer, which is what makes one link here reach them
-    // from the marketing page, a form and a consent screen.
     heading: "Legal",
     links: [
       { label: "Privacy", href: SITE.privacy },
@@ -160,11 +96,6 @@ const FOOTER = [
   },
 ] as const;
 
-/**
- * The grid answers to the column it is in rather than to the window, because
- * the same footer sits under a 72rem page and a 46rem form, and at a given
- * window width those two have very different room for five columns.
- */
 export function SiteFooter({ shell = SHELL }: { shell?: string } = {}) {
   return (
     <footer className="footer">

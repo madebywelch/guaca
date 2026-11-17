@@ -1,14 +1,3 @@
-//! Artifacts in the store: the row, its versions and its log.
-//!
-//! Every agent-facing call takes the crew and matches on it in the WHERE
-//! clause, exactly as the calendar does, so an id from another crew comes back
-//! as nothing rather than as a refusal. The calls that take no crew are the
-//! operator's, who stands above that wall.
-//!
-//! Every write is one transaction that appends one row to `artifact_history`
-//! and, where it made a version, moves the row's copy of the version with it.
-//! Nothing else writes either table, which is what keeps the two in step.
-
 use rusqlite::{params, OptionalExtension, Row, Transaction, TransactionBehavior};
 
 use super::{Store, StoreError};
@@ -16,9 +5,6 @@ use crate::domain::artifact::{Actor, Artifact, Change, Entry, Owner, Source};
 use crate::domain::ids::{AgentId, ArtifactId, GroupId};
 use crate::domain::now_ms;
 
-/// The list's read: the row, the owner as it is now, and who made the current
-/// version. `gone` is an owner deleted or moved out of the crew, which the list
-/// has to say rather than hide: ownership only moves by a decision.
 const COLUMNS: &str = "SELECT r.id, r.group_id, r.owner_id, o.name,
         (o.lifecycle = 'terminated' OR o.group_id <> r.group_id),
         r.title, r.version, h.agent_id, h.actor, r.created_at, r.updated_at,
@@ -65,8 +51,6 @@ fn row_to_artifact(row: &Row<'_>) -> Read<Artifact> {
     Ok((|| {
         let sources: Vec<Source> = serde_json::from_str(&declared)
             .map_err(|e| corrupt("artifact sources", &declared, e))?;
-        // Compared as stored, which is what an approval is of: the list the
-        // operator read. Nothing re-serializes either side.
         let sources_allowed = !sources.is_empty() && allowed.as_deref() == Some(declared.as_str());
         let owner = match (owner_id, owner_name) {
             (Some(raw), Some(name)) => Some(Owner {
@@ -115,26 +99,21 @@ fn row_to_entry(row: &Row<'_>) -> Read<Entry> {
     })())
 }
 
-/// One row of the log, about to be written.
 struct Written<'a> {
     change: Change,
     by: &'a Actor,
     version: u32,
     owner: Option<&'a str>,
     note: &'a str,
-    /// What the version is, on the rows that made one.
     version_of: Option<Version<'a>>,
 }
 
-/// One version's contents: the page, the reads it declares as stored, and the
-/// condensed view when it has one.
 struct Version<'a> {
     page: &'a str,
     sources: &'a str,
     condensed: Option<&'a str>,
 }
 
-/// A version as read back, owned.
 struct Stored {
     page: String,
     sources: String,
@@ -147,7 +126,6 @@ impl Stored {
     }
 }
 
-/// Appends one row to the log. The only insert into `artifact_history`.
 fn append(
     tx: &Transaction<'_>,
     id: ArtifactId,
@@ -183,8 +161,6 @@ fn append(
     Ok(())
 }
 
-/// Where a row stands before a write: its version, and its owner's name now.
-/// `None` when the row is not there, or is another crew's.
 fn standing(
     tx: &Transaction<'_>,
     id: ArtifactId,
@@ -243,19 +219,14 @@ fn declared(sources: &[Source]) -> Result<String, StoreError> {
         .map_err(|e| StoreError::Corrupt(format!("artifact sources did not serialize: {e}")))
 }
 
-/// What a new page is made of.
 pub struct ArtifactDraft<'a> {
     pub title: &'a str,
     pub page: &'a str,
     pub sources: &'a [Source],
-    /// What the status bar draws, if the page is meant to be pinned there.
     pub condensed: Option<&'a str>,
     pub note: &'a str,
 }
 
-/// What an edit changes. `None` keeps what the current version has: a rename
-/// keeps the page, a new page keeps its reads, and so keeps them allowed, and
-/// either keeps the condensed view.
 pub struct ArtifactRevision<'a> {
     pub title: Option<&'a str>,
     pub page: Option<&'a str>,
@@ -265,7 +236,6 @@ pub struct ArtifactRevision<'a> {
 }
 
 impl Store {
-    /// A new artifact at version 1, owned by the agent that made it.
     pub fn create_artifact(
         &self,
         group: GroupId,
@@ -303,7 +273,6 @@ impl Store {
             .ok_or_else(|| StoreError::Corrupt(format!("artifact {id} vanished as it was written")))
     }
 
-    /// One of a crew's artifacts. Another crew's is `None`, not an error.
     pub fn artifact(&self, id: ArtifactId, group: GroupId) -> Result<Option<Artifact>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(&format!("{COLUMNS} WHERE r.id = ?1 AND r.group_id = ?2"))?;
@@ -316,7 +285,6 @@ impl Store {
         }
     }
 
-    /// Any artifact, for the operator.
     pub fn any_artifact(&self, id: ArtifactId) -> Result<Option<Artifact>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(&format!("{COLUMNS} WHERE r.id = ?1"))?;
@@ -326,8 +294,6 @@ impl Store {
         }
     }
 
-    /// A crew's artifacts, or every crew's for `None`, most recently changed
-    /// first.
     pub fn artifacts(
         &self,
         group: Option<GroupId>,
@@ -346,11 +312,6 @@ impl Store {
         Ok(out)
     }
 
-    /// Artifacts whose title matches a search, most recently changed first.
-    ///
-    /// By title only. The page is markup and script, and a search for "total"
-    /// that found every page with a variable named `total` in it would bury the
-    /// one whose title the operator half remembered.
     pub fn matching_artifacts(
         &self,
         pattern: &str,
@@ -369,10 +330,6 @@ impl Store {
         Ok(out)
     }
 
-    /// A new version, with whatever the revision leaves out kept as it was.
-    ///
-    /// Open to any agent in the crew, not only the owner, and the owner is
-    /// untouched: see `domain::artifact`.
     pub fn edit_artifact(
         &self,
         id: ArtifactId,
@@ -423,8 +380,6 @@ impl Store {
         self.artifact(id, group)
     }
 
-    /// An agent taking ownership. Leaves the version and "last updated" where
-    /// they were: ownership is not content.
     pub fn take_artifact(
         &self,
         id: ArtifactId,
@@ -460,9 +415,6 @@ impl Store {
         self.artifact(id, group)
     }
 
-    /// The operator giving an artifact to an agent. The agent has to be a live
-    /// member of the artifact's own crew: ownership outside the crew would be
-    /// an owner who cannot reach the page.
     pub fn hand_artifact(
         &self,
         id: ArtifactId,
@@ -505,8 +457,6 @@ impl Store {
         self.any_artifact(id)
     }
 
-    /// An earlier version put back, as a new one. `None` when the artifact or
-    /// that version does not exist.
     pub fn restore_artifact(
         &self,
         id: ArtifactId,
@@ -545,20 +495,10 @@ impl Store {
         self.any_artifact(id)
     }
 
-    /// The operator allowing the reads the current version declares.
-    ///
-    /// Stores the list exactly as the version holds it, which is what makes the
-    /// approval one of that list and nothing else: see the migration. A page
-    /// that declares none has nothing to allow, and is left as it is.
     pub fn allow_artifact_sources(&self, id: ArtifactId) -> Result<Option<Artifact>, StoreError> {
         self.allow_sources(id, None)
     }
 
-    /// The same, only if the current version still declares `seen`: the list
-    /// an approval card showed the operator before they answered it. A crewmate
-    /// can edit the page while the card waits, and a yes to one list is not a
-    /// yes to whatever replaced it. The artifact comes back either way, and
-    /// `sources_allowed` on it says which happened.
     pub fn allow_artifact_sources_seen(
         &self,
         id: ArtifactId,
@@ -664,8 +604,6 @@ impl Store {
         self.any_artifact(id)
     }
 
-    /// The reads one version declares, or the current one's for `None`, and
-    /// whether the operator allowed exactly that list.
     pub fn artifact_sources(
         &self,
         id: ArtifactId,
@@ -691,7 +629,6 @@ impl Store {
         Ok(Some((sources, allowed)))
     }
 
-    /// The whole log, oldest first, without the pages.
     pub fn artifact_log(&self, id: ArtifactId) -> Result<Vec<Entry>, StoreError> {
         let conn = self.conn()?;
         let mut stmt =
@@ -704,7 +641,6 @@ impl Store {
         Ok(out)
     }
 
-    /// The page at one version, or at the current one for `None`.
     pub fn artifact_page(
         &self,
         id: ArtifactId,
@@ -722,8 +658,6 @@ impl Store {
             .optional()?)
     }
 
-    /// The current version's condensed view, if it has one. `None` as well for
-    /// an artifact that is not there; the caller has already asked which.
     pub fn artifact_condensed(&self, id: ArtifactId) -> Result<Option<String>, StoreError> {
         let conn = self.conn()?;
         Ok(conn
@@ -737,7 +671,6 @@ impl Store {
             .flatten())
     }
 
-    /// Deletes one, with its whole history. The operator's call only.
     pub fn delete_artifact(&self, id: ArtifactId) -> Result<bool, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -780,7 +713,6 @@ mod tests {
             .unwrap()
     }
 
-    /// Rae and Milo in one crew, Juno in another.
     fn fixture() -> Fixture {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("test.db")).unwrap();
@@ -816,8 +748,6 @@ mod tests {
 
     #[test]
     fn another_crews_artifact_is_not_found_rather_than_refused() {
-        // An id is something a model can invent. One that landed on another
-        // crew's page must not reach it, and must not confirm it exists.
         let f = fixture();
         let page = made(&f);
         assert_eq!(f.store.artifact(page.id, f.other).unwrap(), None);
@@ -1006,10 +936,6 @@ mod tests {
 
     #[test]
     fn only_the_changes_that_make_a_version_may_carry_a_page() {
-        // `Change::makes_version` and the table's CHECK constraints say the
-        // same thing. This holds them together, both ways, for every change: a
-        // row that made a version carries a page and the reads that page
-        // declares, and no other row carries either.
         let f = fixture();
         let kept = made(&f);
         let conn = f.store.conn().unwrap();
@@ -1038,8 +964,6 @@ mod tests {
             assert_eq!(without.is_ok(), !change.makes_version(), "{change:?} without one");
             assert!(half.is_err(), "{change:?}: a page without its reads is half a version");
         }
-        // A condensed view is part of a version, so a row that made none
-        // cannot carry one.
         let stray = conn.execute(
             "INSERT INTO artifact_history (artifact_id, seq, at, change, version, condensed)
              VALUES (?1, 900, 0, 'took', 1, '<b>3</b>')",
@@ -1050,9 +974,6 @@ mod tests {
 
     #[test]
     fn a_condensed_view_is_kept_changed_and_put_back_with_its_version() {
-        // The number on the status bar and the board behind it are one version
-        // of one thing. An edit that leaves the strip out keeps it, and a
-        // restore brings back the strip that version had, not today's.
         let f = fixture();
         let page = f
             .store
@@ -1104,9 +1025,6 @@ mod tests {
 
     #[test]
     fn a_card_allows_only_the_reads_it_showed() {
-        // The card waits while the crew keeps working. A crewmate who changed
-        // the reads in the meantime has changed what the operator would be
-        // saying yes to, so the yes does not reach the new list.
         let f = fixture();
         let shown = reads("linear__list_issues");
         let page = f
@@ -1307,10 +1225,6 @@ mod tests {
 
     #[test]
     fn allowing_reads_covers_exactly_the_list_the_operator_saw() {
-        // The approval is of a list, compared as stored. Anything that changes
-        // the list waits for the operator again, and nothing has to remember to
-        // revoke it; putting back a version with the list they allowed needs
-        // nothing new.
         let f = fixture();
         let page = f
             .store
@@ -1417,7 +1331,6 @@ mod tests {
             .unwrap();
         let found = f.store.search("pipe", 10).unwrap().artifacts;
         assert_eq!(found.iter().map(|a| a.id).collect::<Vec<_>>(), vec![page.id]);
-        // A wildcard in what was typed is a character, as it is for messages.
         assert!(f.store.search("%", 10).unwrap().artifacts.is_empty());
     }
 

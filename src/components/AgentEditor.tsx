@@ -13,7 +13,6 @@ import { SubscriptionModel } from "./ProviderFields";
 import { SigninList } from "./SigninList";
 
 interface Props {
-  /** Absent when creating. */
   agent?: AgentCard;
   onClose: () => void;
 }
@@ -45,8 +44,6 @@ export function AgentEditor({ agent, onClose }: Props) {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
 
-  // Focus moves into the dialog on open. Done explicitly rather than with
-  // autoFocus so the timing is under our control.
   useEffect(() => {
     nameRef.current?.focus();
   }, []);
@@ -55,17 +52,11 @@ export function AgentEditor({ agent, onClose }: Props) {
 
   const patch = (fields: Partial<AgentDraft>) => setDraft((current) => ({ ...current, ...fields }));
 
-  // The field is one string and a card holds a list, so the split is what both
-  // saving and the model suggestions read the skills through.
   const skills = skillText
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
 
-  // Which crew's settings decide how this agent's turns are paid for. The
-  // select below defaults to the first group, so an agent that has not been
-  // given one yet is already in it. Named for the crew rather than the group
-  // because the character picker below binds `group` to something else.
   const crew = groups.find((entry) => entry.id === draft.groupId) ?? groups[0];
   const provider = crew?.inference.provider ?? settings?.provider;
   const endpoint = crew?.inference.baseUrl || settings?.baseUrl || "";
@@ -101,13 +92,6 @@ export function AgentEditor({ agent, onClose }: Props) {
     }
   };
 
-  /**
-   * Into the compost, where it waits thirty days.
-   *
-   * The same act the agent menu performs, worded the same way, because two
-   * surfaces that delete the same agent and describe it differently teach two
-   * different things about what a delete costs. See `lib/compost.ts`.
-   */
   const remove = async () => {
     if (!agent) return;
     setBusy(true);
@@ -122,8 +106,6 @@ export function AgentEditor({ agent, onClose }: Props) {
 
   return (
     <div className="scrim">
-      {/* A real button, so dismissing by clicking away is reachable from the
-          keyboard and announced, rather than being an invisible div handler. */}
       <button type="button" className="scrim__close" aria-label="Close dialog" onClick={onClose} />
       <div
         className="dialog"
@@ -195,9 +177,6 @@ export function AgentEditor({ agent, onClose }: Props) {
           </div>
         </div>
 
-        {/* Only shown once a second group exists. With one group there is no
-            choice to make, and the field would be asking about a boundary the
-            operator has not drawn yet. */}
         {groups.length > 1 && (
           <label className="field">
             <span
@@ -377,13 +356,6 @@ export function AgentEditor({ agent, onClose }: Props) {
   );
 }
 
-/**
- * Whether this agent may send errands.
- *
- * Applied the moment it changes, like the grants above it, because it is a
- * decision about what the agent may spend and not part of the card that Save
- * writes. Only on an agent that exists: a new one starts with it off.
- */
 function ErrandSwitch({ agent }: { agent: AgentCard }) {
   const [on, setOn] = useState(agent.runsErrands);
   const [busy, setBusy] = useState(false);

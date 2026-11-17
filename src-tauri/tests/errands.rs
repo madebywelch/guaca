@@ -1,16 +1,3 @@
-//! Errands, end to end: the agent's own model sent out with a brief, inside
-//! the turn that sent it.
-//!
-//! The same scripted server the cascade suite drives, answering as whichever
-//! speaker is asking. An errand's prompt opens "You are on an errand for
-//! Writer", so `speaker` reads it as "on an errand for Writer" and never as
-//! Writer: a stub that could not tell the two apart could not script either.
-//!
-//! What these hold is the part of the design that is not wording: who is
-//! offered errands, what an errand may not do, what it spends and from where,
-//! and that a stop reaches it. What a real model does with the tool is the
-//! evals' question.
-
 mod harness;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -44,8 +31,6 @@ fn grant(h: &Harness, name: &str) {
     h.runtime.store().set_runs_errands(h.id(name), true).unwrap();
 }
 
-/// Every tool call on the record of the given agent's channel, by name and
-/// outcome, in order.
 fn recorded_calls(h: &Harness, name: &str) -> Vec<(String, ToolOutcome)> {
     h.envelopes(&[name])
         .iter()
@@ -57,12 +42,8 @@ fn recorded_calls(h: &Harness, name: &str) -> Vec<(String, ToolOutcome)> {
         .collect()
 }
 
-// ---- refused before anything is spent -------------------------------------
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agent_not_given_errands_is_not_offered_them_and_is_refused_one() {
-    // Off is the default and the operator's to change. A model that calls the
-    // tool anyway, having seen it in some other harness, spends nothing.
     let stub = serve(|body| {
         if speaker(body) == ERRAND {
             return Script::Say("I should not exist.".into());
@@ -90,9 +71,6 @@ async fn an_agent_not_given_errands_is_not_offered_them_and_is_refused_one() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_fourth_errand_is_refused_and_none_is_sent() {
-    // Refused rather than queued, and all of them rather than the first three:
-    // a model told "at most three" picks the three that matter, which a
-    // runtime dropping the last one cannot do for it.
     let stub = serve(|body| {
         if speaker(body) == ERRAND {
             return Script::Say("I should not exist.".into());
@@ -119,8 +97,6 @@ async fn a_fourth_errand_is_refused_and_none_is_sent() {
     h.expect_normal(run, "four errands refused");
 }
 
-// ---- what an errand is --------------------------------------------------
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn errands_work_their_briefs_and_their_answers_reach_the_turn_that_sent_them() {
     let stub = serve(|body| {
@@ -145,8 +121,6 @@ async fn errands_work_their_briefs_and_their_answers_reach_the_turn_that_sent_th
     let run = h.runtime.send_from_human(h.id("Writer"), "Count the staff.").unwrap();
     h.settle(run).await;
 
-    // The answers came back as the result of the call, into the turn that
-    // asked, and that turn answered the operator from them.
     let results = tool_results(&stub).join("\n");
     assert!(results.contains("North office: 12 staff."), "{results}");
     assert!(results.contains("South office: 9 staff."), "{results}");
@@ -157,13 +131,9 @@ async fn errands_work_their_briefs_and_their_answers_reach_the_turn_that_sent_th
         h.transcript()
     );
 
-    // Two errands, one call each, and the turn's own two: four model calls,
-    // each claimed from this run's budget and each on its bill.
     assert_eq!(stub.calls.load(Ordering::SeqCst), 4);
     h.expect_normal(run, "two errands and an answer");
 
-    // An errand knows its brief and nothing else: not the agent's standing
-    // instructions, not the crew, not the conversation it was sent from.
     let sent = errand_requests(&stub);
     assert_eq!(sent.len(), 2);
     for body in &sent {
@@ -184,10 +154,8 @@ async fn errands_work_their_briefs_and_their_answers_reach_the_turn_that_sent_th
         assert!(tools.contains(&"directory"), "the rest are the sender's own: {tools:?}");
     }
 
-    // The crew heard nothing: an errand is not a message to anybody.
     assert!(h.channel_texts("Chef").is_empty(), "{}", h.transcript());
 
-    // And the operator can read what each one came back with.
     let (_, outcome) = recorded_calls(&h, "Writer")
         .into_iter()
         .find(|(name, _)| name == "errand")
@@ -199,8 +167,6 @@ async fn errands_work_their_briefs_and_their_answers_reach_the_turn_that_sent_th
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_errand_cannot_message_the_crew_rewrite_memory_or_send_errands_of_its_own() {
-    // Each one refused where the operator can see it, and each errand still
-    // answers: a refusal is something to route around, not an ending.
     let stub = serve(|body| {
         if speaker(body) == ERRAND {
             if has_tool_result(body) {
@@ -247,7 +213,6 @@ async fn an_errand_cannot_message_the_crew_rewrite_memory_or_send_errands_of_its
     assert!(results.contains("an errand cannot rewrite Writer's memory"), "{results}");
     assert!(results.contains("an errand cannot send errands of its own"), "{results}");
 
-    // On the agent's own trail, refused, with the reason.
     let refused: Vec<String> = recorded_calls(&h, "Writer")
         .into_iter()
         .filter(|(_, outcome)| matches!(outcome, ToolOutcome::Refused { .. }))
@@ -259,13 +224,8 @@ async fn an_errand_cannot_message_the_crew_rewrite_memory_or_send_errands_of_its
     h.expect_normal(run, "three refusals inside errands");
 }
 
-// ---- what an errand spends -------------------------------------------------
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn errands_never_spend_the_calls_kept_for_the_turn_that_sent_them() {
-    // An errand that never finishes, in a run with five calls to spend. The
-    // turn spends one sending it; the errand may take the budget down to the
-    // two kept back and no further; the turn answers with one of those.
     let stub = serve(|body| {
         if speaker(body) == ERRAND {
             return Script::Directory;
@@ -354,13 +314,8 @@ async fn one_errand_failing_leaves_the_others_answers_and_is_on_the_bill() {
         "the operator was not told: {}",
         h.transcript()
     );
-    // The failed call is the one thing wrong with this run. It claimed its step
-    // and is counted by its notice, so the bill still equals the calls made and
-    // nothing reads as a budget that miscounted.
     assert_eq!(h.trajectory(run).anomalies(), vec![Anomaly::CallFailed { agent: "Writer".into() }]);
 }
-
-// ---- what reaches an errand from outside -------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stopping_the_conversation_calls_its_errands_off() {
@@ -382,32 +337,13 @@ async fn stopping_the_conversation_calls_its_errands_off() {
         .await;
     h.runtime.stop_run(run);
 
-    // Well inside the stub's hang: a stop that waited for the call to come
-    // back would sit here for the whole of it.
     h.settle_within(run, (HANG - Duration::from_secs(20)).as_secs()).await;
     assert_eq!(stub.calls.load(Ordering::SeqCst), 2, "nothing was called after the stop");
-    // The abandoned call gave its step back, so the bill names no call that
-    // was never answered.
     h.expect_normal(run, "a stop reaching an errand mid-call");
 }
 
-// ---- what an errand has read -----------------------------------------------
-//
-// A page is the one thing in a turn that is not the operator's, and the gates
-// that keep it from spending their name read whether the turn has taken one in.
-// An errand is part of the turn that sent it, so a page read on either side of
-// the call has to count on the other. These need a page actually read, so they
-// run against a scripted Kernel and a browser that speaks just enough CDP to
-// open a page and press something on it, the seam `tests/machines.rs` uses.
-
-/// Where every page the scripted browser serves says it is. A site the agent
-/// in the second scenario holds a session for.
 const SIGNED_IN_PAGE: &str = "https://mail.example.com/inbox";
 
-/// The scripted providers, started once for the whole binary on a runtime of
-/// their own, for the reasons `tests/machines.rs` gives at length: the seam is
-/// an environment variable, and a listener spawned on one test's runtime dies
-/// with that test.
 static BROWSER: OnceLock<()> = OnceLock::new();
 
 fn scripted_browser() {
@@ -454,8 +390,6 @@ fn scripted_browser() {
     });
 }
 
-/// A browser with one page on it, at [`SIGNED_IN_PAGE`], that does whatever
-/// it is asked. Every connection is one action, as `cdp.rs` makes them.
 async fn serve_cdp(listener: tokio::net::TcpListener) {
     loop {
         let Ok((stream, _)) = listener.accept().await else { return };
@@ -489,15 +423,10 @@ async fn serve_cdp(listener: tokio::net::TcpListener) {
     }
 }
 
-/// How many tool results this conversation has had back, which is how far
-/// along its script a speaker is.
 fn answered(body: &Value) -> usize {
     body["messages"].as_array().map_or(0, |m| m.iter().filter(|m| m["role"] == "tool").count())
 }
 
-/// The permission request a turn parked on, within the time a scripted turn
-/// needs to reach it. A turn that went ahead without asking never parks, and
-/// this says so rather than waiting out the harness's own deadline.
 async fn asked(h: &Harness, what: &str) -> ApprovalId {
     tokio::time::timeout(Duration::from_secs(10), h.awaited_request()).await.unwrap_or_else(|_| {
         panic!("{what} was not asked about: {}\n{}", h.transcript(), tool_results_of(h))
@@ -514,11 +443,6 @@ fn tool_results_of(h: &Harness) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_page_an_errand_read_keeps_a_rule_from_allowing_what_the_turn_asks_next() {
-    // The rule allows sending with no conditions at all, which is the operator
-    // saying "this agent may send without asking me". It does not say "after a
-    // page has told it to": rules never allow once the turn has read one. The
-    // turn here read nothing itself. Its errand did, and the request after it
-    // is the turn acting on what the errand brought back.
     scripted_browser();
     let stub = serve(|body| {
         if speaker(body) == ERRAND {
@@ -567,10 +491,6 @@ async fn a_page_an_errand_read_keeps_a_rule_from_allowing_what_the_turn_asks_nex
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_errand_sent_after_the_turn_read_a_page_asks_before_pressing_on_a_signed_in_site() {
-    // The other direction. The turn reads a page on a site the operator is
-    // signed in to, and the page asks for something to be pressed. Pressing it
-    // itself would stop and ask; briefing an errand to press it must too,
-    // because the errand's reason for pressing is the page the turn read.
     scripted_browser();
     let stub = serve(|body| {
         if speaker(body) == ERRAND {

@@ -1,30 +1,3 @@
-/**
- * The cast.
- *
- * Five silhouettes, twenty-one characters. What tells two of them apart is,
- * first, which shape they are cut from, and then the resting lump on top of it:
- * how it leans, where its lobes are, and how its eyes are set. Nobody draws an
- * outline, so nobody can draw a bad one, and a new character is a row of
- * numbers rather than a path somebody has to get right.
- *
- * There was one shape before this and it was not enough. A rail of sixty round
- * creatures is a rail you read by color, because the only thing varying across
- * it was a few percent of stretch and where the eyes sat; the shape has to
- * carry some of the identity or the eyes carry all of it. So the outline is now
- * two decisions rather than one, and `silhouette.ts` holds the first.
- *
- * This replaced a cast of sixteen hand-drawn vegetables. The vegetables were
- * charming at six agents and childish at sixty, and every one of them was a
- * bezier somebody had to draw to a written spec that a test then had to check.
- * The spec is now the code: a character cannot leave its box, cannot sit at a
- * different weight, and cannot take light from a different direction, because
- * none of those are things a character supplies.
- *
- * Agents store the `key` and nothing else. No drawing is persisted, so any of
- * this can be redrawn without touching the database, and `ALIASES` keeps every
- * agent made by every earlier cast rendering as something deliberate.
- */
-
 import type { Lump } from "./form";
 
 export type Character = Lump;
@@ -231,20 +204,7 @@ const BY_KEY = new Map(CHARACTERS.map((c) => [c.key, c]));
 
 export const DEFAULT_CHARACTER = "orb";
 
-/**
- * Keys from every earlier cast, so an existing agent keeps a deliberate face
- * rather than whatever a hash lands on. Four sets have shipped: sixteen
- * vegetables, an egg with props, a set of hand-drawn creatures, and emoji
- * before any of it. The mapping is by feel, since none of the old keys means
- * anything here.
- *
- * Exported so `catalog.test.ts` can hold the table to the list of keys that
- * have actually reached a database. The fallback hash would answer for all of
- * them, and would re-roll every existing agent's face on the day the cast
- * changed size, which is the one thing this table is for.
- */
 export const ALIASES: Record<string, string> = {
-  // the vegetables
   avocado: "orb",
   lime: "pebble",
   tomato: "lobe",
@@ -266,7 +226,6 @@ export const ALIASES: Record<string, string> = {
   molcajete: "slab",
   jar: "tide",
   spoon: "loop",
-  // the egg with props
   plain: "orb",
   cheerful: "lobe",
   curious: "pebble",
@@ -287,7 +246,6 @@ export const ALIASES: Record<string, string> = {
   headphones: "slab",
   antenna: "tide",
   sprout: "wave",
-  // the creatures
   fox: "tide",
   owl: "puck",
   crab: "lobe",
@@ -299,7 +257,6 @@ export const ALIASES: Record<string, string> = {
   ghost: "bead",
   star: "egg",
   cloud: "wave",
-  // the emoji before any of it
   robot: "slab",
   brain: "puck",
   penguin: "cell",
@@ -323,10 +280,6 @@ function hashToIndex(key: string): number {
   return hash % CHARACTERS.length;
 }
 
-/**
- * Never returns undefined. An agent saved by any past or future build still has
- * to render today, so an unknown key gets a stable stand-in.
- */
 export function lookupCharacter(key: string): Character {
   const direct = BY_KEY.get(key);
   if (direct) return direct;
@@ -339,13 +292,6 @@ export function lookupCharacter(key: string): Character {
   return CHARACTERS[hashToIndex(key)] ?? (BY_KEY.get(DEFAULT_CHARACTER) as Character);
 }
 
-/**
- * Accents. Pigments rather than candy: saturated primaries are half of what
- * reads as childish, and a mid-luminance body keeps the eyes as the darkest
- * thing on the figure, which is where the expression is. The paper relief
- * adds a shared edge and shadow without mixing the body pigment, so the value
- * picked here is the value on the screen.
- */
 export const ACCENTS: { name: string; value: string }[] = [
   { name: "Ochre", value: "#c28c31" },
   { name: "Terracotta", value: "#bf5f3c" },
@@ -363,14 +309,8 @@ export const ACCENTS: { name: string; value: string }[] = [
 
 export const DEFAULT_ACCENT = ACCENTS[0]?.value as string;
 
-/**
- * The color an agent that is gone is drawn in, wherever its face still has to
- * be: one value, so a deleted agent looks the same on every surface. A gray
- * off every accent, so it is never read as one of the living.
- */
 export const ABSENT_ACCENT = "#8aa0a6";
 
-/** Picks the accent least used so far, so a new crew is visually separable. */
 export function suggestAccent(taken: string[]): string {
   const counts = new Map(ACCENTS.map((a) => [a.value, 0]));
   for (const color of taken) {
@@ -388,7 +328,6 @@ export function suggestAccent(taken: string[]): string {
   return best;
 }
 
-/** Picks an unused character so two new agents do not look identical. */
 export function suggestCharacter(taken: string[]): string {
   const used = new Set(taken);
   return (CHARACTERS.find((c) => !used.has(c.key)) ?? (CHARACTERS[0] as Character)).key;

@@ -513,8 +513,6 @@ it("says why the primary button cannot be pressed, and stops saying it once it c
 it("verifies Claude through the existing program without changing either model", async () => {
   mocks.claudeSigninStatus.mockResolvedValue({ signedIn: true });
   const { onConnected } = await draw();
-  // Offered beside the other two rather than behind a disclosure: the plan the
-  // operator already pays for is not an advanced case.
   fireEvent.click(screen.getByRole("button", { name: /^Claude subscription/ }));
   expect(
     screen.getByText(
@@ -616,15 +614,11 @@ const codexPickup: Pickup = { program: "codex", account: "", plan: "" };
 it("offers the Claude Code sign-in this Mac already has, and uses it in one step", async () => {
   mocks.existingSignins.mockResolvedValue([claudePickup]);
   const { onConnected } = await draw();
-  // The account is named so the operator can tell it is theirs, and the card
-  // says plainly that nothing has changed yet.
   expect(await screen.findByText(/robin@example.com/)).toBeTruthy();
   expect(screen.getByText(/Nothing changes until you choose/)).toBeTruthy();
 
   fireEvent.click(screen.getByRole("button", { name: "Use Claude Code" }));
   await waitFor(() => expect(onConnected).toHaveBeenCalledOnce());
-  // The same test the provider card runs, so the offer is a shortcut rather
-  // than a second way in that can drift from the first.
   expect(mocks.testConnection).toHaveBeenCalledWith({ provider: "claude" });
   expect(mocks.updateSettings).toHaveBeenCalledWith({ provider: "claude" });
   expect(mocks.beginSubscriptionSignin).not.toHaveBeenCalled();
@@ -672,8 +666,6 @@ it("does not offer a sign-in on a remote host", async () => {
 });
 
 it("does not offer a sign-in on a box, even one that can run the claude program", async () => {
-  // `claudeProvider` is true on a server too, which is exactly why the offer
-  // reads its own capability rather than borrowing that one.
   useStore.setState({
     capabilities: {
       claudeProvider: true,
@@ -689,8 +681,6 @@ it("does not offer a sign-in on a box, even one that can run the claude program"
 });
 
 it("offers nothing when a program is installed but logged out", async () => {
-  // Detection's answer for a logged-out program is an empty list, and an empty
-  // list is the ordinary provider step rather than an error.
   mocks.existingSignins.mockResolvedValue([]);
   await draw();
   expect(screen.getByText("Choose how your agents are paid for")).toBeTruthy();

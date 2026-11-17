@@ -16,23 +16,11 @@ import { useStore } from "./lib/store";
 import { adoptRemote, guardPanelHost, UNAUTHORIZED_EVENT } from "./lib/transport";
 import { errorMessage } from "./lib/types";
 
-// A test build's control channel, and nothing in any other build: Vite turns
-// the mode into a constant and the comparison folds away. See lib/probe.ts.
 if (import.meta.env.MODE === "probe") void import("./lib/probe").then((probe) => probe.install());
-
-/**
- * The panel under the menu bar icon, as a page.
- *
- * A second client of whichever host the window is attached to, told which one
- * by the tray rather than reading it from storage: the tray creates this page
- * only once the window has said, and reloads it when the window says something
- * else, so the answer and the moment to act on it arrive together.
- */
 
 const root = document.getElementById("root");
 if (!root) throw new Error("missing #root");
 
-/** A panel with somewhere to be, or the reason it has nowhere. */
 function Panel() {
   const everyone = useStore((state) => state.agents);
   const roster = useMemo(() => everyone.map((agent) => agent.name), [everyone]);
@@ -40,19 +28,12 @@ function Panel() {
   const ready = useRuntime();
   const [refused, setRefused] = useState(false);
 
-  // Turned away is the window's problem to solve, because the window is where
-  // a token is pasted. The panel says so and waits to be reloaded with the
-  // one that works.
   useEffect(() => {
     const turnedAway = () => setRefused(true);
     window.addEventListener(UNAUTHORIZED_EVENT, turnedAway);
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, turnedAway);
   }, []);
 
-  // The operator's appearance is chosen in the window and stored where this
-  // page can read it, so it is read again every time the panel is shown
-  // rather than kept from whenever this page loaded. Read, never written: the
-  // window owns the preferences.
   useEffect(() => {
     const shown = () => {
       const prefs = loadPrefs();
@@ -79,7 +60,6 @@ function Panel() {
   );
 }
 
-/** The panel with no workspace to show, and the one way to get one. */
 function Nowhere({ text }: { text: string }) {
   return (
     <div className="menubar">

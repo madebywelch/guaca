@@ -1,21 +1,3 @@
-//! The daemon, driven the way a client drives it.
-//!
-//! The cascade suite proves the runtime does as it is told and the trajectory
-//! suite proves the machinery behaved. Neither can see this, because both drive
-//! the runtime directly: what is tested here is the *transport*, which is the
-//! only part of a hosted workspace that has no desktop equivalent to fall back
-//! on.
-//!
-//! Three questions, and they are the three that have no other answer:
-//!
-//! - Does a command called over HTTP do what the same command does in-process?
-//! - Does an event reach a client that is not a webview?
-//! - Does a workspace that runs on a server refuse the things it cannot do,
-//!   with a sentence rather than a failure?
-//!
-//! Entirely offline. No provider is dialed, no model is called, nothing is
-//! spent. A workspace is a temporary directory that is deleted at the end.
-
 #![cfg(feature = "server")]
 
 use std::net::SocketAddr;
@@ -25,18 +7,14 @@ use serde_json::{json, Value};
 
 const TOKEN: &str = "a-token-nobody-guessed";
 
-/// A daemon on a free port, with a workspace of its own.
 async fn workspace() -> (SocketAddr, tempfile::TempDir) {
     workspace_beside(None).await
 }
 
-/// The same, on a box whose updater listens at `updater`.
 async fn workspace_beside(updater: Option<std::path::PathBuf>) -> (SocketAddr, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("a temporary workspace");
     let bound = guac_lib::server::bind(guac_lib::server::Settings {
         root: dir.path().to_path_buf(),
-        // Port zero, so nothing in this suite can collide with a daemon the
-        // operator happens to be running, or with another test.
         bind: "127.0.0.1:0".parse().expect("a loopback address"),
         token: TOKEN.to_string(),
         web: None,
@@ -51,7 +29,6 @@ async fn workspace_beside(updater: Option<std::path::PathBuf>) -> (SocketAddr, t
     (addr, dir)
 }
 
-/// One command, as a client makes it.
 async fn call(addr: SocketAddr, name: &str, args: Value) -> (u16, Value) {
     let response = reqwest::Client::new()
         .post(format!("http://{addr}/v1/call"))
@@ -77,8 +54,6 @@ async fn subscription_catalog_reports_missing_signin_over_the_shared_surface() {
 async fn a_workspace_on_a_server_answers_the_same_commands_the_window_does() {
     let (addr, _dir) = workspace().await;
 
-    // The default group exists on a fresh workspace, exactly as it does on a
-    // desktop: the migrations are the same migrations.
     let (status, body) = call(addr, "list_groups", json!({})).await;
     assert_eq!(status, 200);
     let groups = body["ok"].as_array().expect("a list of groups");
@@ -108,9 +83,6 @@ async fn a_workspace_on_a_server_answers_the_same_commands_the_window_does() {
 async fn a_server_refuses_what_it_cannot_do_and_says_what_to_do_instead() {
     let (addr, _dir) = workspace().await;
 
-    // Every one of these is something on the operator's own machine. The
-    // refusal is what turns "the button did nothing" into a sentence, and each
-    // has to name an alternative: a refusal that only says no gets retried.
     let refusals = [("save_file", json!({ "digest": "0".repeat(64), "name": "notes.txt" }))];
 
     for (name, args) in refusals {
@@ -131,9 +103,6 @@ async fn nothing_is_reachable_without_the_token() {
     let (addr, _dir) = workspace().await;
     let client = reqwest::Client::new();
 
-    // Health is the one exception, and deliberately: a provider's health check
-    // has no credential, and a check that needed one would report a box
-    // unhealthy for the whole time a token was being rotated.
     let health = client.get(format!("http://{addr}/health")).send().await.expect("a health check");
     assert_eq!(health.status(), 200);
     let health: Value = health.json().await.unwrap();
@@ -159,9 +128,6 @@ async fn nothing_is_reachable_without_the_token() {
 async fn an_event_reaches_a_client_that_is_not_a_webview() {
     let (addr, _dir) = workspace().await;
 
-    // The token goes in the query string because a browser cannot set headers
-    // on a WebSocket handshake. That is the whole reason the socket accepts it
-    // there, and this is the test that says so.
     let (mut socket, _) =
         tokio_tungstenite::connect_async(format!("ws://{addr}/v1/events?token={TOKEN}"))
             .await
@@ -180,9 +146,6 @@ async fn an_event_reaches_a_client_that_is_not_a_webview() {
     )
     .await;
 
-    // `agentsChanged` is what the roster redraws on. Anything else that arrives
-    // first is fine and is skipped: the runtime emits activity as well, and the
-    // order between them is not something this transport promises.
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
     let mut kinds = Vec::new();
     loop {
@@ -203,7 +166,6 @@ async fn an_event_reaches_a_client_that_is_not_a_webview() {
     let _ = socket.close(None).await;
 }
 
-/// The next event of one kind, skipping whatever else the runtime emits.
 async fn next_of_kind(
     socket: &mut tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
@@ -225,8 +187,6 @@ async fn next_of_kind(
     }
 }
 
-// Several workers, as the daemon has: on one thread two commands with no await
-// between their read and their save cannot interleave, and the race is hidden.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_settings_change_reaches_every_client_and_two_at_once_both_land() {
     let (addr, _dir) = workspace().await;
@@ -235,16 +195,11 @@ async fn a_settings_change_reaches_every_client_and_two_at_once_both_land() {
             .await
             .expect("the event socket opens");
 
-    // A client that did not make the change is told, with the settings in it
-    // and never a key: every open settings pane is drawing from this.
     call(addr, "update_settings", json!({ "patch": { "apiKey": "sk-secret-value" } })).await;
     let event = next_of_kind(&mut other, "settingsChanged").await;
     assert_eq!(event["settings"]["apiKeySet"], true);
     assert!(!event.to_string().contains("sk-secret-value"), "a key crossed the socket: {event}");
 
-    // Two clients patching different fields at the same moment. Each read,
-    // patched and saved on its own before, and the later save put the earlier
-    // one's field back.
     for round in 0..40 {
         let name = format!("Operator {round}");
         let model = format!("vendor/model-{round}");
@@ -286,7 +241,6 @@ async fn a_connector_run_as_a_program_on_the_host_is_tested_and_added_like_any_o
     assert!(!added.to_string().contains("a-secret-value"), "a value came back: {added}");
     assert!(added.to_string().contains("FIXTURE_TOKEN"), "the name is shown: {added}");
 
-    // A key is not how a program is given one.
     let (_, refused) = call(
         addr,
         "add_plugin",
@@ -328,7 +282,6 @@ async fn the_operators_quick_actions_reach_every_window() {
     let event = next_of_kind(&mut other, "settingsChanged").await;
     assert_eq!(event["settings"]["quickActions"][0]["label"], "Calendar");
 
-    // A button pointed at an agent that is not there is refused, not drawn dead.
     let (_, refused) = call(
         addr,
         "add_quick_action",
@@ -361,8 +314,6 @@ async fn a_page_is_pinned_resized_and_taken_off_the_bar_with_its_deletion() {
     .await;
     let rae_id: guac_lib::domain::ids::AgentId = rae["ok"]["id"].as_str().unwrap().parse().unwrap();
     let crew = rae["ok"]["groupId"].as_str().unwrap().parse().unwrap();
-    // Pages are an agent's to make, so the test writes them where the daemon
-    // keeps them rather than scripting a model.
     let store = guac_lib::db::Store::open(&dir.path().join("data/guac.db")).unwrap();
     let draft = |condensed| guac_lib::db::ArtifactDraft {
         title: "Open PRs",
@@ -432,8 +383,6 @@ async fn skills_are_written_read_and_announced_over_the_hosted_surface() {
     let event = next_of_kind(&mut socket, "skillsChanged").await;
     assert_eq!(event["scope"]["kind"], "workspace");
 
-    // A listing carries no bodies; a read does. The workspace opened with the
-    // starters in it, because the boot both hosts share put them there.
     let (_, listed) = call(addr, "list_skills", json!({ "scope": workspace })).await;
     let listed = listed["ok"].as_array().expect("a list").clone();
     let names: Vec<_> = listed.iter().filter_map(|s| s["name"].as_str()).collect();
@@ -447,7 +396,6 @@ async fn skills_are_written_read_and_announced_over_the_hosted_surface() {
         call(addr, "read_skill", json!({ "scope": workspace, "name": "house-style" })).await;
     assert_eq!(read["ok"]["body"], "Plain words.");
 
-    // Guaca's own is listed and cannot be written over, from any client.
     let (_, bundled) = call(addr, "list_skills", json!({ "scope": { "kind": "bundled" } })).await;
     assert!(bundled["ok"].as_array().unwrap().iter().any(|s| s["name"] == "guaca"));
     let (_, refused) = call(
@@ -458,7 +406,6 @@ async fn skills_are_written_read_and_announced_over_the_hosted_surface() {
     .await;
     assert_eq!(refused["err"]["kind"], "validation", "{refused}");
 
-    // Nothing is written under the id of a crew that does not exist.
     let ghost = json!({ "kind": "crew", "groupId": uuid::Uuid::new_v4() });
     let (_, refused) = call(
         addr,
@@ -478,8 +425,6 @@ async fn skills_are_written_read_and_announced_over_the_hosted_surface() {
 async fn renaming_a_skill_that_carries_files_carries_them_to_the_new_name() {
     let (addr, dir) = workspace().await;
     let workspace = json!({ "kind": "workspace" });
-    // A starter carries its license; a reference is what a skills.sh one
-    // carries. A rename used to write the new name and delete the old one.
     let folder = dir.path().join("data/skills/workspace/grill-me");
     std::fs::create_dir_all(folder.join("references")).unwrap();
     std::fs::write(folder.join("references/rounds.md"), "# Rounds").unwrap();
@@ -504,9 +449,6 @@ async fn renaming_a_skill_that_carries_files_carries_them_to_the_new_name() {
 async fn a_client_on_a_different_build_is_told_which_of_them_is_wrong() {
     let (addr, _dir) = workspace().await;
 
-    // The failure this exists for is routine on a server and impossible on a
-    // desktop: the app and the workspace it is connected to are updated
-    // separately, so a name one of them has never heard of is a Tuesday.
     let (status, body) = call(addr, "summon_kraken", json!({})).await;
     assert_eq!(status, 404);
     assert_eq!(body["err"]["kind"], "unknownCommand");
@@ -522,7 +464,6 @@ async fn a_client_on_a_different_build_is_told_which_of_them_is_wrong() {
         "it does not name the command: {body}"
     );
 
-    // A client that says what it is gets told which of the two to update.
     let body: Value = reqwest::Client::new()
         .post(format!("http://{addr}/v1/call"))
         .bearer_auth(TOKEN)
@@ -548,7 +489,6 @@ async fn a_browser_hands_a_document_over_as_bytes_and_reads_it_back_by_digest() 
     let token = TOKEN;
     let client = reqwest::Client::new();
 
-    // No token, no store.
     let refused = client
         .post(format!("http://{addr}/v1/upload?name=brief.txt"))
         .body("hello")
@@ -572,7 +512,6 @@ async fn a_browser_hands_a_document_over_as_bytes_and_reads_it_back_by_digest() 
     assert_eq!(file["bytes"], 10, "{stored}");
     let digest = file["digest"].as_str().expect("a digest");
 
-    // The same bytes, on the route every preview reads from.
     let back = client
         .get(format!("http://{addr}/v1/file/{digest}/brief.txt?token={token}"))
         .send()
@@ -581,7 +520,6 @@ async fn a_browser_hands_a_document_over_as_bytes_and_reads_it_back_by_digest() 
     assert_eq!(back.status(), 200);
     assert_eq!(back.text().await.unwrap(), "hello, box");
 
-    // Too big is the store's own sentence, not a bare 413.
     let big = vec![b'x'; 25 * 1024 * 1024 + 1];
     let refused = client
         .post(format!("http://{addr}/v1/upload?name=huge.bin"))
@@ -602,8 +540,6 @@ async fn a_box_does_not_forward_files_from_its_own_disk() {
         json!({ "origin": "http://elsewhere", "token": "t", "paths": ["/etc/hosts"] }),
     )
     .await;
-    // A desktop forwards a dropped path to the box it is showing; a box has no
-    // operator's disk to read from, and says which capability that is.
     assert_eq!(body["err"]["kind"], "notHere", "{status} {body}");
     let said = body["err"]["message"].as_str().unwrap_or_default();
     assert!(said.contains("server"), "{said}");
@@ -649,7 +585,6 @@ async fn a_screen_is_reached_by_a_ticket_for_that_sandbox_and_relayed_to_the_vie
     let (addr, _dir) = workspace().await;
     let client = reqwest::Client::new();
 
-    // A ticket for another sandbox, or a made-up one, opens nothing.
     let wrong = client
         .get(format!("http://{addr}/v1/screen/{}/sbx/6080/viewer.html", "f".repeat(64)))
         .send()
@@ -658,8 +593,6 @@ async fn a_screen_is_reached_by_a_ticket_for_that_sandbox_and_relayed_to_the_vie
     assert_eq!(wrong.status(), 404);
     assert!(wrong.text().await.unwrap().contains("not a screen"));
 
-    // The right ticket reaches the viewer, which is the one that knows there is
-    // no such machine and says so: the relay carries its answer through whole.
     let ticket = guac_lib::commands::screen_ticket(TOKEN, "sbx");
     let relayed = client
         .get(format!("http://{addr}/v1/screen/{ticket}/sbx/6080/viewer.html?autoconnect=1"))
@@ -674,8 +607,6 @@ async fn a_screen_is_reached_by_a_ticket_for_that_sandbox_and_relayed_to_the_vie
 async fn a_sign_in_nobody_is_waiting_for_is_told_so_at_the_door() {
     let (addr, _dir) = workspace().await;
     let client = reqwest::Client::new();
-    // No token on this route: the browser arrives from the vendor. What bounds
-    // it is that only a flow waiting on that exact state reads it.
     let page = client
         .get(format!("http://{addr}/v1/oauth/callback?state=stale&code=x"))
         .send()
@@ -690,9 +621,6 @@ async fn a_stored_file_is_reachable_by_its_digest() {
     let (addr, dir) = workspace().await;
     let client = reqwest::Client::new();
 
-    // Placed the way the store lays them out, because the command that would
-    // normally put one there reads a path on the operator's machine and is
-    // refused on a server. What is being tested is the route, not the staging.
     let body = b"the quick brown fox";
     let digest = {
         use sha2::Digest;
@@ -705,9 +633,6 @@ async fn a_stored_file_is_reachable_by_its_digest() {
 
     let url = format!("http://{addr}/v1/file/{digest}/notes.txt");
 
-    // Without a token this must be 401 rather than 404. The difference is the
-    // whole test: a route registered with the wrong parameter syntax matches
-    // nothing, falls through, and answers 404 to everything including this.
     let refused = client.get(&url).send().await.expect("an answer");
     assert_eq!(refused.status(), 401, "the file route did not match at all");
 
@@ -716,7 +641,6 @@ async fn a_stored_file_is_reachable_by_its_digest() {
     assert_eq!(served.headers()["content-type"], "text/plain");
     assert_eq!(served.bytes().await.expect("the bytes").as_ref(), body);
 
-    // A digest nothing is stored under is a missing file, said as one.
     let missing = client
         .get(format!("http://{addr}/v1/file/{}/notes.txt", "0".repeat(64)))
         .query(&[("token", TOKEN)])
@@ -1151,8 +1075,6 @@ async fn a_box_relays_its_updater_and_only_for_the_token() {
     updater.abort();
 }
 
-// --- Session cookie auth ---
-
 #[cfg(unix)]
 #[tokio::test]
 async fn a_box_relays_the_callers_attempt_id_unchanged() {
@@ -1181,7 +1103,6 @@ async fn a_box_relays_the_callers_attempt_id_unchanged() {
     assert_eq!(updater.await.unwrap()["attemptId"], id);
 }
 
-/// Exchanges the workspace token for the HttpOnly session cookie.
 async fn session_cookie(addr: SocketAddr) -> String {
     let client = reqwest::Client::new();
     let response = client
@@ -1211,8 +1132,6 @@ async fn a_browser_exchanges_its_token_for_a_cookie() {
     assert_eq!(response.status(), 200);
     let set_cookie =
         response.headers().get("set-cookie").expect("the daemon sets a cookie").to_str().unwrap();
-    // The name carries the host's port, because a cookie cannot: two hosts on
-    // one machine keep two sessions rather than replacing each other.
     assert!(set_cookie.starts_with("guaca_session"), "the cookie is named: {set_cookie}");
     assert!(set_cookie.contains("HttpOnly"), "the cookie is HttpOnly: {set_cookie}");
     assert!(set_cookie.contains("SameSite=Strict"), "the cookie is SameSite=Strict: {set_cookie}");
@@ -1231,10 +1150,6 @@ async fn a_wrong_token_is_turned_away_with_only_the_fact_that_is_new() {
     assert_eq!(response.status(), 401);
     let body: Value = response.json().await.expect("a refusal is JSON");
     let said = body["err"]["message"].as_str().expect("a refusal says why");
-    // The token screen already says where the token comes from, above the
-    // field. The one thing it cannot know until this answers is that the one
-    // pasted was refused, and a second copy of the hint under the field is the
-    // sentence the operator already read, in a voice that is not the app's.
     assert_eq!(said, "that token was not accepted");
 }
 
@@ -1243,8 +1158,6 @@ async fn a_cookie_authenticates_a_call_without_a_bearer_token() {
     let (addr, _dir) = workspace().await;
     let cookie = session_cookie(addr).await;
     let client = reqwest::Client::new();
-    // A state-changing request authenticated by cookie alone must prove
-    // same-origin. The Origin header's hostname matches the request's Host.
     let response = client
         .post(format!("http://{addr}/v1/call"))
         .header("Origin", format!("http://{addr}"))
@@ -1325,7 +1238,6 @@ async fn a_bearer_token_still_authenticates_a_non_browser_client() {
 #[tokio::test]
 async fn a_legacy_local_storage_token_can_be_exchanged_for_a_cookie() {
     let (addr, _dir) = workspace().await;
-    // The same endpoint the client uses to migrate a token from localStorage.
     let client = reqwest::Client::new();
     let response = client
         .post(format!("http://{addr}/v1/auth/session"))
@@ -1549,9 +1461,6 @@ async fn explicit_signin_is_not_replaced_by_a_legacy_upgrade() {
     assert_eq!(cookies.len(), 1, "the explicit exchange must not be overwritten");
 }
 
-/// A session signed with this workspace's token, the way a host signs one,
-/// that expires at `expires`. For a test that has to choose the name a
-/// session arrives under, which a sign-in does not let it do.
 fn signed_session(expires: u64) -> String {
     use base64::Engine;
     let issued = expires - 30 * 24 * 60 * 60;
@@ -1568,9 +1477,6 @@ fn signed_session(expires: u64) -> String {
     )
 }
 
-/// The two cookies an older host admitted a browser by: the one that carried
-/// the token itself, and the session a host upgraded that one to. The second
-/// is signed and unexpired, so only its name stands between it and a session.
 fn retired_cookies(addr: SocketAddr) -> [String; 2] {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
     let port = addr.port();
@@ -1580,14 +1486,10 @@ fn retired_cookies(addr: SocketAddr) -> [String; 2] {
     ]
 }
 
-/// Every `Set-Cookie` on an answer, in order.
 fn set_cookies(headers: &reqwest::header::HeaderMap) -> Vec<String> {
     headers.get_all("set-cookie").iter().map(|value| value.to_str().unwrap().to_string()).collect()
 }
 
-/// What a browser carrying `cookie` is answered on an API call, a route a page
-/// loads directly, and the event socket: the status, every `Set-Cookie`, and
-/// the body. A socket that is let in answers 101 and nothing else.
 async fn admission(addr: SocketAddr, cookie: Option<&str>) -> Vec<(u16, Vec<String>, String)> {
     use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Error};
     let client = reqwest::Client::new();
@@ -1737,9 +1639,6 @@ async fn a_leftover_legacy_session_file_is_removed_when_the_host_starts() {
     let _running = open(first.path()).await.expect("the first start opens the workspace");
     assert!(!leftover.exists(), "the first start removes the legacy session file");
 
-    // The first host holds the workspace lock for as long as this process
-    // lives, so the second start opens a copy of what the first left on disk,
-    // which is the state a restarted host finds.
     let second = tempfile::tempdir().expect("a second temporary workspace");
     copy_tree(first.path(), second.path());
     let _restarted = open(second.path()).await.expect("a start with nothing to remove opens");
@@ -1759,7 +1658,6 @@ fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
     }
 }
 
-/// The name half of a `Set-Cookie` value, which is what a browser keys a jar by.
 fn name_of(cookie: &str) -> &str {
     cookie.split('=').next().unwrap_or_default()
 }
@@ -1777,7 +1675,6 @@ async fn the_session_cookie_is_secure_when_the_request_arrived_over_https() {
         .expect("the daemon answers");
     let set_cookie =
         response.headers().get("set-cookie").expect("the daemon sets a cookie").to_str().unwrap();
-    // A cookie a proxy carried over https must never come back over http.
     assert!(set_cookie.contains("; Secure"), "the cookie is Secure: {set_cookie}");
 }
 
@@ -1787,8 +1684,6 @@ async fn two_hosts_on_one_machine_keep_their_own_sessions() {
     let (second, _b) = workspace().await;
     let mine = session_cookie(first).await;
     let theirs = session_cookie(second).await;
-    // Cookies are not scoped by port, so the port is part of the name: a
-    // daemon and a container beside it would otherwise overwrite each other.
     assert_ne!(name_of(&mine), name_of(&theirs), "each host names its own cookie");
 
     let client = reqwest::Client::new();
@@ -1824,9 +1719,6 @@ async fn a_browser_behind_a_proxy_that_rewrites_host_is_admitted_by_sec_fetch_si
         .send()
         .await
         .expect("the daemon answers");
-    // The Origin is the public name and Host is what the proxy forwarded to,
-    // so the authority comparison cannot pass. The browser's own answer can,
-    // and every browser that sends it is the browser that has the cookie.
     assert_eq!(response.status(), 200, "the browser's own proof is enough");
 }
 
@@ -1854,7 +1746,6 @@ async fn a_cookie_opens_the_event_channel_from_the_same_origin() {
     request.headers_mut().insert("Cookie", cookie.parse().unwrap());
     let (mut socket, _) =
         tokio_tungstenite::connect_async(request).await.expect("the cookie opens the socket");
-    // The snapshot is what a client draws before any event arrives.
     let frame = tokio::time::timeout(std::time::Duration::from_secs(10), socket.next())
         .await
         .expect("a frame arrives")
@@ -1867,9 +1758,6 @@ async fn a_cookie_opens_the_event_channel_from_the_same_origin() {
 async fn a_desktop_window_showing_a_box_opens_the_event_channel() {
     let (addr, _dir) = workspace().await;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-    // The third host: a window served from the app's own origin, pointed at a
-    // box, presenting the token in the query because a handshake cannot carry
-    // a header. Its Origin is not the daemon's and never could be.
     let mut request = format!("ws://{addr}/v1/events?token={TOKEN}")
         .into_client_request()
         .expect("a valid request");
@@ -1884,10 +1772,6 @@ async fn the_dev_ports_origin_gets_no_socket_without_the_token() {
     let cookie = session_cookie(addr).await;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
-    // Same site, another origin. Ports do not count toward a site, so the
-    // browser hands this daemon's cookie to a page served on 1420 — the dev
-    // port Tauri and Vite use by default, and one anything else on the machine
-    // can take. That page is not the app, so the cookie is not its proof.
     let mut refused =
         format!("ws://{addr}/v1/events").into_client_request().expect("a valid request");
     refused.headers_mut().insert("Origin", "http://localhost:1420".parse().unwrap());
@@ -1895,8 +1779,6 @@ async fn the_dev_ports_origin_gets_no_socket_without_the_token() {
     let refused = tokio_tungstenite::connect_async(refused).await;
     assert!(refused.is_err(), "a cookie is not a shell's proof");
 
-    // The same rule for the desktop's own origin, which is why it holds for
-    // all of them rather than for the one that was tried.
     let mut desktop =
         format!("ws://{addr}/v1/events").into_client_request().expect("a valid request");
     desktop.headers_mut().insert("Origin", "tauri://localhost".parse().unwrap());
@@ -1904,7 +1786,6 @@ async fn the_dev_ports_origin_gets_no_socket_without_the_token() {
     let desktop = tokio_tungstenite::connect_async(desktop).await;
     assert!(desktop.is_err(), "the shell's credential is the token, never the cookie");
 
-    // And the token is what a shell presents.
     let mut admitted = format!("ws://{addr}/v1/events?token={TOKEN}")
         .into_client_request()
         .expect("a valid request");

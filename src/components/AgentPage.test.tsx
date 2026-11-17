@@ -108,12 +108,6 @@ describe("the agent's page, past the conversation", () => {
   });
 
   it("holds one panel's worth of an agent, however many agents have been through it", async () => {
-    // Two siblings under the same key left the first agent's screen in the DOM
-    // when the second arrived: React's reconciler indexes the old children by
-    // key, so the duplicate overwrote the entry it would have deleted through.
-    // Every switch added another dead card, and only closing the panel, which
-    // unmounts their container, cleared them. Each tab goes through the switch
-    // itself, since each draws its own sections.
     const view = render(
       <AgentPanel section="now" agent={card("a1", "Cook")} onEditProfile={vi.fn()} />,
     );
@@ -159,8 +153,6 @@ describe("the agent's page, past the conversation", () => {
   });
 
   it("draws what the agent is doing on Now: the task, its steps, then the places", async () => {
-    // Now is what the agent is doing and nothing else: every store has a tab
-    // of its own, and drawing them here as well said each of them twice.
     useStore.setState({
       agents: [card("a1", "Cook")],
       activity: { a1: { state: "thinking" } },
@@ -208,8 +200,6 @@ describe("the agent's page, past the conversation", () => {
     expect(screen.queryByRole("heading", { name: "Memory" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Notebook" })).toBeNull();
 
-    // The tabs, in the order the page draws them: what it is doing, what it
-    // said, what it carries, and what it is set up with last.
     expect(VIEWS.map((tab) => tab.label)).toEqual([
       "Now",
       "Conversation",
@@ -221,8 +211,6 @@ describe("the agent's page, past the conversation", () => {
   });
 
   it("says the last run failed, and when, for an idle agent whose run failed", async () => {
-    // A failed run ends in Guaca's notice, not in anything the agent said: a
-    // line reading "Last finished" over an empty reply said it went well.
     const at = Date.now() - 3_600_000;
     const base = {
       runId: "r1",
@@ -352,9 +340,6 @@ describe("the agent's page, past the conversation", () => {
   });
 
   it("switches the memory over with everything else, rather than under the new name", async () => {
-    // One key on the level they share is the whole mechanism, and a memory
-    // left behind is the worst of the three to leave: an operator editing what
-    // they believe is one agent's memory would save it onto another's.
     const view = render(
       <AgentPanel section="memory" agent={card("a1", "Cook")} onEditProfile={vi.fn()} />,
     );

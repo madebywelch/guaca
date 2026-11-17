@@ -49,14 +49,10 @@ pub fn opaque(text: &str) -> u64 {
     )
 }
 
-/// Opened at startup rather than on the first event, so a launch that never
-/// traces anything still leaves a file whose marker says the writer worked.
 pub fn start() {
     writer();
 }
 
-/// What the probe's hello reports, so a missing trace reads as a writer that
-/// failed rather than as nothing.
 pub fn healthy() -> bool {
     writer().as_ref().is_some_and(|trace| !trace.lock().broken)
 }
@@ -71,8 +67,6 @@ fn writer() -> &'static Option<Mutex<Trace>> {
     TRACE.get_or_init(|| open(Path::new(&std::env::var_os("GUACA_PROBE_TRACE")?)).map(Mutex::new))
 }
 
-/// Exclusive, so the trace is never one an earlier launch or anyone else
-/// wrote; the probe gives each launch its own path.
 fn open(path: &Path) -> Option<Trace> {
     let file = OpenOptions::new().write(true).create_new(true).mode(0o600).open(path).ok()?;
     let mut trace = Trace { clock: Instant::now(), file, rows: 0, broken: false };

@@ -1,31 +1,3 @@
-//! One directive, eight agents, a real model, and a record of what happened.
-//!
-//! The other three suites each ask a question with one right answer. The
-//! cascade tests ask whether the runtime did as it was told; the evals ask
-//! whether a crew communicated like something worth watching; the trajectory
-//! suite asks whether the machinery behaved. All three can be asserted because
-//! all three are decidable.
-//!
-//! This one is not, and that is the point of it. A real model given a real
-//! instruction and a team of eight makes a different set of decisions every
-//! time, and the interesting failures live in the spread rather than in any one
-//! run: the delegation that goes to five agents on the third attempt and one on
-//! the first two, the fan-in that reports twice when a reply lands late, the
-//! turn that only hangs when two answers arrive in the same batch. A suite that
-//! runs once and asserts cannot see any of that. So this runs the same
-//! directive as many times as it is asked to, writes down everything each run
-//! did, and says what was different.
-//!
-//! What it does assert is the part that is not a matter of taste: every run
-//! settled, no run left the machinery in a state `trajectory.rs` calls broken,
-//! and somebody answered the operator. A crew that chose oddly is a finding to
-//! read. A placeholder left open is a defect.
-//!
-//! ```sh
-//! ./scripts/crew.sh          # one run, on the default model
-//! GUACA_RUNS=5 ./scripts/crew.sh
-//! ```
-
 mod harness;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -43,43 +15,15 @@ use guac_lib::runtime::events::{EventSink, UiEvent};
 use harness::live::*;
 use harness::*;
 
-/// The agent the operator talks to. Everything else is reached through it.
 const CHIEF: &str = "Chief of Staff";
 
-/// Cheap, fast, and a competent tool caller, which is what eight agents making
-/// several calls each needs to be. Every run records the model it used, so a
-/// comparison between two of them is two runs and a diff rather than a rebuild:
-/// `GUACA_MODEL=anthropic/claude-sonnet-5 ./scripts/crew.sh`.
 const DEFAULT_MODEL: &str = "openai/gpt-5.6-luna";
 
-/// What an operator types when they have one person they talk to.
-///
-/// Close to the `ONLY_DELEGATES` instruction the evals use, because the failure
-/// it produces is the same one and the two are worth comparing: an agent told
-/// not to do the work either answers from its own head, asks everybody, or
-/// takes the instruction as a reason to do nothing. The addition is the fan-in,
-/// which a crew of two cannot be asked about: four answers have to become one
-/// package, and the operator is waiting for the package rather than for the
-/// pieces.
 const STANDING_INSTRUCTION: &str =
     "You are the Chief of Staff. Work the operator brings you is yours to place: decide who on \
      the team each piece belongs to, send it to them, and answer the operator yourself once you \
      have what you need. You do not do the team's work yourself.";
 
-/// The eight, and the ambiguity is deliberate.
-///
-/// Four of the directive's asks have an obvious owner and three of the crew
-/// have no part in it at all, which is the arrangement that separates a
-/// coordinator that chooses from one that hands everybody a piece. The
-/// Market Researcher overlaps the Content Marketer on positioning and the Data
-/// Analyst on sizing, so there is a real judgment to make rather than a lookup.
-/// The Executive Assistant is bait: the directive mentions a meeting on Monday
-/// and never asks for anything to be done about it.
-///
-/// Only the Chief of Staff carries instructions. The other seven are described
-/// by their skills and nothing else, because that is how most agents are
-/// created, and a crew whose specialists each carry a hand-written brief is a
-/// test of the briefs.
 fn crew() -> Vec<LiveAgent> {
     vec![
         LiveAgent::told(CHIEF, &["coordination", "prioritization"], STANDING_INSTRUCTION),
@@ -105,18 +49,12 @@ fn crew() -> Vec<LiveAgent> {
     ]
 }
 
-/// Four asks with four owners, in the sentence an operator would type.
-///
-/// Deliberately not a numbered list: a list is a delegation plan already
-/// written, and what is being watched is whether one gets written at all.
 const DIRECTIVE: &str = "We're launching the Pro tier on the 15th of next month and I want to \
                          walk into Monday's leadership meeting with one package. I need a \
                          one-page positioning brief, a read on whether our current terms of \
                          service cover usage-based billing, the fifty accounts we should \
                          approach first and the reasoning for those fifty, and what the launch \
                          does to next quarter's numbers. Bring it back to me together.";
-
-// ---- the run -------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live: costs money, needs a configured key"]
@@ -133,11 +71,6 @@ async fn a_directive_to_the_chief_of_staff() {
     let directive = setting("GUACA_DIRECTIVE").unwrap_or_else(|| DIRECTIVE.to_string());
 
     config.inference.default_model = model.clone();
-    // The operator's own limits otherwise, because the guard is part of what is
-    // being watched: a fan-out ceiling low enough to refuse a broadcast would
-    // answer the question this suite is asking. The step budget is the
-    // exception, and it is the only real spend control: a crew of eight that
-    // will not converge is a bill, not a finding.
     config.limits.max_steps_per_run = steps as u32;
 
     let crew = crew();
@@ -145,8 +78,6 @@ async fn a_directive_to_the_chief_of_staff() {
 
     let dir = recordings().join(stamp());
     std::fs::create_dir_all(&dir).unwrap();
-    // Printed several times and pasted into a shell at least once, so it is
-    // worth being a path rather than a route to one.
     let dir = dir.canonicalize().unwrap_or(dir);
     write(&dir.join("directive.txt"), &format!("to: {CHIEF}\n\n{directive}\n"));
     write(
@@ -182,8 +113,6 @@ async fn a_directive_to_the_chief_of_staff() {
     write(&dir.join("across-runs.md"), &across);
     println!("\n{across}\nrecorded in {}\n", dir.display());
 
-    // Only the three that are not a matter of taste. Everything else about a
-    // run is in the comparison above, which is what the suite is for.
     let unsettled = which(&reports, |report| !report.settled);
     assert!(
         unsettled.is_empty(),
@@ -226,17 +155,11 @@ async fn one_run(
 ) -> RunReport {
     std::fs::create_dir_all(dir).unwrap();
 
-    // Opened before the crew exists, so a run that never comes back still
-    // leaves everything up to the moment it stopped. `tail -f` works on it.
     let recorder = Recorder::open(&dir.join("events.jsonl"));
     let before = machines_now(config).await;
     let h = live_crew_watched(config.clone(), crew, recorder);
     let (answering, asked) = answer_permission_requests(&h);
 
-    // Written before the first message rather than with the rest, because the
-    // events name agents by id and a run that hangs is one whose record has to
-    // be readable without it having finished. Per run, since every run builds
-    // its crew in a fresh store and none of the ids survive.
     let lookup: HashMap<AgentId, String> =
         names.iter().map(|name| (h.id(name), (*name).to_string())).collect();
     write(
@@ -253,9 +176,6 @@ async fn one_run(
     let settled = h.settled_within(run, secs).await;
     let seconds = started.elapsed().as_secs();
     answering.abort();
-    // Before anything that can fail, exactly as the evals do it: a run that
-    // overruns is a run whose agents are all still working, and those are the
-    // ones that leave the most behind.
     release_machines(config, before).await;
 
     let messages = h.envelopes(names);
@@ -308,45 +228,29 @@ async fn one_run(
     report
 }
 
-// ---- what one run did ----------------------------------------------------
-
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RunReport {
     run: usize,
     settled: bool,
     seconds: u64,
-    /// Model calls, which is the unit the budget and the bill are both in.
     calls: usize,
     steps: Option<u32>,
     prompt_tokens: u64,
     completion_tokens: u64,
-    /// Dollars, when the provider prices a call. Absent rather than zero: a
-    /// local endpoint charges nothing and reports nothing, and the two must not
-    /// add up the same.
     cost: Option<f64>,
     peak_concurrency: usize,
     peer_messages: usize,
     max_hop: u16,
     told_operator: Vec<(String, String)>,
-    /// Who the Chief of Staff sent something to, with a count each. The
-    /// decision the whole scenario exists to watch.
     delegated: Vec<(String, usize)>,
     turns: Vec<(String, usize)>,
-    /// Work sent to a peer that had not answered the last thing yet, by pair.
-    ///
-    /// The prompt asks for this in so many words: a send returns once the
-    /// message is queued, a reply arrives later on its own, and calling
-    /// `send_message` again to check for one is named as the thing not to do.
-    /// It is not one of `eval.rs`'s faults, so nothing else counts it, and a
-    /// coordinator waiting on four answers is exactly where it happens.
     chased: Vec<String>,
     tools: BTreeMap<String, usize>,
     refusals: Vec<String>,
     silent: bool,
     faults: Vec<String>,
     anomalies: Vec<String>,
-    /// Permission requests, all of which were declined.
     approvals: Vec<String>,
 }
 
@@ -371,7 +275,6 @@ impl RunReport {
         )
     }
 
-    /// Who was given work, as one comparable string.
     fn chose(&self) -> String {
         if self.delegated.is_empty() {
             return "nobody".to_string();
@@ -380,11 +283,6 @@ impl RunReport {
     }
 }
 
-/// What every model call this run reported costing.
-///
-/// Read from the events rather than from the trajectory, which keeps the token
-/// counts and drops the price: a comparison between two models is a comparison
-/// of what they charged, and tokens alone cannot make it.
 fn spend(h: &Harness) -> Option<f64> {
     let mut total = None;
     for event in h.sink.snapshot() {
@@ -399,14 +297,6 @@ fn spend(h: &Harness) -> Option<f64> {
     total
 }
 
-/// Work sent to a peer that had not answered the last one yet.
-///
-/// Decidable from the envelopes and nothing else: a pair is waiting from the
-/// moment work is sent until anything comes back the other way, and a second
-/// piece of work inside that window is a chase. Counted here rather than in
-/// `eval.rs` because it has not yet been seen often enough to be a fault: a
-/// crew is allowed to send a peer a second, different thing to do, and telling
-/// that apart from nagging needs more than one run of evidence.
 fn chases(messages: &[Envelope], name_of: &dyn Fn(AgentId) -> String) -> Vec<String> {
     let mut waiting: BTreeSet<(AgentId, AgentId)> = BTreeSet::new();
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
@@ -417,8 +307,6 @@ fn chases(messages: &[Envelope], name_of: &dyn Fn(AgentId) -> String) -> Vec<Str
         else {
             continue;
         };
-        // Anything back the other way ends the wait, whatever it says: an
-        // agent that has spoken is an agent that is no longer silent.
         waiting.remove(&(to, from));
         if envelope.intent.is_work() && !waiting.insert((from, to)) {
             *counts.entry(format!("{} chased {}", name_of(from), name_of(to))).or_default() += 1;
@@ -428,13 +316,6 @@ fn chases(messages: &[Envelope], name_of: &dyn Fn(AgentId) -> String) -> Vec<Str
     counts.into_iter().map(|(pair, times)| format!("{pair} {times} time(s)")).collect()
 }
 
-// ---- what was different --------------------------------------------------
-
-/// The whole reason this suite runs more than once.
-///
-/// One table of numbers and then, for each thing worth comparing, the distinct
-/// answers and which runs gave them. A dimension with one answer was stable; a
-/// dimension with five is where to start reading the transcripts.
 fn compare(reports: &[RunReport], model: &str) -> String {
     let mut out = format!("# {} run(s) of one directive on `{model}`\n\n", reports.len());
 
@@ -469,9 +350,6 @@ fn compare(reports: &[RunReport], model: &str) -> String {
     out.push_str(&varied("times the operator was told", reports, |r| {
         r.told_operator.len().to_string()
     }));
-    // The two halves of that number, because they are different complaints. A
-    // coordinator that answers four times is the one the operator notices; a
-    // specialist writing one line in its own channel is the workspace working.
     out.push_str(&varied("times the Chief of Staff answered", reports, |r| {
         r.told_operator.iter().filter(|(who, _)| who == CHIEF).count().to_string()
     }));
@@ -499,7 +377,6 @@ fn compare(reports: &[RunReport], model: &str) -> String {
     out
 }
 
-/// One dimension, and which runs gave which answer.
 fn varied(label: &str, reports: &[RunReport], of: impl Fn(&RunReport) -> String) -> String {
     let mut answers: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for report in reports {
@@ -517,8 +394,6 @@ fn varied(label: &str, reports: &[RunReport], of: impl Fn(&RunReport) -> String)
     out
 }
 
-/// A set of strings, ordered and joined, so two runs that produced the same
-/// things in a different order compare equal.
 fn set(values: impl Iterator<Item = String>) -> String {
     let ordered: BTreeSet<String> = values.collect();
     if ordered.is_empty() {
@@ -531,15 +406,6 @@ fn which(reports: &[RunReport], fits: impl Fn(&RunReport) -> bool) -> Vec<usize>
     reports.iter().filter(|report| fits(report)).map(|report| report.run).collect()
 }
 
-// ---- the recording -------------------------------------------------------
-
-/// Every event the runtime emitted, timestamped, written as it happened.
-///
-/// The same stream the webview is drawn from and the same one `trajectory.rs`
-/// reads, so a question about what the operator would have seen is answerable
-/// from the file rather than from a rerun. Timestamps are here and nowhere near
-/// an assertion: a wall clock in a test is a flake, and a wall clock in a
-/// recording is how you find the turn that sat for four minutes.
 struct Recorder {
     file: parking_lot::Mutex<std::fs::File>,
     started: Instant,
@@ -567,12 +433,6 @@ impl EventSink for Recorder {
     }
 }
 
-/// The conversation, as a person would read it.
-///
-/// `messages.json` beside it is the same thing without a decision taken about
-/// what matters, and this is the one that gets read: every envelope in the
-/// order it was filed, named rather than numbered, carrying the two fields that
-/// decide whether a cascade terminates.
 fn render(messages: &[Envelope], names: &HashMap<AgentId, String>, report: &RunReport) -> String {
     let who = |participant: Participant| match participant {
         Participant::Human => "OPERATOR".to_string(),
@@ -586,12 +446,6 @@ fn render(messages: &[Envelope], names: &HashMap<AgentId, String>, report: &RunR
     let first = messages.first().map(|envelope| envelope.created_at).unwrap_or_default();
     let at = |envelope: &Envelope| (envelope.created_at - first) as f64 / 1000.0;
 
-    // One line per message before the messages themselves, because a cascade
-    // is a shape and a shape cannot be read at the pace of full paragraphs.
-    // Everything a runaway is recognized by is in it: work going out to five
-    // peers at once, a hop count climbing past where the operator's message
-    // started, a specialist answering the operator while its coordinator is
-    // still consolidating.
     out.push_str("## The shape\n\n| at | hop | intent | reply | from → to | chars | tools |\n");
     out.push_str("|---|---|---|---|---|---:|---|\n");
     for envelope in messages {
@@ -658,8 +512,6 @@ fn render(messages: &[Envelope], names: &HashMap<AgentId, String>, report: &RunR
     out
 }
 
-/// Tool arguments, shortened. A `send_message` carries the whole message it
-/// sent, and the transcript is already the place that message is read.
 fn clip(arguments: &serde_json::Value) -> String {
     let rendered = arguments.to_string();
     match rendered.char_indices().nth(400) {
@@ -668,15 +520,10 @@ fn clip(arguments: &serde_json::Value) -> String {
     }
 }
 
-// ---- plumbing ------------------------------------------------------------
-
 fn setting(name: &str) -> Option<String> {
     std::env::var(name).ok().map(|value| value.trim().to_string()).filter(|v| !v.is_empty())
 }
 
-/// A number from the environment, or the default. A value that is not a number
-/// is a typo in a command line, and taking the default silently is how a five
-/// hundred step budget gets spent on a run somebody thought was bounded.
 fn number(name: &str, fallback: usize) -> usize {
     match setting(name) {
         Some(raw) => raw.parse().unwrap_or_else(|_| panic!("{name} must be a number, got {raw:?}")),
@@ -684,10 +531,6 @@ fn number(name: &str, fallback: usize) -> usize {
     }
 }
 
-/// Where recordings go: beside the repo, never inside the build directory.
-///
-/// `cargo clean` is something people run without thinking about it, and the
-/// runs are the product of this suite rather than a build artifact of it.
 fn recordings() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../runs")
 }

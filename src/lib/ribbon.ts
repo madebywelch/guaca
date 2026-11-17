@@ -1,17 +1,3 @@
-/**
- * Where everything on the ribbon sits: the strip across the top of the window
- * that puts each agent at a moment of today and the rest of the week after it.
- *
- * Pure, and with no clock of its own. The window passes `now` in, so the same
- * input lays out the same strip, and a test can stand at 9:12 on a Monday.
- *
- * Positions are fractions of the timeline's width, 0 at its left edge and 1 at
- * its right. The scale is bent rather than linear: the stretch before the last
- * hour or so is compressed, the hours either side of now are wide, the rest of
- * today is narrow, and each coming day is a narrow column of its own. A linear
- * day would spend most of the strip on hours where nothing happened.
- */
-
 import { clockLabel, midnight, whenLabel } from "./time";
 import type {
   Activity,
@@ -26,97 +12,54 @@ import type {
 
 export interface RibbonInput {
   now: number;
-  /** The agents to draw, deleted ones already left out. */
   agents: AgentCard[];
   activity: Record<AgentId, Activity | undefined>;
   outcomes: Outcome[];
-  /** Approvals still waiting on the operator. */
   approvals: Approval[];
   upcoming: UpcomingRun[];
   occasions: Occasion[];
-  /**
-   * How much of the timeline one face takes, as a fraction of its width:
-   * `RIBBON_FACE_PX` over the width `Ribbon` reports. Faces nearer than this
-   * are pushed apart.
-   */
   faceSpan: number;
-  /**
-   * One character of a name or a time, as a fraction of the timeline's width:
-   * `RIBBON_CHAR_PX` over the width `Ribbon` reports. What a label is reckoned
-   * to take, so it can be kept off the now line and inside the strip. Left out,
-   * every label is reckoned a face wide.
-   */
   charSpan?: number;
 }
 
-/**
- * Where a label hangs from its mark. Centered under it, unless that would put
- * part of the label past an end of the strip: then it starts at the mark's
- * left edge, or ends at its right one.
- */
 export type Align = "center" | "start" | "end";
 
-/**
- * Why a face is where it is. The first four pull it to a live or unseen
- * moment and carry a mark; `rest` is its last moment today, unmarked.
- */
 export type FaceState = "needsYou" | "working" | "finished" | "failed" | "rest";
 
 export interface RibbonFace {
   agentId: AgentId;
   state: FaceState;
-  /** The moment it belongs to. */
   at: number;
-  /** Where it is drawn, after being pushed clear of its neighbors. */
   x: number;
-  /** What a screen reader says: "Dara, needs you, asked 9:05 AM". */
   label: string;
   align: Align;
 }
 
-/** Who a counted item stands for: those working, or those who need you. */
 export type CountKind = "working" | "needsYou";
 
-/** Faces of one kind too many to stand side by side, drawn as one: "+3 working". */
 export interface RibbonCount {
   key: string;
   kind: CountKind;
   agentIds: AgentId[];
   x: number;
-  /** What is drawn: "+3 working", "+4 need you". */
   text: string;
-  /** What a screen reader says: "+3 working: Ines, Kit, Pip". */
   label: string;
   align: Align;
 }
 
-/** "+3 working", "+1 needs you", "+4 need you". */
 function countText(kind: CountKind, n: number): string {
   return kind === "working" ? `+${n} working` : `+${n} ${n === 1 ? "needs" : "need"} you`;
 }
 
 export interface RibbonScheduled {
   key: string;
-  /** A routine shows its owner's face; a calendar occasion shows a glyph. */
   agentId: AgentId | null;
   at: number;
   x: number;
   what: string;
-  /** Under the name: "10:00 AM", "8 to 10 AM". The day is the column's. */
   when: string;
-  /** The whole of it, day included: "Changelog type check, Tue 9:00 AM". */
   label: string;
-  /**
-   * The distance to the nearest thing beside it on the strip, as a share of
-   * the strip. Its words get that much width and no more, and none at all
-   * when it is less than a face: a crowd of names written over each other
-   * says nothing, and the label above is still read out.
-   */
   room: number;
-  /**
-   * Whether there is room for what it is beside it: two faces' width. Its
-   * time is drawn either way, so nothing coming is only a face.
-   */
   words: boolean;
   align: Align;
 }
@@ -126,7 +69,6 @@ export interface RibbonLapse {
   agentId: AgentId;
   at: number;
   x: number;
-  /** "Dara stops waiting". */
   label: string;
   when: string;
 }
@@ -135,11 +77,9 @@ export interface RibbonTick {
   at: number;
   x: number;
   label: string;
-  /** An hour is centered on its moment; a day labels the column it starts. */
   kind: "hour" | "day";
 }
 
-/** One bend in the scale: the moment `at` is drawn at `x`. */
 export interface Knot {
   at: number;
   x: number;
@@ -147,14 +87,9 @@ export interface Knot {
 
 export interface Ribbon {
   now: { at: number; x: number; label: string };
-  /** The faint gray behind what happened since the operator last looked. Runs to now. */
-  /** Its label is null when the band is too narrow to hold it clear of the now pill. */
   band: { from: number; x: number; label: string | null } | null;
-  /** Agents with nothing to show, for the pile at the left edge. */
   pile: AgentId[];
-  /** How many in the pile did something today and were moved there for room. */
   crowded: number;
-  /** Working or needs-you faces too many for their side of now, one item each kind. */
   counts: RibbonCount[];
   faces: RibbonFace[];
   scheduled: RibbonScheduled[];
@@ -163,17 +98,10 @@ export interface Ribbon {
   scale: Knot[];
 }
 
-/** A face on the ribbon and the air beside it, in CSS pixels at 100%. */
 export const RIBBON_FACE_PX = 52;
 
-/**
- * One character of a label at the size the ribbon sets names, in CSS pixels at
- * 100%, rounded up: a label reckoned a little wide is kept a little further
- * from the now line, and one reckoned narrow is drawn across it.
- */
 export const RIBBON_CHAR_PX = 8;
 
-/** How many faces' width a scheduled item needs free beside it to say what it is. */
 const WORDS_SPANS = 2;
 
 export const BAND_LABEL = "Since you last looked";
@@ -183,45 +111,32 @@ export const UNNAMED_ROUTINE = "Routine";
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 
-/** Where today ends and the week's columns begin. */
 const TODAY_END = 0.58;
-/** How today's width is shared: before the near hours, the near hours, after. */
 const SHARE = { before: 0.45, near: 0.45, after: 0.1 };
 const NEAR_BEFORE = 75 * MINUTE;
 const NEAR_AFTER = 105 * MINUTE;
-/** Air before the earliest thing drawn today, so it is not on the edge. */
 const LEAD = 30 * MINUTE;
-/** A day column spends its inside on 6 AM to 9 PM, and its edges on the night. */
 const DAY_FROM = 6 * HOUR;
 const DAY_TO = 21 * HOUR;
 const DAY_INSET = 0.14;
 const MAX_DAYS = 4;
-/** How close two hour labels may sit, and how close one may come to the now pill. */
 const TICK_GAP = 0.12;
 const TICK_CLEAR_NOW = 0.05;
-/** What the band's label is reckoned to take when nothing says how wide a character is. */
 const BAND_LABEL_SPAN = 0.14;
-/** The band label's lead, and the now pill's padding on both sides, in characters. */
 const BAND_LABEL_LEAD_CHARS = 1;
 const PILL_PAD_CHARS = 2;
 
-/** Local midnight `days` after the one `at` falls in, honest across a clock change. */
 function dayStart(at: number, days: number): number {
   const day = new Date(midnight(at));
   day.setDate(day.getDate() + days);
   return day.getTime();
 }
 
-/**
- * The coming days the strip has columns for: through Sunday, at most four, and
- * on a Sunday the four after it, so there is always a week ahead to look at.
- */
 function comingDays(now: number): number {
   const weekday = new Date(now).getDay();
   return weekday === 0 ? MAX_DAYS : Math.min(MAX_DAYS, 7 - weekday);
 }
 
-/** The moment `at` drawn on a scale, clamped to its ends. */
 export function xAt(scale: Knot[], at: number): number {
   const first = scale[0];
   const last = scale[scale.length - 1];
@@ -260,19 +175,8 @@ function buildScale(start: number, now: number, days: number): Knot[] {
   return knots;
 }
 
-/**
- * Spreads sorted positions so no two overlap, moving each as little as it can.
- * `widths` is what each one takes, or one width for all of them; two
- * neighbors stand half of each one's width apart.
- *
- * A run of positions that collide is laid out as one cluster, side by side,
- * centered on where its members wanted to be, and clusters that then collide
- * merge. Pushing each one right of the last would drag a crowd past the moment
- * it belongs to, all to one side.
- */
 export function spread(xs: number[], widths: number | number[], lo = 0, hi = 1): number[] {
   const w = (i: number) => (typeof widths === "number" ? widths : (widths[i] as number));
-  // Where each one's center sits from the left edge of a cluster it starts.
   const offset = new Array<number>(xs.length);
   xs.forEach((_, i) => {
     offset[i] = i === 0 ? w(0) / 2 : (offset[i - 1] as number) + (w(i - 1) + w(i)) / 2;
@@ -289,8 +193,6 @@ export function spread(xs: number[], widths: number | number[], lo = 0, hi = 1):
       if (end <= next.left + 1e-9) break;
       clusters.pop();
       const n = prev.n + next.n;
-      // The left edge every member agrees on best: the mean of where each
-      // would put it, which is its own x less its place in the cluster.
       let sum = 0;
       for (let k = 0; k < n; k++) sum += (xs[prev.first + k] as number) - at(prev.first, k);
       next = { first: prev.first, n, left: sum / n };
@@ -302,8 +204,6 @@ export function spread(xs: number[], widths: number | number[], lo = 0, hi = 1):
   for (const c of clusters) {
     for (let k = 0; k < c.n; k++) out[c.first + k] = c.left + at(c.first, k);
   }
-  // Kept between `lo` and `hi`, the strip unless told otherwise. A crowd too
-  // big for the room overlaps rather than leaving it.
   const apart = (i: number) => (w(i - 1) + w(i)) / 2;
   for (let i = 0; i < out.length; i++) {
     const floor = i === 0 ? lo + w(0) / 2 : (out[i - 1] as number) + apart(i);
@@ -317,14 +217,12 @@ export function spread(xs: number[], widths: number | number[], lo = 0, hi = 1):
   return out;
 }
 
-/** "2:56 AM" today, "yesterday 11:50 PM", "Saturday 4:00 PM" further back. */
 function stamp(at: number, now: number): string {
   return whenLabel(at, now)
     .replace(/^Today /, "")
     .replace(/^Yesterday/, "yesterday");
 }
 
-/** A clock without its half of the day, for the pill on the now line: "9:12". */
 function bareClock(at: number): string {
   return clockLabel(at).replace(/\s\S+$/, "");
 }
@@ -336,14 +234,12 @@ function hourLabel(at: number): string {
   return new Date(at).toLocaleTimeString([], { hour: "numeric" });
 }
 
-/** "8 AM" on the hour, "8:30 AM" otherwise. */
 function shortClock(at: number): string {
   return new Date(at).getMinutes()
     ? clockLabel(at)
     : new Date(at).toLocaleTimeString([], { hour: "numeric" });
 }
 
-/** "8 to 10 AM" when both ends share a half of the day, "11 AM to 1 PM" when not. */
 function span(from: number, to: number): string {
   const start = shortClock(from);
   const end = shortClock(to);
@@ -351,7 +247,6 @@ function span(from: number, to: number): string {
   return `${half(start) === half(end) ? start.replace(/\s\S+$/, "") : start} to ${end}`;
 }
 
-/** The face an agent gets, or null for the pile. */
 function placeFace(
   agent: AgentCard,
   input: RibbonInput,
@@ -398,15 +293,6 @@ function faceLabel(name: string, state: FaceState, at: number, now: number): str
   }
 }
 
-/**
- * Where the band starts: the last time anything was marked seen, or when the
- * oldest unseen run began if that is earlier. Null when there is nothing
- * unseen to put in it.
- *
- * The earlier of the two, because seeing is per run: opening one agent marks
- * its run seen now, and a band that started there would leave every older run
- * nobody has looked at outside the stretch that says it was missed.
- */
 function bandFrom(outcomes: Outcome[]): number | null {
   const unseen = outcomes.filter((one) => one.seenAt === null);
   if (!unseen.length) return null;
@@ -415,10 +301,6 @@ function bandFrom(outcomes: Outcome[]): number | null {
   return seen.length ? Math.min(Math.max(...seen), oldest) : oldest;
 }
 
-/**
- * `bandX` is where the band's words start, or null when it has none, and
- * `wordsSpan` how much of the strip they take.
- */
 function hourTicks(
   scale: Knot[],
   start: number,
@@ -426,15 +308,12 @@ function hourTicks(
   bandX: number | null,
   wordsSpan: number,
 ): RibbonTick[] {
-  // From the first local hour, since not every zone is a whole hour off UTC.
   const first = new Date(start);
   first.setMinutes(0, 0, 0);
   const candidates: number[] = [];
   for (let at = first.getTime(); at < dayStart(now, 1); at += HOUR) {
     if (at >= start) candidates.push(at);
   }
-  // Round hours win a crowded stretch: noon and midnight, then every six,
-  // every three, then any.
   const rank = (at: number) => {
     const hour = new Date(at).getHours();
     return hour % 12 === 0 ? 0 : hour % 6 === 0 ? 1 : hour % 3 === 0 ? 2 : 3;
@@ -452,15 +331,6 @@ function hourTicks(
   return kept.sort((a, b) => a.at - b.at);
 }
 
-/**
- * Lays the strip out.
- *
- * Each agent is one face, placed by the first of these that holds: it needs
- * the operator (at the oldest pending approval), it is working (at now), it
- * finished a run nobody has seen (at that run's end, failed or not), or it did
- * anything today (at the last of it). An agent none of those hold for goes to
- * the pile. What is scheduled is drawn apart from the faces, small.
- */
 export function layoutRibbon(input: RibbonInput): Ribbon {
   const { now } = input;
   const today = midnight(now);
@@ -473,17 +343,12 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
   const wanted = placed.flatMap(({ face }) => (face ? [face] : []));
 
   const band = bandFrom(input.outcomes);
-  // As far back as anything drawn, but no further than a day: a run left
-  // unseen for a week is drawn at the left edge rather than a week away.
   const earliest = Math.min(now - NEAR_BEFORE, band ?? now, ...wanted.map((face) => face.at));
   const start = Math.max(now - 24 * HOUR, Math.floor((earliest - LEAD) / HOUR) * HOUR);
   const scale = buildScale(start, now, days);
 
   const dayName = (at: number) =>
     at < dayStart(now, 1) ? "today" : new Date(at).toLocaleDateString([], { weekday: "short" });
-  // The same routine at the same moment for several agents is one item: nine
-  // copies of it side by side would push the last of them days away from
-  // the moment all nine are at.
   const together = new Map<string, UpcomingRun[]>();
   for (const run of input.upcoming) {
     if (!names.has(run.agentId) || run.nextRunAt < now || run.nextRunAt >= weekEnd) continue;
@@ -494,7 +359,6 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
     const run = same[0] as UpcomingRun;
     const agents = new Set(same.map((one) => one.agentId)).size;
     const who = agents > 1 ? ` for ${agents} agents` : "";
-    // A routine saved without a name still says what kind of thing it is.
     const what = run.name.trim() || UNNAMED_ROUTINE;
     return {
       key: `run:${run.routineId}`,
@@ -509,7 +373,6 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
     .filter((one) => (one.allDay ? one.startsAt > today : one.startsAt >= now))
     .filter((one) => one.startsAt < weekEnd)
     .map((one) => {
-      // A day with no time on it sits in the middle of its day.
       const at = one.allDay ? one.startsAt + 12 * HOUR : one.startsAt;
       const when = one.allDay
         ? "All day"
@@ -528,7 +391,6 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
     });
   const longest = (...texts: string[]) => texts.reduce((a, b) => (b.length > a.length ? b : a), "");
   const charSpan = input.charSpan ?? 0;
-  // Half of what a label is reckoned to take, never less than half a face.
   const halfOf = (text: string) => Math.max(input.faceSpan, text.length * charSpan) / 2;
   type Count = { kind: CountKind; agentIds: AgentId[] };
   type Row = {
@@ -540,9 +402,6 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
     text: string;
     width: number;
   };
-  // Every row takes its words and a character of air, so no two faces overlap
-  // and no two names touch; an item takes a face, and says what it is only
-  // where there is room.
   const takes = (text: string) => 2 * halfOf(text) + charSpan;
   const faceRows: Row[] = wanted.map((face) => {
     const text = names.get(face.agentId) ?? "";
@@ -561,13 +420,6 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
   const byX = (a: Row, b: Row) => a.x - b.x || a.at - b.at;
   const total = (rows: Row[]) => rows.reduce((sum, one) => sum + one.width, 0);
 
-  // No label is drawn under the now line. What happened is spread left of it
-  // and what is live or still coming right of it, each side kept a label's
-  // half and a character clear: Marlow working at 9:12 sits just after the
-  // line rather than with his name cut through by it.
-  // A face's side is what it is, not its time: asked, finished and resting
-  // have happened, and the clock this is drawn with moves once a minute, so
-  // one that landed since the last tick is still left of the line.
   const nowX = xAt(scale, now);
   const after = (one: Row) => (one.face ? one.face.state === "working" : one.at > now);
   const beforeHi = (rows: Row[]) => {
@@ -581,9 +433,6 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
   const fitsBefore = (rows: Row[]) => rows.length === 0 || total(rows) <= beforeHi(rows) + 1e-9;
   const fitsLater = (rows: Row[]) => rows.length === 0 || total(rows) <= 1 - laterLo(rows) + 1e-9;
 
-  // Faces of one kind that cannot all stand side by side: as many as fit are
-  // drawn, the longest waiting first, and the rest are one counted item at
-  // the latest of their moments. Nobody who needs you is ever only "asleep".
   const fold = (rows: Row[], kind: CountKind, fits: (rows: Row[]) => boolean): Row[] => {
     const ofKind = rows.filter((one) => one.face?.state === kind).sort((x, y) => x.at - y.at);
     if (fits(rows) || ofKind.length < 2) return rows;
@@ -606,9 +455,6 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
     return rows;
   };
 
-  // When the faces left of now cannot stand side by side, some go to the
-  // pile, one at a time, until the rest can: whoever is only resting first,
-  // then the oldest news. Nobody who needs you does; they fold instead.
   let before = faceRows.filter((one) => !after(one)).sort(byX);
   const piled = new Set<AgentId>();
   while (!fitsBefore(before)) {
@@ -627,10 +473,6 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
     .map((agent) => agent.id)
     .filter((id) => drowsy.includes(id) || piled.has(id));
 
-  // Faces and what is scheduled share one row right of now, so they are
-  // spread as one: spread apart, a run due at eight would sit on top of a
-  // face working now. When that side cannot hold them all, the schedule gives
-  // way first, and then whoever is working folds into one count.
   const liveFaces = faceRows.filter(after);
   const withItems = [...liveFaces, ...itemRows].sort(byX);
   const later = fitsLater(withItems) ? withItems : fold(liveFaces.sort(byX), "working", fitsLater);
@@ -680,8 +522,6 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
       return;
     }
     if (!one.item) return;
-    // At an end of the strip the label hangs inward from its mark, so the
-    // only room it is short of is toward its one neighbor.
     const left = i > 0 ? x - (xs[i - 1] as number) : 1;
     const right = i < xs.length - 1 ? (xs[i + 1] as number) - x : 1;
     const room = Math.min(left, right);
@@ -690,12 +530,8 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
     scheduled.push({ ...one.item, x, room, words, align: align(x, shown) });
   });
 
-  // A request from an agent the strip does not know (deleted since it asked)
-  // has nobody to name, and "It stops waiting" says nothing about whose.
   const lapses = input.approvals.flatMap((one) => {
     const name = names.get(one.agentId);
-    // A moment already past is not something coming: the runtime closes the
-    // request on its own, and a time that has gone is noise on the strip.
     return one.lapsesAt === null || one.lapsesAt <= now || name === undefined
       ? []
       : [
@@ -721,8 +557,6 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
     };
   });
 
-  // Wide enough for every unseen face as drawn, not only as timed: a crowd
-  // pushed left of its moment stays inside the band it is news in.
   const bandAt = band;
   const bandX = Math.max(
     0,
@@ -733,9 +567,6 @@ export function layoutRibbon(input: RibbonInput): Ribbon {
         .map((face) => face.x - input.faceSpan / 2),
     ),
   );
-  // Words that would run under the now pill are left off; the ground still says it.
-  // Reckoned in characters where the width is known, since the pill and the
-  // words keep their size as the window narrows and a share of it does not.
   const nowLabel = bareClock(now);
   const wordsSpan = charSpan
     ? (BAND_LABEL.length + BAND_LABEL_LEAD_CHARS) * charSpan

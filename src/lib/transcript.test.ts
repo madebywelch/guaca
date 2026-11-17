@@ -58,7 +58,6 @@ function envelope(overrides: Partial<Envelope>): Envelope {
   };
 }
 
-/** Manager's channel: a peer wrote to it. */
 function inbound(from: string, text = "peer says something"): Envelope {
   return envelope({
     from: { kind: "agent", id: from },
@@ -67,7 +66,6 @@ function inbound(from: string, text = "peer says something"): Envelope {
   });
 }
 
-/** Manager's channel: its own record of a turn. */
 function record(...parts: Part[]): Envelope {
   return envelope({
     from: { kind: "agent", id: "manager" },
@@ -94,8 +92,6 @@ function bursts(rows: Row[]) {
 
 describe("peer traffic in a channel", () => {
   it("collapses a burst into one row per peer, counting both directions", () => {
-    // The whole point. A fan-out and its answers is a dozen lines of machine
-    // chatter through the middle of the operator's own conversation.
     const rows = transcriptRows(
       [record(send(["Chef", "Scribe"], ok)), inbound("chef"), inbound("scribe"), inbound("chef")],
       lookups,
@@ -114,8 +110,6 @@ describe("peer traffic in a channel", () => {
   });
 
   it("says which way a single message went", () => {
-    // "1 message with Chef" is a worse sentence than either of these, and it
-    // loses the one thing a lone message has to say.
     const sent = bursts(transcriptRows([record(send(["Chef"], ok))], lookups))[0];
     expect(sent?.peers.map(summaryLabel)).toEqual(["Messaged Chef"]);
 
@@ -130,16 +124,12 @@ describe("peer traffic in a channel", () => {
   });
 
   it("offers no thread for a name that resolves to nobody", () => {
-    // An agent that wrote to a name nobody can find is worth seeing, and there
-    // is no conversation behind it to open.
     const burst = bursts(transcriptRows([record(send(["Ghost"], ok))], lookups))[0];
     expect(burst?.peers[0]?.peer.name).toBe("Ghost");
     expect(burst?.peers[0]?.agentId).toBeNull();
   });
 
   it("ends a burst at anything that is not peer traffic", () => {
-    // Two exchanges either side of a memory update are two things that
-    // happened, and one row saying "4 messages" would say otherwise.
     const rows = transcriptRows(
       [
         inbound("chef"),
@@ -186,8 +176,6 @@ describe("a send the runtime stopped", () => {
   });
 
   it("counts only the recipients a half-delivered fan-out actually reached", () => {
-    // The bug this inherits a test from: one verdict for the whole call, so a
-    // send that reached two of three drew all three as delivered.
     const rows = transcriptRows(
       [
         record(
@@ -220,7 +208,6 @@ describe("a send the runtime stopped", () => {
 
 describe("an agent's own trail", () => {
   it("keeps a send that named nobody, where the reason it failed is legible", () => {
-    // There is no peer to file it under, so extracting it would delete it.
     const rows = transcriptRows(
       [
         record({
@@ -251,17 +238,12 @@ describe("an agent's own trail", () => {
 
     expect(rows.map((row) => row.kind)).toEqual(["peers", "message"]);
     const trail = rows.find((row) => row.kind === "message");
-    // The stop, and only the stop: the send beside it is in the burst.
     expect(trail?.kind === "message" && trail.message.parts).toEqual([
       { type: "notice", kind: "guardStop", text: "Reply to Scribe was not delivered" },
     ]);
   });
 
   it("keeps the text a turn trailed after answering through the tool", () => {
-    // The answer went through `send_message`, so it is peer traffic and lifts
-    // into the burst. What the turn typed afterward reached nobody and is on
-    // the record instead. Folding it away with the send would delete the only
-    // copy of it there is.
     const rows = transcriptRows(
       [record(send(["Chef"], ok), { type: "text", text: "Replied to Chef." })],
       lookups,
@@ -284,8 +266,6 @@ describe("merging consecutive messages under one header", () => {
   });
 
   it("does not merge across a burst of peer traffic", () => {
-    // Something happened in between. Drawing the second message as a
-    // continuation of the first says nothing did.
     const first = envelope({});
     const second = envelope({ createdAt: first.createdAt + 1_000 });
     const rows = transcriptRows([first, inbound("chef"), second], lookups);
@@ -303,8 +283,6 @@ describe("saying when a conversation picked up again", () => {
   const hour = 60 * 60 * 1000;
 
   it("draws nothing between messages of the same sitting", () => {
-    // The clock a transcript used to print over every message. Four replies in
-    // the same minute is four headers carrying one fact between them.
     const first = envelope({});
     const rows = transcriptRows(
       [first, envelope({ createdAt: first.createdAt + 5 * 60 * 1000 })],
@@ -319,14 +297,10 @@ describe("saying when a conversation picked up again", () => {
     const rows = transcriptRows([first, later], lookups);
 
     expect(rows.map((row) => row.kind)).toEqual(["message", "when", "message"]);
-    // The time it started again, not the time it stopped: the line belongs to
-    // what is under it.
     expect(rows[1]).toMatchObject({ kind: "when", at: later.createdAt });
   });
 
   it("ends the burst it interrupts", () => {
-    // Two exchanges three hours apart are two things that happened. Counted as
-    // one burst they read as a single conversation the operator missed.
     const first = inbound("chef");
     const later = inbound("chef");
     later.createdAt = first.createdAt + 3 * hour;
@@ -336,9 +310,6 @@ describe("saying when a conversation picked up again", () => {
   });
 
   it("never trails a transcript with a line nothing follows", () => {
-    // A turn whose every part folded into a burst leaves no row of its own, so
-    // a line pushed the moment the gap is spotted can end up hanging off the
-    // bottom pointing at nothing.
     const first = envelope({});
     const quiet = record(send(["Chef"], { status: "ok", summary: "sent" }));
     quiet.createdAt = first.createdAt + 3 * hour;
@@ -360,8 +331,6 @@ describe("saying when a conversation picked up again", () => {
 
 describe("a decision the operator answered", () => {
   it("is never continued by what Guaca says after it", () => {
-    // Drawn as the operator's reply, with no header of Guaca's. Merged, the
-    // next Guaca line would lose its own header to a bubble that never had one.
     const answered = envelope({
       from: { kind: "system" },
       trust: "system",
@@ -391,7 +360,6 @@ describe("a decision the operator answered", () => {
 
 describe("a request for permission", () => {
   it("is never folded into a burst, whoever the envelope says it is from", () => {
-    // The one thing in a transcript the operator is expected to act on.
     const asking = envelope({
       from: { kind: "agent", id: "chef" },
       to: { kind: "agent", id: "manager" },

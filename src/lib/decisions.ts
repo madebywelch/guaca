@@ -1,6 +1,5 @@
 import type { WorkDecision } from "./types";
 
-/** The same row can be read, snoozed and answered. Only its durable state settles it. */
 export function needsAnswer(item: WorkDecision): boolean {
   return item.status === "pending" || (item.status === "answered" && item.interrupted);
 }

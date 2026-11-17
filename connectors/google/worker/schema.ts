@@ -1,20 +1,5 @@
 import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
-/**
- * The tables Better Auth reads and writes, as Drizzle.
- *
- * Hand-written rather than generated, because generated code in a repository
- * is a second source of truth that nobody diffs. The authority is Better
- * Auth's own `getAuthTables()`, and `schema.test.ts` calls it and fails if a
- * field, a type, a nullability or an index here has drifted from it. That
- * check is the reason this file is safe to hand-write: an upgrade that adds a
- * column fails a test rather than a request.
- *
- * `migrations/` is the same shape again, in SQL, because D1 is migrated by file
- * and not by ORM. The same test replays the whole directory in order.
- */
-
-/** Better Auth stores dates as epoch seconds through the SQLite adapter. */
 const timestamp = (name: string) => integer(name, { mode: "timestamp" });
 
 export const user = sqliteTable("user", {
@@ -41,21 +26,9 @@ export const session = sqliteTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
   },
-  // Not required by Better Auth, but every session read and every cascade
-  // delete goes through one of these. Without them D1 scans the table.
   (table) => [index("session_userId_idx").on(table.userId)],
 );
 
-/**
- * One row per OAuth grant: the identity a person signed in with, and the
- * scopes any connector on that provider was authorized for.
- *
- * The unique index is `(issuer, accountId)` rather than `(providerId,
- * accountId)`, which is Better Auth saying out loud that one external identity
- * is one row. Two provider configurations pointing at the same issuer share
- * this row and its tokens. `connectors.ts` is built on that: a provider grant
- * is the unit, and a connector is a scope bundle inside it.
- */
 export const account = sqliteTable(
   "account",
   {
@@ -92,24 +65,8 @@ export const verification = sqliteTable(
     createdAt: timestamp("createdAt").notNull(),
     updatedAt: timestamp("updatedAt").notNull(),
   },
-  // Every OAuth round trip stores its state here and reads it back by
-  // identifier on the callback.
   (table) => [index("verification_identifier_idx").on(table.identifier)],
 );
-
-/**
- * This origin as an OAuth 2.1 authorization server, which is how the desktop
- * app is linked to an account.
- *
- * Seven tables, all of them Better Auth's. Nothing in this half is written by
- * hand at runtime: the only row this repository puts here is the `guaca-desktop`
- * client, seeded by `migrations/0001_oauth_provider.sql` so that the one
- * application allowed through the flow is named in a diff rather than
- * registered by whoever asks first.
- *
- * `string[]` and `json` fields are JSON in a TEXT column, which is what the
- * SQLite adapter does with them.
- */
 
 export const oauthClient = sqliteTable("oauthClient", {
   id: text("id").primaryKey(),

@@ -1,23 +1,3 @@
-//! Work a stopping host put down, and the one pass that reads it back.
-//!
-//! A restart used to end every conversation in flight: each was reported as
-//! interrupted, with a button to send it again, because nothing could say
-//! whether a tool call had finished before the process died. A host that is
-//! asked to stop can do better than that, and this is the half of it that
-//! outlives the process. `Runtime::drain` is the other half, and says what a
-//! boundary is.
-//!
-//! What this file keeps is only what a drain could vouch for. A message is put
-//! down with the records of the turn it was in the middle of, and a
-//! conversation is marked whole once nothing of it is left running.
-//!
-//! A crash vouches for one thing more: a conversation no turn had started.
-//! Its message was written and never read, so nothing can have happened that
-//! was not written down, and it is delivered again as though it had just
-//! arrived. Everything else a restart finds, whether a turn a crash cut off or
-//! one still inside a tool call when the host was stopped, is reported
-//! interrupted exactly as before.
-
 use std::collections::{HashMap, HashSet};
 
 use rusqlite::{params, TransactionBehavior};
@@ -32,64 +12,31 @@ use crate::runtime::guard::{GuardSnapshot, RunState};
 const ENVELOPE: &str = "m.id,m.run_id,m.channel_id,m.from_kind,m.from_agent,m.to_kind,m.to_agent,\
      m.parts,m.trust,m.hop,m.expects_reply,m.intent,m.cause,m.created_at";
 
-/// What a restart says about work it cannot pick up.
-///
-/// The same words a restart has always used, because the situation is the
-/// same one: something may have happened that was never written down.
 const INTERRUPTED: &str = "The backend restarted before this conversation finished. Previous \
      messages and files are preserved. Review any actions already taken before retrying; an \
      external action may have completed without its result being recorded.";
 
-/// A message put down, as the next host reads it back.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PutDown {
     pub envelope: Envelope,
-    /// The records of the turn it was being answered in, oldest first. Empty
-    /// for a message no turn had started, which is delivered as though it had
-    /// just arrived.
     pub records: Vec<MessageId>,
     pub absorbed: Vec<MessageId>,
 }
 
-/// What a restart found.
 #[derive(Debug, Default)]
 pub struct Recovered {
-    /// Messages to deliver again, oldest first.
     pub resumed: Vec<PutDown>,
-    /// What each conversation being picked up had already spent, so its budget
-    /// is the one it was measured against before the restart.
     pub steps: HashMap<RunId, u32>,
     pub guards: HashMap<RunId, RunState>,
-    /// Conversations reported interrupted.
     pub interrupted: usize,
 }
 
-/// A conversation still owed an answer that no turn had started, as a
-/// condition on `pending_runs p`: never marked started, holding nothing but
-/// the message it began with, and addressed to an agent that can still read
-/// it.
-///
-/// One rule with two readers. `Store::recover` delivers these again, and
-/// `Store::recover_decisions` leaves the decision whose answer one carries
-/// unmarked, because it is about to be delivered rather than cut off. Read
-/// differently by the two, a decision would be reported interrupted while its
-/// answer was being delivered, or its answer reported and the decision not.
-///
-/// A conversation holding a second message is reported even when nothing
-/// marked it started: delivering its first message again would answer only
-/// part of what it owes, and whatever wrote the second may have acted on it.
 pub(super) const UNTOUCHED: &str = "p.started_at IS NULL \
      AND NOT EXISTS (SELECT 1 FROM messages l WHERE l.run_id=p.run_id AND l.id<>p.message_id) \
      AND EXISTS (SELECT 1 FROM messages f JOIN agents a ON a.id=f.to_agent \
          WHERE f.id=p.message_id AND f.to_kind='agent' AND a.lifecycle<>'terminated')";
 
 impl Store {
-    /// Puts messages down and marks the conversations left with nothing else
-    /// outstanding, in one commit.
-    ///
-    /// One commit because a mark without its messages would pick up a
-    /// conversation with a hole in it. The caller holds the runtime's run lock
-    /// across this, which is what makes `whole` true when it is written.
     pub fn put_down(
         &self,
         messages: &[(MessageId, &[MessageId])],
@@ -116,12 +63,6 @@ impl Store {
         Ok(())
     }
 
-    /// Accepts a message while the host is stopping, putting it down rather
-    /// than queueing it: nothing in this process will start another turn.
-    ///
-    /// The same commit as an ordinary acceptance, with the put-down row added,
-    /// so a message sent in the last seconds is neither lost nor reported
-    /// interrupted when it never began.
     pub fn append_put_down(
         &self,
         envelope: &Envelope,
@@ -142,8 +83,6 @@ impl Store {
         Ok(())
     }
 
-    /// Takes back everything put down for one conversation: the operator
-    /// stopped it, and work called off is never picked up.
     pub fn forget_put_down(&self, run: RunId) -> Result<(), StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
@@ -156,14 +95,6 @@ impl Store {
         Ok(())
     }
 
-    /// Reads back what the last host put down, and reports everything else it
-    /// left as interrupted. Called once, before any actor starts.
-    ///
-    /// One commit, so a restart that dies partway through this repeats it
-    /// rather than picking something up twice or reporting it twice. What is
-    /// picked up keeps its `pending_runs` row: until it settles it is a
-    /// conversation in flight like any other, and a crash in the middle of it
-    /// is reported like any other.
     pub fn recover(&self) -> Result<Recovered, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -246,9 +177,6 @@ impl Store {
                 }
             }
         }
-        // A turn had these when the last host put them down, so they are
-        // started whatever their row says. Carried on once, on the drain's
-        // word; a crash before the next turn ends reports them.
         for put in &resumed {
             if !put.records.is_empty() || !put.absorbed.is_empty() {
                 tx.execute(
@@ -274,17 +202,12 @@ impl Store {
             }
             drop(stmt);
             resumed.extend(untouched);
-            // Oldest first across all three kinds, as an actor would have
-            // read them. Stable, so each kind keeps its own order on a tie.
             resumed.sort_by_key(|put| put.envelope.created_at);
         }
         let picked: HashSet<RunId> = resumed.iter().map(|put| put.envelope.run_id).collect();
         let associated: HashSet<MessageId> =
             resumed.iter().flat_map(|put| put.absorbed.iter().copied()).collect();
 
-        // Where each interrupted conversation's notice goes: the message it
-        // began with, which is what **Try again** sends again. A conversation
-        // only this file knows about began with the message put down for it.
         let mut anchors: Vec<Envelope> = Vec::new();
         let mut anchored: HashSet<RunId> = HashSet::new();
         for original in pending.iter().chain(cut.iter().map(|put| &put.envelope)) {
@@ -314,10 +237,6 @@ impl Store {
                 }
             }
         }
-        // Each one reported is a run that ended here, so it ends in an outcome
-        // like any other, written in the commit that reports it. One that
-        // cannot be written is logged and passed over: a host that would not
-        // start over a report is worse than a report with a line missing.
         let now = now_ms();
         for original in &anchors {
             let notice = interrupted(original);
@@ -574,8 +493,6 @@ mod tests {
         assert_eq!(recovered.resumed[0].records, vec![record]);
         assert_eq!(recovered.steps.get(&run), Some(&7));
 
-        // Picked up is in flight again, so a crash before it settles is the
-        // ordinary kind of restart and is reported like one.
         let crashed = store.recover().unwrap();
         assert!(crashed.resumed.is_empty());
         assert_eq!(crashed.interrupted, 1);
@@ -590,8 +507,6 @@ mod tests {
         store.append_delivery(&original).unwrap();
         let queued = asked(&agent, run, "and this");
         store.append_delivery(&queued).unwrap();
-        // One message put down, and the conversation never marked whole: a turn
-        // in it was still inside a tool call when the host stopped.
         store.put_down(&[(queued.id, &[])], &[]).unwrap();
 
         let recovered = store.recover().unwrap();
@@ -659,8 +574,6 @@ mod tests {
         assert!(recovered.resumed[0].records.is_empty());
         assert!(recovered.steps.is_empty(), "a fresh budget: none of it was spent");
 
-        // Still unstarted, so a second crash before a turn takes it delivers
-        // it again rather than reporting it.
         let again = store.recover().unwrap();
         assert_eq!(again.interrupted, 0);
         assert_eq!(again.resumed.len(), 1);

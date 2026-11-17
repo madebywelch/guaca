@@ -1,17 +1,4 @@
 #!/usr/bin/env bash
-#
-# The version floors, tested where the installer cannot run.
-#
-# `scripts/install.sh` builds a .app and refuses to start on anything but macOS
-# in its third check, so the arithmetic that decides whether somebody is told
-# now or by a wall of errors later would otherwise never be tested anywhere. The
-# checks live in `scripts/versions.sh` for exactly this reason, and this sources
-# it. No harness, no dependencies: bash and an exit code, so the gate runs it on
-# Linux and on a Mac alike.
-#
-# Deliberately not `set -e`: a failing case must be counted and reported rather
-# than ending the file at the first one, which is also what makes the output
-# worth reading when it does fail.
 
 set -uo pipefail
 
@@ -52,15 +39,10 @@ check "reads the version corepack reads" "$(pnpm_pin "$scratch/pinned.json")" "1
 check "no field is no pin"               "$(pnpm_pin "$scratch/unpinned.json")" ""
 check "another manager is no pnpm pin"   "$(pnpm_pin "$scratch/yarn.json")" ""
 
-# The repository's own pin, read the way the installer reads it. A sed that
-# stopped matching would leave the check silent rather than wrong, which is the
-# failure this catches.
 pin="$(pnpm_pin)"
 check "this repository declares a pin" "$([ -n "$pin" ] && echo pinned)" "pinned"
 
 say "pnpm_verdict"
-# Word for word, because this is a sentence somebody reads instead of a build
-# failing four hundred crates in. What to run is the whole of what it is for.
 check "an old pnpm is told exactly what to run" "$(pnpm_verdict 8.15.4 10.33.0)" \
   'pnpm 8.15.4 is older than the 10.33.0 this repository pins; run `corepack enable pnpm` (corepack ships with Node), or `npm install -g pnpm@10.33.0`, and run this again.'
 check "the pinned version passes"   "$(pnpm_verdict 10.33.0 10.33.0)" ""

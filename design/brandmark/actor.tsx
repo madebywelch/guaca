@@ -1,15 +1,3 @@
-/**
- * One of the cast, directed rather than fed agent signals.
- *
- * `AgentAvatar` decides a creature's mood from what the runtime says and can
- * aim a look up or down, which is everything an agent in a rail needs. A brand
- * needs two things it cannot do: look sideways at a peer or at the pointer, and
- * become another member of the cast mid-performance. So this is the same loop
- * in miniature, over the same painters (`CutArt`, `DrawnArt`), the same body,
- * moods, gaze smoother and knock, with a cue written by a director in place of
- * `moodFor`. Nothing is drawn here that the app does not already draw.
- */
-
 import { type CSSProperties, useEffect, useRef } from "react";
 
 import { CutArt } from "../../src/avatars/CutArt";
@@ -24,27 +12,21 @@ import { SILHOUETTES } from "../../src/avatars/silhouette";
 
 export type Look = Point | "pointer" | null;
 
-/** What the director asks of one creature, right now. */
 export interface Cue {
   mood: Mood;
-  /** Where to look, in body radii. Null is the mood's own glances. */
   look: Look;
-  /** A throw or a catch, and the scene time it began; a new time is a new one. */
   gesture: { kind: Exclude<Gesture, null>; at: number } | null;
   shown: boolean;
-  /** Becoming another member of the cast: from one, to another, how far. */
   morph?: { from: Lump; to: Lump; u: number; colors: [string, string] };
 }
 
 export const REST_CUE: Cue = { mood: "idle", look: null, gesture: null, shown: true };
 
-/** What a throw and a catch do to the mass, in body radii. `AgentAvatar`'s. */
 const KNOCK = {
   send: { amp: 0.26, hz: 1.5, decay: 0.28, life: 0.9 },
   receive: { amp: 0.3, hz: 2.2, decay: 0.3, life: 0.8 },
 };
 
-/** How far a look at the pointer goes. The idle mood's own range, so no face does more than it already does. */
 const REACH = { across: 0.38, up: AIM.up, down: AIM.down };
 
 const pointer = { x: Number.NaN, y: Number.NaN };
@@ -64,8 +46,6 @@ function toward(el: Element): Point | null {
   const dx = pointer.x - (box.left + box.width / 2);
   const dy = pointer.y - (box.top + box.height / 2);
   const d = Math.hypot(dx, dy) || 1;
-  /* A pointer on the face is looked at straight on; one a hand away gets the
-     whole of the look. Past that the direction is all that changes. */
   const k = Math.min(1, d / (box.width * 2.5));
   return [
     (dx / d) * REACH.across * k,
@@ -76,7 +56,6 @@ function toward(el: Element): Point | null {
 let morphs = 0;
 const lerp = (a: number, b: number, u: number) => a + (b - a) * u;
 
-/** A character partway to another: one outline function, and every number between. */
 function between(key: string, a: Lump, b: Lump, u: number): Lump {
   const table = SILHOUETTES as Record<string, (angle: number) => number>;
   const from = table[a.form] as (angle: number) => number;
@@ -131,10 +110,8 @@ export function Actor({
 }: {
   lump: Lump;
   color: string;
-  /** Drawn size in CSS pixels; line weights are hinted against it. */
   px: number;
   cast: "cut" | "drawn";
-  /** Read every frame, written by the director. Never a render. */
   cue: { current: Cue };
   seed: string;
 }) {
@@ -204,8 +181,6 @@ export function Actor({
       const eyes: Point = [c.gaze[0], c.gaze[1]];
       const body: Point = [c.gaze[0], c.gaze[1]];
 
-      /* Away from whoever the look is at: a throw recoils against itself and a
-         catch is shoved back from the thrower. With nobody looked at, down. */
       if (c.gesture) {
         const knock = KNOCK[c.gesture];
         const age = seconds - c.gestureAt;
@@ -242,8 +217,6 @@ export function Actor({
         mood: c.mood,
         from: c.from,
         since: live ? since : Number.POSITIVE_INFINITY,
-        /* Any aimed look quiets the mood's own saccades, in both casts. The
-           value is not otherwise read for geometry. */
         look: aimed ? "down" : null,
         sinceLook: seconds - c.aimAt,
         gesture: c.gesture,
@@ -253,9 +226,6 @@ export function Actor({
         px,
       });
     };
-    /* The shared clock stops under reduced motion and leaves every creature
-       as it was last painted. An agent is repainted when its props change; a
-       directed one is repainted when its cue does, still, on its own frame. */
     if (!prefersReducedMotion()) return join(el, paint);
     let frame = 0;
     let last = "";

@@ -37,12 +37,6 @@ describe("presence reports", () => {
   });
 });
 
-/**
- * The icon's view of the store, and what the panel under it decides about its
- * own. The first has to match what Rust reads, and `ipc.contract.test.ts`
- * holds the fields equal; this holds the values.
- */
-
 function agent(name: string, over: Partial<AgentCard> = {}): AgentCard {
   return {
     id: `id-${name}`,
@@ -83,7 +77,6 @@ describe("presenceOf", () => {
     };
     const presence = presenceOf(state);
 
-    // A terminated agent is out of the icon's count, as it is out of the rail.
     expect(Object.keys(presence.roster)).toEqual(["id-Chef"]);
     expect(presence.roster["id-Chef"]).toEqual({
       name: "Chef",
@@ -147,7 +140,6 @@ describe("presenceOf", () => {
   });
 });
 
-/** A message between two ends of a channel, `at` milliseconds in. */
 function message(
   from: Participant,
   to: Participant,
@@ -200,7 +192,6 @@ describe("the panel's list", () => {
       lastActive: { "id-Ada": 9 },
     });
     expect(order.map((a) => a.name)).toEqual(["Bea", "Ada"]);
-    // It is waiting on a person, which the headline counts separately.
     expect(workingCount([agent("Ada"), agent("Bea")], parked)).toBe(0);
   });
 
@@ -226,9 +217,7 @@ describe("a conversation in the panel", () => {
     const messages = [
       message(YOU, CHEF, "first", 1),
       message(CHEF, YOU, "second", 2),
-      // A peer's message filed in the channel is the crew's traffic.
       message(SCOUT, CHEF, "between us", 3),
-      // A reply with nothing to read in it.
       message(CHEF, YOU, "", 4, [{ type: "notice", kind: "upstreamError", text: "timed out" }]),
       message(YOU, CHEF, "third", 5),
       message(CHEF, YOU, "fourth", 6),
@@ -260,7 +249,6 @@ describe("a conversation in the panel", () => {
     expect(liveReply({ a: stream({}) }, "id-Chef")).toBe("Working on it");
     expect(liveReply({ a: stream({ to: SCOUT }) }, "id-Chef")).toBeNull();
     expect(liveReply({ a: stream({ text: "   " }) }, "id-Chef")).toBeNull();
-    // Chef writing into Scout's channel is Chef's, and it is not this conversation.
     expect(liveReply({ a: stream({ channelId: "id-Scout" }) }, "id-Chef")).toBeNull();
   });
 });

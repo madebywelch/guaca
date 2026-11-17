@@ -5,15 +5,6 @@ import { saveFirstTask } from "./lib/onboarding";
 import type { AgentCard, Routine, Settings } from "./lib/types";
 import { aGroup } from "./test-fixtures";
 
-/**
- * Smoke test for the shell.
- *
- * A blank window is the worst failure this app can have: nothing throws, the
- * background paints, and there is no clue what went wrong. This mounts the real
- * component tree over a mocked IPC layer, so anything that empties the window
- * fails here instead of in a release bundle.
- */
-
 const listGroups = vi.fn(async () => [aGroup({ agentCount: 3 })]);
 const listAgents = vi.fn<() => Promise<AgentCard[]>>(async () => []);
 const agentLastActive = vi.fn<() => Promise<Record<string, number>>>(async () => ({}));
@@ -51,9 +42,6 @@ const getSettings = vi.fn<() => Promise<Settings>>(async () => ({
 vi.mock("./lib/ipc", () => ({
   api: {
     listAgents: () => listAgents(),
-    // The shared fixture rather than a hand-built object: this one had drifted
-    // into a mixture of a group and the app's settings, with a group's own
-    // `inference` block missing entirely, and nothing typechecks a mock.
     listGroups: () => listGroups(),
     agentActivity: () => agentActivity(),
     usageSummary: async () => [],
@@ -75,9 +63,6 @@ vi.mock("./lib/ipc", () => ({
       })),
     reportPresence: async () => {},
     reportHost: async () => {},
-    // The window reports what it is showing on a timer. Without this the timer
-    // threw into an unhandled error that vitest reports after whichever test
-    // happened to be running, which is a failure nobody can act on.
     reportView: async () => {},
     capabilities: async () => ({
       loopbackEndpoints: true,
@@ -146,10 +131,6 @@ function agent(name: string, railOrder = 0): AgentCard {
   };
 }
 
-/**
- * The Groups sheet, where the rail now lives, opened from the window's people
- * button when it is not open already.
- */
 function groupsSheet(): HTMLElement {
   const open = screen.queryByRole("dialog", { name: "Groups and agents" });
   if (open) return open;
@@ -157,13 +138,6 @@ function groupsSheet(): HTMLElement {
   return screen.getByRole("dialog", { name: "Groups and agents" });
 }
 
-/**
- * The row in the rail, specifically.
- *
- * An agent's name is on its row, on its channel header, on its face on the
- * timeline and in any menu open over it, so a bare text query is ambiguous the
- * moment more than one of those is on screen.
- */
 function railRow(name: string): HTMLElement {
   const rail = within(groupsSheet()).getByRole("navigation", { name: /agents/i });
   const row = [...rail.querySelectorAll(".agent-row__name")].find((n) => n.textContent === name);
@@ -171,7 +145,6 @@ function railRow(name: string): HTMLElement {
   return row as HTMLElement;
 }
 
-/** Every row in the rail, top to bottom. */
 function railNames(): (string | null)[] {
   const rail = within(groupsSheet()).getByRole("navigation", { name: /agents/i });
   return [...rail.querySelectorAll(".agent-row__name")].map((n) => n.textContent);
@@ -209,20 +182,13 @@ describe("when the host goes away", () => {
   };
 
   it("offers a retry and the place hosts are changed, not only a dismissal", async () => {
-    // The banner used to say the truth and hand over a blindfold: the one
-    // control removed the diagnosis and nothing else. These are the two things
-    // that help, and `Check the host` is where a person changes hosts.
     useStore.setState({ banner: down });
     render(<App />);
     expect(screen.getByText(/could not reach this workspace/)).toBeTruthy();
-    // What to go and look at, in the words of the host this window shows: this
-    // suite is the desktop showing its own workspace.
     expect(screen.getByText(/Check that Docker is running/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Check the host" }));
-    // The pane that holds On this Mac and Remote host, open rather than the
-    // dialog's first section.
     const pane = await screen.findByRole("tab", { name: "Host" });
     expect(pane.getAttribute("aria-selected")).toBe("true");
   });
@@ -236,16 +202,11 @@ describe("when the host goes away", () => {
   });
 
   it("leaves it up when the host still is not there", async () => {
-    // The real path rather than a banner set by hand: this is also the one
-    // place the store's classification of an unreachable refusal is drawn.
     listAgents.mockRejectedValue({ kind: "unreachable", message: down.text });
     render(<App />);
     await screen.findByRole("button", { name: "Retry" });
     const before = listAgents.mock.calls.length;
 
-    // The retry asks again and gets the same nothing, which is not news: the
-    // banner is already saying it, and a second sentence saying it again is
-    // noise on the one line that matters.
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(listAgents.mock.calls.length).toBeGreaterThan(before));
     expect(useStore.getState().banner?.fix).toBe("host");
@@ -264,8 +225,6 @@ describe("when the host goes away", () => {
 describe("App", () => {
   it("renders the ribbon and reaches every agent through the Groups sheet", async () => {
     render(<App />);
-    // The ribbon is always present, whether or not there are agents. If this is
-    // missing, the window is blank.
     expect(await screen.findByRole("navigation", { name: /agents/i })).toBeTruthy();
     expect(within(groupsSheet()).getByText("guaca")).toBeTruthy();
   });
@@ -284,8 +243,6 @@ describe("App", () => {
   });
 
   it("opens the cafeteria from the empty state", async () => {
-    // The one path a workspace with nothing in it is expected to take, so it
-    // has to reach somewhere that can actually fill it.
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /open the cafeteria/i }));
     expect(await screen.findByRole("dialog", { name: /cafeteria/i })).toBeTruthy();
@@ -511,8 +468,6 @@ describe("App", () => {
   });
 
   it("opens on today rather than on the first agent's channel", async () => {
-    // The window used to open whoever was first in the rail, so the first thing
-    // on screen was one agent's transcript and not what needed the operator.
     listAgents.mockResolvedValue([agent("Manager"), agent("Chef")]);
     render(<App />);
     await waitFor(() => expect(useStore.getState().agents).toHaveLength(2));
@@ -535,9 +490,6 @@ describe("App", () => {
   });
 
   it("lands a notification for an agent on that agent's conversation", async () => {
-    // Nothing is open when the window starts, so a click from outside it is
-    // the whole journey to the agent: it has to open them, on the conversation,
-    // whatever was on screen before.
     const { onRevealRequest } = await import("./lib/ipc");
     listAgents.mockResolvedValue([agent("Manager"), agent("Chef")]);
     render(<App />);
@@ -556,8 +508,6 @@ describe("App", () => {
   });
 
   it("lands a notification on the conversation even while that agent is working", async () => {
-    // Opening a working agent shows what it is doing. A click on a message
-    // from it is a request to read that message, which is in the conversation.
     const { onRevealRequest } = await import("./lib/ipc");
     listAgents.mockResolvedValue([agent("Manager"), agent("Chef")]);
     agentActivity.mockResolvedValue({ "id-Manager": { state: "thinking" } });
@@ -653,14 +603,10 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByText("Manager")).toBeTruthy());
     expect(railRow("Chef")).toBeTruthy();
     fireEvent.click(railRow("Manager"));
-    // A channel header, meaning the pane rendered rather than staying empty.
     await waitFor(() => expect(screen.getByRole("heading", { name: "Manager" })).toBeTruthy());
   });
 
   it("draws the rail in the order the operator arranged it", async () => {
-    // Having spoken recently is not a reason to move. The rail used to be
-    // ordered by nothing else, so a conversation rewrote the arrangement and
-    // the row you reached for was the row that had just left.
     listAgents.mockResolvedValue([agent("Manager", 0), agent("Chef", 1), agent("Host", 2)]);
     agentLastActive.mockResolvedValue({ "id-Host": 900, "id-Chef": 500 });
     render(<App />);
@@ -677,7 +623,6 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByText("Manager")).toBeTruthy());
     expect(railNames()).toEqual(["Host", "Manager", "Chef"]);
 
-    // The turn ends, and the row goes back where it was put.
     useStore
       .getState()
       .applyEvent({ type: "activityChanged", agentId: "id-Host", activity: { state: "idle" } });
@@ -722,10 +667,6 @@ describe("App", () => {
       },
     });
     render(<App />);
-    // The banner that says a key is missing is suppressed while the first-run
-    // page is up, because that page is the thing asking for one: step one is a
-    // task and step two is the provider. A test that expected the banner was
-    // asking for two prompts for the same key on one screen.
     expect(await screen.findByText(/What would you like help with/i)).toBeTruthy();
     expect(screen.queryByText(/Add an API key/i)).toBeNull();
   });
@@ -754,9 +695,6 @@ describe("App", () => {
   ])(
     "on Today, asks for a key only when no group with agents can reply: %j",
     async ({ paid, banner }) => {
-      // Nobody is open on Today, so there is no group to read the key from. The
-      // window used to fall back to the workspace's own key, which a group with
-      // its own key never sets, and asked for a key that was already there.
       getSettings.mockResolvedValue({
         ...(await getSettings()),
         provider: "compatible",
@@ -804,9 +742,6 @@ describe("App", () => {
   });
 
   it("does not ask for a key when a subscription is what pays", async () => {
-    // There is nothing to paste on a subscription, so this banner asked forever
-    // for something the Provider pane does not offer. The one place the app says
-    // "you are not set up yet" has to keep meaning that.
     getSettings.mockResolvedValue({
       operatorName: "",
       baseUrl: "https://openrouter.ai/api/v1",
@@ -835,16 +770,11 @@ describe("App", () => {
     });
     listAgents.mockResolvedValue([agent("Manager")]);
     render(<App />);
-    // Wait for the load that would have produced the banner before asserting it
-    // is absent, or this passes on a render that had no settings yet.
     await waitFor(() => expect(screen.getByText("Manager")).toBeTruthy());
     expect(screen.queryByText(/Add an API key/i)).toBeNull();
   });
 
   it("puts a pinned agent above the rest and leaves it there", async () => {
-    // The rail lifts whoever is working to the top of its section. A row pinned
-    // so it could be found in one glance must not join in, wherever it sits in
-    // the arrangement.
     listAgents.mockResolvedValue([
       agent("Manager", 0),
       { ...agent("Chef", 1), pinned: true },
@@ -858,11 +788,6 @@ describe("App", () => {
   });
 
   it("draws a pinned agent at the head of its crew rather than above the crews", async () => {
-    // The pins had a section of their own above the groups, which made a pin
-    // the one arrangement that came undone on the way into the crew it was
-    // arranging. They are the head of the crew now, and counted in it: a pinned
-    // agent is still in the group, still costs it money, and is still someone
-    // its peers can message.
     listAgents.mockResolvedValue([agent("Manager"), { ...agent("Chef"), pinned: true }]);
     render(<App />);
 
@@ -870,10 +795,6 @@ describe("App", () => {
     expect(screen.queryByText("Pinned")).toBeNull();
     const crew = railRow("Chef").closest(".rail__group");
     expect(crew?.textContent).toContain("Everyone");
-    // Both rows under the one heading, with the pinned one at the head of them.
-    // The crew's size used to be read off a digit in that heading; the heading
-    // gave the digit's width back to the crew's name, so what says a pinned
-    // agent is still in the crew is that it is drawn inside it.
     expect(
       [...(crew?.querySelectorAll(".agent-row__name") ?? [])].map((n) => n.textContent),
     ).toEqual(["Chef", "Manager"]);
@@ -888,8 +809,6 @@ describe("App", () => {
     await waitFor(() => railRow("Manager"));
     fireEvent.contextMenu(railRow("Manager"));
 
-    // Right-clicking used to open the whole profile dialog. It opens a menu
-    // now, and the dialog is one deliberate click further away.
     expect(screen.queryByRole("dialog", { name: /edit agent/i })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Pin to top" }));
     await waitFor(() => expect(setAgentPinned).toHaveBeenCalledWith("id-Manager", true));
@@ -910,8 +829,6 @@ describe("App", () => {
   });
 
   it("shows the open agent's screen and routines on the agent's page", async () => {
-    // Both used to be behind the dialog, which meant a standing commitment and
-    // a live desktop were things you had to open a modal to find.
     listAgents.mockResolvedValue([agent("Manager")]);
     agentRoutines.mockResolvedValue([
       {
@@ -945,8 +862,6 @@ describe("App", () => {
   });
 
   it("still renders the rail when startup fails", async () => {
-    // A failed bootstrap must degrade to a usable window with an error, not to
-    // a blank one.
     listAgents.mockRejectedValue({ kind: "storage", message: "disk on fire" });
     render(<App />);
     expect(await screen.findByRole("navigation", { name: /agents/i })).toBeTruthy();
@@ -954,9 +869,6 @@ describe("App", () => {
   });
 });
 
-// A component that throws on its first render. At module level because a
-// component made inside the test is a new type on every render, which is the
-// one thing React cannot keep state across.
 const Boom = (): never => {
   throw new Error("render exploded");
 };
@@ -964,7 +876,6 @@ const Boom = (): never => {
 describe("failure surfacing", () => {
   it("shows the error instead of a blank window when a child throws", async () => {
     const { ErrorBoundary } = await import("./components/ErrorBoundary");
-    // React logs the caught error; silence it so the run stays readable.
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     render(
       <ErrorBoundary>
@@ -990,15 +901,12 @@ it("refreshes the roster when the event connection returns", async () => {
 });
 
 describe("when the connection to the host is lost", () => {
-  // What the socket hands up, in the words `transport.ts` writes it in: the
-  // address, and the one fact the close adds — that the page is not live.
   const gone = {
     kind: "unreachable",
     message:
       "lost the connection to this host at http://127.0.0.1:8787. It may be restarting, or the connection to it is down, and nothing on this page is live until it answers again",
   };
 
-  /** The subscription this page made, as `useRuntime` handed it over. */
   async function connection() {
     const { onRuntimeEvent } = await import("./lib/ipc");
     const calls = vi.mocked(onRuntimeEvent).mock.calls;
@@ -1015,12 +923,8 @@ describe("when the connection to the host is lost", () => {
 
     act(() => lost(gone));
 
-    // The banner a failed call raises, without a call: the diagnosis, and the
-    // controls that do something about it.
     expect(screen.getByText(/Lost the connection to this host/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
-    // The page stops claiming what it draws is current, and the one row that
-    // names the host says since when.
     expect(container.querySelector(".app")?.getAttribute("data-link")).toBe("down");
     expect(screen.getByText(/last heard/)).toBeTruthy();
   });
@@ -1043,8 +947,6 @@ describe("when the connection to the host is lost", () => {
   });
 
   it("says nothing while an update is restarting the host on purpose", async () => {
-    // The panel that started the update is already saying the host is
-    // restarting, and a page that also raised a lost host would argue with it.
     expectRestart();
     listAgents.mockResolvedValue([agent("Ada")]);
     const { container } = render(<App />);
@@ -1123,13 +1025,11 @@ describe("where an agent's page lands", () => {
     const page = await screen.findByRole("navigation", { name: "Manager's page" });
     expect(within(page).getByRole("button", { current: "page" }).textContent).toBe("Conversation");
 
-    // What the chip in the transcript does, as MessageItem's suite pins.
     act(() => useStore.getState().openRoutine("r1"));
 
     expect(within(page).getByRole("button", { current: "page", name: "Routines" })).toBeTruthy();
     expect(await screen.findByRole("switch")).toBeTruthy();
     expect(useStore.getState().openingRoutine).toBeNull();
-    // Taken where it was asked for, so it does not pop open on a later tab.
     fireEvent.click(within(page).getByRole("button", { name: "Memory" }));
     fireEvent.click(within(page).getByRole("button", { name: "Routines" }));
     expect(useStore.getState().openingRoutine).toBeNull();

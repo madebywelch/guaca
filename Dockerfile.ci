@@ -1,18 +1,5 @@
-# Verification environment.
-#
-# Guac ships as a native desktop binary, so there is no container in the
-# product. This image exists to prove the code builds and its tests pass in a
-# clean environment with nothing borrowed from a developer's machine.
-#
-#   docker build -f Dockerfile.ci -t guac-ci .
-#   docker run --rm guac-ci
-#
-# GUI bundling is not attempted here: `cargo test` and `cargo clippy` need the
-# webkit headers, not a display.
-
 FROM rust:1.99-bookworm
 
-# Tauri's Linux backend needs these to compile even when no window is opened.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       libwebkit2gtk-4.1-dev \
       libgtk-3-dev \
@@ -24,9 +11,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-# Node from nodesource; the distro package lags too far behind. python3 is for
-# the icon scripts: the app icon and the tray glyphs are drawn by Python and
-# compared against the committed ones by the gate's `assets` step.
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
  && apt-get install -y --no-install-recommends nodejs python3 \
  && rm -rf /var/lib/apt/lists/* \
@@ -36,13 +20,10 @@ RUN rustup component add clippy rustfmt
 
 WORKDIR /app
 
-# Dependency manifests first, so a source-only change reuses both caches.
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY src-tauri/Cargo.toml src-tauri/Cargo.lock* ./src-tauri/
-# The manifest patches crates in from here, and Cargo resolves a patch on every
-# platform, so the fetch cannot run without it.
 COPY src-tauri/vendor ./src-tauri/vendor
 RUN mkdir -p src-tauri/src \
  && echo 'fn main() {}' > src-tauri/src/main.rs \

@@ -1,16 +1,3 @@
-//! A guacad container on the Docker daemon this process talks to, and the one
-//! sequence that replaces it. Never starts an agent in this process.
-//!
-//! Two managers use it. The desktop manages On this Mac, and `guaca-updater`
-//! manages the host on a box it runs beside (`updater.rs`). They differ in how
-//! the container is made, which is a [`Spec`], and in where an update comes
-//! from, which is a [`Target`], and in nothing else: the backup before a
-//! replacement and the restore after a failed one are the same code for both.
-//! The restore is automatic because the person who pressed the button cannot
-//! be assumed to have a shell on the box, on either.
-//!
-//! Desktop container names are scoped to the bundle ID; volumes survive app
-//! upgrades.
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -20,15 +7,11 @@ use serde_json::Value;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 
-/// The host this app installs. Unpinned, it is the published tag of this
-/// app's own version: a spelled-out tag stayed at 0.1.0 after the app moved
-/// on, and offered every source build a downgrade of the host it managed.
 pub const IMAGE: &str = match option_env!("GUACA_BACKEND_IMAGE") {
     Some(image) => image,
     None => concat!("ghcr.io/madebywelch/guaca/guacad:", env!("CARGO_PKG_VERSION")),
 };
 
-/// Where a box's updater listens, as both containers see it.
 pub const UPDATER_SOCKET: &str = "/run/guaca-updater/updater.sock";
 const UPDATER_DIR: &str = "/run/guaca-updater";
 
@@ -39,37 +22,23 @@ pub struct Connection {
     pub token: String,
 }
 
-/// How a host container is made. The desktop and a box disagree about
-/// nothing else.
 #[derive(Clone)]
 pub struct Spec {
     pub name: String,
-    /// The label that says this manager made the container. One with the name
-    /// and without the label is somebody else's, and is never touched.
     pub owner: &'static str,
-    /// The workspace, mounted at `/var/lib/guaca`.
     pub volume: String,
-    /// The loopback port it is published on. `None` takes any free one.
     pub port: Option<u16>,
-    /// Variables handed from this process's environment, by name, so a value
-    /// never appears in an argument list.
     pub env: &'static [&'static str],
-    /// The volume holding the updater's socket, when there is an updater.
     pub socket: Option<String>,
     pub reach: Reach,
 }
 
-/// Where the manager stands when it asks the host whether it is ready.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Reach {
-    /// On the machine the port is published on, which is the desktop.
     Published,
-    /// In another container on the same Docker network, which is the updater.
-    /// A box publishes to its own loopback, which a container cannot see.
     Bridge,
 }
 
-/// What an update installs, and what the host must say about itself after.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Target {
@@ -78,8 +47,6 @@ pub struct Target {
     pub api_generation: u32,
 }
 
-/// Where an update is. The strings are what the operator reads and what the
-/// journal has always held, so a journal an older build wrote still reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stage {
     Downloading,
@@ -123,7 +90,6 @@ impl Stage {
         }
     }
 
-    /// Whether the operation is over, one way or the other.
     pub fn finished(self) -> bool {
         matches!(self, Stage::Updated | Stage::Canceled | Stage::Restored | Stage::RecoveryNeeded)
     }
@@ -154,17 +120,12 @@ pub struct Operation {
     pub backup: Option<String>,
     pub previous_image: String,
     pub target_image: String,
-    /// What the host has to report after the swap. Absent from a journal an
-    /// older build wrote, which is then restored rather than trusted.
     #[serde(default)]
     pub target_version: String,
     #[serde(default)]
     pub api_generation: u32,
-    /// The port it was published on, so a recovery publishes the same one.
     #[serde(default)]
     pub port: Option<u16>,
-    /// Where the workspace a failed update left was copied before the backup
-    /// was restored over it.
     #[serde(default)]
     pub preserved: Option<String>,
     pub error: Option<String>,
@@ -191,16 +152,11 @@ pub struct Status {
     pub target_image: String,
     pub target_version: String,
     pub operation: Option<Operation>,
-    /// The zone the container keeps its clock in, when there is a container.
     pub host_zone: Option<String>,
-    /// The zone this Mac is on, which is the one a container is made with.
     pub mac_zone: Option<String>,
-    /// Whether the two are different zones, which replacing the container
-    /// fixes. Decided here so the pane never compares names itself.
     pub zone_differs: bool,
 }
 
-/// The container that is running, as the updater reports it.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Running {
@@ -218,21 +174,13 @@ pub struct ExistingHost {
 
 pub struct LocalHost {
     spec: Spec,
-    /// What a container is started from when there is none.
     image: String,
     lock: Mutex<()>,
     journal: Option<PathBuf>,
     binary: PathBuf,
-    /// The IANA zone a container is made with, as `TZ`. Routines, the
-    /// briefings and an agent's "today" all read the host's local clock, and
-    /// a container is given no environment of its own, so without this a
-    /// host on this Mac keeps UTC and fires everything at UTC hours. A box
-    /// gets its zone from its own environment instead, so it has none here.
     zone: Option<String>,
 }
 
-/// The IANA zone this process is in: `TZ` when it is set, as a container
-/// is given it, else what the system is configured with.
 pub fn zone() -> Option<String> {
     std::env::var("TZ")
         .ok()
@@ -241,8 +189,6 @@ pub fn zone() -> Option<String> {
         .or_else(|| iana_time_zone::get_timezone().ok())
 }
 
-/// The zone a container keeps. One made without `TZ` keeps the image's,
-/// which is UTC.
 fn container_zone(value: &Value) -> String {
     value["Config"]["Env"]
         .as_array()
@@ -254,8 +200,6 @@ fn container_zone(value: &Value) -> String {
         .unwrap_or_else(|| "UTC".into())
 }
 
-/// Whether two zone names keep different clocks. UTC goes by several names,
-/// and a Mac set to one of them is not behind a host on another.
 fn different_zones(a: &str, b: &str) -> bool {
     let utc = |z: &str| {
         matches!(z, "UTC" | "Etc/UTC" | "Etc/Universal" | "Universal" | "Zulu" | "Etc/Zulu")
@@ -267,8 +211,6 @@ struct ProcessLock(std::fs::File);
 
 impl Drop for ProcessLock {
     fn drop(&mut self) {
-        // A concurrent fork can keep a duplicate descriptor alive until exec.
-        // Closing our descriptor alone would leave that child holding the lock.
         if let Err(error) = self.0.unlock() {
             tracing::warn!(%error, "could not release the host operation lock");
         }
@@ -300,7 +242,6 @@ pub(crate) async fn run_docker(
             "Docker is not installed. Install Docker Desktop, then check again.".to_string()
         })?;
     if !output.status.success() {
-        // Arguments never contain credentials. Avoid dumping Docker's environment or logs.
         return Err(format!(
             "Docker could not finish: {}",
             String::from_utf8_lossy(&output.stderr).trim()
@@ -314,7 +255,6 @@ impl LocalHost {
         run_docker(&self.binary, args, seconds).await
     }
 
-    /// On this Mac: a container per bundle ID, on any free loopback port.
     pub fn new(identifier: &str, image: &str) -> Self {
         let name: String =
             identifier.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
@@ -347,13 +287,10 @@ impl LocalHost {
         }
     }
 
-    /// Whether the container keeps a different zone from the one it would be
-    /// made with now.
     fn zone_differs(&self, value: &Value) -> bool {
         self.zone.as_deref().is_some_and(|zone| different_zones(&container_zone(value), zone))
     }
 
-    /// The update a desktop installs: the host built with it.
     pub fn bundled(&self) -> Target {
         Target {
             image: self.image.clone(),
@@ -367,7 +304,6 @@ impl LocalHost {
     }
 
     async fn available(&self) -> Result<(), String> {
-        // A selected remote Docker context would create a host on a different machine.
         let endpoint = self
             .docker(&["context", "inspect", "--format", "{{.Endpoints.docker.Host}}"], 10)
             .await?;
@@ -430,7 +366,6 @@ impl LocalHost {
             .into_iter()
             .find(|h| h.name == name)
             .ok_or("That local Guaca host is no longer available.")?;
-        // No caller-supplied path or command can reach Docker through this API.
         let token =
             self.docker(&["exec", &host.name, "cat", "/var/lib/guaca/config/token"], 15).await?;
         if token.is_empty() {
@@ -444,8 +379,6 @@ impl LocalHost {
         self
     }
 
-    /// The `docker` this manager runs, for a caller managing a container
-    /// beside this one.
     #[cfg(feature = "server")]
     pub(crate) fn docker_path(&self) -> &Path {
         &self.binary
@@ -487,8 +420,6 @@ impl LocalHost {
         Ok(())
     }
 
-    /// Why an operation that was stopped midway cannot be settled here, if it
-    /// cannot. Read without Docker, for a status that must not block.
     fn stuck(&self) -> Result<(), String> {
         match self.operation()? {
             Some(op) if op.stage == Stage::RecoveryNeeded => Err(format!(
@@ -499,15 +430,6 @@ impl LocalHost {
         }
     }
 
-    /// Finishes or undoes an operation a crash left midway, before anything
-    /// else touches the container. Holds the caller's locks.
-    ///
-    /// Before the swap the old container was never removed, so it is started
-    /// again. After it, the new one is kept only if it passes the same checks
-    /// an uninterrupted update makes, which is what separates a host that
-    /// finished updating from one that died doing it. Anything else is
-    /// restored from the backup the operation recorded before it could touch
-    /// the workspace.
     async fn settle(&self) -> Result<(), String> {
         self.stuck()?;
         let Some(mut op) = self.operation()? else {
@@ -541,7 +463,6 @@ impl LocalHost {
         }
     }
 
-    /// Whether the container is the target, running, and answering as it.
     async fn finished(&self, target: &Target) -> Result<(), String> {
         let value = self.inspect().await?.ok_or("The host container is missing.")?;
         if value["Config"]["Image"].as_str() != Some(&target.image) {
@@ -551,8 +472,6 @@ impl LocalHost {
         self.verify(&connection, &target.version, target.api_generation, "").await
     }
 
-    /// The desktop's view: whether Docker is ready and whether the host this
-    /// app bundles differs from the one running.
     pub async fn status(&self) -> Status {
         let mut status = Status {
             state: "unavailable",
@@ -609,7 +528,6 @@ impl LocalHost {
         status
     }
 
-    /// The image and release of the container that is there, if one is.
     pub async fn running(&self) -> Result<Option<Running>, String> {
         Ok(self.inspect().await?.map(|value| Running {
             image: value["Config"]["Image"].as_str().unwrap_or_default().into(),
@@ -656,10 +574,6 @@ impl LocalHost {
         Ok(())
     }
 
-    /// Update is explicit: download before interrupting work, then preserve a
-    /// complete stopped-volume backup before the new binary can migrate it.
-    /// A failure after the swap restores that backup and the previous image,
-    /// and the error says so.
     pub async fn update(
         &self,
         target: &Target,
@@ -718,8 +632,6 @@ impl LocalHost {
         Err(error)
     }
 
-    /// Everything checked before an update may interrupt anything. Returns
-    /// the port the replacement must keep.
     async fn admit(
         &self,
         target: &Target,
@@ -753,8 +665,6 @@ impl LocalHost {
                 target.version
             ));
         }
-        // The same image is put in again only to give the host this Mac's
-        // zone, through the same backup and checks as any replacement.
         if op.previous_image == target.image && !self.zone_differs(&old) {
             return Err(format!("This host already runs Guaca {}.", target.version));
         }
@@ -776,9 +686,6 @@ impl LocalHost {
             .and_then(|l| l["org.opencontainers.image.revision"].as_str())
             .unwrap_or_default()
             .to_string();
-        // Checked while the old host still runs. After the swap the database
-        // is either migrated by a binary nobody vouched for or refused by an
-        // older one, and both end in a restore.
         let labeled =
             labels.and_then(|l| l["org.opencontainers.image.version"].as_str()).unwrap_or_default();
         if !labeled.is_empty() && labeled != target.version {
@@ -793,8 +700,6 @@ impl LocalHost {
         let backup = format!("{}-backup-{}", self.spec.name, uuid::Uuid::new_v4());
         op.backup = Some(backup.clone());
         op.stage = Stage::BackingUp;
-        // If journaling fails after stopping, restart the old host as with a
-        // failed copy. The target has not mounted the live workspace yet.
         let saved = match self.record(op) {
             Err(e) => Err(e),
             Ok(()) => self.copy(&target.image, &self.spec.volume, &backup).await,
@@ -805,15 +710,8 @@ impl LocalHost {
                 Err(_) => Err("The backup failed and Docker could not restart the previous host. Your data is preserved. Check Docker before trying again.".into()),
             };
         }
-        // Persist the recovery point before any destructive action. A manager
-        // killed after this write restores rather than guesses.
         op.stage = Stage::Starting;
         self.record(op)?;
-        // One backup is kept: this one, which is what a failed update restores
-        // and what the operator would roll back to. Every earlier backup, and
-        // every copy a failed update left, is of a state this host has moved
-        // past. Removed only now that this one is recorded, so there is never
-        // a moment with none.
         self.prune(&backup).await;
         self.docker(&["rm", &self.spec.name], 30).await?;
         let connection = self.start_unlocked(&target.image, Some(port)).await?;
@@ -826,8 +724,6 @@ impl LocalHost {
         Ok(connection)
     }
 
-    /// Asks the host who it is, then asks it something only its workspace
-    /// can answer with its key. An empty revision is not compared.
     async fn verify(
         &self,
         connection: &Connection,
@@ -881,13 +777,6 @@ impl LocalHost {
         Ok(())
     }
 
-    /// Puts the workspace back as it was when the update began and runs the
-    /// image that was running then.
-    ///
-    /// The workspace the failed version left is copied aside first and kept,
-    /// because a restore is a decision about somebody's data made without
-    /// asking them. The volume keeps its name: a restored host that mounted
-    /// a new one would be a host its own manager no longer recognizes.
     async fn restore(&self, op: &mut Operation) -> Result<(), String> {
         op.stage = Stage::Restoring;
         self.record(op)?;
@@ -917,8 +806,6 @@ impl LocalHost {
         if self.inspect().await?.is_some() {
             return Err("Docker could not remove the failed host.".into());
         }
-        // Either image carries `cp`; the target is the one certainly present,
-        // since the swap only happens after it downloads.
         let tools = if op.target_image.is_empty() { &op.previous_image } else { &op.target_image };
         let preserved = format!("{}-failed-{}", self.spec.name, uuid::Uuid::new_v4());
         self.copy(tools, &self.spec.volume, &preserved).await?;
@@ -951,10 +838,6 @@ impl LocalHost {
         self.admitted(&http, &connection).await
     }
 
-    /// A whole volume into a new one, as root, with `image` supplying `cp`.
-    /// Removes this host's backups and failed-update copies, all but `keep`.
-    /// One that will not go is left and said: the update does not depend on
-    /// it, and the next update tries again.
     async fn prune(&self, keep: &str) {
         let names = match self.docker(&["volume", "ls", "--format", "{{.Name}}"], 30).await {
             Ok(names) => names,
@@ -1041,8 +924,6 @@ impl LocalHost {
                 args.extend(["--env", *name]);
             }
         }
-        // A zone name is not a secret, so it is given by value: the desktop's
-        // own environment rarely has `TZ`, and the zone is what it is set to.
         let zone = self.zone.as_ref().map(|zone| format!("TZ={zone}"));
         if let Some(zone) = &zone {
             args.extend(["--env", zone]);
@@ -1060,7 +941,6 @@ impl LocalHost {
         self.docker(&args, 60).await.map(drop)
     }
 
-    /// Waits for the container to answer as guacad, and reads its key.
     async fn connection(&self, value: &Value) -> Result<Connection, String> {
         let port = published_port(value)?;
         let published = format!("http://127.0.0.1:{port}");
@@ -1089,8 +969,6 @@ impl LocalHost {
         Err("The local host started but is not ready to connect. Check Docker's Guaca container for details, then try again. Your data is preserved.".into())
     }
 
-    /// The key the host answers to. A box that was given one in its
-    /// environment never writes it to the token file.
     async fn token(&self) -> Result<String, String> {
         if self.spec.env.contains(&"GUACA_TOKEN") {
             if let Some(token) = std::env::var("GUACA_TOKEN")
@@ -1111,16 +989,11 @@ impl LocalHost {
     }
 }
 
-/// The container called `name`, if there is one and it carries the `label`
-/// its maker gave it. One by that name without it is refused rather than
-/// returned. The label is compared to what the container was made as, which
-/// is its name until it is renamed aside.
 pub(crate) async fn owned(
     binary: &Path,
     name: &str,
     label: (&str, &str),
 ) -> Result<Option<Value>, String> {
-    // Listing first distinguishes an absent container from an unavailable daemon.
     let ids = run_docker(
         binary,
         &["container", "ls", "-a", "--filter", &format!("name=^/{name}$"), "--format", "{{.ID}}"],
@@ -1142,10 +1015,6 @@ pub(crate) async fn owned(
     Ok(Some(value))
 }
 
-/// Why the host image did not arrive, split where the operator's next step
-/// splits. Every failure used to say "check your connection", including a
-/// registry answering 403 for an image this build names but nobody published,
-/// which no connection will fix.
 fn pull_failure(image: &str, error: &str) -> String {
     let error = error.to_ascii_lowercase();
     if ["denied", "unauthorized", "manifest unknown", "not found"].iter().any(|s| error.contains(s))
@@ -1156,8 +1025,6 @@ fn pull_failure(image: &str, error: &str) -> String {
     }
 }
 
-/// Whether the container's release is newer than `version`. A container
-/// without a release label is a source build and is never ordered.
 fn newer_than(value: &Value, version: &str) -> bool {
     let current = value["Config"]["Labels"]["org.opencontainers.image.version"]
         .as_str()
@@ -1210,7 +1077,6 @@ fn published_port(value: &Value) -> Result<u16, String> {
         .ok_or("Guaca has an invalid connection port.".into())
 }
 
-/// The container's address on a Docker network another container shares.
 fn bridge_address(value: &Value) -> Result<String, String> {
     value["NetworkSettings"]["Networks"]
         .as_object()
@@ -1251,9 +1117,6 @@ pub(crate) mod tests {
         let mut host =
             LocalHost::new("fixture", "fixture:new").with_journal(dir.path().join("update.json"));
         host.binary = fixture(&dir);
-        // The fixture keeps no environment, so a zone would make every
-        // container look like it needs replacing on a machine not on UTC.
-        // The tests about the zone set one.
         host.zone = None;
         let value = serde_json::json!({
             "failure":failure, "exists":true, "image_version": env!("CARGO_PKG_VERSION"),
@@ -1264,13 +1127,9 @@ pub(crate) mod tests {
         std::fs::write(dir.path().join("docker-state.json"), value.to_string()).unwrap();
         (host, dir, task, format!("http://{addr}"))
     }
-    /// The fake `docker` beside a fixture's own state.
     #[cfg(unix)]
     pub(crate) fn fixture(dir: &tempfile::TempDir) -> PathBuf {
         let binary = dir.path().join("docker");
-        // A concurrent fork can inherit a freshly written executable's writer
-        // until exec, causing ETXTBSY. Share the immutable script; __file__ still
-        // names this symlink, so each fixture keeps its own state directory.
         std::os::unix::fs::symlink(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/docker-host.py"),
             &binary,
@@ -1364,8 +1223,6 @@ pub(crate) mod tests {
             task.abort();
         }
     }
-    /// Volumes beside a fixture host: two of its own earlier copies, and
-    /// three that only look like them.
     #[cfg(unix)]
     fn earlier_copies(dir: &tempfile::TempDir) {
         edit(dir, |state| {
@@ -1420,7 +1277,6 @@ pub(crate) mod tests {
         ];
         expected.sort();
         assert_eq!(volumes(&dir), expected, "only this host's earlier copies go");
-        // Removed after the new one was taken and recorded, never before.
         let log = calls(&dir);
         let copied = log.iter().position(|c| c[0] == "run" && c.contains(&"cp".into())).unwrap();
         let first_removal = log.iter().position(|c| c[..2] == ["volume", "rm"]).unwrap();
@@ -1443,12 +1299,10 @@ pub(crate) mod tests {
             assert_eq!(now["container"]["Config"]["Image"], "fixture:old", "{mode}");
             assert_eq!(now["restored_from"], backup.as_str(), "{mode}");
             assert_eq!(now["volumes"][&preserved], "fixture-host-data", "{mode}");
-            // The failed workspace was copied aside before the backup went over it.
             let log = calls(&dir);
             let aside = log.iter().position(|c| c.iter().any(|a| a.contains(&preserved))).unwrap();
             let restored = log.iter().position(|c| c.iter().any(|a| a == "sh")).unwrap();
             assert!(aside < restored, "{mode}");
-            // A restored host starts normally afterward.
             host.start().await.unwrap();
             task.abort();
         }
@@ -1466,7 +1320,6 @@ pub(crate) mod tests {
             assert_eq!(op.stage, Stage::RecoveryNeeded, "{mode}");
             assert!(error.contains(op.backup.as_deref().unwrap()), "{mode}: {error}");
             if mode == "preserve" {
-                // Nothing may be deleted without a copy of it somewhere.
                 assert!(!calls(&dir).iter().any(|c| c.iter().any(|a| a == "sh")));
             }
             let restart_error = host.start().await.err().unwrap();
@@ -1576,7 +1429,6 @@ pub(crate) mod tests {
         task.abort();
     }
 
-    /// An interrupted journal, as a manager killed at `stage` leaves it.
     #[cfg(unix)]
     fn interrupted(host: &LocalHost, stage: Stage, port: u16) -> Operation {
         let op = Operation {
@@ -1709,7 +1561,6 @@ pub(crate) mod tests {
         let host =
             LocalHost::new("fixture", "fixture:new").with_journal(dir.path().join("update.json"));
         let operation = host.process_lock().unwrap().unwrap();
-        // A fork inherits the same open file description until exec closes it.
         let inherited = operation.0.try_clone().unwrap();
         assert!(host.process_lock().is_err());
         drop(operation);
@@ -1746,8 +1597,6 @@ pub(crate) mod tests {
         let container = host.spec.name.clone();
         drop(host);
         docker(&["stop", &container], 45).await.unwrap();
-        // A second tag of the same image is a different reference, which is
-        // all an update compares, and it reports the same release.
         let next = format!("{id}:next");
         docker(&["tag", &image, &next], 30).await.unwrap();
         let journal = tempfile::tempdir().unwrap();
@@ -1779,9 +1628,6 @@ pub(crate) mod tests {
             .await
             .unwrap();
         assert!(groups["ok"].as_array().unwrap().iter().any(|g| g["name"] == "Persistent test"));
-        // An update the new image cannot pass is undone with the workspace
-        // intact. Its label claims a release its binary does not report, so
-        // it passes the check before the swap and fails the one after.
         let wrong = format!("{id}:wrong");
         let mut build = std::process::Command::new(docker_binary())
             .args(["build", "--quiet", "--tag", &wrong, "-"])

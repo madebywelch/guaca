@@ -424,8 +424,6 @@ describe("desktop host setup", () => {
     expect(restart).not.toHaveBeenCalled();
   });
   it("keeps the form for a saved remote host the workspace is not open on", async () => {
-    // Onboarding and a host turned away both reach here with a remote attached,
-    // and the operator needs the fields to correct it, not a claim it works.
     current.mockReturnValue({ origin: "https://vps.example", token: "private" });
     render(<HostChoice />);
     expect(screen.queryByRole("button", { name: "Change host" })).toBeNull();

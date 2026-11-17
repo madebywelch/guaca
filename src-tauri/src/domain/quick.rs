@@ -1,32 +1,12 @@
-//! A quick action: one button on the status bar for something the operator
-//! does often.
-//!
-//! Declarative on purpose. Hermes lets an agent write JavaScript that runs in
-//! the window with the app's whole authority, and says in its own loader that
-//! this is not a capability boundary. Here a button is data from a closed set
-//! of things it can do, drawn by the app's own code, so an agent that adds one
-//! has chosen a label and a destination and nothing else.
-//!
-//! One of those destinations is not harmless, and it decides who may add one. A
-//! button that sends a message sends it as the operator, on a click made without
-//! reading the text again. So a quick action is the operator's own and only
-//! theirs. Agents used to ask for them through `settings`; what an agent puts on
-//! the bar now is a widget (`domain::widget`), a page its crew keeps, whose
-//! clicks open the page rather than speak for anybody. A button an agent asked
-//! for before then is still drawn, and still says it was.
-
 use serde::{Deserialize, Serialize};
 
 use super::ids::{AgentId, GroupId};
 use super::view;
 
-/// How many fit on the bar. Past this it is a menu, and a menu is not quick.
 pub const MAX_ACTIONS: usize = 8;
 
-/// A button's label. Two or three words.
 pub const MAX_LABEL: usize = 24;
 
-/// What a button sends. A message, not a brief.
 pub const MAX_TEXT: usize = 2_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,18 +15,13 @@ pub struct QuickAction {
     pub id: String,
     pub label: String,
     pub does: Does,
-    /// Who put it there: "the operator", or the agent that asked for it.
     pub added_by: String,
 }
 
-/// What pressing it does. A closed set: the app draws and runs each one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Does {
-    /// Sends this text to this agent, as the operator would from its channel,
-    /// and opens that channel to show the answer arriving.
     Message { agent_id: AgentId, text: String },
-    /// Opens a place in the app.
     Open { place: Place },
 }
 
@@ -89,7 +64,6 @@ pub enum QuickError {
 }
 
 impl QuickAction {
-    /// A button fit to put on the bar, with a fresh id.
     pub fn new(label: &str, does: Does, added_by: &str) -> Result<Self, QuickError> {
         let label = label.split_whitespace().collect::<Vec<_>>().join(" ");
         if label.is_empty() {
@@ -112,7 +86,6 @@ impl QuickAction {
                 Does::Message { agent_id, text }
             }
             Does::Open { place: Place::Settings { section } } => {
-                // A pane name, or none: it reaches the page as a route.
                 let section = section.filter(|name| {
                     !name.is_empty()
                         && name.len() <= 32
@@ -126,8 +99,6 @@ impl QuickAction {
         Ok(Self { id, label, does, added_by: added_by.trim().to_string() })
     }
 
-    /// What it does, in one line, with names the caller looked up. What an
-    /// agent reading the settings is told, so the message is quoted whole.
     pub fn describe(&self, agent: impl Fn(AgentId) -> String) -> String {
         match &self.does {
             Does::Message { agent_id, text } => {
@@ -155,7 +126,6 @@ impl QuickAction {
     }
 }
 
-/// Adds one to the bar, refusing a full one.
 pub fn add(bar: &mut Vec<QuickAction>, action: QuickAction) -> Result<(), QuickError> {
     if bar.len() >= MAX_ACTIONS {
         return Err(QuickError::Full);
@@ -164,7 +134,6 @@ pub fn add(bar: &mut Vec<QuickAction>, action: QuickAction) -> Result<(), QuickE
     Ok(())
 }
 
-/// Takes one off the bar by id.
 pub fn remove(bar: &mut Vec<QuickAction>, id: &str) -> Result<QuickAction, QuickError> {
     let at = bar.iter().position(|action| action.id == id).ok_or(QuickError::Unknown(id.into()))?;
     Ok(bar.remove(at))
@@ -205,8 +174,6 @@ mod tests {
 
     #[test]
     fn what_an_agent_is_told_about_a_pane_names_it() {
-        // The sentence an agent reads and the one under a quick action's button
-        // are the same sentence, so both name the pane rather than the id.
         let made = QuickAction::new(
             "Host",
             Does::Open { place: Place::Settings { section: Some("workspace".into()) } },
@@ -238,7 +205,6 @@ mod tests {
         let made = QuickAction::new("Brief", message("Give me the brief."), "Pip").unwrap();
         let said = made.describe(|_| "Scout".into());
         assert_eq!(said, "\u{201c}Brief\u{201d} sends Scout: \u{201c}Give me the brief.\u{201d}");
-        // What crosses IPC is spelled the way the frontend spells it.
         let wire = serde_json::to_value(&made).unwrap();
         assert_eq!(wire["does"]["kind"], "message");
         assert!(wire["does"].get("agentId").is_some(), "{wire}");

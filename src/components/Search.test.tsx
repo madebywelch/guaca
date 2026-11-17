@@ -4,15 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentCard, SearchHits } from "../lib/types";
 import { aGroup } from "../test-fixtures";
 
-/**
- * The palette, over a mocked store.
- *
- * What is worth testing here is not the markup: it is that the two halves of
- * the search behave as one control. The local half has to answer on the
- * keystroke, the stored half has to arrive later without overwriting a newer
- * query, and choosing a row has to do the one thing that row says it does.
- */
-
 const GROUP = "00000000-0000-4000-8000-000000000001";
 const NOTHING: SearchHits = { messages: [], files: [], links: [], routines: [], artifacts: [] };
 
@@ -88,15 +79,6 @@ function type(value: string) {
   fireEvent.change(screen.getByLabelText(/search guaca/i), { target: { value } });
 }
 
-/**
- * A key press from the search input, carrying the composition flag a browser
- * puts on the native event.
- *
- * The window listener reads a DOM `KeyboardEvent`, so the flag has to be set
- * on the event itself rather than on a React synthetic wrapper. jsdom has no
- * input method, so this is the only way to reproduce what an IME delivers:
- * a real `keydown` whose native `isComposing` is true.
- */
 function press(key: string, options: { isComposing?: boolean; shiftKey?: boolean } = {}) {
   const input = screen.getByLabelText(/search guaca/i);
   const event = createEvent.keyDown(input, {
@@ -110,11 +92,9 @@ function press(key: string, options: { isComposing?: boolean; shiftKey?: boolean
   return event;
 }
 
-/** The title of the row the cursor is on, read from the rendered list. */
 const selectedTitle = () =>
   document.querySelector("[data-selected='true'] .palette__title")?.textContent;
 
-/** The label of the scope tab currently marked selected. */
 const activeScope = () => screen.getByRole("tab", { selected: true }).textContent;
 
 beforeEach(() => {
@@ -211,9 +191,6 @@ describe("Search", () => {
     }
   });
   it("narrows as the operator types, without waiting for the store", async () => {
-    // Agents are already in hand, so the list must move on the keystroke
-    // itself. A palette that pauses for a round trip to filter two names is
-    // slower than the rail it replaced.
     open();
     expect(screen.getByText("Manager")).toBeTruthy();
     expect(screen.getByText("Chef")).toBeTruthy();
@@ -228,13 +205,10 @@ describe("Search", () => {
     type("bud");
     type("budget");
     await waitFor(() => expect(search).toHaveBeenCalledWith("budget", expect.any(Number)));
-    // Both keystrokes inside the window are one query, not two.
     expect(search.mock.calls.filter(([q]) => q === "bud")).toHaveLength(0);
   });
 
   it("ignores an answer to a query the operator has moved past", async () => {
-    // The reply to "b" can land after the reply to "budget". Rendering it
-    // would show results for something nobody is looking at any more.
     const stale: SearchHits = {
       ...NOTHING,
       links: [
@@ -306,8 +280,6 @@ describe("Search", () => {
     open();
     const selected = () =>
       document.querySelector("[data-selected='true'] .palette__title")?.textContent;
-    // Read off the list rather than assumed: what order the rows come in is
-    // the ranking's business, and it is tested where the ranking is.
     const rows = [...document.querySelectorAll(".palette__title")].map((n) => n.textContent);
 
     expect(selected()).toBe(rows[0]);
@@ -318,8 +290,6 @@ describe("Search", () => {
   });
 
   it("does not run off the end of the list", async () => {
-    // Enter on a cursor past the last row would open nothing, or worse, open
-    // whatever ends up at that index when the next answer arrives.
     open([agent("Manager")]);
     fireEvent.click(screen.getByRole("tab", { name: "Agents" }));
     for (let i = 0; i < 5; i++) fireEvent.keyDown(window, { key: "ArrowDown" });
@@ -337,8 +307,6 @@ describe("Search", () => {
   });
 
   it("opens a link in the operating system browser, never in the webview", async () => {
-    // Following one inside the webview navigates away from the app with no
-    // way back.
     search.mockResolvedValue({
       ...NOTHING,
       links: [
@@ -380,7 +348,6 @@ describe("Search", () => {
 
     fireEvent.click(screen.getByText("the budget is signed off"));
     await waitFor(() => expect(useStore.getState().selected).toBe("id-Chef"));
-    // Marked, so the transcript can scroll to it and say which one it was.
     expect(useStore.getState().focused).toBe("m1");
   });
 
@@ -392,8 +359,6 @@ describe("Search", () => {
 
   describe("while an input method is composing", () => {
     it("does not open a result or close the palette on Enter", async () => {
-      // An IME uses Enter to accept a candidate, not to submit. The palette
-      // must leave that keystroke alone or it would open something mid-word.
       open();
       type("chef");
 
@@ -415,8 +380,6 @@ describe("Search", () => {
     });
 
     it("does not move the selection up with ArrowUp", async () => {
-      // Move off the first row first: a composing ArrowUp that only failed to
-      // move because it was already at the top would prove nothing.
       open();
       press("ArrowDown");
       const second = selectedTitle();
@@ -437,7 +400,6 @@ describe("Search", () => {
 
       expect(event.defaultPrevented).toBe(false);
       expect(activeScope()).toBe("All");
-      // The cursor is not reset either: a scope change clears it.
       expect(selectedTitle()).toBe(cursor);
     });
 
@@ -465,8 +427,6 @@ describe("Search", () => {
     });
 
     it("recovers on the ordinary key that follows composition", async () => {
-      // The guard must be a pass-through, not a one-way latch: once the IME
-      // is done, the very next ordinary Enter has to work.
       open();
       type("chef");
       press("Enter", { isComposing: true });
@@ -546,7 +506,6 @@ describe("Search", () => {
   });
 });
 
-/** The title of the first row, read without touching the cursor. */
 function selectedTitleAtStart() {
   return document.querySelector(".palette__title")?.textContent;
 }

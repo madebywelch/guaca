@@ -1,27 +1,3 @@
-//! Loop guard.
-//!
-//! Bidirectional agent messaging does not terminate on its own. Two agents
-//! being polite at each other is an infinite loop that costs real money, and
-//! a broadcast to N agents that each reply to the sender is a fan-in storm.
-//! None of the protocols in the interoperability literature specify a
-//! termination condition; they describe how to address a peer, not when to
-//! stop. So Guac supplies one.
-//!
-//! Five independent limits, because each catches a different shape of runaway
-//! and any one of them alone has a hole:
-//!
-//! | Limit             | Catches                                        |
-//! |-------------------|------------------------------------------------|
-//! | hop depth         | long delegation chains, A->B->C->D->...         |
-//! | run step budget   | everything else, as a hard ceiling on spend     |
-//! | per-pair sends    | two agents ping-ponging inside the hop budget   |
-//! | content dedup     | an agent restating itself to make progress      |
-//! | fan-out width     | one call blasting every agent in the directory  |
-//!
-//! Refusals are returned to the calling model as tool results, never silently
-//! dropped. An agent that is told "you have already sent Chef 3 messages this
-//! run" will stop. An agent whose message vanishes will retry.
-
 use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
@@ -33,25 +9,10 @@ use crate::domain::now_ms;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GuardLimits {
-    /// Maximum agent-to-agent forwards away from the operator's message.
     pub max_hops: u16,
-    /// Maximum inference calls across all agents in one run.
-    ///
-    /// Counted per model call, not per agent turn: one turn can call the model
-    /// several times as it works through tool results, and the model call is
-    /// the thing that costs money.
     pub max_steps_per_run: u32,
-    /// Maximum recipients accepted by a single `send_message` call.
     pub max_fanout_per_call: usize,
-    /// Maximum messages one agent may send to one specific peer per run.
     pub max_sends_per_pair: u32,
-    /// Maximum model calls inside a single turn as an agent works through tool
-    /// results.
-    ///
-    /// Working a browser is a loop of read, act, read again, and each pass is
-    /// one of these. Four was enough when the only tools were messaging and
-    /// notes, and far too few once an agent could use a computer: it stopped
-    /// mid-task, having done part of the work and reported none of it.
     #[serde(default = "default_tool_rounds")]
     pub max_tool_rounds: u16,
 }
@@ -62,19 +23,6 @@ pub fn default_tool_rounds() -> u16 {
 
 impl Default for GuardLimits {
     fn default() -> Self {
-        // Tuned against a real working session, not the introduction demo.
-        //
-        // A four-agent review cycle (operator -> Manager -> Researcher ->
-        // Manager -> Critic -> Researcher -> Critic) is seven hops of genuine
-        // progress, and a coordinator legitimately messages the same specialist
-        // several times across one task. Limits of 4 hops and 3 sends per pair
-        // cut exactly that pattern off partway: the coordinator could not
-        // forward a document it had just been asked to forward, and the rest of
-        // the crew spent the thread asking for content that could never arrive.
-        //
-        // The run budget is the real spend control. Hops and per-pair counts
-        // exist to stop relay chains and ping-pong, so they only have to sit
-        // above the depth of honest work.
         Self {
             max_hops: 8,
             max_steps_per_run: 60,
@@ -86,65 +34,32 @@ impl Default for GuardLimits {
 }
 
 impl GuardLimits {
-    /// Clamps operator-supplied limits into a range the runtime can survive.
-    ///
-    /// Settings come from the UI, so treat them as untrusted. A zero step
-    /// budget deadlocks every run; an unbounded one is an open wallet.
     pub fn sanitized(self) -> Self {
         Self {
             max_hops: self.max_hops.clamp(1, 16),
             max_steps_per_run: self.max_steps_per_run.clamp(1, 500),
             max_fanout_per_call: self.max_fanout_per_call.clamp(1, 64),
             max_sends_per_pair: self.max_sends_per_pair.clamp(1, 50),
-            // The run budget is the real spend control, so this can be generous:
-            // a browsing turn legitimately takes dozens of passes.
             max_tool_rounds: self.max_tool_rounds.clamp(1, 100),
         }
     }
 }
 
-/// Why a send was refused. Every variant carries the numbers, because the
-/// message goes back to a model that needs to understand it has hit a wall.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "reason", rename_all = "snake_case")]
 pub enum Refusal {
-    HopLimit {
-        hop: u16,
-        max: u16,
-    },
-    RunBudgetExhausted {
-        used: u32,
-        max: u32,
-    },
-    PairLimit {
-        recipient: String,
-        sent: u32,
-        max: u32,
-    },
-    DuplicateContent {
-        recipient: String,
-    },
-    FanOutTooWide {
-        requested: usize,
-        max: usize,
-    },
+    HopLimit { hop: u16, max: u16 },
+    RunBudgetExhausted { used: u32, max: u32 },
+    PairLimit { recipient: String, sent: u32, max: u32 },
+    DuplicateContent { recipient: String },
+    FanOutTooWide { requested: usize, max: usize },
     SelfAddressed,
-    UnknownRecipient {
-        recipient: String,
-    },
-    RecipientTerminated {
-        recipient: String,
-    },
-    /// Both sides have spoken and neither is waiting. See `Runtime::run_turn`.
-    ExchangeSettled {
-        recipient: String,
-    },
+    UnknownRecipient { recipient: String },
+    RecipientTerminated { recipient: String },
+    ExchangeSettled { recipient: String },
 }
 
 impl Refusal {
-    /// Phrasing aimed at a model, not a developer. States the wall, the
-    /// numbers, and what to do instead, so the agent reports back rather than
-    /// retrying into the same refusal.
     pub fn explain(&self) -> String {
         match self {
             Refusal::HopLimit { hop, max } => format!(
@@ -190,7 +105,6 @@ impl Refusal {
         }
     }
 
-    /// Short form for the transcript chip.
     pub fn headline(&self) -> String {
         match self {
             Refusal::HopLimit { max, .. } => format!("hop limit ({max}) reached"),
@@ -212,15 +126,12 @@ impl Refusal {
     }
 }
 
-/// A single proposed agent-to-agent send, evaluated before it is enqueued.
 #[derive(Debug, Clone)]
 pub struct SendRequest {
     pub from: AgentId,
     pub to: AgentId,
-    /// Display name of the recipient, used only to phrase refusals.
     pub to_name: String,
     pub text: String,
-    /// Hop count of the envelope the sender is currently processing.
     pub inbound_hop: u16,
 }
 
@@ -230,23 +141,12 @@ pub enum Verdict {
     Refuse(Refusal),
 }
 
-/// Mutable guard state for one run.
 #[derive(Debug)]
 pub struct RunState {
     limits: GuardLimits,
     steps_used: u32,
     fingerprints: HashSet<String>,
     pair_counts: HashMap<(AgentId, AgentId), u32>,
-    /// Pairs whose last delivered send asked the recipient for something and
-    /// has not been answered: `(asker, ower)`.
-    ///
-    /// Written by [`Self::note_sent`] when the runtime delivers an expectant
-    /// message, and cleared after delivery the moment anything travels
-    /// the other way, because any message from the ower is the reply the asker
-    /// was owed. Derived from `pair_counts` before work could re-arm the reply
-    /// path, which broke the moment it could: "has ever written to me" and
-    /// "owes me an answer" are different questions, and a peer that answered
-    /// an earlier round still owes one for the instruction sent after it.
     expecting: HashMap<(AgentId, AgentId), u32>,
     last_touched: i64,
 }
@@ -306,10 +206,6 @@ impl RunState {
         self.limits.max_steps_per_run.saturating_sub(self.steps_used)
     }
 
-    /// Whether another model call is affordable, without claiming it.
-    ///
-    /// Lets a turn bail out before building a prompt or telling the UI a
-    /// message is coming.
     pub fn has_budget(&self) -> bool {
         self.steps_remaining() > 0
     }
@@ -318,16 +214,10 @@ impl RunState {
         self.limits
     }
 
-    /// Restores the recorded budget for a legacy put-down.
     pub fn resume_at(&mut self, spent: u32) {
         self.steps_used = self.steps_used.max(spent);
     }
 
-    /// Claims one model call. Returns false when the run is spent.
-    ///
-    /// Called immediately before each invocation, including the extra calls a
-    /// turn makes while working through tool results, so the budget tracks
-    /// real spend rather than intent.
     pub fn reserve_step(&mut self) -> bool {
         self.last_touched = now_ms();
         if self.steps_used >= self.limits.max_steps_per_run {
@@ -337,14 +227,6 @@ impl RunState {
         true
     }
 
-    /// Claims one model call only while more than `kept` would remain after it.
-    ///
-    /// The errand's claim. An errand spends from the run that sent it, and the
-    /// turn that sent it still has to read what came back and answer; a claim
-    /// that could take the last step would let errands spend the budget
-    /// between them and leave that turn with findings and no call to report
-    /// them in. The turn itself claims with [`Self::reserve_step`], so what is
-    /// kept here is kept for it.
     pub fn reserve_step_leaving(&mut self, kept: u32) -> bool {
         self.last_touched = now_ms();
         if self.steps_remaining() <= kept {
@@ -354,30 +236,11 @@ impl RunState {
         true
     }
 
-    /// Gives back the step claimed for a call the operator's stop cut short.
-    ///
-    /// The one caller is the model call a stop abandoned, and it exists because
-    /// of how the bill is read rather than to be generous about the ceiling.
-    /// `trajectory.rs` checks a run's steps against `calls + failures`: a
-    /// completed call reports usage and a call that failed every attempt writes
-    /// a notice, so both buckets are visible from outside. A call dropped
-    /// mid-flight is in neither, and a step left claimed for it makes every
-    /// stopped run read as a budget that miscounted.
-    ///
-    /// It cannot be spent against the ceiling, because a run only reaches here
-    /// on its way out: the turn that released breaks out of its round loop on
-    /// the same stop, and every other boundary is already refusing work for the
-    /// run. Nothing claims again after this.
     pub fn release_step(&mut self) {
         self.last_touched = now_ms();
         self.steps_used = self.steps_used.saturating_sub(1);
     }
 
-    /// Evaluates one proposed send and, when allowed, records it.
-    ///
-    /// Recording on allow is what makes the per-pair and dedup limits real, so
-    /// this cannot be split into a pure check plus a separate commit without
-    /// opening a race between two agents sending concurrently.
     pub fn evaluate(&mut self, req: &SendRequest) -> Verdict {
         let generation = self.reply_generation(req.from, req.to);
         let verdict = self.evaluate_pending(req);
@@ -439,13 +302,6 @@ impl RunState {
         }
     }
 
-    /// Records whether a send the runtime went on to deliver asked its
-    /// recipient for something.
-    ///
-    /// Separate from [`Self::evaluate`] because whether a message expects an
-    /// answer is decided by the runtime after the verdict, from the sender's
-    /// declared intent and the state of the exchange. Only a delivered message
-    /// creates a debt: a refused one reached nobody.
     pub fn note_sent(&mut self, from: AgentId, to: AgentId, expects_reply: bool) {
         if expects_reply {
             let generation = self.pair_counts.get(&(from, to)).copied().unwrap_or(0);
@@ -453,29 +309,14 @@ impl RunState {
         }
     }
 
-    /// The peers that owe this agent an answer.
-    ///
-    /// The only thing worth waiting for between turns. Waiting on "is anyone
-    /// in this run busy" was tried and made an agent sit through peers that
-    /// were merely finishing their own notes; deriving it from "has written to
-    /// me at all" was tried next and stopped counting the moment a peer could
-    /// be instructed twice, because a peer that answered round one still owes
-    /// the answer to round two.
     pub fn awaited(&self, me: AgentId) -> HashSet<AgentId> {
         self.expecting.keys().filter(|(from, _)| *from == me).map(|(_, to)| *to).collect()
     }
 
-    /// Whether `from` has written to `to` at any point in this run.
-    ///
-    /// Batch membership cannot answer this. Replies arrive milliseconds apart
-    /// and an actor drains whatever has landed, so three peers answering at
-    /// once can be split across turns: two of them then look like agents this
-    /// one has never spoken to, and get messages that demand answers.
     pub fn has_written(&self, from: AgentId, to: AgentId) -> bool {
         self.pair_counts.get(&(from, to)).copied().unwrap_or(0) > 0
     }
 
-    /// Checks fan-out width before any individual recipient is evaluated.
     pub fn check_fanout(&self, requested: usize) -> Option<Refusal> {
         if requested > self.limits.max_fanout_per_call {
             return Some(Refusal::FanOutTooWide {
@@ -487,7 +328,6 @@ impl RunState {
     }
 }
 
-/// Run guards retained after settlement and pinned while work is booked.
 #[derive(Debug, Default)]
 pub struct GuardRegistry {
     runs: HashMap<RunId, RunState>,
@@ -524,16 +364,6 @@ impl GuardRegistry {
         self.reap(None);
     }
 
-    /// Gets or creates the state for a run, on the limits of the group it is
-    /// happening in, reaping stale entries first.
-    ///
-    /// The registry holds no limits of its own, because there is no such thing
-    /// as a run outside a group. A run cannot cross one either, since a send
-    /// addressed outside a group is refused as an unknown recipient, so every
-    /// caller for a given run passes the same numbers, and it does not matter
-    /// which of them creates the state. They are read on creation and then
-    /// fixed for the life of the run: a limit edited mid-cascade must not move
-    /// the ceiling a conversation is already being measured against.
     pub fn run_within(&mut self, id: RunId, limits: GuardLimits) -> &mut RunState {
         self.reap(None);
         self.runs.entry(id).or_insert_with(|| RunState::new(limits));
@@ -555,7 +385,6 @@ impl GuardRegistry {
             Some(*id) == protected || self.pinned.contains(id) || state.last_touched >= cutoff
         });
 
-        // Live runs keep their budgets even under retention pressure.
         let settled =
             self.runs.len() - self.runs.keys().filter(|id| self.pinned.contains(id)).count();
         if settled > self.max_retained {
@@ -664,15 +493,12 @@ mod tests {
     #[test]
     fn hop_counter_cannot_be_overflowed_into_wrapping() {
         let mut state = RunState::new(GuardLimits { max_hops: 4, ..permissive() });
-        // A saturating add means a maxed inbound hop stays maxed rather than
-        // wrapping to 0 and re-opening the budget.
         let verdict = state.evaluate(&req(AgentId::new(), AgentId::new(), "x", u16::MAX));
         assert_eq!(verdict, Verdict::Refuse(Refusal::HopLimit { hop: u16::MAX, max: 4 }));
     }
 
     #[test]
     fn ping_pong_between_two_agents_terminates() {
-        // The canonical runaway: A and B politely acknowledging each other.
         let mut state =
             RunState::new(GuardLimits { max_hops: 100, max_sends_per_pair: 3, ..permissive() });
         let (a, b) = (AgentId::new(), AgentId::new());
@@ -706,8 +532,6 @@ mod tests {
 
     #[test]
     fn the_same_text_to_different_peers_is_allowed() {
-        // This is the whole point of the broadcast feature, so it must not trip
-        // the dedup check.
         let mut state = RunState::new(permissive());
         let manager = AgentId::new();
         for _ in 0..5 {
@@ -726,10 +550,7 @@ mod tests {
     fn a_refused_send_does_not_consume_the_pair_budget() {
         let mut state = RunState::new(GuardLimits { max_hops: 1, ..permissive() });
         let (a, b) = (AgentId::new(), AgentId::new());
-        // Refused on hops.
         assert!(matches!(state.evaluate(&req(a, b, "x", 5)), Verdict::Refuse(_)));
-        // The pair counter must still be clean, otherwise a hop refusal would
-        // silently eat quota the agent never used.
         assert!(matches!(state.evaluate(&req(a, b, "x", 0)), Verdict::Allow { hop: 1 }));
     }
 
@@ -745,9 +566,6 @@ mod tests {
 
     #[test]
     fn a_call_the_operator_cut_short_gives_its_step_back() {
-        // The bill is read as `steps == calls + failures`. An abandoned call is
-        // in neither bucket, so a step left claimed for it is a run that looks
-        // like it billed for a call nothing can find.
         let mut state = RunState::new(GuardLimits { max_steps_per_run: 3, ..permissive() });
         assert!(state.reserve_step());
         assert!(state.reserve_step());
@@ -758,8 +576,6 @@ mod tests {
 
     #[test]
     fn releasing_a_step_that_was_never_claimed_does_nothing() {
-        // Nothing calls it that way today, and a wrap to u32::MAX would be a
-        // run whose budget can never be spent rather than a panic anybody sees.
         let mut state = RunState::new(GuardLimits { max_steps_per_run: 2, ..permissive() });
         state.release_step();
         assert_eq!(state.steps_used(), 0);
@@ -819,15 +635,11 @@ mod tests {
 
     #[test]
     fn a_broadcast_storm_across_five_agents_stays_within_default_budget() {
-        // The scenario: Manager introduces itself to everyone,
-        // everyone replies. This must complete rather than hit a limit.
         let limits = GuardLimits::default();
         let mut state = RunState::new(limits);
         let manager = AgentId::new();
         let peers: Vec<AgentId> = (0..4).map(|_| AgentId::new()).collect();
 
-        // Two calls: one that emits the tool call, one that speaks after the
-        // tool result comes back.
         assert!(state.reserve_step(), "manager's tool call");
         assert!(state.reserve_step(), "manager's follow-up");
         assert_eq!(state.check_fanout(peers.len()), None);
@@ -861,9 +673,6 @@ mod tests {
 
     #[test]
     fn a_realistic_review_cycle_is_not_cut_off_by_the_defaults() {
-        // Observed in real use: operator -> Manager -> Researcher -> Manager
-        // -> Critic -> Researcher -> Critic -> Researcher. Every step is honest
-        // progress, and the defaults must let all of it through.
         let mut state = RunState::new(GuardLimits::default());
         let manager = AgentId::new();
         let researcher = AgentId::new();
@@ -889,8 +698,6 @@ mod tests {
 
     #[test]
     fn a_coordinator_can_message_the_same_specialist_across_a_task() {
-        // A manager assigning, following up, and forwarding to one specialist
-        // is three to five messages. Refusing the fourth strands the work.
         let mut state = RunState::new(GuardLimits::default());
         let (manager, researcher) = (AgentId::new(), AgentId::new());
         for round in 0..5 {
@@ -905,8 +712,6 @@ mod tests {
 
     #[test]
     fn budget_counts_model_calls_so_a_tool_heavy_turn_cannot_overspend() {
-        // A turn that loops on tool results makes several model calls. If the
-        // budget counted turns instead, one turn could bill many times over.
         let mut state = RunState::new(GuardLimits { max_steps_per_run: 3, ..permissive() });
         assert!(state.reserve_step(), "call 1: emits a tool call");
         assert!(state.reserve_step(), "call 2: emits another tool call");
@@ -917,9 +722,6 @@ mod tests {
 
     #[test]
     fn a_run_keeps_the_limits_it_started_on() {
-        // Two groups, two ceilings, one registry. And the second call for a run
-        // does not re-read them: a run measured against a moving number cannot
-        // report what it was allowed to spend.
         let mut reg = GuardRegistry::new();
         let (tight, loose) = (RunId::new(), RunId::new());
 
@@ -958,7 +760,6 @@ mod tests {
         let mut reg = GuardRegistry::new();
         let old = RunId::new();
         reg.run_within(old, GuardLimits::default()).reserve_step();
-        // Backdate past the retention window.
         reg.runs.get_mut(&old).unwrap().last_touched = now_ms() - (2 * 60 * 60 * 1000);
         reg.run_within(RunId::new(), GuardLimits::default());
         assert!(reg.peek(old).is_none(), "stale run should have been reaped");
@@ -1024,8 +825,6 @@ mod tests {
         state.note_sent(manager, chef, true);
         assert_eq!(state.awaited(manager), HashSet::from([chef]));
 
-        // Anything from the ower settles the debt, whatever it declares
-        // itself to be: the asker wanted to hear back, and it has.
         assert!(matches!(state.evaluate(&req(chef, manager, "done", 1)), Verdict::Allow { .. }));
         assert!(state.awaited(manager).is_empty());
     }
@@ -1116,9 +915,6 @@ mod tests {
 
     #[test]
     fn a_second_instruction_is_awaited_although_the_peer_answered_the_first() {
-        // The case the pair-count derivation could not see: after one round
-        // trip the peer "has written", and an agent that instructs it again is
-        // owed an answer the old question answered no about.
         let mut state = RunState::new(permissive());
         let (manager, chef) = (AgentId::new(), AgentId::new());
 

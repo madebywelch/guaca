@@ -6,8 +6,6 @@ import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 import { builtOn } from "./build-stamp.ts";
 
-// Tauri drives the dev server on a fixed port and expects a hard failure
-// rather than a silent port bump, otherwise the webview loads nothing.
 const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig({
@@ -28,8 +26,6 @@ export default defineConfig({
   },
   envPrefix: ["VITE_", "TAURI_ENV_*"],
   build: {
-    // Two pages from one bundle: the window, and the panel under the menu bar
-    // icon, which is a second webview the tray opens on `menubar.html`.
     rollupOptions: {
       input: {
         main: fileURLToPath(new URL("./index.html", import.meta.url)),

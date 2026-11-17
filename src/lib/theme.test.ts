@@ -1,15 +1,3 @@
-/**
- * The gates a theme is held to, and the stylesheet held to the theme.
- *
- * Nothing here says amber is right or that the columns should be a particular
- * gray. It says every combination an operator can pick is readable, that the
- * signals stay apart for somebody who cannot tell red from green, and that the
- * values `styles.css` paints before any script runs are the ones the solver
- * would have written anyway. Colorblind separation and contrast are exactly
- * the things nobody can check by looking, which is why none of it is left to
- * a screenshot.
- */
-
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -36,7 +24,6 @@ import {
 
 const css = readFileSync(join(process.cwd(), "src/styles.css"), "utf8");
 
-/** What one block of a stylesheet declares, by name. */
 function declared(source: string, selector: string): Map<string, string> {
   const block = source.match(
     new RegExp(`^${selector.replace(/[[\]"=]/g, "\\$&")} \\{\\n[\\s\\S]*?\\n\\}`, "m"),
@@ -48,7 +35,6 @@ function declared(source: string, selector: string): Map<string, string> {
 const PAPER = ":root";
 const INK = ':root[data-surface="dark"]';
 
-/** Every combination the Appearance pane can reach. */
 const THEMES: Theme[] = (Object.keys(GRAYS) as GrayKey[]).flatMap((grays) =>
   (Object.keys(ATTENTIONS) as AttentionKey[]).flatMap((attention) =>
     CONTRASTS.flatMap((contrast) =>
@@ -57,7 +43,6 @@ const THEMES: Theme[] = (Object.keys(GRAYS) as GrayKey[]).flatMap((grays) =>
   ),
 );
 
-/** What failed, as sentences a failure message can print. */
 function failures(tokens: Tokens, level: Theme["contrast"]): string[] {
   return measure(tokens, level)
     .filter((check) => check.value < check.target)
@@ -132,14 +117,6 @@ describe("the gates", () => {
       }
     }
   });
-  /**
-   * The stylesheet as it stood before themes, in today's names.
-   *
-   * Kept as the failure the gates exist for. Hints at 3.2 to 1, a control's
-   * border at 1.3, and "answer me" 2.6 from "failed" under deuteranopia, which
-   * is one color: every one of these shipped, and every one passed the suites
-   * of the day, because none of them is visible to the person who picked it.
-   */
   const SHIPPED: Tokens = {
     "--rail-ground": "#f5f3ee",
     "--rail-raised": "#ffffff",
@@ -198,12 +175,6 @@ describe("the gates", () => {
 
 describe("what a theme can and cannot move", () => {
   it("keeps the page the brightest ground, whatever the grays and climate", () => {
-    // The page used to be required to be white, and a tint there was the
-    // reading surface picking up a color every agent's color then competes
-    // with. Ledger's page is paper instead: warm, and still the brightest
-    // thing on screen, which is the half of that argument that survives. A
-    // column lighter than the page turns the reading surface into another
-    // panel, and no contrast gate sees a relationship between two grounds.
     for (const grays of Object.keys(GRAYS) as GrayKey[]) {
       for (const temperature of TEMPERATURE_KEYS) {
         const light = themeTokens({ ...DEFAULT_THEME, grays, temperature }, "light");
@@ -230,8 +201,6 @@ describe("what a theme can and cannot move", () => {
   });
 
   it("moves the page with the temperature rather than painting over it", () => {
-    // The one thing the fourth choice may not be is a color written down: a
-    // page warmed by a hex is a page the text was not solved against.
     const pages = TEMPERATURE_KEYS.map(
       (temperature) => themeTokens({ ...DEFAULT_THEME, temperature }, "light")["--ground"],
     );
@@ -243,9 +212,6 @@ describe("what a theme can and cannot move", () => {
   });
 
   it("draws a fill the same on both surfaces, text color included", () => {
-    // A fill carries its own text color precisely so it does not have to
-    // agree with the page. One that moved with the surface would be a badge
-    // that is a different color in a dark room for no reason.
     for (const theme of THEMES) {
       const light = themeTokens(theme, "light");
       const dark = themeTokens(theme, "dark");
@@ -274,12 +240,6 @@ describe("what a theme can and cannot move", () => {
 });
 
 describe("the stylesheet's own values", () => {
-  /**
-   * `styles.css` is the first paint and the fallback, and the default theme is
-   * what an operator who changed nothing sees. If the two disagree, every
-   * launch paints one set of colors and then snaps to the other, and the set
-   * in the stylesheet is one nobody measured.
-   */
   it.each([
     ["light", PAPER],
     ["dark", INK],

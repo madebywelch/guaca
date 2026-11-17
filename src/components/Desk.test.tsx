@@ -71,7 +71,6 @@ function request(over: Partial<Approval> = {}): Approval {
   };
 }
 
-/** An escalation, raised a fortnight ago unless a test says otherwise. */
 function stuckOn(over: Partial<Escalation> = {}): Escalation {
   return {
     id: "esc-1",
@@ -87,7 +86,6 @@ function stuckOn(over: Partial<Escalation> = {}): Escalation {
   };
 }
 
-/** Where "Open channel" was asked to go. The caller decides what that means. */
 const openChannel = vi.fn<(agent: string) => void>();
 
 function draw(pending: Approval[], stuck: Escalation[] = []) {
@@ -95,7 +93,6 @@ function draw(pending: Approval[], stuck: Escalation[] = []) {
   return render(<Desk onOpenChannel={openChannel} />);
 }
 
-/** A question, which is answered with a value rather than with a verdict. */
 function asks(options: string[], over: Partial<Approval> = {}): Approval {
   return request({
     request: { kind: "question", options },
@@ -146,9 +143,6 @@ describe("the desk", () => {
     expect(decideApproval).toHaveBeenCalledWith("req-9", "allow");
   });
 
-  // The same refusal the transcript's card makes, for the same reason: a
-  // standing yes to acting in the operator's name would cover every future
-  // send rather than this one.
   it("offers no standing yes for anything done in the operator's name", () => {
     draw([request({ request: { kind: "permission", action: "actOnBehalf" } })]);
     expect(screen.queryByRole("button", { name: "Always" })).toBeNull();
@@ -159,9 +153,6 @@ describe("the desk", () => {
     expect(screen.getByRole("button", { name: "Always" })).toBeTruthy();
   });
 
-  // A summary is enough to answer most requests and not all of them. The way
-  // into the conversation around one has to be on the card, or the desk becomes
-  // a surface that asks for decisions it cannot support.
   it("stops saying when it lapses the moment that time passes, with nothing else redrawing it", () => {
     vi.useFakeTimers();
     try {
@@ -197,9 +188,6 @@ describe("the desk", () => {
     expect(screen.getByRole("button", { name: "Allow" })).toBeTruthy();
   });
 
-  // Nothing about a decision is believed until the runtime has been read again.
-  // A card that vanished on click would hide a request that is still live when
-  // the answer was refused for landing a moment too late.
   it("keeps a card whose answer the runtime refused", async () => {
     decideApproval.mockRejectedValue(new Error("already settled"));
     pendingApprovals.mockResolvedValue([request()]);
@@ -210,9 +198,6 @@ describe("the desk", () => {
     expect(screen.getByRole("button", { name: "Allow" })).toBeTruthy();
   });
 
-  // The two kinds are answered differently and both land here. Allow and Deny
-  // on "which vendor" would settle the row saying nothing, and the turn would
-  // resume having been told nothing at all.
   it("offers a question's own choices, and no verdict", () => {
     draw([asks(["Northwind", "Contoso"])]);
 
@@ -238,8 +223,6 @@ describe("the desk", () => {
     expect(answerQuestion).toHaveBeenCalledWith("q-2", "Northwind");
   });
 
-  // An empty answer settles the request with nothing in it and the agent
-  // resumes as though it had been told something.
   it("will not send an empty answer", () => {
     draw([asks([])]);
 
@@ -266,8 +249,6 @@ describe("an escalation on the desk", () => {
     expect(screen.getByText("1 agent needs your help")).toBeTruthy();
   });
 
-  // The two numbers the message in a channel could not carry. "Stuck" is a
-  // state; "stuck for two days, six turns into it" is a decision.
   it("says how long it has been true and how many turns have hit it", () => {
     draw([], [stuckOn({ times: 6 })]);
     expect(screen.getByText("Manager · stuck 2d")).toBeTruthy();
@@ -275,15 +256,10 @@ describe("an escalation on the desk", () => {
   });
 
   it("agrees with itself at one, which is the count it opens with", () => {
-    // An escalation goes up with a count of one, so this is the sentence most
-    // of them are read at, and "1 turn have run into this" reads as a bug in
-    // the app at the moment the operator is deciding whether to help.
     draw([], [stuckOn({ times: 1 })]);
     expect(screen.getByText("1 turn has run into this")).toBeTruthy();
   });
 
-  // Opening the channel is what actually unblocks the agent. Clearing only
-  // takes the row away, so it must not be the loud button.
   it("leads with the channel and not with the clear", () => {
     draw([], [stuckOn()]);
     const open = screen.getByRole("button", { name: "Open channel" });
@@ -303,8 +279,6 @@ describe("an escalation on the desk", () => {
     expect(clearEscalation).toHaveBeenCalledWith("esc-9");
   });
 
-  // A clear that failed must not leave the desk missing a row the store still
-  // has: the read is what decides, exactly as it does for a refused verdict.
   it("reads the queue back after a clear that was refused", async () => {
     clearEscalation.mockRejectedValue(new Error("gone"));
     openEscalations.mockResolvedValue([stuckOn()]);
@@ -315,9 +289,6 @@ describe("an escalation on the desk", () => {
     expect(useStore.getState().banner?.tone).toBe("error");
   });
 
-  // One of these has ten minutes to be answered in and the other has as long as
-  // it takes. Sorting the perishable half under the durable half is how a
-  // permission lapses while the operator reads about a two-day-old wall.
   it("draws requests above escalations, whatever their ages are", () => {
     const { container } = draw([request()], [stuckOn()]);
     const cards = [...container.querySelectorAll(".desk__card")];

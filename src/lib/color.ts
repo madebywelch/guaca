@@ -1,13 +1,3 @@
-/**
- * Color arithmetic, in the model the chart palette is gated with.
- *
- * sRGB to linear, OKLab and OKLCH, WCAG 2 contrast, and Machado, Oliveira &
- * Fernandes (2009) at full severity for the two red-green colorblindnesses,
- * with distance as OKLab ×100. The simulation model is part of the standard
- * rather than an implementation detail: every threshold a theme is held to is
- * calibrated against it, and a different model moves every borderline pair.
- */
-
 export type Vec3 = [number, number, number];
 export type Vision = "normal" | "protan" | "deutan";
 
@@ -28,7 +18,6 @@ const toLinear = (c: number) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055
 const toGamma = (c: number) => (c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055);
 const clamp = (c: number) => Math.max(0, Math.min(1, c));
 
-/** `#rrggbb` to linear light. */
 export function linear(color: string): Vec3 {
   return [1, 3, 5].map((at) =>
     toLinear(Number.parseInt(color.slice(at, at + 2), 16) / 255),
@@ -64,13 +53,6 @@ function lch(L: number, C: number, h: number): Vec3 {
 
 const inGamut = (rgb: Vec3) => rgb.every((c) => c >= -1e-4 && c <= 1 + 1e-4);
 
-/**
- * OKLCH to `#rrggbb`, giving up chroma until the color fits in sRGB.
- *
- * Chroma rather than lightness or hue, because lightness is what every ratio
- * below was solved for and hue is what a person chose: a pale amber that has
- * to lose something loses saturation and stays the amber it was asked to be.
- */
 export function hex(L: number, C: number, h: number): string {
   let chroma = C;
   if (!inGamut(lch(L, C, h))) {
@@ -92,13 +74,11 @@ export function hex(L: number, C: number, h: number): string {
     .join("")}`;
 }
 
-/** WCAG 2 relative luminance. */
 export function luminance(color: string): number {
   const [r, g, b] = linear(color);
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
-/** WCAG 2 contrast ratio, 1 to 21. */
 export function contrast(a: string, b: string): number {
   const x = luminance(a);
   const y = luminance(b);
@@ -111,26 +91,16 @@ function simulate(color: string, vision: Vision): Vec3 {
   return MACHADO[vision].map(([r, g, b]) => clamp(r * rgb[0] + g * rgb[1] + b * rgb[2])) as Vec3;
 }
 
-/** OKLab distance ×100, as seen with the vision given. */
 export function distance(a: string, b: string, vision: Vision = "normal"): number {
   const p = oklab(simulate(a, vision));
   const q = oklab(simulate(b, vision));
   return 100 * Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
 }
 
-/** The worse of the two red-green simulations. */
 export function colorblindDistance(a: string, b: string): number {
   return Math.min(distance(a, b, "protan"), distance(a, b, "deutan"));
 }
 
-/**
- * The color at this hue and chroma that clears `ratio` against every ground
- * given, at the lightness closest to `prefer` that does.
- *
- * On a light surface it solves downward toward ink, and on a dark one upward
- * toward paper. `prefer` is where the color looks like itself; the ratio is
- * the floor it is not allowed under.
- */
 export function solve(
   C: number,
   h: number,
@@ -149,11 +119,6 @@ export function solve(
     if (dark === clears(mid)) hi = mid;
     else lo = mid;
   }
-  // The search lands on the lightness that clears, measured before the color
-  // is rounded to eight bits. The rounded one can land a hair under the ratio
-  // it was solved for, which is a suite failure with no visible cause, and the
-  // paper being a shade off white was enough to produce one. Step away from
-  // the ground until the color the document is actually given clears.
   let at = dark ? hi : lo;
   for (let i = 0; i < 24; i++) {
     const color = hex(at, C, h);

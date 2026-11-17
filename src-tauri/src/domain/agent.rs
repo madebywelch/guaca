@@ -1,43 +1,22 @@
-//! Agent identity and capability description.
-//!
-//! `AgentCard` is lifted from A2A's Agent Card: a self-describing document that
-//! says who an agent is and what it can do, so peers can discover it without
-//! out-of-band configuration. Guac keeps the useful half (name, skills,
-//! version, lifecycle) and drops the parts that only pay off across a trust
-//! boundary that a local single-process app does not have: no `.well-known`
-//! hosting, no DIDs, no signatures, no registry.
-
 use crate::config::Provider;
 use crate::domain::effort::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 
 use super::ids::{AgentId, GroupId};
 
-/// Where an agent is in its lifecycle.
-///
-/// The survey models agents as Creation -> Operation -> Update -> Termination.
-/// Creation and Update are transitions rather than resting states, so only the
-/// three states an agent can actually sit in are represented here. Collapsing
-/// the other two removes states that could never be observed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Lifecycle {
-    /// Accepting and processing envelopes.
     Active,
-    /// Reachable in the directory, but queues rather than processes.
-    /// Useful for pinning one agent still while you watch the others.
     Paused,
-    /// Drained and closed. Retained for transcript history, invisible to peers.
     Terminated,
 }
 
 impl Lifecycle {
-    /// Whether peers should see this agent when they call `directory`.
     pub fn is_discoverable(self) -> bool {
         matches!(self, Lifecycle::Active | Lifecycle::Paused)
     }
 
-    /// Whether the actor should pull from its inbox right now.
     pub fn accepts_work(self) -> bool {
         matches!(self, Lifecycle::Active)
     }
@@ -60,50 +39,15 @@ impl Lifecycle {
     }
 }
 
-/// Whether this agent's browser stops and asks before it acts in the operator's
-/// name.
-///
-/// ## Why it is per agent
-///
-/// A browser is given to one agent, and what is in it is the operator's
-/// accounts. Giving an agent the browser is the decision about those accounts:
-/// there is nothing an agent can do with a page it was handed that the operator
-/// did not hand it. So the answer belongs beside `has_browser`, on the agent.
-/// It is a fact about how this agent's work happens.
-///
-/// ## Why it is not per site
-///
-/// The gate this switches off asks per site, in the turn, and no answer it can
-/// collect is the answer an operator actually holds. "Post on the company
-/// LinkedIn, never on my own" is one account divided by intent, and a rule that
-/// only knows domains cannot express it, so asking harder produces a dialog per
-/// site that is answered without reading and still gets the interesting case
-/// wrong. What can hold that instruction is the model, told plainly. What the
-/// operator gets to decide here is which agents are trusted to follow it.
-///
-/// ## Why the default is open
-///
-/// Because giving the browser already was the decision, and an agent doing
-/// research presses something on a search engine every few seconds. Asking
-/// about each one trains the operator to approve without looking, which is
-/// worse than not asking: the one prompt that mattered arrives in a habit of
-/// clicking through. [`Consent::AskBeforeActing`] is for the agent holding an
-/// account the operator wants a hand on, and it is theirs to switch on.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Consent {
-    /// Nothing stops. What the browser is signed in to is this agent's to use,
-    /// which is what giving it the browser said.
     #[default]
     Open,
-    /// A press or a typed line, on a site this browser holds a session for,
-    /// after this turn has read a page, asks the operator first.
     AskBeforeActing,
 }
 
 impl Consent {
-    /// What the column holds, and what crosses IPC. One spelling for both, for
-    /// the reason [`Lifecycle::as_str`] has one.
     pub fn as_str(self) -> &'static str {
         match self {
             Consent::Open => "open",
@@ -111,11 +55,6 @@ impl Consent {
         }
     }
 
-    /// What a stored row means. Anything unrecognized is [`Consent::Open`],
-    /// which is the default the column was added with. Reading a string a
-    /// downgrade wrote as the *asking* variant would park turns on a desk over
-    /// a value nobody chose, and a turn parked on nobody expires having spent a
-    /// booking.
     pub fn parse(raw: &str) -> Consent {
         match raw {
             "askBeforeActing" => Consent::AskBeforeActing,
@@ -132,127 +71,45 @@ impl Consent {
 #[serde(rename_all = "camelCase")]
 pub struct AgentCard {
     pub id: AgentId,
-    /// The isolation boundary this agent sits in. Peers outside it are not
-    /// listed by `directory` and cannot be addressed; see `domain::group`.
     pub group_id: GroupId,
     pub name: String,
-    /// Key into the frontend avatar catalog, not a drawing. Storing the key
-    /// means a character can be redrawn entirely without touching stored data.
     pub avatar: String,
-    /// Accent color as `#rrggbb`. Validated on write, never on read.
     pub color: String,
-    /// The model this agent runs when a key pays for its turns: the endpoint's
-    /// own slug. Per-agent so a cheap agent and an expensive one can share a
-    /// room. Blank inherits. Read through [`AgentCard::own_model`].
     pub model: String,
-    /// The model it runs when the ChatGPT subscription pays. A second field
-    /// for the reason the group and the app keep two: the providers share no
-    /// model names, so one field is refused by name after every switch.
     #[serde(default)]
     pub subscription_model: String,
     #[serde(default)]
     pub reasoning_effort: Option<ReasoningEffort>,
     pub system_prompt: String,
-    /// Free-text capability lines. This is what peers actually read when they
-    /// decide who to talk to, so it is the highest-leverage field on the card.
     pub skills: Vec<String>,
-    /// The sandbox this agent uses as its computer, once it has been given one,
-    /// and the tokens that reach it. Never set by an operator edit.
     pub sandbox_id: Option<String>,
-    /// Never sent to the webview in a form it could use directly; the viewer
-    /// goes through the local proxy, which holds these.
     #[serde(skip_serializing)]
     pub sandbox_envd_token: Option<String>,
     #[serde(skip_serializing)]
     pub sandbox_traffic_token: Option<String>,
-    /// The hosted browser this agent uses, once it has been given one. A
-    /// different thing from the computer above and on a different provider: the
-    /// computer is a machine with a screen, this is a Chrome with a DOM. An
-    /// agent may hold both, one, or neither.
-    ///
-    /// Only the session. The socket that drives it and the URL the operator
-    /// watches are read from the provider when needed, because both change when
-    /// a browser is replaced and a stale copy of either is a pane pointed at
-    /// something that has gone.
     pub browser_id: Option<String>,
-    /// Whether the operator has given this agent a computer at all.
-    ///
-    /// Not the same question as `sandbox_id`, and the difference is the whole
-    /// point of the field. A machine is rented and reclaimed on the provider's
-    /// clock; being allowed one is a decision, and it has to outlive every
-    /// machine made under it. An agent with this false is offered no tool that
-    /// reaches a machine and cannot make one, whatever it decides it needs.
     pub has_computer: bool,
-    /// The same decision about the browser, and separately, because they are
-    /// two places: a crew where one agent reads the web and nobody else leaves
-    /// the workspace is the ordinary shape, not a special case.
     pub has_browser: bool,
-    /// Whether that browser stops and asks before it acts in the operator's
-    /// name. See [`Consent`], which is where the argument is.
     pub browser_consent: Consent,
-    /// Whether this agent may send errands: second calls to its own model,
-    /// each working one brief with its tools while the turn that sent them
-    /// waits. See `runtime/errand.rs`.
-    ///
-    /// Off until the operator says otherwise, and given one agent at a time
-    /// for the reason a computer is. An errand is the agent spending the same
-    /// model again, up to three at once, and a crew where only the coordinator
-    /// should spend that way is the ordinary shape.
     pub runs_errands: bool,
     pub lifecycle: Lifecycle,
-    /// Kept at the top of the rail. Where a row is drawn and nothing else: a
-    /// pinned agent is addressed, paid for and messaged exactly as before, so
-    /// no peer is ever told about this.
     pub pinned: bool,
-    /// Where the operator put this row. Lower is higher up its section.
-    ///
-    /// The arrangement, not the drawn order: a working agent is lifted to the
-    /// top of its section by the rail itself and drops back here when it stops.
-    /// Where a row is drawn and nothing else, exactly like `pinned`, so it does
-    /// not bump the version and no peer is told. Ties are legal and are broken
-    /// by `created_at`, which is what an upgrade leaves behind.
     pub rail_order: i32,
-    /// Bumped on every update. A2A's Update phase exists so peers can detect
-    /// that a card changed under them; the version is what makes that possible.
     pub version: u32,
     pub created_at: i64,
     pub updated_at: i64,
-    /// When this agent was thrown out, while it can still be pulled back.
-    ///
-    /// Set only on a `Terminated` row, and only for as long as the wait lasts:
-    /// `None` is both an agent nobody has deleted and one whose thirty days
-    /// are up and whose machines, memory and schedule are already gone. The
-    /// lifecycle is what tells those two apart, which is why this is not a
-    /// state of its own. See [`COMPOST_DAYS`].
     pub discarded_at: Option<i64>,
 }
 
-/// How long a deleted agent waits before it is gone for good.
-///
-/// Long enough that an operator who deleted the wrong row and did not notice
-/// until the next time they went looking still has it, and short enough that
-/// the compost is not a second roster nobody empties. The number is drawn in
-/// the panel, and `Compost.test.tsx` reads it out of this file rather than
-/// restating it, because a warning is read as a fact about what will happen.
 pub const COMPOST_DAYS: i64 = 30;
 
-/// The same wait, in the milliseconds every timestamp in this app is stamped
-/// with.
 pub const COMPOST_MS: i64 = COMPOST_DAYS * 24 * 60 * 60 * 1000;
 
 impl AgentCard {
-    /// Whether this agent is in the compost: deleted, and still able to come
-    /// back. Its machines, memory, schedule and sign-ins are all still there.
     pub fn discarded(&self) -> bool {
         self.discarded_at.is_some()
     }
 
-    /// The model this agent names for a turn `provider` pays for, or `None` to
-    /// run the group's.
-    ///
-    /// Each provider reads only its own field, so a model chosen while one
-    /// provider paid is kept, and never sent, while the other does. Claude
-    /// reads neither: which model answers is the program's own setting.
     pub fn own_model(&self, provider: Provider) -> Option<&str> {
         let named = match provider {
             Provider::Compatible => &self.model,
@@ -262,13 +119,6 @@ impl AgentCard {
         Some(named.trim()).filter(|model| !model.is_empty())
     }
 
-    /// The directory entry a peer sees. Deliberately excludes `system_prompt`:
-    /// one agent should not be able to read another's instructions just by
-    /// listing the directory.
-    ///
-    /// `reaches` is passed in rather than read from the card because accounts
-    /// live in their own table, and because deciding what a peer may know about
-    /// them is a judgment the caller has to make deliberately.
     pub fn directory_entry(&self, reaches: Vec<String>) -> DirectoryEntry {
         DirectoryEntry {
             id: self.id,
@@ -281,13 +131,6 @@ impl AgentCard {
     }
 }
 
-/// Splits a model written when an agent had one field for both providers into
-/// `(model, subscription_model)`, by what its crew pays with.
-///
-/// Migration 63's reading, for a group copy made before it: a slash is an
-/// endpoint's, since ChatGPT's names never carry one; otherwise the provider
-/// the crew names has it, and a crew that follows the app or runs on Claude
-/// gets it in both, because which provider ran it is not in the file.
 pub fn split_legacy_model(model: &str, crew: Option<Provider>) -> (String, String) {
     let model = model.trim().to_string();
     if model.is_empty() || model.contains('/') {
@@ -306,37 +149,21 @@ pub struct DirectoryEntry {
     pub id: AgentId,
     pub name: String,
     pub skills: Vec<String>,
-    /// What this peer can reach and the reader cannot: accounts signed in on its
-    /// machine, as `Gmail as robert@…`, and any of the crew's plugins the
-    /// reader was not chosen for, as `the Stripe plugin`.
-    ///
-    /// A skill is a claim its agent wrote about itself; this is a fact the
-    /// operator established. It is here so an agent asked for something it has
-    /// no account for can name the peer that does, instead of reporting that
-    /// the crew cannot do it. Only what the reader lacks: listing something it
-    /// holds itself reads as a reason to delegate work it can already do.
     #[serde(default)]
     pub reaches: Vec<String>,
     pub lifecycle: Lifecycle,
     pub version: u32,
 }
 
-/// Fields an operator can set. Separate from `AgentCard` so that `id`,
-/// `version`, and timestamps cannot be forged across the IPC boundary.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDraft {
-    /// Absent means "leave it where it is" on update, and "the oldest surviving
-    /// group" on create.
     #[serde(default)]
     pub group_id: Option<GroupId>,
     pub name: String,
     pub avatar: String,
     pub color: String,
     pub model: String,
-    /// Absent means "leave it as it is" on update, and blank on create. A
-    /// client from before this field sends none, and an edit it makes must not
-    /// clear a subscription model it never showed.
     #[serde(default)]
     pub subscription_model: Option<String>,
     #[serde(default)]
@@ -363,10 +190,6 @@ pub enum DraftError {
 pub const MAX_NAME_LEN: usize = 48;
 
 impl AgentDraft {
-    /// Normalizes and validates operator input.
-    ///
-    /// Returns the cleaned values rather than mutating in place so that a
-    /// rejected draft leaves no half-applied state behind.
     pub fn validate(&self) -> Result<CleanDraft, DraftError> {
         let name = self.name.trim();
         if name.is_empty() {
@@ -381,9 +204,6 @@ impl AgentDraft {
             return Err(DraftError::BlankAvatar);
         }
 
-        // Blank is legal and means "inherit": the group's model, or the app
-        // default if the group does not name one. Requiring a model here was
-        // what made a group-level model impossible to express.
         let model = self.model.trim();
 
         let color = normalize_color(&self.color)
@@ -415,21 +235,12 @@ pub struct CleanDraft {
     pub avatar: String,
     pub color: String,
     pub model: String,
-    /// `None` keeps what is stored; see [`AgentDraft::subscription_model`].
     pub subscription_model: Option<String>,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub system_prompt: String,
     pub skills: Vec<String>,
 }
 
-/// The character keys and accents the UI offers when a person picks a look.
-///
-/// Here so an agent created by another agent gets one too. This is a courtesy
-/// and not a contract with the frontend catalog: an unrecognized key still
-/// draws, from a hash of the key itself, so the two drifting apart costs a
-/// character somebody did not choose rather than a blank avatar. The keys that
-/// earlier builds wrote are kept working by the alias table in
-/// `src/avatars/catalog.ts` rather than by being listed here.
 const CHARACTERS: [&str; 21] = [
     "orb", "egg", "pebble", "drop", "bean", "lobe", "puck", "cell", "knot", "moon", "wave", "mote",
     "bead", "gourd", "slab", "pip", "husk", "loop", "crumb", "tide", "cinder",
@@ -439,11 +250,6 @@ const ACCENTS: [&str; 12] = [
     "#4f5f96", "#7c5a8c", "#b26f86", "#6c6f70",
 ];
 
-/// Picks a look for an agent nobody chose one for.
-///
-/// Deterministic from the name and then nudged past whatever the group is
-/// already using, so ten agents made in one turn are ten different faces rather
-/// than ten of the same one.
 pub fn suggest_look(name: &str, taken: &[AgentCard]) -> (String, String) {
     let seed = name
         .trim()
@@ -465,16 +271,8 @@ pub fn suggest_look(name: &str, taken: &[AgentCard]) -> (String, String) {
     (unused(&CHARACTERS, &avatars), unused(&ACCENTS, &colors))
 }
 
-/// What to call a copy of an agent, given who is already in the group.
-///
-/// Names are unique per group and the database enforces it, so a duplicate
-/// that guessed wrong would surface to the operator as a constraint violation
-/// on a button whose whole job is to succeed. Copying a copy gives
-/// `Manager copy 2` rather than `Manager copy copy`: the second is what the
-/// rule says and not what anybody means.
 pub fn copy_name(original: &str, taken: &[String]) -> String {
     let base = original.trim();
-    // Strip a trailing `copy` or `copy N` so the chain stays flat.
     let root = base
         .rsplit_once(" copy")
         .filter(|(_, tail)| tail.trim().is_empty() || tail.trim().parse::<u32>().is_ok())
@@ -487,7 +285,6 @@ pub fn copy_name(original: &str, taken: &[String]) -> String {
     if is_free(&first) {
         return truncate_name(&first);
     }
-    // Bounded by the roster: one of the first `taken.len() + 2` has to be free.
     (2..=taken.len() as u32 + 2)
         .map(|n| format!("{root} copy {n}"))
         .find(|candidate| is_free(candidate))
@@ -495,19 +292,6 @@ pub fn copy_name(original: &str, taken: &[String]) -> String {
         .unwrap_or_else(|| truncate_name(&first))
 }
 
-/// Names for a set of agents hired in one go, given who already holds a name in
-/// the group they are joining.
-///
-/// Resolved in sequence rather than independently, and that is the whole point:
-/// two agents hired from the same preset, or two presets that happen to share a
-/// name, are both free against the roster as it stands and would both be told
-/// they can have it. The second write then fails a unique index on a button
-/// whose job is to succeed. Each name handed out joins the pool the next one is
-/// checked against.
-///
-/// A name nobody is using is returned untouched, so an ordinary hire produces
-/// the name on the card rather than a decorated one. Clashes fall through to
-/// [`copy_name`], because one naming rule the operator can predict beats two.
 pub fn hire_names(wanted: &[String], taken: &[String]) -> Vec<String> {
     let mut pool = taken.to_vec();
     let mut out = Vec::with_capacity(wanted.len());
@@ -520,8 +304,6 @@ pub fn hire_names(wanted: &[String], taken: &[String]) -> Vec<String> {
     out
 }
 
-/// Keeps a generated name inside the limit `validate` enforces, by characters
-/// rather than bytes: a crew of emoji-named agents is legal.
 fn truncate_name(name: &str) -> String {
     if name.chars().count() <= MAX_NAME_LEN {
         return name.to_string();
@@ -529,8 +311,6 @@ fn truncate_name(name: &str) -> String {
     name.chars().take(MAX_NAME_LEN).collect()
 }
 
-/// Accepts `#rgb` and `#rrggbb`, with or without the leading `#`, and returns
-/// a canonical lowercase `#rrggbb`.
 fn normalize_color(input: &str) -> Option<String> {
     let hex = input.trim().trim_start_matches('#');
     let expanded = match hex.len() {
@@ -581,8 +361,6 @@ mod tests {
     #[test]
     fn overlong_name_is_rejected_by_character_count_not_bytes() {
         let mut d = draft();
-        // 40 emoji is 40 characters but well over 48 bytes. Counting bytes here
-        // would reject a legal name.
         d.name = "\u{1f951}".repeat(40);
         assert!(d.validate().is_ok());
         d.name = "\u{1f951}".repeat(49);
@@ -591,8 +369,6 @@ mod tests {
 
     #[test]
     fn a_blank_model_is_allowed_and_means_inherit() {
-        // The runtime resolves agent over group over app default, so a blank
-        // model here is how an agent says "whatever my group is using".
         let mut d = draft();
         d.model = "  ".into();
         assert_eq!(d.validate().unwrap().model, "");
@@ -600,9 +376,6 @@ mod tests {
 
     #[test]
     fn a_model_is_sent_only_to_the_provider_it_was_chosen_for() {
-        // The crew that found this: turns on a ChatGPT sign-in, and an
-        // OpenRouter slug on the agent itself. One field sent it to ChatGPT,
-        // which refused it by name on every turn.
         let engineer = AgentCard {
             model: "xiaomi/mimo-v2.6-pro".into(),
             subscription_model: "gpt-6-astra".into(),
@@ -612,8 +385,6 @@ mod tests {
         assert_eq!(engineer.own_model(Provider::Compatible), Some("xiaomi/mimo-v2.6-pro"));
         assert_eq!(engineer.own_model(Provider::Claude), None, "the program chooses");
 
-        // Blank on the paying side is the group's model, whatever the other
-        // side holds.
         let unset = AgentCard { subscription_model: "  ".into(), ..engineer };
         assert_eq!(unset.own_model(Provider::Chatgpt), None);
     }
@@ -703,14 +474,11 @@ mod tests {
             copy_name("Manager", &taken_names(&["Manager", "Manager copy", "Manager copy 2"])),
             "Manager copy 3"
         );
-        // Names are unique case-insensitively, so a clash in another case is
-        // still a clash the database would refuse.
         assert_eq!(copy_name("Manager", &taken_names(&["manager copy"])), "Manager copy 2");
     }
 
     #[test]
     fn copying_a_copy_does_not_stack_the_word() {
-        // `Manager copy copy` is what the rule says and not what anyone means.
         assert_eq!(
             copy_name("Manager copy", &taken_names(&["Manager", "Manager copy"])),
             "Manager copy 2"
@@ -719,14 +487,11 @@ mod tests {
             copy_name("Manager copy 2", &taken_names(&["Manager copy", "Manager copy 2"])),
             "Manager copy 3"
         );
-        // A name that merely ends in a word starting with "copy" is not one.
         assert_eq!(copy_name("Manager copywriter", &[]), "Manager copywriter copy");
     }
 
     #[test]
     fn a_copy_of_a_maximum_length_name_is_still_a_legal_name() {
-        // The suffix is what pushes it over, and a draft the operator cannot
-        // fix is worse than a name that lost its last few characters.
         let long = "\u{1f951}".repeat(MAX_NAME_LEN);
         let copy = copy_name(&long, &[]);
         assert_eq!(copy.chars().count(), MAX_NAME_LEN);
@@ -742,9 +507,6 @@ mod tests {
 
     #[test]
     fn hiring_the_same_preset_twice_in_one_go_does_not_ask_for_one_name_twice() {
-        // Both are free against the roster as it stands, so resolving them
-        // independently hands out "Researcher" twice and the second write dies
-        // on the unique index.
         let wanted = taken_names(&["Researcher", "Researcher"]);
         assert_eq!(hire_names(&wanted, &[]), taken_names(&["Researcher", "Researcher copy"]));
     }
@@ -755,8 +517,6 @@ mod tests {
             hire_names(&taken_names(&["Manager"]), &taken_names(&["Manager"])),
             taken_names(&["Manager copy"])
         );
-        // Case is not a difference the database recognizes, so it is not one
-        // here either.
         assert_eq!(
             hire_names(&taken_names(&["Manager"]), &taken_names(&["manager"])),
             taken_names(&["Manager copy"])
@@ -765,9 +525,6 @@ mod tests {
 
     #[test]
     fn a_batch_of_hires_is_a_batch_of_legal_drafts() {
-        // The names this hands out go straight into `validate`, so anything it
-        // can produce has to survive it. A crew hired into a group that already
-        // holds every one of them is the case that decorates every name.
         let roster = taken_names(&["Manager", "Researcher", "Critic"]);
         let names = hire_names(&roster, &roster);
         assert_eq!(names.len(), roster.len());

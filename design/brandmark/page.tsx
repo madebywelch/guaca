@@ -1,12 +1,3 @@
-/**
- * The review page: three ways the name gives the corner back to the cast.
- *
- *   ./design/brandmark/make.sh
- *
- * Every creature on it is the app's own, drawn by the painters in
- * src/avatars; the rows under each title bar are `AgentAvatar` itself.
- */
-
 import { type MutableRefObject, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -33,7 +24,6 @@ const fresh = (): Flags => ({
   happeningAt: 0,
 });
 
-/** The mark: the cast, and the name beside it or in a bubble over it. */
 function Mark({
   dir,
   px,
@@ -45,7 +35,6 @@ function Mark({
 }: {
   dir: Direction;
   px: number;
-  /** The name's size, and the bubble's, in CSS pixels. */
   type: number;
   bubble: number;
   cast: Cast;
@@ -82,9 +71,6 @@ function Mark({
     };
   });
 
-  /* A box is a fifth empty on either side of the body, which is room for a
-     mood to swell into. A pair stands closer than its boxes, as the icon's
-     does, the second a little higher; the name stands off the body, not the box. */
   const overlap = Math.round(px * 0.22);
   return (
     <span
@@ -137,12 +123,6 @@ const CREW = [
   { name: "Quill", avatar: "wave", color: PIGMENT.Rose as string },
 ];
 
-/**
- * The top of the rail, drawn to the app's own measurements: the window's
- * buttons over the corner, the 36px the rail leaves for them, then the search
- * field and a crew. `now` is what ships; `mark` is a mark in the title bar
- * and no brand row under it.
- */
 function RailTop({ mark }: { mark?: React.ReactNode }) {
   return (
     <div className="bm-railtop">
@@ -188,8 +168,6 @@ function Section({ dir, index }: { dir: Direction; index: number }) {
   const start = useRef(now());
   const shown = useRef(0);
   const said = useRef(Number.NaN);
-  /* Reduced motion skips the performance: the mark is already condensed and
-     at rest, and the name appears on a hover rather than folding out. */
   const at = () => now() - start.current + (prefersReducedMotion() ? HOLD + 60 : 0);
 
   useEffect(() => {
@@ -206,8 +184,6 @@ function Section({ dir, index }: { dir: Direction; index: number }) {
       if (still) f.condensedAt = 0;
       else if (t >= HOLD && f.condensedAt === Number.POSITIVE_INFINITY) f.condensedAt = t;
       const scene = dir.at(t, f);
-      /* The launch writes the name at its own pace; after that the name eases
-         toward in or out, so a condense and a hover are a fold, not a cut. */
       shown.current =
         still || t < HOLD - 1
           ? scene.name
@@ -231,8 +207,6 @@ function Section({ dir, index }: { dir: Direction; index: number }) {
   const hover = (on: boolean) => {
     const f = flags.current;
     if (on && !f.hover) {
-      /* Still, a visit lands already finished: the name is out and the
-         shapeshifter has become the next one, with nothing in between. */
       f.hoverAt = at() - (prefersReducedMotion() ? 1 : 0);
       f.visits += 1;
     }
@@ -310,7 +284,6 @@ function Section({ dir, index }: { dir: Direction; index: number }) {
   );
 }
 
-/** Now and proposed, side by side at 2x, with the pair standing in for all three. */
 function Corner() {
   const views = useRef(new Set<View>());
   useEffect(() => {

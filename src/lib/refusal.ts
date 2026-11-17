@@ -1,69 +1,10 @@
-/**
- * What a refusal written for a model says to the person reading it.
- *
- * A call the runtime stopped is written for the agent that made it: it names
- * parameters in backticks, quotes the JSON key that was missing, and tells the
- * model what to send instead. That is exactly right where it is read — a model
- * handed a sentence it cannot parse retries into the same wall — and wrong
- * everywhere else, which is the trail, where the operator meets it at the
- * moment their agent misbehaved. A paragraph of parameter names there reads as
- * a stack trace in the one place that should read like a colleague.
- *
- * So this is a display layer and nothing else. The runtime's words do not
- * change: they are what the model is told, and `llm/tools.rs` and
- * `runtime/guard.rs` hold them to the way forward they have to offer. What
- * changes is which of the two sentences the row draws first, and the runtime's
- * own is kept beside it, one click away, next to the arguments the row already
- * shows.
- *
- * A refusal nobody has translated is drawn as it was written. That is the
- * honest fallback rather than a shortcoming: a build older than this one
- * refuses for reasons this file has never heard of, and a sentence invented for
- * one of those would describe the wrong failure, which is worse than a sentence
- * that is hard to read.
- *
- * The anchors below are the openings of the runtime's sentences, written out
- * rather than matched loosely, because these run to a paragraph and a match in
- * the middle would be a different failure. `refusal.test.ts` reads the Rust
- * sources and fails when one of them is reworded, so this table cannot silently
- * fall back to machine text.
- */
-
-/** How one refusal reads to a person. */
 export interface Rule {
-  /**
-   * The tool the call was to, or null for a refusal any call can hit.
-   *
-   * Needed because two tools refuse with the same opening: `run_command` and
-   * `open_on_desktop` both say a `command` must be non-empty, and a command
-   * that did not run is not the same news as a program that did not open.
-   */
   tool: string | null;
-  /** The part of the runtime's sentence that does not change from call to call. */
   opens: RegExp;
-  /**
-   * The runtime's own text, as Rust still writes it — interpolation and all.
-   *
-   * Carried so the coupling is visible: `refusal.test.ts` looks for every one of
-   * these in `runtime/guard.rs`, `runtime/errand.rs`, `runtime/mod.rs` and
-   * `llm/tools.rs`, so a refusal reworded on that side fails there rather than
-   * quietly falling back to machine text in front of an operator.
-   */
   mirrors: string;
-  /** What it says to the operator. */
   says: (found: RegExpMatchArray) => string;
 }
 
-/**
- * The table, in the order it is read.
- *
- * Every sentence says what did not happen before it says why, because that is
- * the question somebody looking at a failed row has. None of them apologizes
- * and none of them tells the operator to do something the app has not offered,
- * which is the rule the whole app is written to (`deployment.rs` holds it for
- * the surfaces that can be built at): a refusal whose way forward does not
- * exist is worse than one that says nothing.
- */
 export const RULES: Rule[] = [
   {
     tool: null,
@@ -74,8 +15,6 @@ export const RULES: Rule[] = [
     says: (found) =>
       `Nothing happened: your rule (${found[1]}) refuses it, so it never reached you as a request.`,
   },
-  // What the guard stopped, in `runtime/guard.rs`. These are the ones that read
-  // most like a policy document and are most about the operator's own limits.
   {
     tool: null,
     opens: /^Refused: this conversation is (\d+) hops from the operator and the limit is (\d+)/,
@@ -137,9 +76,6 @@ export const RULES: Rule[] = [
       `Nothing was sent: it and ${found[1]} had already finished their exchange, and this was a courtesy.`,
   },
 
-  // What an agent was not given, in `runtime/mod.rs`. The runtime's version of
-  // each says what the agent should do instead, which is why it is addressed to
-  // them; the operator is the one who can change the answer, so theirs says so.
   {
     tool: null,
     opens: /^Refused: you have no computer/,
@@ -167,9 +103,6 @@ export const RULES: Rule[] = [
     says: () => "Nothing was sent: errands are off for this agent.",
   },
 
-  // What an errand may not do, in `runtime/errand.rs`. One of these is a normal
-  // thing to see: an errand is a brief with no memory of the conversation, so
-  // the calls it cannot make are the calls that would need one.
   {
     tool: null,
     opens: /^Refused: you asked for (\d+) errands and at most (\d+) run at once/,
@@ -196,9 +129,6 @@ export const RULES: Rule[] = [
     says: () => "Nothing was sent: an errand cannot send errands of its own.",
   },
 
-  // A call whose arguments were not enough to do anything with, in
-  // `llm/tools.rs`. The model is told which parameter to send; the operator is
-  // told that the call did nothing, which is the part they cannot see.
   {
     tool: "send_message",
     opens: /^send_message needs a non-empty `to` list/,
@@ -284,8 +214,6 @@ export const RULES: Rule[] = [
     says: () => "No agent was added: the call was missing part of what one needs.",
   },
 
-  // A call that could not be read at all. The name of the tool is on the chip
-  // already, so the sentence is about the outcome rather than the vocabulary.
   {
     tool: null,
     opens: /^unknown tool /,
@@ -300,12 +228,6 @@ export const RULES: Rule[] = [
   },
 ];
 
-/**
- * The same refusal, in words for the person reading the transcript.
- *
- * Null when nothing here has met this refusal, which the caller draws exactly
- * as the runtime wrote it.
- */
 export function plainRefusal(tool: string, said: string): string | null {
   for (const rule of RULES) {
     if (rule.tool !== null && rule.tool !== tool) continue;

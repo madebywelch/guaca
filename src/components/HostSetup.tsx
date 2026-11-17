@@ -16,7 +16,6 @@ import {
 import { errorMessage } from "../lib/types";
 import { LegacyGroups } from "./GroupTransfer";
 
-/** Runs before App mounts, so no workspace calls or subscriptions can race setup. */
 export function HostSetup({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(!desktop);
   const [checking, setChecking] = useState(desktop && !!attached());
@@ -142,7 +141,6 @@ function hostName(origin: string): string {
   }
 }
 
-/** Shared by onboarding and Settings. Switching never transfers or stops groups. */
 export function HostChoice({
   initialError = "",
   onConnected,
@@ -152,17 +150,12 @@ export function HostChoice({
   initialError?: string;
   showUpdate?: boolean;
   onConnected?: () => void;
-  /** The workspace is open on the host this window is attached to. Onboarding
-   *  and a host that was turned away are not, and get the form instead. */
   inUse?: boolean;
 }) {
-  // A local host's loopback address is not a remote one, so it prefills nothing.
   const remote = hostMode() === "remote" ? attached() : null;
   const [mode, setMode] = useState<"local" | "remote">(remote ? "remote" : "local");
   const [origin, setOrigin] = useState(remote?.origin ?? "");
   const [token, setToken] = useState("");
-  // The saved key is never read back into the field, so the host in use is
-  // stated rather than drawn as an empty form that looks disconnected.
   const [changing, setChanging] = useState(false);
   const address = useRef<HTMLInputElement>(null);
   const change = useRef<HTMLButtonElement>(null);
@@ -252,8 +245,6 @@ export function HostChoice({
       }
     } catch (cause) {
       setError(errorMessage(cause));
-      // A failed start or update can change what Docker holds. The status
-      // above the error is otherwise the one read before the attempt.
       if (mode === "local") void refresh();
     } finally {
       setBusy(false);
@@ -268,7 +259,6 @@ export function HostChoice({
     requestAnimationFrame(() => change.current?.focus());
   };
   const usable = !!docker && ["ready", "running", "stopped"].includes(docker.state);
-  // A finished update is history. Only one that stopped part way needs reading.
   const failed = showUpdate && docker?.operation?.error ? docker.operation : null;
 
   return (
@@ -483,7 +473,6 @@ export function HostChoice({
   );
 }
 
-/** A place the agents can run, with the tradeoff that decides it written on it. */
 function Place({
   label,
   hint,

@@ -134,7 +134,6 @@ beforeEach(() => {
   });
 });
 
-/** Opens Chef's conversation from the list. */
 async function talkToChef() {
   render(<MenubarPanel ready />);
   await act(async () => {
@@ -382,7 +381,6 @@ describe("what the panel says at a glance", () => {
   it("says what the session spent in the floor the meters use", () => {
     useStore.setState({ sessionSpend: { prompt: 900, completion: 100, cost: 0, calls: 3 } });
     render(<MenubarPanel ready />);
-    // A free model prices at a real zero, which is not a price.
     expect(screen.getByText("1.0k tokens this session")).toBeTruthy();
   });
 
@@ -440,7 +438,6 @@ describe("finished work in the panel", () => {
       "Scout Report r3",
       "Scout Report r4",
     ]);
-    // The header still answers one question, and finished work is not it.
     expect(screen.getByText("1 waiting on you")).toBeTruthy();
 
     await act(async () => {

@@ -10,7 +10,6 @@ import { Onboarding } from "./Onboarding";
 
 const { hire, send } = vi.hoisted(() => ({ hire: vi.fn(), send: vi.fn() }));
 vi.mock("../lib/ipc", () => ({ api: { hireAgents: hire, sendMessage: send } }));
-/** A desktop window has a menu bar icon; a browser has nowhere to put one. */
 const platform = vi.hoisted(() => ({ desktop: true }));
 vi.mock("../lib/transport", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/transport")>()),

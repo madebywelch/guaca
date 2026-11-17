@@ -1,25 +1,3 @@
-//! The Guaca daemon: one workspace, on a machine that stays awake.
-//!
-//! Everything it needs comes from the environment, because it is started by
-//! systemd or a container runtime rather than by a person with a terminal. A
-//! flag nobody can see is a flag nobody sets correctly.
-//!
-//!   GUACA_ROOT     where the workspace lives. Default `/var/lib/guaca`.
-//!   GUACA_BIND     what to listen on. Default `127.0.0.1:8787`, which is
-//!                  loopback on purpose: a box is reached through a tunnel, and
-//!                  a default that binds every interface is one operator's
-//!                  firewall away from a public workspace.
-//!   GUACA_TOKEN    the bearer token. Generated and written beside the settings
-//!                  when it is absent, so a first run needs nothing prepared.
-//!   GUACA_WEB      the frontend bundle to serve at `/`. Absent serves no page,
-//!                  which is right for a box the desktop app connects to.
-//!   GUACA_ORIGIN   the address a browser reaches this box at, e.g. the
-//!                  tunnel's https URL. Only a sign-in needs it, for the
-//!                  redirect; absent, the origin of the last call is used.
-//!   GUACA_UPDATER_SOCKET  where the updater beside this host listens, on a
-//!                  box `guaca-updater` made. Set by the updater, never by hand.
-//!   GUAC_LOG       the tracing filter, spelled as the desktop app spells it.
-
 use std::path::PathBuf;
 
 fn main() {
@@ -30,9 +8,6 @@ fn main() {
         )
         .init();
 
-    // Every schedule and the date an agent is told run on this zone, and a
-    // container keeps UTC unless it is given `TZ`. Said once, where an
-    // operator whose briefings arrive at odd hours looks first.
     tracing::info!(
         zone = guac_lib::host::zone().as_deref().unwrap_or("unknown"),
         offset = %chrono::Local::now().offset(),
@@ -45,9 +20,6 @@ fn main() {
     let bind = match bind.parse() {
         Ok(bind) => bind,
         Err(err) => {
-            // Said rather than defaulted. A daemon that silently listens
-            // somewhere other than where it was told is one nobody can reach
-            // and nobody can diagnose.
             tracing::error!(%bind, %err, "GUACA_BIND is not an address to listen on");
             std::process::exit(2);
         }
@@ -87,16 +59,6 @@ fn main() {
     }
 }
 
-/// The token this workspace answers to.
-///
-/// Read from the environment, else from the file a previous run wrote, else
-/// generated. Generating is what makes a first run need nothing prepared: an
-/// operator who has just installed this has a working token before they have
-/// read any documentation, and it is in the logs where they are already looking.
-///
-/// It is not in `config.json`. That file is rewritten wholesale whenever the
-/// operator presses Save in the app, and a credential in it would be one a
-/// settings change could drop. The same argument `subscription.rs` makes.
 fn token_for(root: &std::path::Path) -> Result<String, String> {
     if let Ok(token) = std::env::var("GUACA_TOKEN") {
         let token = token.trim().to_string();
@@ -116,9 +78,6 @@ fn token_for(root: &std::path::Path) -> Result<String, String> {
         }
     }
 
-    // Two v4 UUIDs with the hyphens taken out: 256 bits from the same generator
-    // every id in this app already comes from. Not a password, and never typed
-    // by a person, so it is long rather than memorable.
     let token = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
     write_private(&path, &token)?;
     tracing::warn!(
@@ -129,12 +88,6 @@ fn token_for(root: &std::path::Path) -> Result<String, String> {
     Ok(token)
 }
 
-/// Writes a credential so only this user can read it.
-///
-/// Temp-then-rename, and the mode is set before the bytes are written rather
-/// than after: a file created world-readable and tightened a moment later is
-/// readable for that moment, and on a shared box that moment is the whole of
-/// the vulnerability.
 fn write_private(path: &std::path::Path, contents: &str) -> Result<(), String> {
     use std::io::Write;
 

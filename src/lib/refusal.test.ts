@@ -7,22 +7,12 @@ import { plainRefusal, RULES } from "./refusal";
 
 const read = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
 
-/**
- * The runtime's own refusals, as they arrive in a trail.
- *
- * Written out rather than imported: they are what `llm/tools.rs` and
- * `runtime/guard.rs` interpolate into, and the whole point of this file is that
- * the two sides agree. A sample that no longer matches is a mapping that has
- * stopped working, so each case asserts both halves — that the sentence is
- * translated, and that it is the sentence the runtime still writes.
- */
 const SAMPLES: { tool: string; said: string; says: string }[] = [
   {
     tool: "request_permission",
     said: "Refused: the operator's rules never allow this (Never email example.com), so nothing happened and they were not asked. Do not look for another way round it.",
     says: "Nothing happened: your rule (Never email example.com) refuses it, so it never reached you as a request.",
   },
-  // The guard, from `runtime/guard.rs`.
   {
     tool: "send_message",
     said: "Refused: this conversation is 8 hops from the operator and the limit is 8. Do not relay further. Summarize what you have and reply to whoever asked you.",
@@ -69,7 +59,6 @@ const SAMPLES: { tool: string; said: string; says: string }[] = [
     says: "Nothing was sent: it and Chef had already finished their exchange, and this was a courtesy.",
   },
 
-  // What an agent was not given, from `runtime/mod.rs`.
   {
     tool: "run_command",
     said: "Refused: you have no computer, so nothing ran and no machine was started. Nothing is broken and there is nothing to retry: you have not been given one, and only the operator can give you one.",
@@ -91,7 +80,6 @@ const SAMPLES: { tool: string; said: string; says: string }[] = [
     says: "Nothing was sent: errands are off for this agent.",
   },
 
-  // What an errand may not do, from `runtime/errand.rs`.
   {
     tool: "errand",
     said: "Refused: you asked for 9 errands and at most 4 run at once, so none was sent and nothing was spent.",
@@ -113,7 +101,6 @@ const SAMPLES: { tool: string; said: string; says: string }[] = [
     says: "Nothing was sent: an errand cannot send errands of its own.",
   },
 
-  // A call whose arguments were not enough, from `llm/tools.rs`.
   {
     tool: "send_message",
     said: "send_message needs a non-empty `to` list of agent names",
@@ -202,22 +189,15 @@ describe("a refusal the runtime wrote for a model", () => {
   });
 
   it("says nothing about the vocabulary the model needed", () => {
-    // The point of the exercise: no backticks, no parameter name, no JSON key
-    // in the sentence an operator reads. The runtime's own version is one click
-    // away for the ones who want it.
     for (const sample of SAMPLES) {
       const said = plainRefusal(sample.tool, sample.said)!;
       expect(said, sample.said).not.toContain("`");
       expect(said, sample.said).not.toMatch(/every_secs|in_secs|_secs|`to`|`text`|_memory/);
-      // And it opens with what did not happen, which is the question somebody
-      // looking at a failed row has.
       expect(said, sample.said).toMatch(/^(Nothing|Its|No agent) /);
     }
   });
 
   it("does not translate one tool's refusal into another's", () => {
-    // `run_command` and `open_on_desktop` refuse with the same opening and are
-    // different news: nothing left the machine, and the screen stayed empty.
     const command = plainRefusal("run_command", "run_command needs a non-empty `command` string");
     const desktop = plainRefusal(
       "open_on_desktop",
@@ -228,21 +208,13 @@ describe("a refusal the runtime wrote for a model", () => {
   });
 
   it("leaves a refusal it has never seen exactly as it was written", () => {
-    // A build newer than this one, or a refusal this table has not met. Drawing
-    // the original is the honest answer: a sentence invented for it would
-    // describe the wrong failure, which is worse than one that is hard to read.
     const unknown = "Refused: the archive you named is read-only for this session.";
     expect(plainRefusal("archive", unknown)).toBeNull();
-    // And a summary is not a refusal at all.
     expect(plainRefusal("browse", "read in the browser")).toBeNull();
   });
 });
 
 describe("the table against the runtime it translates", () => {
-  // The coupling is the one thing worth a test of its own: this file is a
-  // second copy of a decision `llm/tools.rs` and `runtime/guard.rs` already
-  // made, and a reword on that side has to fail here rather than silently put
-  // machine text in front of an operator again.
   const sources = [
     "src-tauri/src/runtime/guard.rs",
     "src-tauri/src/runtime/mod.rs",

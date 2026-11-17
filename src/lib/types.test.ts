@@ -51,9 +51,6 @@ describe("plainText", () => {
   });
 
   it("counts a fired routine's instruction, which is what the model was sent", () => {
-    // The transcript draws a firing as one line instead of a bubble, and does
-    // it by choosing a row for the part. If that were done by hiding the words
-    // here, the flow board could not say what opened the run.
     const message = envelope({
       from: { kind: "system" },
       parts: [
@@ -70,8 +67,6 @@ describe("plainText", () => {
   });
 
   it("counts a decision's answer, not the brief the model was sent around it", () => {
-    // The flow board names what opened a run with the first 140 characters.
-    // Of the brief, that is Guaca introducing the answer and nothing of it.
     const message = envelope({
       from: { kind: "system" },
       parts: [
@@ -131,8 +126,6 @@ describe("error handling", () => {
 
 describe("asSentence", () => {
   it("finishes a line that was written for a log rather than for a person", () => {
-    // The transport's own words, and the shape the polish audit found twice: an
-    // opening that is not a capital and an ending that is not a full stop.
     expect(
       asSentence(
         "lost the connection to this host at http://127.0.0.1:8787. It may be restarting, and nothing on this page is live until it answers again",

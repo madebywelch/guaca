@@ -10,26 +10,12 @@ import { type AgentCard, type AgentId, errorMessage } from "../lib/types";
 import { Icon } from "./Icon";
 
 interface Props {
-  /** Opens search with what was typed, for the row offered under the field. */
   onSearch: (query: string) => void;
-  /** The Groups sheet, which the picker's last row opens. */
   onManageGroups: () => void;
 }
 
-/** What the last send did, said once under the field. */
 type Receipt = { kind: "sent"; agent: AgentCard } | { kind: "answered"; agent: AgentCard };
 
-/**
- * The first thing in the column: one line that writes to an agent, or answers
- * the question that is waiting.
- *
- * A field rather than the channel's composer. It sends one message and stays
- * where it is, which is the whole of the most common errand ("tell someone,
- * then leave"); a draft, a file or a thread is a conversation, and the
- * conversation is one click away with the composer it needs. The picker names
- * every group, so the group an agent belongs to is said where the agent is
- * chosen.
- */
 export function Field({ onSearch, onManageGroups }: Props) {
   const agents = useStore((state) => state.agents);
   const groups = useStore((state) => state.groups);
@@ -47,8 +33,6 @@ export function Field({ onSearch, onManageGroups }: Props) {
   const [failure, setFailure] = useState<string | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
 
-  // Grows with what is written, to the cap the stylesheet sets, the way the
-  // composer does: a one-line box scrolled a long request out of sight.
   useEffect(() => {
     const node = input.current;
     if (!node) return;
@@ -59,8 +43,6 @@ export function Field({ onSearch, onManageGroups }: Props) {
   const live = writable(agents);
   const question = waitingQuestion(pending);
   const asker = question && live.find((agent) => agent.id === question.agentId);
-  // An @ that names somebody moves the chip as it is typed, so the chip never
-  // says one agent while the message is on its way to another.
   const named = addressed(text, agents)?.agent ?? namedAlone(text, agents);
   const target =
     named ??
@@ -68,8 +50,6 @@ export function Field({ onSearch, onManageGroups }: Props) {
     defaultTarget(agents, lastActive, railGroup);
   const asking = answering && question && asker;
 
-  // A question answered elsewhere takes the field out of answering it, rather
-  // than leaving a sentence pointed at a request that is gone.
   useEffect(() => {
     if (!question) setAnswering(false);
   }, [question]);
@@ -85,8 +65,6 @@ export function Field({ onSearch, onManageGroups }: Props) {
         setReceipt({ kind: "answered", agent: asker });
         setAnswering(false);
       } else {
-        // A name and nothing else is a change of recipient, not a message:
-        // sent as written it would hand somebody the literal "@Name".
         const named = namedAlone(body, agents);
         if (named) {
           setPicked(named.id);
@@ -116,8 +94,6 @@ export function Field({ onSearch, onManageGroups }: Props) {
       void send();
       return;
     }
-    // Tab answers the waiting question, once, from an empty field. With text
-    // in it Tab is the browser's, and leaving the field is what it should do.
     if (event.key === "Tab" && !event.shiftKey && !answering && question && asker && !text) {
       event.preventDefault();
       setAnswering(true);
@@ -128,8 +104,6 @@ export function Field({ onSearch, onManageGroups }: Props) {
       setAnswering(false);
       return;
     }
-    // Search with what is written, as the row under the field offers. Stopped
-    // here so the window's own shortcut does not open search empty.
     if (bindingFor(event.nativeEvent)?.id === "search" && text.trim() !== "") {
       event.preventDefault();
       event.stopPropagation();
@@ -164,8 +138,6 @@ export function Field({ onSearch, onManageGroups }: Props) {
             onPick={(id) => {
               setPicked(id);
               setPicking(false);
-              // After the picker has closed and handed focus back to the
-              // button that opened it: the next thing typed is the message.
               requestAnimationFrame(() => input.current?.focus());
             }}
             onManageGroups={() => {
@@ -244,15 +216,6 @@ export function Field({ onSearch, onManageGroups }: Props) {
   );
 }
 
-/**
- * Who the field writes to, and the one place group names are read now that the
- * top of the window is a timeline: each group is a heading over its agents.
- *
- * Plain buttons in a popup rather than a listbox: a listbox is one focus stop
- * with its own selection model, and this one holds a button that opens the
- * Groups sheet, which no option of a listbox can be. The arrows move between
- * the buttons, and Escape or a press anywhere else closes it.
- */
 function TargetPicker({
   target,
   open,
@@ -287,7 +250,6 @@ function TargetPicker({
 
   const buttons = () => [...(menu.current?.querySelectorAll<HTMLButtonElement>("button") ?? [])];
 
-  // Onto whoever is written to now, so the arrows start from there.
   useEffect(() => {
     if (!open) return;
     const all = [...(menu.current?.querySelectorAll<HTMLButtonElement>("button") ?? [])];

@@ -1,11 +1,3 @@
-# The daemon on this machine, or on a box: the same file either way.
-#
-#   GUACA_COMMIT=$(git rev-parse --short=7 HEAD) docker compose up -d
-#   docker compose logs guacad | grep 'open this'
-#
-# Published to 127.0.0.1 only. A box is reached through a tunnel, and a default
-# that exposed every interface would be one firewall away from a public
-# workspace holding somebody's keys and transcripts.
 services:
   guacad:
     build:
@@ -18,18 +10,12 @@ services:
     volumes:
       - guaca:/var/lib/guaca
     environment:
-      # Absent, the daemon generates one on first run and prints it.
       GUACA_TOKEN: ${GUACA_TOKEN:-}
       GUACA_UPDATE_CHECKS: ${GUACA_UPDATE_CHECKS:-on}
       GUACA_ACCOUNT_ORIGIN: ${GUACA_ACCOUNT_ORIGIN:-}
       GUACA_BROKER_BEARER: ${GUACA_BROKER_BEARER:-}
-      # The zone routines, the 9:00 and 16:00 reminders and an agent's date
-      # keep, by its IANA name (America/New_York). Unset, the host keeps UTC.
       TZ: ${TZ:-UTC}
-      # Read by the `claude` program, separately from the model key in
-      # Settings. Set, it bills the API instead of the plan it is signed in to.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-    # Docker Desktop supplies this name; host-gateway also supports Linux.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     init: true

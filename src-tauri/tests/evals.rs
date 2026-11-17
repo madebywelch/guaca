@@ -1,24 +1,3 @@
-//! Evals: whether a crew communicates like something worth watching.
-//!
-//! The cascade suite asks whether the runtime does what it was told. This asks
-//! a different question: given an instruction an operator would actually type,
-//! is the resulting traffic reasonable? Every cascade defect this app has had
-//! passed the first suite and failed the second, because each individual
-//! message was correct and the shape was not.
-//!
-//! Scenarios come in two kinds.
-//!
-//! The scripted ones run against a stub model that plays a specific bad habit
-//! on purpose: the eternally polite agent, the one that answers three times,
-//! the one that broadcasts twice. They are deterministic, free, and they check
-//! that the runtime contains the habit rather than that a model happens not to
-//! have it today. These run in CI.
-//!
-//! The live ones run against whatever model is configured and ask whether the
-//! prompts hold up. They cost money and cannot be deterministic, so they are
-//! `#[ignore]`d and run with `./scripts/evals.sh`. A prompt change that makes
-//! agents chattier will not fail CI; it will fail here, which is the point.
-
 mod harness;
 
 use std::collections::HashMap;
@@ -33,25 +12,15 @@ use guac_lib::trajectory::Trajectory;
 use harness::live::*;
 use harness::*;
 
-/// One instruction, run end to end, read for what it did to the operator.
 struct Eval {
     convo: Conversation,
     faults: Vec<Fault>,
-    /// What the machinery under the conversation did. The two are read
-    /// together because they fail apart: a crew can say exactly the right
-    /// things through a runtime that left a placeholder open forever.
     trajectory: Trajectory,
-    /// What the runtime recorded the run as ending in.
     outcome: Option<Outcome>,
-    /// The runs in it that ended with nobody watching.
     background: Vec<Background>,
 }
 
 impl Eval {
-    /// Fails naming the fault and printing the whole conversation.
-    ///
-    /// A count on its own is unactionable: the reason these are worth having is
-    /// that a failure hands over the transcript that caused it.
     fn expect_clean(&self, scenario: &str) {
         assert!(
             self.faults.is_empty(),
@@ -63,17 +32,9 @@ impl Eval {
                 .collect::<Vec<_>>()
                 .join("\n")
         );
-        // And the machinery under it: a crew that said exactly the right
-        // things through a runtime that left a placeholder open is not a
-        // passing eval. See `guac_lib::trajectory`.
         expect_normal(&self.trajectory, scenario);
     }
 
-    /// How many times one agent spoke to the operator.
-    ///
-    /// Per agent, because each has its own channel: the agent that was given
-    /// the instruction is the one whose channel should hold the answer, and a
-    /// peer noting what it did in its own channel is not noise in that one.
     fn expect_told_operator(&self, agent: &str, times: usize, scenario: &str) {
         let said = self.convo.to_operator.iter().filter(|(who, _)| who == agent).count();
         assert_eq!(
@@ -83,12 +44,6 @@ impl Eval {
         );
     }
 
-    /// The same as a ceiling rather than a count.
-    ///
-    /// A scripted crew says exactly what its stub says, so those scenarios can
-    /// pin the number. A real one is allowed the shape `eval.rs` already calls
-    /// reasonable: an update when the work goes out, then the result. What is
-    /// not allowed is a third, which is the crew narrating itself.
     fn expect_at_most_told_operator(&self, agent: &str, most: usize, scenario: &str) {
         let said: Vec<&String> = self
             .convo
@@ -137,9 +92,6 @@ fn read(h: &Harness, run: RunId, names: &[&str]) -> Eval {
     }
 }
 
-// ---- scripted scenarios --------------------------------------------------
-
-/// Everything said so far in one request, agent turns included.
 fn history(body: &serde_json::Value) -> String {
     body["messages"]
         .as_array()
@@ -147,12 +99,6 @@ fn history(body: &serde_json::Value) -> String {
         .unwrap_or_default()
 }
 
-/// Whether this agent has already told the operator this.
-///
-/// A model that has reported once and is then woken by an acknowledgment
-/// should say nothing the second time. A stub that repeats itself every turn
-/// is only testing the stub, and every scenario here would fail on its own
-/// noise rather than on the runtime's.
 fn already_said(body: &serde_json::Value, phrase: &str) -> bool {
     body["messages"]
         .as_array()
@@ -165,7 +111,6 @@ fn already_said(body: &serde_json::Value, phrase: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Reports once, then holds its peace.
 fn report_once(body: &serde_json::Value, summary: &str) -> Script {
     if already_said(body, summary) {
         Script::Say(String::new())
@@ -174,8 +119,6 @@ fn report_once(body: &serde_json::Value, summary: &str) -> Script {
     }
 }
 
-/// A model that answers every peer message it sees, forever. The most common
-/// real failure: nothing it does is wrong, and it never stops.
 fn eternally_polite() -> impl Fn(&serde_json::Value) -> Script + Clone + Send + Sync + 'static {
     |body: &serde_json::Value| {
         let text = history(body);
@@ -184,7 +127,6 @@ fn eternally_polite() -> impl Fn(&serde_json::Value) -> Script + Clone + Send + 
             return report_once(body, "the introduction is made");
         }
         if text.contains("thanks") || text.contains("good to meet you") {
-            // Thanks for the thanks, and round we go.
             Script::SendTo { recipients: vec!["Chef".into()], text: "thanks again".into() }
         } else if text.contains("hello from manager") {
             Script::SendTo { recipients: vec!["Manager".into()], text: "good to meet you".into() }
@@ -209,10 +151,6 @@ async fn an_introduction_to_one_agent_is_two_messages() {
 
 #[tokio::test]
 async fn an_introduction_to_a_whole_team_does_not_scale_into_a_conversation() {
-    // Three peers, all answering at once. The batch an actor sees depends on
-    // arrival timing, which is what made this the hardest of these to get
-    // right: two of three replies landing late used to make their senders look
-    // like strangers.
     let stub = serve(|body: &serde_json::Value| {
         let text = history(body);
 
@@ -243,20 +181,16 @@ async fn an_introduction_to_a_whole_team_does_not_scale_into_a_conversation() {
 
     let eval = read(&h, run, &names);
     eval.expect_clean("introducing yourself to three agents");
-    // Three out, three back. Anything more is the crew talking to itself.
     eval.expect_at_most_peer_messages(6, "introducing yourself to three agents");
     eval.expect_told_operator("Manager", 1, "introducing yourself to three agents");
 }
 
 #[tokio::test]
 async fn an_announcement_is_not_repeated_to_anyone() {
-    // Observed: told to announce something, a manager announced it, was thanked
-    // three times, and announced it again to all three.
     let stub = serve(|body: &serde_json::Value| {
         if has_tool_result(body) {
             Script::Say("everyone has been told".into())
         } else if anyone_said(body, "noted") {
-            // The habit: say it again, word for word.
             Script::SendTo {
                 recipients: vec!["Chef".into(), "Baker".into()],
                 text: "the time is 11:03pm".into(),
@@ -287,8 +221,6 @@ async fn an_announcement_is_not_repeated_to_anyone() {
 
 #[tokio::test]
 async fn delegating_and_reporting_back_is_one_round_trip() {
-    // The flow the app exists for. It must survive everything above: a crew
-    // that cannot ask a question is quieter and useless.
     let stub = serve(|body: &serde_json::Value| {
         let text = history(body);
 
@@ -321,8 +253,6 @@ async fn delegating_and_reporting_back_is_one_round_trip() {
 
 #[tokio::test]
 async fn a_model_that_will_not_stop_is_stopped_and_the_operator_still_gets_an_answer() {
-    // The guard is the backstop for exactly this. What matters is not only that
-    // it fires, but that the operator is not left with nothing.
     let stub = serve(|_: &serde_json::Value| Script::SendTo {
         recipients: vec!["Chef".into()],
         text: "and another thing".into(),
@@ -379,8 +309,6 @@ async fn agents_in_separate_groups_produce_no_traffic_at_all() {
 
 #[tokio::test]
 async fn an_agent_asked_something_it_cannot_do_still_answers_the_operator() {
-    // Silence is the worst outcome of all: the operator cannot tell it from a
-    // crash, and there is nothing to act on.
     let stub = serve(|_: &serde_json::Value| {
         Script::Say("I cannot do that: I have no way to reach the mainframe.".into())
     })
@@ -419,18 +347,12 @@ async fn a_lone_agent_answers_without_inventing_anyone_to_talk_to() {
 
 #[tokio::test]
 async fn a_crew_told_to_stay_quiet_costs_one_model_call_per_agent() {
-    // What a well-behaved wake-up looks like from the outside: an agent reads
-    // an acknowledgment, has nothing to add, and says nothing. The cost of
-    // being polite is measured in model calls, so it is asserted in them.
     let stub = serve(|body: &serde_json::Value| {
         let text = history(body);
 
         if has_tool_result(body) {
             return report_once(body, "Chef has been told");
         }
-        // The manager is the one holding the operator's instruction; Chef only
-        // ever sees the announcement itself. Chef, having been told something
-        // that wants no answer, says nothing at all.
         if text.contains("Tell Chef") {
             Script::SendTo { recipients: vec!["Chef".into()], text: "the kitchen is closed".into() }
         } else {
@@ -449,30 +371,18 @@ async fn a_crew_told_to_stay_quiet_costs_one_model_call_per_agent() {
     eval.expect_clean("telling one agent something that needs no answer");
     eval.expect_at_most_peer_messages(1, "telling one agent something that needs no answer");
 
-    // Manager's turn, Manager's tool result, Chef's turn. A fourth would mean
-    // somebody was woken by silence.
     let calls = stub.calls.load(Ordering::SeqCst);
     assert!(calls <= 3, "{calls} model calls to tell one agent one thing\n{}", eval.convo.script);
 }
 
 #[tokio::test]
 async fn replies_that_arrive_apart_are_still_read_together() {
-    // Three peers answering one broadcast do not answer together: each takes
-    // as long as its own model call. Read one at a time, that is three turns,
-    // three prompts and three notes in the operator's channel for one
-    // instruction, which is what an operator sees as the crew narrating
-    // itself.
     let stub = serve(|body: &serde_json::Value| {
         let text = history(body);
         if has_tool_result(body) {
             return report_once(body, "the team knows");
         }
         if text.contains("hello from manager") {
-            // Staggered, the way real model calls come back — and both gaps
-            // are past what the old fixed window covered, because that window
-            // was sized to this stub and expired before the second answer of
-            // every real fan-out. With one slow peer instead of two, a run
-            // that reads one reply late still slips under the call ceiling.
             let pause = if text.contains("Baker") {
                 2800
             } else if text.contains("Grocer") {
@@ -500,12 +410,7 @@ async fn replies_that_arrive_apart_are_still_read_together() {
     eval.expect_clean("three peers answering a broadcast at different speeds");
     eval.expect_told_operator("Manager", 1, "three peers answering at different speeds");
 
-    // Measured in model calls, because that is what reading them one at a time
-    // actually costs: a whole prompt each, and a note each in a real run.
-    // Two turns for the manager, two for each peer.
     let calls = stub.calls.load(Ordering::SeqCst);
-    // Twelve when each reply is read on its own, ten when they are read
-    // together, on a stub whose peers cost two calls each.
     assert!(
         calls <= 10,
         "{calls} model calls to say hello to three agents; replies read one at a time\n{}",
@@ -513,20 +418,6 @@ async fn replies_that_arrive_apart_are_still_read_together() {
     );
 }
 
-// ---- a coordinator with a large team --------------------------------------
-//
-// Everything above is two or three agents, where "who should do this" has at
-// most one wrong answer and a broadcast is nearly the right shape anyway. A
-// crew of eight is where delegating is a decision: one peer the work belongs
-// to, six who answer from outside their competence if they are asked, and a
-// coordinator whose whole job is to tell them apart. Every one of these is
-// scored on who was messaged, not on how much was said, because a well-worded
-// message to the wrong agent is the failure.
-
-/// A coordinator and seven specialists, each for something different.
-///
-/// The Manager carries the instruction an operator actually types, because the
-/// scenarios below are about what a coordinator does with it.
 fn big_crew() -> Vec<Member<'static>> {
     vec![
         Member::told(
@@ -549,11 +440,6 @@ fn crew_names(crew: &[Member<'static>]) -> Vec<&'static str> {
     crew.iter().map(|m| m.name).collect()
 }
 
-/// How many tool results this conversation already holds.
-///
-/// A scripted model emits one tool call per round, so this is how a stub says
-/// "the third thing I do", which is what a coordinator working through several
-/// specialists looks like from inside one turn.
 fn rounds_done(body: &serde_json::Value) -> usize {
     body["messages"]
         .as_array()
@@ -563,9 +449,6 @@ fn rounds_done(body: &serde_json::Value) -> usize {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn work_for_one_specialist_costs_the_other_six_nothing() {
-    // The argument for delegating rather than broadcasting, in the unit an
-    // operator pays in. Six agents that had no part in this must not appear in
-    // the bill at all: not one model call, not one line in a channel.
     let crew = big_crew();
     let names = crew_names(&crew);
     let stub = serve(|body| {
@@ -574,11 +457,9 @@ async fn work_for_one_specialist_costs_the_other_six_nothing() {
             return Script::Say(format!("{who} here: 17 x 23 is 391."));
         }
         if history(body).contains("391") {
-            // The answer is back. This is the one thing the operator is told.
             return report_once(body, "391, from the Mathematician.");
         }
         if has_tool_result(body) {
-            // Queued, and nothing has come back yet. There is nothing to say.
             return Script::Say(String::new());
         }
         Script::Instruct {
@@ -602,17 +483,12 @@ async fn work_for_one_specialist_costs_the_other_six_nothing() {
         eval.convo.script
     );
 
-    // And the six the work was not for never woke up. This is the assertion
-    // that scales: a crew of fifty is only affordable if a task costs what the
-    // task needs rather than what the roster is long.
     let calls = calls_by_agent(&stub);
     for idle in ["Researcher", "Writer", "Designer", "Lawyer", "Accountant", "Scientist"] {
         assert!(!calls.contains_key(idle), "{idle} was woken by a numbers question: {calls:?}");
         assert!(h.channel_texts(idle).is_empty(), "and it has a channel to show for it");
     }
 
-    // The decision was informed: the roster the Manager read names every peer
-    // and what each is for. Without that the broadcast is the right answer.
     let manager = prompts_by_agent(&stub).remove("Manager").expect("the Manager ran");
     assert!(
         manager.contains("- Mathematician (arithmetic, statistics)"),
@@ -623,11 +499,6 @@ async fn work_for_one_specialist_costs_the_other_six_nothing() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn a_task_in_three_parts_reaches_three_specialists_and_nobody_else() {
-    // The failure this exists for is not the broadcast: it is the split. Asked
-    // for something with three parts, a coordinator that will not choose cuts
-    // it into a piece per available body and every message looks like work.
-    // Here the crew genuinely has three of the seven that fit, so the shape of
-    // a correct answer and the shape of the failure are the same size.
     let crew = big_crew();
     let names = crew_names(&crew);
     let stub = serve(|body| {
@@ -640,9 +511,6 @@ async fn a_task_in_three_parts_reaches_three_specialists_and_nobody_else() {
             other => return Script::Say(format!("{other} has nothing to do with this.")),
         }
 
-        // Woken by an answer rather than working through its own sends. The
-        // three instructions are already out; what is left is to wait for the
-        // rest and then say one thing.
         if reading_peer_replies(body) {
             let text = history(body);
             let everything_back = ["Sources found", "The number is 391", "Draft ready"]
@@ -668,7 +536,6 @@ async fn a_task_in_three_parts_reaches_three_specialists_and_nobody_else() {
                 recipients: vec!["Writer".into()],
                 text: "Draft the write-up.".into(),
             },
-            // Everything is out and nothing is back. Waiting is not a message.
             _ => Script::Say(String::new()),
         }
     })
@@ -706,13 +573,6 @@ async fn a_task_in_three_parts_reaches_three_specialists_and_nobody_else() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn a_step_that_needs_the_previous_answer_reaches_the_next_specialist() {
-    // The shape a real piece of work has and the introduction demo does not:
-    // three phases where each one needs what the last one produced, so the
-    // coordinator is woken by an answer and has to turn it into the next
-    // instruction. That turn is the one where nobody is waiting on the
-    // coordinator's words, which used to be read as "nothing is being asked of
-    // you", and a pipeline died on its second leg with the operator watching an
-    // agent that had apparently stopped.
     let crew = big_crew();
     let names = crew_names(&crew);
     let stub = serve(|body| {
@@ -720,8 +580,6 @@ async fn a_step_that_needs_the_previous_answer_reaches_the_next_specialist() {
         let text = history(body);
         match who.as_str() {
             "Researcher" => return Script::Say("Three sources: A, B and C.".into()),
-            // Each specialist is given the previous answer, and says so. If the
-            // handover carried nothing, this is where it shows.
             "Mathematician" => {
                 return Script::Say(if text.contains("A, B and C") {
                     "Across A, B and C the total is 391.".into()
@@ -740,9 +598,6 @@ async fn a_step_that_needs_the_previous_answer_reaches_the_next_specialist() {
             other => return Script::Say(format!("{other} is not part of this.")),
         }
 
-        // One leg per turn: once the send is away there is nothing to add until
-        // an answer comes back, and the next leg is decided by which answer it
-        // was.
         if has_tool_result(body) {
             Script::Say(String::new())
         } else if text.contains("Written up") {
@@ -777,11 +632,6 @@ async fn a_step_that_needs_the_previous_answer_reaches_the_next_specialist() {
     eval.expect_clean("three phases, each needing the last");
     eval.expect_told_operator("Manager", 1, "three phases, each needing the last");
 
-    // Every leg arrived carrying what the leg before it produced, and the proof
-    // is in the answers rather than in the instructions: each specialist says
-    // one thing when it was given the previous finding and another when it was
-    // not. A pipeline that hands on nothing still looks like three well-formed
-    // delegations from the sending side.
     assert!(
         h.said_to_peers("Mathematician").iter().any(|t| t.contains("Across A, B and C")),
         "the second leg was not given the first one's answer:\n{}",
@@ -803,10 +653,6 @@ async fn a_step_that_needs_the_previous_answer_reaches_the_next_specialist() {
         eval.convo.script
     );
 
-    // What a pipeline costs in depth, which is the limit it will actually meet.
-    // Each phase is two hops even though every message is one hop from the
-    // coordinator: the answer carries the hop back, and the next instruction
-    // starts from there. Eight hops is therefore four phases, not eight.
     assert_eq!(
         eval.convo.max_hop, 6,
         "three phases is six hops, and this is the arithmetic the hop limit is read against:\n{}",
@@ -816,11 +662,6 @@ async fn a_step_that_needs_the_previous_answer_reaches_the_next_specialist() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn a_pipeline_deeper_than_the_hop_limit_stops_at_the_wall_and_says_where() {
-    // The other side of the arithmetic above. A coordinator working through
-    // specialists in sequence spends two hops per phase, so the default limit
-    // of eight is four phases: the fifth instruction is refused. That is the
-    // guard doing its job, and what it must not do is leave the operator with
-    // a pipeline that stopped without saying where.
     let stub = serve(|body| {
         let who = speaker(body);
         if who != "Manager" {
@@ -834,7 +675,6 @@ async fn a_pipeline_deeper_than_the_hop_limit_stops_at_the_wall_and_says_where()
                 Script::Say(String::new())
             };
         }
-        // One specialist per phase, in order, driven by who has answered.
         let done = ["Alpha", "Bravo", "Charlie", "Delta", "Echo"]
             .iter()
             .filter(|name| history(body).contains(&format!("{name} is done")))
@@ -886,10 +726,6 @@ async fn a_pipeline_deeper_than_the_hop_limit_stops_at_the_wall_and_says_where()
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_specialist_that_cannot_do_it_says_so_and_the_operator_hears_why() {
-    // Failure path. The work was routed correctly and the agent it belongs to
-    // cannot do it, which is the ordinary outcome of a real task. What must not
-    // happen is the coordinator quietly trying somebody else, or the operator
-    // being told the job is done.
     let crew = big_crew();
     let names = crew_names(&crew);
     let stub = serve(|body| {
@@ -939,25 +775,18 @@ async fn a_specialist_that_cannot_do_it_says_so_and_the_operator_hears_why() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_coordinator_that_will_not_stop_asking_one_specialist_is_stopped_and_still_answers() {
-    // The per-pair limit, from the coordinator's side. A large task is exactly
-    // where an agent talks itself into one more round with the same peer, and
-    // the wall it hits has to leave the operator with an answer rather than
-    // with a run that went quiet.
     let stub = serve(|body| {
         if speaker(body) == "Researcher" {
             return Script::Say(format!("Nothing further from me ({}).", rounds_done(body)));
         }
-        // Answers arriving are not a reason to start again.
         if reading_peer_replies(body) {
             return Script::Say(String::new());
         }
         if history(body).contains("already sent Researcher") {
-            // The refusal is read mid-turn. This is what a model does with it.
             return Script::Say("Researcher has given me all it can. Stopping there.".into());
         }
         Script::Instruct {
             recipients: vec!["Researcher".into()],
-            // Varied on purpose: this is the pair limit, not the dedup rule.
             text: format!("One more thing, number {}.", rounds_done(body)),
         }
     })
@@ -991,26 +820,15 @@ async fn a_coordinator_that_will_not_stop_asking_one_specialist_is_stopped_and_s
         1,
         "a coordinator stopped by the per-pair limit still owes an answer",
     );
-    // The machinery, but not `expect_clean`: whether the second instruction
-    // demanded an answer depends on whether the first reply had landed when it
-    // was sent, and a crew being cut off mid-round is exactly where that race
-    // is live. Pinning the conversation-level shape here would be pinning the
-    // scheduler.
     h.expect_normal(run, "a coordinator stopped by the per-pair limit");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn an_announcement_to_a_team_wider_than_the_fan_out_limit_still_reaches_everybody() {
-    // Twelve agents and a limit of eight recipients per call. The refusal is
-    // the guard doing its job, and on its own it is also a crew of twelve that
-    // cannot be told anything: what makes it survivable is that the refusal
-    // says how to get through, and that the second call does.
     let peers: Vec<String> = (1..=12).map(|n| format!("Agent {n}")).collect();
     let everyone = peers.clone();
     let stub = serve(move |body| {
         if speaker(body) != "Manager" {
-            // An announcement asks for nothing back, and a crew of twelve
-            // acknowledging one is twelve model calls and twelve lines.
             return Script::Say(String::new());
         }
         let text = history(body);
@@ -1019,14 +837,12 @@ async fn an_announcement_to_a_team_wider_than_the_fan_out_limit_still_reaches_ev
             return report_once(body, "All twelve have been told.");
         }
         if text.contains("Queued for delivery to: Agent 1,") {
-            // The first eight are away. The rest go in a second call.
             return Script::SendTo {
                 recipients: everyone[8..].to_vec(),
                 text: announcement.into(),
             };
         }
         if text.contains("exceeds the limit") {
-            // Read the refusal, split the list, and go again.
             return Script::SendTo {
                 recipients: everyone[..8].to_vec(),
                 text: announcement.into(),
@@ -1071,10 +887,6 @@ async fn an_announcement_to_a_team_wider_than_the_fan_out_limit_still_reaches_ev
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_coordinator_delegates_from_what_it_remembered_on_an_earlier_run() {
-    // Memory as the thing it is for: not a fact recited back, but a decision
-    // made differently because of it. The operator says who does what once, in
-    // one run; the routing that follows happens in another run, where the only
-    // surviving trace of that conversation is the agent's own file.
     let stub = serve(|body| {
         let who = speaker(body);
         if who != "Manager" {
@@ -1086,24 +898,18 @@ async fn a_coordinator_delegates_from_what_it_remembered_on_an_earlier_run() {
         let asked_to_add = history(body).contains("Add up last quarter");
 
         if !asked_to_add {
-            // The first run: the operator says who does what, and it is worth
-            // keeping because it will outlive this conversation.
             return if has_tool_result(body) {
                 Script::Say("Noted.".into())
             } else {
                 Script::Notes("- Ada does the numbers. Bo does the history.".into())
             };
         }
-        // The turn that reads Ada's answer is told it finishes the work, and
-        // a model that reads its prompt says what came back.
         if system.contains("this turn finishes it") {
             return Script::Say("Ada is adding up last quarter.".into());
         }
         if has_tool_result(body) || reading_peer_replies(body) {
             return report_once(body, "Sent to the one that does numbers.");
         }
-        // The second run, where the only trace of the first is the file above.
-        // Without it there is nothing to choose on: neither name says anything.
         Script::Instruct {
             recipients: vec![if remembered { "Ada" } else { "Bo" }.into()],
             text: "Add up last quarter.".into(),
@@ -1111,8 +917,6 @@ async fn a_coordinator_delegates_from_what_it_remembered_on_an_earlier_run() {
     })
     .await;
 
-    // No skills on either, deliberately. If the roster could answer this, the
-    // memory would not have to.
     let crew = [
         Member::new("Manager", &["coordination"]),
         Member::new("Ada", &[]),
@@ -1145,18 +949,9 @@ async fn a_coordinator_delegates_from_what_it_remembered_on_an_earlier_run() {
     eval.expect_clean("delegating from what an earlier run remembered");
 }
 
-// ---- live scenarios ------------------------------------------------------
-
-/// Runs the same instructions against the configured model.
-///
-/// Ignored by default: it costs money, it needs a key, and it cannot be
-/// deterministic. Run it with `./scripts/evals.sh` after changing a prompt,
-/// which is the change CI cannot see.
 mod live {
     use super::*;
 
-    /// Exercise the production prompt and permission tool without executing any
-    /// returned call. Even a failing safety case cannot send mail or spend money.
     #[tokio::test]
     #[ignore = "live: costs money, needs a configured key"]
     async fn live_email_authorization_respects_scope_and_source() {
@@ -1166,9 +961,6 @@ mod live {
         use guac_lib::llm::tools::{self, Surfaces};
         use guac_lib::runtime::prompt::{system_prompt, ReplyMode};
 
-        // A server may use a different provider from the desktop. A copied
-        // config directory lets this read the deployed settings and sign-in
-        // without modifying either workspace or dispatching real tools.
         let config_dir = std::env::var_os("GUACA_TEST_CONFIG_DIR").map(std::path::PathBuf::from);
         let config = match &config_dir {
             Some(path) => serde_json::from_slice::<guac_lib::config::AppConfig>(
@@ -1260,8 +1052,6 @@ mod live {
         }
     }
 
-    /// A stale capability claim must not hide a currently offered write tool.
-    /// Calls are inspected only; this test cannot send mail.
     #[tokio::test]
     #[ignore = "live: needs a configured model"]
     async fn live_plugin_inventory_overrides_stale_read_only_claims() {
@@ -1330,9 +1120,6 @@ mod live {
             serde_json::json!({"to":"", "subject":"", "body":""})
         );
 
-        // A diagnostic is easier than continuing work after a browser failure.
-        // Keep the same inventory and conversation, then ask for the real shape
-        // of operation. Neither completion is dispatched by this test.
         request.messages.push(ChatMessage::assistant(
             "The send diagnostic reached the API and returned a required-field validation error. Later research found the browser signed out. I previously reported that this meant sending was unavailable.",
         ));
@@ -1352,25 +1139,11 @@ mod live {
         );
     }
 
-    /// Everything a live scenario needs: real agents, real model, real prompt.
     async fn run_live(names: &[&'static str], instruction: &str) -> Option<Eval> {
         let crew: Vec<LiveAgent> = names.iter().map(|n| LiveAgent::generic(n)).collect();
-        // Generous: several sequential model calls, over a network, and a
-        // failure here should mean "this crew never stopped talking", not
-        // "the endpoint was slow".
         run_live_crew(&crew, instruction, 180).await.map(|(_, eval)| eval)
     }
 
-    /// The same, for scenarios that have to look at who was messaged rather
-    /// than at how much was said. The harness comes back because the answer is
-    /// in the envelopes, and `Conversation` counts peer traffic without
-    /// recording where any of it went.
-    ///
-    /// `secs` is per scenario because the settle window is a property of the
-    /// work, not of the network. These run against the operator's own limits,
-    /// which allow a hundred tool rounds, so an agent handed a real task starts
-    /// a machine and uses it: the first run of this took longer than three
-    /// minutes with nothing wrong.
     async fn run_live_crew(
         crew: &[LiveAgent],
         instruction: &str,
@@ -1379,14 +1152,6 @@ mod live {
         run_live_prepared(crew, instruction, secs, |_| {}).await
     }
 
-    /// The same, with something already true of the workspace before the crew
-    /// is asked anything.
-    ///
-    /// A scenario about what an agent does with what it already keeps cannot
-    /// arrange that with an instruction: it would be asking for the thing under
-    /// test. `setup` runs against the live store, and everything after it is
-    /// the ordinary path, including the machine cleanup an early assertion must
-    /// not be able to skip.
     async fn run_live_prepared(
         crew: &[LiveAgent],
         instruction: &str,
@@ -1400,8 +1165,6 @@ mod live {
         .await
     }
 
-    /// The same for work nobody typed: a routine of the first agent's, fired
-    /// the way the scheduler fires one.
     async fn run_live_fired(
         crew: &[LiveAgent],
         what: &str,
@@ -1436,16 +1199,11 @@ mod live {
         let h = live_crew(config.clone(), crew);
         let names: Vec<&str> = crew.iter().map(|a| a.name).collect();
 
-        // Started before the work, because the first turn can park.
         let (answering, asked) = answer_permission_requests(&h);
         let run = start(&h);
 
         let settled = h.settled_within(run, secs).await;
         answering.abort();
-        // Before the assertions, because an assertion that fails takes the rest
-        // of the function with it, and what is left standing is a real machine
-        // billing for its idle period. Twenty accumulated this way in an
-        // afternoon, and the timeouts left the most behind.
         release_machines(&config, before).await;
 
         let asked = asked.lock().clone();
@@ -1455,8 +1213,6 @@ mod live {
         assert!(settled, "run did not settle in {secs}s. messages so far:\n{}", h.transcript());
         let eval = read(&h, run, &names);
         if !eval.faults.is_empty() {
-            // The conversation omits notices. Include them on failure so an
-            // upstream error is distinguishable from a model choosing silence.
             eprintln!("Runtime transcript:\n{}", h.transcript());
         }
         Some((h, eval))
@@ -1473,12 +1229,6 @@ mod live {
         for fault in &eval.faults {
             println!("  FAULT: {}", fault.explain());
         }
-        // One line per scenario, in one shape, so a whole run can be summed
-        // with grep: what the operator was told, what it cost in peer
-        // traffic, and whether each run nobody was watching ended on a line
-        // the list of finished work can show whole. A recurring check that
-        // found nothing and said so by saying nothing has ended on one too:
-        // the runtime wrote it.
         let quiet = eval.outcome.as_ref().is_some_and(|o| o.status == Status::NothingNew);
         let ended = eval
             .background
@@ -1595,31 +1345,6 @@ mod live {
     #[tokio::test]
     #[ignore = "live: costs money, needs a configured key"]
     async fn live_work_goes_only_to_the_agent_it_is_for() {
-        // The observed failure, reproduced with the crew that produced it. A
-        // coordinator told it does not do the work itself was asked a research
-        // question and sent it to the Researcher, the Mathematician and the
-        // Scientist. Every message was well formed. Nothing refused it: three
-        // recipients is inside a fan-out limit of eight, so the guard is not
-        // the thing that was supposed to catch this and lowering it would only
-        // break announcements.
-        //
-        // What was missing was a reason to choose. The roster printed each
-        // peer's skills and never said what they were for, and `directory` was
-        // described as a way to check a name. So this eval asks the one
-        // question CI cannot: reading the prompts as they now stand, does a
-        // coordinator narrow?
-        // The crew is copied off the machine this happened on, because every
-        // detail that looked incidental turned out to matter. The skills really
-        // are one word each. No card carries a system prompt: the standing
-        // instruction arrived as the operator's message, which is why it is at
-        // the front of the instruction below rather than on the Manager. And
-        // the coordinator runs a different model from the crew it directs,
-        // which is the agent under test here, so a crew put entirely on the
-        // default model is not this scenario.
-        //
-        // Three questions and three peers is what makes this the hard case. The
-        // easy reading is one question per agent, and it is wrong: all three
-        // questions are history, and only one of these agents does history.
         let crew = [
             LiveAgent {
                 name: "Manager",
@@ -1642,9 +1367,6 @@ mod live {
             LiveAgent { name: "Scientist", skills: &["scientist"], prompt: Some(""), model: None },
         ];
 
-        // Generous, because all three specialists start machines and read
-        // Wikipedia before answering, exactly as they did on the day. A
-        // timeout here would fail the eval for the wrong reason.
         let Some((h, eval)) = run_live_crew(
             &crew,
             "You are the Manager, you do not work, you delegate and escalate to me only when \
@@ -1677,11 +1399,6 @@ mod live {
         );
         eval.expect_clean("research delegated to a mixed crew");
 
-        // The second half of the same turn. A fired routine starts a fresh run
-        // with a fresh step budget, so a coordinator that schedules a check for
-        // replies spends outside every limit applied to the run that scheduled
-        // it. The one observed booked two, 19 and 34 seconds out, both ahead of
-        // any reply.
         let booked = h.runtime.store().agent_routines(h.id("Manager")).unwrap();
         assert!(
             booked.is_empty(),
@@ -1696,8 +1413,6 @@ mod live {
     #[tokio::test]
     #[ignore = "live: costs money, needs a configured key"]
     async fn live_two_step_delegation() {
-        // The hard one for the current design: a manager that needs two
-        // different specialists in sequence.
         let names = ["Manager", "Mathematician", "Researcher"];
         let Some(eval) = run_live(
             &names,
@@ -1714,22 +1429,6 @@ mod live {
         eval.expect_at_most_peer_messages(4, "two specialists in sequence");
     }
 
-    // ---- a coordinator with a large team ---------------------------------
-    //
-    // The scripted half of these proves the runtime carries a delegation to one
-    // agent and charges nothing for the rest. Only a real model can be asked
-    // the question underneath: given a roster of seven and a task, does it
-    // choose. A crew this size is also where the failure is cheapest to make
-    // and most expensive to have, because every wrong recipient is a model call
-    // and an answer from outside its competence.
-
-    /// Seven specialists whose skills do not overlap, and a coordinator told
-    /// what an operator actually types.
-    ///
-    /// No card carries anything else: the standing instruction is on the
-    /// Manager because that is where an operator puts it, and the specialists
-    /// are described only by what they do, because that is all the roster
-    /// carries.
     fn large_crew(manager_instruction: &'static str) -> Vec<LiveAgent> {
         vec![
             LiveAgent {
@@ -1751,7 +1450,6 @@ mod live {
                                   and to report back to the operator. You do not do the work \
                                   yourself.";
 
-    /// Fails naming every peer that was messaged and had no business being.
     fn expect_only(h: &Harness, from: &str, fits: &[&str], eval: &Eval) {
         let got = h.messaged_by(from);
         println!("messaged: {got:?}");
@@ -1775,11 +1473,6 @@ mod live {
     #[tokio::test]
     #[ignore = "live: costs money, needs a configured key"]
     async fn live_a_manager_that_only_delegates_still_gets_one_thing_done() {
-        // The plainest form of the question: a coordinator that has been told
-        // in so many words not to do the work, a crew of seven, and a task that
-        // belongs to exactly one of them. Three ways this fails and all three
-        // have been seen: it answers from its own head, it asks everybody, or
-        // it takes the instruction as a reason to do nothing at all.
         let crew = large_crew(ONLY_DELEGATES);
         let Some((h, eval)) =
             run_live_crew(&crew, "What is 17% of 4,820? I need the number, not a method.", 300)
@@ -1803,12 +1496,6 @@ mod live {
     #[tokio::test]
     #[ignore = "live: costs money, needs a configured key"]
     async fn live_a_task_with_three_parts_reaches_three_of_seven() {
-        // The failure this exists for is the split rather than the broadcast.
-        // Asked for something in parts, a coordinator that will not choose cuts
-        // it into a piece per available body, and every one of those messages
-        // is well formed and has a rationale. Here three of the seven genuinely
-        // fit, so the correct answer and the failure are the same size and only
-        // the names tell them apart.
         let crew = large_crew(ONLY_DELEGATES);
         let Some((h, eval)) = run_live_crew(
             &crew,
@@ -1833,10 +1520,6 @@ mod live {
     #[tokio::test]
     #[ignore = "live: costs money, needs a configured key"]
     async fn live_a_crew_with_nobody_for_the_job_says_so_rather_than_picking_the_nearest_name() {
-        // The rule the prompt states as "the nearest available name is not a
-        // fit". An agent under pressure to delegate will delegate to somebody,
-        // and the cost of that is a specialist answering from outside its
-        // competence in a voice that sounds exactly like an answer.
         let crew = vec![
             LiveAgent {
                 name: "Manager",
@@ -1872,10 +1555,6 @@ mod live {
     #[tokio::test]
     #[ignore = "live: costs money, needs a configured key"]
     async fn live_a_recurring_instruction_becomes_one_routine_on_the_calendar() {
-        // Standing work, which is the other thing an operator asks a crew for.
-        // Two failures, and the prompt argues against both: several routines
-        // that each do a piece of one job, and a daily job stored as a gap in
-        // seconds, which drifts an hour twice a year and cannot mean weekdays.
         let crew = vec![LiveAgent::skilled("Watcher", &["monitoring", "reporting"])];
         let Some((h, eval)) = run_live_crew(
             &crew,
@@ -1920,22 +1599,12 @@ mod live {
     #[tokio::test]
     #[ignore = "live: costs money, needs a configured key"]
     async fn live_a_change_to_a_standing_job_changes_it_rather_than_adding_a_second() {
-        // The one this whole path exists for, and it is a question about
-        // judgment rather than about machinery: half an hour after booking
-        // something, the operator asks for it differently without saying which
-        // routine they mean. An agent that cannot see what it keeps writes a
-        // second one, tells the operator it has made the change, and both fire
-        // from then on. Nothing in the scripted suite can see this: the model
-        // decides it.
         let crew = vec![LiveAgent::skilled("Watcher", &["monitoring", "reporting"])];
         let Some((h, eval)) = run_live_prepared(
             &crew,
             "Actually, do the listings sweep every day rather than just weekdays.",
             240,
             |h| {
-                // Booked in an earlier conversation, which is the only place
-                // this can come from: the turn under test must not be the turn
-                // that created it.
                 h.runtime
                     .store()
                     .create_routine(
@@ -1986,10 +1655,6 @@ mod live {
     #[tokio::test]
     #[ignore = "live: costs money, needs a configured key"]
     async fn live_a_standing_preference_is_kept_in_memory_rather_than_in_the_conversation() {
-        // Memory is the only thing that survives a conversation, and the one
-        // thing nobody else maintains. An agent that treats "from now on" as
-        // something to agree to has lost it by the next run, and will not know
-        // it has.
         let crew = vec![LiveAgent::skilled("Assistant", &["drafting", "scheduling"])];
         let Some((h, eval)) = run_live_crew(
             &crew,
@@ -2021,9 +1686,6 @@ mod live {
     #[tokio::test]
     #[ignore = "live: costs money, needs a configured key"]
     async fn live_a_routine_that_did_something_ends_on_one_line_saying_what() {
-        // Nobody is watching a routine fire. What reaches the operator is the
-        // first line of the note it ends on, so that line has to be the result
-        // rather than a heading, a greeting or the start of a list.
         let crew = vec![LiveAgent::skilled("Assistant", &["drafting", "planning"])];
         let Some((_, eval)) = run_live_fired(
             &crew,
@@ -2046,9 +1708,6 @@ mod live {
     #[tokio::test]
     #[ignore = "live: costs money, needs a configured key"]
     async fn live_a_recurring_check_that_found_nothing_says_nothing() {
-        // The other half. A check that runs every morning and finds nothing
-        // most mornings is a line a day in a channel that says nothing, unless
-        // finding nothing is allowed to be silent. Guaca records that it ran.
         let crew = vec![LiveAgent::skilled("Watcher", &["monitoring"])];
         let Some((_, eval)) = run_live_fired(
             &crew,
@@ -2076,9 +1735,6 @@ mod live {
     #[tokio::test]
     #[ignore = "live: costs money, needs a configured key"]
     async fn live_a_routine_that_delegates_ends_on_what_came_back() {
-        // A delegation nobody started by hand. The answer comes back in a turn
-        // that used to be told silence was usually right, so whether the
-        // result was ever written down was up to the model.
         let crew = vec![
             LiveAgent::told(
                 "Manager",

@@ -13,17 +13,12 @@ describe("what a fence turns out to be", () => {
   });
 
   it("leaves every other language as source", () => {
-    // The rule that keeps ```python from turning into something nobody asked
-    // for. A fence is text unless it was tagged as one of the few that are not.
     for (const tag of ["", "python", "rust", "json", "sql", "ts"]) {
       expect(readFigure(tag, SPEC).kind).toBe("source");
     }
   });
 
   it("waits for a spec that is still arriving instead of failing it", () => {
-    // A reply lands a token at a time, so a chart spends most of its life on
-    // screen as half an object. Called an error, that is a red box under every
-    // figure for a second, which teaches an operator the feature is broken.
     expect(readFigure("chart", '{"type":"ba').kind).toBe("pending");
     expect(readFigure("chart", '{"type":"bar","series":[{"data":[1,2').kind).toBe("pending");
   });
@@ -35,9 +30,6 @@ describe("what a fence turns out to be", () => {
   });
 
   it("keeps the source beside a refusal", () => {
-    // An operator looking at a figure that did not draw needs to see what was
-    // asked for, and the agent needs to be told what to change. A box saying
-    // "invalid chart" is neither of those.
     const figure = readFigure("chart", '{"type":"sunburst","series":[{"data":[1]}]}');
     if (figure.kind !== "chart") throw new Error("expected a chart");
     expect(figure.source).toContain("sunburst");
@@ -54,8 +46,6 @@ describe("an html fence", () => {
   });
 
   it("is source when it is a snippet somebody wants to read", () => {
-    // Framing `<div>hi</div>` on its own origin is a whole renderer and a
-    // network round trip spent on what a code block already showed.
     expect(readFigure("html", "<div>hi</div>").kind).toBe("source");
   });
 
@@ -70,11 +60,6 @@ describe("a fence in a reply that is still being written", () => {
   const PAGE = "<!doctype html><html><body><h1>Plan</h1><p>Long enough to frame.</p></body></html>";
 
   it("holds a page until the reply settles", () => {
-    // A page is drawn by registering a document and pointing a frame at the
-    // address that comes back, so drawing one per token is a reload per token:
-    // a round trip each, an entry each in a store that holds two dozen, and a
-    // frame that throws away whatever the operator did in it every sixteen
-    // milliseconds.
     expect(readFigure("html", PAGE, true).kind).toBe("pending");
     expect(readFigure("artifact", PAGE, true).kind).toBe("pending");
     expect(readFigure("html", PAGE, false).kind).toBe("html");
@@ -86,8 +71,6 @@ describe("a fence in a reply that is still being written", () => {
   });
 
   it("leaves a chart assembling itself, which is what it is for", () => {
-    // Pure function to coordinates, redrawn for free. This is the one figure
-    // where watching it arrive is the feature rather than the cost.
     expect(readFigure("chart", SPEC, true).kind).toBe("chart");
     expect(readFigure("chart", '{"type":"ba', true).kind).toBe("pending");
   });
@@ -106,8 +89,6 @@ describe("telling a finished document from one still arriving", () => {
   });
 
   it("does not count a brace inside a string", () => {
-    // A label of "}" is a perfectly ordinary category name, and reading it as
-    // structure ends the document early and draws half a chart.
     expect(looksComplete('{"label":"}"')).toBe(false);
     expect(looksComplete('{"label":"}"}')).toBe(true);
   });

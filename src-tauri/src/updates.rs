@@ -1,6 +1,3 @@
-//! Public release information. What the checker reads is news and nothing
-//! more; [`signed`] and [`feed`] are the only reads anything installs from,
-//! and each refuses a manifest that none of its channel's keys signed.
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -9,30 +6,15 @@ use tokio::sync::Mutex;
 pub const SOURCE: &str =
     "https://github.com/madebywelch/guaca/releases/latest/download/guaca-release.json";
 
-/// The keys a manifest may be signed with. A GitHub account that can publish
-/// a release is not, by itself, able to make every box install it.
 pub const KEYS: &str = include_str!("../../release-keys.pub");
 
-/// The newest build of `main`, as CI published it: one file carrying the
-/// manifest and its signature, because the file is replaced on every push
-/// and two files replaced one after the other can be read one from each. On
-/// a branch, because this repository's releases are immutable.
 pub const MAIN_FEED: &str =
     "https://raw.githubusercontent.com/madebywelch/guaca/refs/heads/main-feed/guaca-main.json";
 
-/// The keys a build of `main` may be signed with. Not the release keys: CI
-/// holds this one, and a leak of it reaches only the boxes that chose `main`.
 pub const MAIN_KEYS: &str = include_str!("../../main-keys.pub");
 
-/// How long the checker keeps an answer about `main`. A push is news within
-/// minutes on that channel, which is what choosing it asked for.
 const MAIN_CACHE_FOR: Duration = Duration::from_secs(5 * 60);
 
-/// Which builds a box installs: published releases, or every build of `main`.
-///
-/// Set where the box is installed, in `GUACA_CHANNEL`, and read from the
-/// updater's own environment. Nothing that can reach the updater's socket can
-/// change it, so an agent in the host cannot move a release box onto `main`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Channel {
@@ -61,9 +43,6 @@ impl Channel {
     }
 }
 
-/// Where each release's files are, by version. The signature is read from
-/// here rather than from `latest`, so a release published between the two
-/// reads is a mismatch rather than a pair of files from two releases.
 pub const DOWNLOADS: &str = "https://github.com/madebywelch/guaca/releases/download";
 const MAX_BYTES: usize = 16 * 1024;
 const CACHE_FOR: Duration = Duration::from_secs(6 * 60 * 60);
@@ -81,11 +60,6 @@ pub fn protocol() -> Protocol {
         .expect("release-protocol.json is checked by the build gates")
 }
 
-/// The commit this daemon was built from, told to the build rather than read
-/// from a repository it does not ship with. Empty for a build made without
-/// one, which `/health` says rather than hides: a box and a laptop that
-/// disagree about this string are running different code, and that is the
-/// first thing worth knowing about a bug that reproduces on one of them.
 pub const BUILD: &str = match option_env!("GUACA_COMMIT") {
     Some(commit) => commit,
     None => "",
@@ -103,8 +77,6 @@ pub fn metadata() -> serde_json::Value {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Release {
     pub schema: u32,
-    /// Absent from a release manifest, which predates channels and is read by
-    /// updaters that refuse a field they do not know.
     #[serde(default, skip_serializing_if = "Channel::is_release")]
     pub channel: Channel,
     pub version: String,
@@ -138,8 +110,6 @@ impl Release {
         Ok(())
     }
 
-    /// The one page a manifest may link: a release's notes, or the commit a
-    /// build of `main` was made from.
     fn notes_for(&self) -> String {
         match self.channel {
             Channel::Release => {
@@ -170,9 +140,6 @@ struct Cached {
     attempted: Option<Instant>,
 }
 
-/// News about what an update would install. Which channel's news is not the
-/// checker's to decide: a box's updater follows one, and a host without an
-/// updater follows releases, so the caller says which on every check.
 pub struct Checker {
     release: String,
     main: String,
@@ -195,14 +162,10 @@ impl Checker {
         Self { release, main, automatic, cached: Mutex::new(Cached::default()) }
     }
 
-    /// The news for `channel`, or for whichever channel was asked about last
-    /// when the caller cannot say, which is an updater replacing itself.
     pub async fn check(&self, channel: Option<Channel>, refresh: bool) -> Status {
-        // Serializing the read also coalesces checks from several clients.
         let mut cached = self.cached.lock().await;
         let channel = channel.unwrap_or(cached.status.channel);
         if channel != cached.status.channel {
-            // A release is not news on main, nor the other way round.
             *cached = Cached::default();
             cached.status.channel = channel;
         }
@@ -226,7 +189,6 @@ impl Checker {
             }
             Err(error) => {
                 tracing::warn!(%error, "could not check host releases");
-                // Retain the last successful answer, with its original timestamp.
                 cached.status.error = Some(error);
             }
         }
@@ -238,17 +200,11 @@ impl Checker {
             Channel::Release => {
                 parse(&download(&client()?, &self.release).await?, Channel::Release)
             }
-            // One read either way, so the news is checked as an install would be.
             Channel::Main => feed(&self.main, MAIN_KEYS).await,
         }
     }
 }
 
-/// The release at `source`, if one of `keys` signed exactly the bytes read.
-///
-/// The signature is checked before anything in the manifest is acted on; the
-/// version is read first only to find the signature, and only after
-/// `validate` has held it to a plain release number.
 pub async fn signed(source: &str, downloads: &str, keys: &str) -> Result<Release, String> {
     let client = client()?;
     let bytes = download(&client, source).await?;
@@ -268,8 +224,6 @@ pub async fn signed(source: &str, downloads: &str, keys: &str) -> Result<Release
     Ok(release)
 }
 
-/// What `MAIN_FEED` is: a manifest's exact bytes and the signature over them,
-/// both base64.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Envelope {
@@ -277,7 +231,6 @@ struct Envelope {
     signature: String,
 }
 
-/// The build `main` is at, if one of `keys` signed exactly the manifest read.
 pub async fn feed(source: &str, keys: &str) -> Result<Release, String> {
     use base64::Engine;
     let bytes = download(&client()?, source).await?;
@@ -295,7 +248,6 @@ pub async fn feed(source: &str, keys: &str) -> Result<Release, String> {
 const UNSIGNED_RELEASE: &str = "This release is not signed with Guaca's release key, so nothing was installed. Try again later; if it persists, the release was not published by Guaca.";
 const UNSIGNED_MAIN: &str = "This build of main is not signed with Guaca's key for main, so nothing was installed. Try again after the next push; if it persists, the build was not published by Guaca's CI.";
 
-/// Whether one of `keys` made `signature` over `bytes`.
 fn verify(bytes: &[u8], signature: &[u8], keys: &str, channel: Channel) -> Result<(), String> {
     use base64::Engine;
     let said = match channel {
@@ -350,8 +302,6 @@ async fn download(client: &reqwest::Client, source: &str) -> Result<Vec<u8>, Str
     Ok(bytes)
 }
 
-/// A manifest, held to the channel it was read for: a build of `main` read
-/// where a release belongs is refused, and the other way round.
 fn parse(bytes: &[u8], channel: Channel) -> Result<Release, String> {
     let release: Release = serde_json::from_slice(bytes)
         .map_err(|_| "The release metadata is unreadable. Try again later.".to_string())?;
@@ -417,7 +367,6 @@ mod tests {
         assert!(result.error.is_none());
         assert!(result.checked_at.is_none());
     }
-    /// A key pair nobody else holds, and its public half as `KEYS` spells one.
     fn keypair() -> (ring::signature::Ed25519KeyPair, String) {
         use base64::Engine;
         use ring::signature::KeyPair;
@@ -434,7 +383,6 @@ mod tests {
         base64::engine::general_purpose::STANDARD.encode(pair.sign(bytes).as_ref())
     }
 
-    /// Serves one manifest and, beside it, whatever signature it is given.
     async fn publish(
         manifest: Vec<u8>,
         signature: Option<String>,
@@ -533,7 +481,6 @@ mod tests {
         task.abort();
     }
 
-    /// A build of `main`, as CI describes one.
     fn build() -> Release {
         let commit = "e".repeat(40);
         Release {
@@ -544,7 +491,6 @@ mod tests {
         }
     }
 
-    /// What CI publishes: the manifest's exact bytes and a signature over them.
     fn envelope(manifest: &[u8], signature: &str) -> Vec<u8> {
         use base64::Engine;
         serde_json::to_vec(&serde_json::json!({
@@ -630,9 +576,6 @@ mod tests {
         let (pair, public) = keypair();
         let bytes = serde_json::to_vec_pretty(&build()).unwrap();
         let (url, task) = serve(envelope(&bytes, &sign(&pair, &bytes))).await;
-        // The checker trusts the compiled-in key, which this test's pair is
-        // not, so it reports the refusal: the news is checked as an install
-        // would check it.
         let checker = Checker::new(String::new(), url.clone(), true);
         let status = checker.check(Some(Channel::Main), true).await;
         assert_eq!(status.channel, Channel::Main);
@@ -651,12 +594,10 @@ mod tests {
             cached.status.checked_at = Some("a release check".into());
             cached.attempted = Some(Instant::now());
         }
-        // Not refreshed and within the cache's life: only the channel moved.
         let moved = checker.check(Some(Channel::Main), false).await;
         assert_eq!(moved.channel, Channel::Main);
         assert!(moved.latest.is_none(), "a release is not a build of main");
         assert!(moved.checked_at.is_none());
-        // An updater that cannot answer keeps the channel the box was on.
         assert_eq!(checker.check(None, false).await.channel, Channel::Main);
     }
 

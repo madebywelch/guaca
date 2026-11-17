@@ -78,15 +78,8 @@ export default function App() {
   const prefs = useStore((s) => s.prefs);
 
   const [agentView, setAgentView] = useState<AgentView>("conversation");
-  /** Set while a click from outside the window is opening an agent. */
   const revealing = useRef<AgentId | null>(null);
 
-  /**
-   * Where the window lands when the operator asks to be taken somewhere from
-   * outside it: the menu bar panel, or a click on a notification. Read from
-   * the store at the moment it is asked, so it can be made once. An agent
-   * opens on the conversation, working or not: what was clicked was a message.
-   */
   const reveal = useCallback((target: Reveal) => {
     if (target.kind === "agent") diagnostic("reveal.agent", target.id);
     const state = useStore.getState();
@@ -100,12 +93,6 @@ export default function App() {
     void state.select(target.id);
   }, []);
 
-  /**
-   * A delivery the Host offered every window. Whether it is worth a
-   * notification was decided there; this window only claims it, and shows it
-   * if the claim won. Made once, for the same reason as `reveal`: the
-   * subscription that calls it is.
-   */
   const onEvent = useCallback(
     (event: UiEvent) => {
       if (event.type !== "delivery") return;
@@ -126,16 +113,10 @@ export default function App() {
   const [showGroups, setShowGroups] = useState(false);
   const [showCafeteria, setShowCafeteria] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
-  // The pane inside whichever settings dialog is open, reported by the dialog.
   const [openSection, setOpenSection] = useState<string | null>(null);
   const leaveChannel = useStore((state) => state.leaveChannel);
   const focused = useStore((state) => state.focused);
 
-  // Opening someone lands on what they are doing when they are doing
-  // something, and on the conversation otherwise. Decided once, as the agent
-  // is opened: the found message's mark is cleared a moment after it is shown,
-  // and a landing that reran on that would take the reader off the message
-  // to the agent's screen.
   useEffect(() => {
     const revealed = revealing.current;
     revealing.current = null;
@@ -149,24 +130,15 @@ export default function App() {
     setAgentView(busy && !state.focused ? "now" : "conversation");
   }, [selected]);
 
-  // A message asked for by search is in the conversation, including one in the
-  // agent already open on another tab.
   useEffect(() => {
     if (focused) setAgentView("conversation");
   }, [focused]);
 
-  // A fired routine clicked in the transcript. The panel that opens it is
-  // only drawn on a tab other than the conversation, so the request goes there
-  // and the panel takes it as it mounts.
   const openingRoutine = useStore((state) => state.openingRoutine);
   useEffect(() => {
     if (openingRoutine !== null) setAgentView("routines");
   }, [openingRoutine]);
 
-  // The four shortcuts that work wherever the operator is, matched against
-  // the same table the Shortcuts pane draws from, so a key listed there is a key
-  // that works. Everything else in that table belongs to the surface it acts
-  // on: see `lib/keybinds`.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const binding = bindingFor(event);
@@ -174,11 +146,7 @@ export default function App() {
       event.preventDefault();
 
       if (binding.id === "field") {
-        // Not from under a dialog or the Groups sheet: the box is behind it,
-        // and focus moved there would be typing into something out of sight.
         if (dismissing()) return;
-        // The field on the opening screen, or the open conversation's box:
-        // whichever box writes to someone from where the operator is.
         if (useStore.getState().selected) setAgentView("conversation");
         requestAnimationFrame(() =>
           document.querySelector<HTMLElement>("[data-field]:not([disabled])")?.focus(),
@@ -192,10 +160,6 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // The appearance, written to the root element. Done here rather than where
-  // it is chosen so a reload draws it before the first paint of anything else,
-  // and re-run when the OS changes its mind, which only matters while the
-  // surface is set to follow it.
   const {
     uiScale,
     surface,
@@ -225,20 +189,11 @@ export default function App() {
 
   const ready = useRuntime(onEvent);
 
-  // What was offered while this page was not connected: once the first read
-  // lands, and again each time the link comes back up, since an offer made
-  // while the socket was down reached nobody.
   useEffect(() => {
     if (!ready || link !== "up") return;
     void catchUp((target) => land(target, reveal));
   }, [ready, link, reveal]);
 
-  // The menu bar follows the window. The tray process holds no workspace of
-  // its own, so its icon is drawn from this window's store, coalesced and only
-  // when it would draw differently, and its panel is told which host this
-  // window is attached to and becomes a second client of it. A refusal is
-  // said rather than swallowed: a report the tray turned away once left the
-  // icon idle whatever the crew was doing, and nothing on screen said so.
   useEffect(() => {
     const host = attached();
     if (!host) return;
@@ -259,10 +214,6 @@ export default function App() {
     };
   }, []);
 
-  // The menu bar panel, asking for the window. The window is already up by the
-  // time this lands; the only thing left is where it lands, and the newest
-  // window of a channel is the right one: a request the panel offered is the
-  // last thing in the channel that raised it.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let canceled = false;
@@ -282,14 +233,6 @@ export default function App() {
     };
   }, [reveal]);
 
-  /**
-   * Runs something on one agent and re-reads the roster.
-   *
-   * Both menu actions change a card the rail is drawing, and the runtime emits
-   * `agentsChanged` for each, but waiting for the round trip means the row does
-   * not move until the event lands. Refreshing here as well makes the click
-   * feel like it did something.
-   */
   const onAgent = async (run: () => Promise<unknown>) => {
     try {
       await run();
@@ -301,7 +244,6 @@ export default function App() {
 
   const openAgent = selected ? agents.find((a) => a.id === selected) : undefined;
 
-  // Where a quick action goes: the same places the rail and the palette open.
   const openPlace = (place: QuickPlace) => {
     switch (place.kind) {
       case "channel":
@@ -323,8 +265,6 @@ export default function App() {
       }
     }
   };
-  // A message from a quick action is the operator's own, sent from the channel
-  // it goes to, which is then on screen for the answer.
   const sendFromBar = async (agentId: string, text: string) => {
     await select(agentId);
     setAgentView("conversation");
@@ -357,9 +297,6 @@ export default function App() {
       overlay === "crewSettings" && editingGroup !== "new" ? (editingGroup?.id ?? null) : null,
   });
   const currentGroup = groups.find((group) => group.id === (openAgent?.groupId ?? railGroup));
-  // Read the same group-over-workspace provider and key choices as the backend.
-  // On Today no group is in front of the operator, so the banner speaks for
-  // every group with someone in it, and only when none of them can reply.
   const unpaid = (group: Group | undefined) =>
     settings !== null &&
     (group?.inference.provider ?? settings.provider) === "compatible" &&
@@ -379,8 +316,6 @@ export default function App() {
         !groups[0]!.apiKeySet &&
         Object.values(groups[0]!.inference).every((value) => value === null)));
 
-  // `data-link` is the one attribute the whole window reads: whether what it
-  // draws is current. `styles.css` is where the transcript loses its weight.
   return (
     <div
       className="app"
@@ -410,8 +345,6 @@ export default function App() {
         {needsKey && !firstRun && (
           <div className="banner">
             <span>Add an API key before your agents can reply.</span>
-            {/* Onto the pane that holds the key, rather than onto the first one
-                with the key two sections away. */}
             <button type="button" className="btn" onClick={() => setShowSettings("provider")}>
               Open settings
             </button>
@@ -479,9 +412,6 @@ export default function App() {
             </div>
           </div>
         ) : selected === null ? (
-          // Nothing open: the opening screen. Also where going inside a group
-          // the open channel was not in, and deleting the agent that was open,
-          // both leave the operator, rather than on somebody picked for them.
           <Home
             onSearch={(query) => setSearching(query)}
             onManageGroups={() => setShowGroups(true)}
@@ -510,9 +440,6 @@ export default function App() {
           onClose={() => setMenu(null)}
           onEditProfile={(agent) => setEditing(agent)}
           onTogglePin={(agent) => void onAgent(() => api.setAgentPinned(agent.id, !agent.pinned))}
-          // Through the store rather than the API: a move lands the agent at
-          // the end of a group it is not in yet, which is a placement only the
-          // roster the rail is drawn from can work out.
           onMoveToGroup={(agent, group) =>
             void onAgent(() => dropAgent(agent.id, { kind: "group", id: group.id }))
           }
@@ -526,19 +453,12 @@ export default function App() {
               await select(copy.id);
             })
           }
-          // The runtime announces the clear and the store re-reads whatever is
-          // open, but only once the event has been round-tripped. Reading here
-          // as well is what makes the click look like it did something.
           onClearHistory={(agent) =>
             void onAgent(async () => {
               await api.clearChannel(agent.id);
               await loadChannel(agent.id);
             })
           }
-          // Into the compost. The rail drops the row on the next roster read,
-          // and the pane is left where it was: what the agent said is still in
-          // every channel it said it in, and a view that emptied itself would
-          // read as the transcript having gone too.
           onDelete={(agent) => void onAgent(() => api.deleteAgent(agent.id))}
         />
       )}
@@ -623,18 +543,6 @@ export default function App() {
   );
 }
 
-/**
- * The one line the window keeps for something that went wrong.
- *
- * Dismiss is the only control a message can always have, and for most of them
- * it is the only one that would do anything: a refused write, a duplicate name
- * and a missing key are all fixed by changing something elsewhere, in a place
- * the banner cannot open. The host being gone is the exception, and it is the
- * one failure where the app knows more than it says: nothing answered, and the
- * two things that help are asking again and looking at which host this is.
- * Both are actions, and leaving the operator with only the button that removes
- * the diagnosis is what this exists to stop.
- */
 function FailureBanner({
   banner,
   onSettings,
@@ -645,23 +553,12 @@ function FailureBanner({
   const setBanner = useStore((state) => state.setBanner);
   const [retrying, setRetrying] = useState(false);
 
-  /**
-   * Asks the host everything again, which is what came back missing.
-   *
-   * The socket redials on its own, and that is why this is not a reload: a host
-   * that has come back is a host whose next read succeeds, and the whole page
-   * reloading would lose the draft in the composer for news the operator can
-   * get without it.
-   */
   const retry = async () => {
     setRetrying(true);
     try {
       await useStore.getState().resynchronize();
       setBanner(null);
     } catch {
-      // The banner is already saying nothing answered. Saying it again in a
-      // sentence the operator has just read is noise on the one line that
-      // matters.
     } finally {
       setRetrying(false);
     }
@@ -671,9 +568,6 @@ function FailureBanner({
     <div className={banner.tone === "error" ? "banner banner--error" : "banner"}>
       <span className="banner__text">
         <span>{banner.text}</span>
-        {/* Under the sentence rather than instead of it: the sentence is what
-            happened, and this is the part the app could not know from the
-            failure alone. */}
         {banner.fix === "host" && <span className="banner__hint">{unreachableHint()}</span>}
       </span>
       <span className="banner__actions">
@@ -682,8 +576,6 @@ function FailureBanner({
             {retrying ? "Trying…" : "Retry"}
           </button>
         )}
-        {/* Where a person changes hosts, and only a desktop can: a browser is
-            pointed at its host by the address it was opened with. */}
         {banner.fix === "host" && desktop && (
           <button type="button" className="btn btn--ghost" onClick={() => onSettings("workspace")}>
             Check the host

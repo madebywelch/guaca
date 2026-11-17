@@ -1,18 +1,4 @@
 #!/usr/bin/env bash
-#
-# Rebuilds every committed icon from the two scripts that draw them: the app
-# icon, and the three menu bar glyphs. `scripts/make-icon.py` draws one 1024px
-# PNG and `tauri icon` derives the platform set from it; `scripts/make-tray.py`
-# draws the glyphs at 36px. `scripts/check-icons.py` runs this into a temp
-# directory and fails the gate when the committed files are not what comes out,
-# so this is the command to run when it does.
-#
-#   ./scripts/make-icons.sh              rebuild the repo's icons in place
-#   ./scripts/make-icons.sh /tmp/icons   rebuild them under another root, which
-#                                        is how the check compares
-#
-# Editing a mark is editing the species in `make-icon.py`: the tray imports it,
-# so the dock and the menu bar move together.
 
 set -euo pipefail
 
@@ -26,10 +12,6 @@ python3 scripts/make-icon.py "$root/scripts/icon-source.png"
 node_modules/.bin/tauri icon "$root/scripts/icon-source.png" -o "$root/src-tauri/icons"
 python3 scripts/make-tray.py "$root/src-tauri/icons"
 
-# `tauri icon` packs icon.icns by walking a map, so its chunks land in a
-# different order on every run and every rebuild would be a diff even when no
-# pixel moved. A reader finds a chunk by its type rather than by where it
-# stands, so sorting them costs nothing and makes the file reproducible.
 python3 - "$root/src-tauri/icons/icon.icns" <<'PY'
 import sys
 from pathlib import Path

@@ -1,4 +1,3 @@
-/* The app's own tokens, trimmed to what this page reads. */
 :root {
   --ground: #ffffff;
   --sunken: #f4f3f0;
@@ -70,8 +69,6 @@ button {
   font: inherit;
   color: inherit;
 }
-
-/* --- bar ------------------------------------------------------------------ */
 
 .bar {
   position: sticky;
@@ -150,8 +147,6 @@ button {
   color: var(--ground);
 }
 
-/* --- intro ---------------------------------------------------------------- */
-
 .intro {
   padding: 4rem 0 2rem;
   max-width: 60rem;
@@ -223,8 +218,6 @@ button {
   color: var(--muted);
   font-size: 14px;
 }
-
-/* --- a design ------------------------------------------------------------- */
 
 .design {
   padding-top: 4.5rem;
@@ -447,8 +440,6 @@ button {
   border-radius: 10px;
 }
 
-/* --- rail ------------------------------------------------------------------- */
-
 .rail {
   position: relative;
   background: var(--rail-ground);
@@ -515,8 +506,6 @@ button {
   place-items: center;
 }
 
-/* --- grid -------------------------------------------------------------------- */
-
 .grid {
   display: grid;
   grid-template-columns: 5rem repeat(10, 1fr);
@@ -551,8 +540,6 @@ button {
 .grid--24 .grid__cell {
   padding: 0.15rem 0;
 }
-
-/* --- creatures ---------------------------------------------------------------- */
 
 .creature {
   position: relative;
@@ -593,7 +580,6 @@ button {
   opacity: 0.55;
 }
 
-/* The marks beside a head, ported from styles.css with their gait offset. */
 .avatar__dots circle {
   animation: think-dot 1.5s cubic-bezier(0.45, 0, 0.55, 1) infinite;
   animation-delay: calc(var(--gait, 0s) * -1);

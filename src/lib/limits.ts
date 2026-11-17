@@ -1,17 +1,3 @@
-/**
- * The five bounds a conversation runs inside, as they are written for a person.
- *
- * Here rather than in the dialog that first drew them, because they are now set
- * in two places: app-wide in Settings, and per crew in a group. Two copies of
- * this list would drift, and what drifts is the sentence explaining a number
- * whose consequence is money.
- *
- * The ranges are the ones `GuardLimits::sanitized` clamps to. They are advisory
- * here, since a typed or pasted number sails past a `max` on an input, and the
- * runtime clamps whatever arrives, which is why both dialogs read their limits
- * back after saving rather than leaving what was typed on screen.
- */
-
 import type { GuardLimits } from "./types";
 
 export interface LimitField {

@@ -1,10 +1,3 @@
-/* The review page. Everything a creature needs comes from src/styles.css,
-   which make.sh bundles ahead of this; what is here is the page around them
-   and the two things the brand adds: the name beside the cast and the bubble
-   over it. */
-
-/* The app pins these to the window and hides the overflow, because the app
-   scrolls inside its own panes. This page is one long document. */
 html,
 body,
 #root {
@@ -65,8 +58,6 @@ p {
   color: var(--muted);
 }
 
-/* --- the mark ------------------------------------------------------------- */
-
 .bm-mark {
   display: inline-flex;
   align-items: center;
@@ -99,12 +90,8 @@ p {
   color: var(--rail-text);
 }
 
-/* The app's shout, grown to carry a name: the creature's own pigment, the
-   corner nearest the speaker left square, in and out once. */
 .bm-mark__says {
   position: absolute;
-  /* Beside the face rather than over it: in the title bar there is no room
-     above a creature, only the window's edge. */
   left: 94%;
   bottom: 34%;
   padding: 0.18em 0.5em 0.24em;
@@ -149,8 +136,6 @@ p {
     transform: scale(0.96);
   }
 }
-
-/* --- a direction ---------------------------------------------------------- */
 
 .bm-stage {
   height: 300px;
@@ -221,8 +206,6 @@ p {
   color: var(--faint);
 }
 
-/* --- the top of the rail, to the app's own measurements -------------------- */
-
 .bm-zoom {
   zoom: 2;
 }
@@ -283,8 +266,6 @@ p {
   justify-content: space-between;
 }
 
-/* 33px: the rail sets no line-height of its own, so the wordmark inherits
-   Tailwind's 1.5 from the root, and that line box is the row's height. */
 .bm-railtop__wordmark {
   font: 600 22px/33px var(--font-display);
   letter-spacing: 0.18em;
@@ -304,7 +285,6 @@ p {
   line-height: 1;
 }
 
-/* `.rail__search`: 2px over, 8px either side and under, 36px tall. */
 .bm-railtop__search {
   margin: 2px 8px 8px;
   height: 36px;
@@ -334,8 +314,6 @@ p {
   font-size: 15px;
   line-height: 20px;
 }
-
-/* --- the corner ----------------------------------------------------------- */
 
 .bm-corner {
   display: flex;
@@ -368,9 +346,6 @@ figcaption {
     transition: none;
   }
 
-  /* The app's own rule ends every animation at once under reduced motion,
-     and a finished one holds its last frame, which here is invisible. So the
-     bubble has no animation at all, and is simply there while the pointer is. */
   .bm-mark__says.on {
     animation: none;
   }

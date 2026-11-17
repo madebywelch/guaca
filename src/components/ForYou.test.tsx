@@ -46,7 +46,6 @@ function outcome(runId: string, over: Partial<Outcome> = {}): Outcome {
   };
 }
 
-/** The host's answer: the unseen ones when asked for those, everything otherwise. */
 function hostHas(rows: Outcome[]) {
   useStore.setState({ outcomes: rows.filter((one) => one.seenAt === null) });
   mocks.outcomes.mockImplementation(async (query) =>
@@ -174,9 +173,6 @@ it("does not let an older refresh overwrite a newer answer", async () => {
   expect(useStore.getState().decisions[0]?.status).toBe("answered");
 });
 
-// The desk inside For you leads into the window it is already in. The same
-// desk under the menu bar icon leads somewhere else, which is why the desk
-// asks rather than deciding, and why this is asserted here.
 it("opens a request's channel behind For you and gets out of the way", async () => {
   const select = vi.fn(async () => {});
   const close = vi.fn();
@@ -243,8 +239,6 @@ describe("Finished", () => {
     expect(screen.queryByRole("region", { name: "Finished" })).toBeNull();
   });
 
-  // A gathered banner opens For you, so finished work alone has to be the first
-  // thing there, on the view For you opens on.
   it("opens on Finished when it is the only thing there", async () => {
     hostHas([outcome("run-1")]);
     await act(async () => {
@@ -340,9 +334,6 @@ describe("Finished", () => {
     ).toEqual(["Ops", "Research"]);
   });
 
-  // A notification click or the panel's "And N more in For you" asks For you
-  // to open while it may already be open on another view. The ask is about
-  // what Needs you draws, so that is where it lands.
   it("goes back to Needs you when asked to open while open on another view", async () => {
     hostHas([outcome("run-1")]);
     useStore.setState({ forYou: true });

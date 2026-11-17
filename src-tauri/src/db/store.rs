@@ -1,9 +1,3 @@
-//! SQLite-backed persistence.
-//!
-//! One pool, WAL mode, plain SQL. There is no ORM because there are two tables
-//! and eleven queries, and hiding those behind a query builder would add a
-//! dependency and remove the ability to read what actually hits the disk.
-
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -44,46 +38,25 @@ use crate::runtime::guard::GuardSnapshot;
 
 pub type Conn = PooledConnection<SqliteConnectionManager>;
 
-/// One thing an agent asked for and has not heard back on.
-///
-/// Read on every turn and never stored, so it is always true and there is
-/// nothing to keep in step. See [`Store::outstanding_asks`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct Outstanding {
     pub peer: String,
     pub at: i64,
-    /// What was asked, as the agent itself wrote it.
     pub asked: String,
 }
 
-/// How much of the original ask is quoted back.
-///
-/// A line, not the message. The agent wrote it and can read the whole thing in
-/// the channel; what this list is for is recognising which one it was.
 const ASK_GIST: usize = 120;
 
-/// An agent whose group tidies memory overnight, as the clock reads it. See
-/// [`Store::tidy_due`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TidyDue {
     pub agent: AgentId,
     pub hour: u8,
-    /// Its last tidy, or the switch being turned on, whichever is later. A
-    /// tidy is owed when the hour has struck since.
     pub since: i64,
 }
 
-/// The most lines a tidy is handed. A busy week is dozens of runs, and the
-/// newest are the ones that can still correct the page: about a thousand
-/// tokens at most, and a tidy is not where an agent reads its history.
 pub const TIDY_LINES: u32 = 30;
 
 impl Outstanding {
-    /// One line, as the prompt draws it.
-    ///
-    /// The wait is in words rather than a timestamp because that is what the
-    /// decision turns on: nobody chases a thing because it happened at 14:03,
-    /// they chase it because it has been two hours.
     pub fn line(&self, now: i64) -> String {
         let mut gist: String = self.asked.split_whitespace().collect::<Vec<_>>().join(" ");
         if gist.chars().count() > ASK_GIST {
@@ -154,20 +127,16 @@ pub enum StoreError {
     DuplicateEnvVar(String),
 }
 
-/// Guards the one-time-per-file setup inside `Store::open`.
 fn bootstrap_lock() -> &'static parking_lot::Mutex<()> {
     static LOCK: std::sync::OnceLock<parking_lot::Mutex<()>> = std::sync::OnceLock::new();
     LOCK.get_or_init(|| parking_lot::Mutex::new(()))
 }
 
-/// The group created by the migration, before any operator edits.
 #[cfg(test)]
 fn default_group_id() -> GroupId {
     migrations::DEFAULT_GROUP_ID.parse().expect("the pinned default group id is a valid uuid")
 }
 
-/// The first surviving group, in the same order as the group list. Excluding
-/// the group being deleted keeps retained transcripts attached to a real crew.
 fn fallback_group(
     conn: &rusqlite::Connection,
     excluding: Option<GroupId>,
@@ -185,9 +154,6 @@ fn fallback_group(
         .map_err(|e| StoreError::Corrupt(format!("invalid group id: {e}")))
 }
 
-/// A fresh card from a validated draft. Everything an agent goes on to acquire
-/// (a machine, its tokens, a pin) starts empty: those are things it did, not
-/// things anybody wrote down.
 fn new_card(draft: &CleanDraft, rail_order: i32, fallback: GroupId) -> AgentCard {
     let now = now_ms();
     AgentCard {
@@ -219,21 +185,12 @@ fn new_card(draft: &CleanDraft, rail_order: i32, fallback: GroupId) -> AgentCard
     }
 }
 
-/// The slot after the last row in the rail.
-///
-/// Read rather than defaulted, and read on whatever connection is doing the
-/// writing: a new agent must not land in the middle of an arrangement the
-/// operator made, and a column default cannot know what the last row is. Taking
-/// it on the transaction is what stops a concurrent create from handing out the
-/// same slot twice.
 fn bottom_of_rail(conn: &rusqlite::Connection) -> Result<i32, StoreError> {
     let last: i32 =
         conn.query_row("SELECT coalesce(max(rail_order), -1) FROM agents", [], |row| row.get(0))?;
     Ok(last.saturating_add(1))
 }
 
-/// Takes a `&Connection` rather than a `&Store` so one insert serves both a
-/// single create and a batch inside a transaction; `Transaction` derefs here.
 fn insert_agent(conn: &rusqlite::Connection, card: &AgentCard) -> Result<(), StoreError> {
     conn.execute(
         "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,rail_order,reasoning_effort,subscription_model)
@@ -260,8 +217,6 @@ fn insert_agent(conn: &rusqlite::Connection, card: &AgentCard) -> Result<(), Sto
     Ok(())
 }
 
-/// Maps SQLite's unique-constraint failure onto a domain error, so callers get
-/// "that name is taken" instead of a raw driver string.
 fn classify(err: rusqlite::Error, name: &str) -> StoreError {
     if let rusqlite::Error::SqliteFailure(inner, _) = &err {
         if inner.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE {
@@ -271,23 +226,13 @@ fn classify(err: rusqlite::Error, name: &str) -> StoreError {
     StoreError::Sqlite(err)
 }
 
-/// How many matching messages a search reads before it cuts each category.
-///
-/// Wider than any list it produces, because links are pulled out of the same
-/// rows: the URL somebody wants is rarely in the first few messages that
-/// mention its host. A search that finds the newest few hundred matches is the
-/// one an operator asked for; finding the oldest of ten thousand is a report.
 const SEARCH_SCAN: u32 = 400;
 
-/// How much of a message a result row shows.
 const EXCERPT_CHARS: usize = 160;
 
 #[derive(Debug, Clone)]
 pub struct Store {
     pool: Pool<SqliteConnectionManager>,
-    /// Told after a commit that wrote something for the outbox, so the
-    /// dispatcher looks now rather than at its next tick. A permit, not a
-    /// queue: one wake covers any number of rows.
     outbox: std::sync::Arc<tokio::sync::Notify>,
 }
 
@@ -318,9 +263,6 @@ impl ResourceState {
 }
 
 impl Store {
-    /// Copies retain this identity and the ledger as it stood at the copy.
-    /// A pre-copy resource released by one copy can still be in use by the
-    /// other, which observes a provider 404 rather than a separate ownership.
     pub fn workspace_identity(&self) -> Result<String, StoreError> {
         let conn = self.conn()?;
         conn.execute(
@@ -538,32 +480,10 @@ impl Store {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        // Two kinds of setting, applied in two places.
-        //
-        // `journal_mode` belongs to the database file, not to a connection, and
-        // switching it takes an exclusive lock. It has to happen once, alone,
-        // before the pool exists. Letting the pool's connections race for that
-        // lock logs "database is locked" and silently leaves some of them on
-        // the rollback journal: a busy timeout does not save you, because
-        // SQLite treats a shared/exclusive conflict inside a single process as
-        // a deadlock and fails immediately rather than waiting.
-        //
-        // WAL is what lets the UI read a transcript while agents are mid-write.
-        // Without it every read queues behind the writer and the window
-        // stutters whenever a cascade is running.
         {
-            // One thread at a time, process-wide. Both steps below take an
-            // exclusive lock on the file, and SQLite reports a shared vs
-            // exclusive conflict *inside one process* as a deadlock rather than
-            // waiting, so a busy timeout does not save the losers. Racing here
-            // used to fail on the journal_mode switch alone; once the migration
-            // list grew long enough to hold the lock for a few milliseconds, the
-            // same race started failing there too.
             let _serialized = bootstrap_lock().lock();
 
             let mut bootstrap = rusqlite::Connection::open(path)?;
-            // Needed before the migration below, so a second process opening
-            // the same database waits for the write lock rather than failing.
             bootstrap.busy_timeout(std::time::Duration::from_secs(5))?;
             let mode: String =
                 bootstrap.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
@@ -576,8 +496,6 @@ impl Store {
             migrations::run(&mut bootstrap)?;
         }
 
-        // Everything below is per-connection and needs no exclusive lock, so it
-        // is safe to run on all of them at once.
         let manager = SqliteConnectionManager::file(path).with_init(|conn| {
             conn.execute_batch(
                 "PRAGMA busy_timeout = 5000;
@@ -589,7 +507,6 @@ impl Store {
         Ok(Self { pool: Pool::builder().max_size(8).build(manager)?, outbox: Default::default() })
     }
 
-    /// What the dispatcher waits on between passes.
     pub fn outbox_written(&self) -> std::sync::Arc<tokio::sync::Notify> {
         self.outbox.clone()
     }
@@ -601,8 +518,6 @@ impl Store {
     pub fn conn(&self) -> Result<Conn, StoreError> {
         Ok(self.pool.get()?)
     }
-
-    // ---- agents ----------------------------------------------------------
 
     pub fn create_agent(&self, draft: &CleanDraft) -> Result<AgentCard, StoreError> {
         let mut conn = self.conn()?;
@@ -651,21 +566,9 @@ impl Store {
         Ok((card, true))
     }
 
-    /// Creates a whole crew, or none of it.
-    ///
-    /// Written in one transaction because the alternative fails halfway. Names
-    /// are unique per group, and the realistic way a batch dies on its fourth
-    /// row is another window taking a name between the check and the write,
-    /// which no amount of validating up front prevents. Leaving three agents
-    /// behind and reporting an error about a fourth gives the operator a
-    /// workspace they did not ask for and no list of what landed.
     pub fn create_agents(&self, drafts: &[CleanDraft]) -> Result<Vec<AgentCard>, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        // One read, then consecutive slots. Asking for the bottom once per
-        // agent would give a whole crew the same answer, because none of them
-        // is written until the transaction commits, and the rail would then
-        // order them by the tiebreak rather than by the order they were picked.
         let first = bottom_of_rail(&tx)?;
         let fallback = fallback_group(&tx, None)?;
         let cards: Vec<AgentCard> = drafts
@@ -680,20 +583,11 @@ impl Store {
         Ok(cards)
     }
 
-    /// Applies an operator edit and bumps the card version.
-    ///
-    /// The version bump is what lets a peer notice the card changed under it,
-    /// which is the only reason A2A's Update phase exists.
     pub fn update_agent(&self, id: AgentId, draft: &CleanDraft) -> Result<AgentCard, StoreError> {
         let conn = self.conn()?;
         let now = now_ms();
         let changed = conn
             .execute(
-                // `coalesce` is what makes an omitted group mean "do not move
-                // it" rather than "move it to the default", which would
-                // silently relocate an agent on an unrelated edit. The same for
-                // the subscription model, which a client from before it sends
-                // no value for.
                 "UPDATE agents
                     SET name=?2, avatar=?3, color=?4, model=?5, system_prompt=?6, skills=?7,
                         version = version + 1, updated_at=?8,
@@ -734,18 +628,6 @@ impl Store {
         self.get_agent(id)?.ok_or(StoreError::AgentNotFound(id))
     }
 
-    /// Throws an agent out, keeping everything it holds.
-    ///
-    /// The row goes to `Terminated`, which is what makes it unreachable,
-    /// undiscoverable and absent from the rail, and is stamped, which is what
-    /// makes it findable again. Nothing private is touched here: that is the
-    /// half that waits, and [`Store::forget_discard`] is where it stops
-    /// waiting.
-    ///
-    /// Refused for an agent that is already gone. Re-stamping one would restart
-    /// a wait that is most of the way through, so a double click on a delete
-    /// button would quietly buy an agent another thirty days in a list the
-    /// operator thought they had emptied.
     pub fn discard_agent(&self, id: AgentId, at: i64) -> Result<AgentCard, StoreError> {
         let conn = self.conn()?;
         let changed = conn.execute(
@@ -759,22 +641,6 @@ impl Store {
         self.get_agent(id)?.ok_or(StoreError::AgentNotFound(id))
     }
 
-    /// Pulls one back out, under whatever name is free.
-    ///
-    /// Paused rather than active, and the reason is the wait. An agent restored
-    /// three weeks after it was thrown out comes back to a schedule that has
-    /// been due every morning since, and to peers that have moved on without
-    /// it. Coming back stopped means the operator decides when it starts, on a
-    /// row that already says `paused` and already offers Resume.
-    ///
-    /// The name is settled by the caller, because a name freed while the agent
-    /// waited may have been taken by somebody hired since, and the partial
-    /// index is what would otherwise refuse the restore.
-    ///
-    /// Refused for a row that is not in the compost. That covers an agent
-    /// nobody deleted and one whose wait is over: the second has no memory, no
-    /// schedule and no machines left, so bringing it back would hand the
-    /// operator a name and a face wearing none of the work they wanted back.
     pub fn restore_agent(&self, id: AgentId, name: &str) -> Result<AgentCard, StoreError> {
         let conn = self.conn()?;
         let changed = conn.execute(
@@ -788,36 +654,20 @@ impl Store {
         self.get_agent(id)?.ok_or(StoreError::AgentNotFound(id))
     }
 
-    /// Ends the wait, leaving the agent terminated.
-    ///
-    /// Called once whatever the agent was holding has actually been destroyed,
-    /// so the row says what is true: terminated with no stamp is an agent whose
-    /// machines, memory, schedule and sign-ins are gone, which is every agent
-    /// deleted before the compost existed and every one whose thirty days have
-    /// run out.
     pub fn forget_discard(&self, id: AgentId) -> Result<(), StoreError> {
         let conn = self.conn()?;
         conn.execute("UPDATE agents SET discarded_at=NULL WHERE id=?1", params![id.to_string()])?;
         Ok(())
     }
 
-    /// Whoever is in the compost, newest first.
-    ///
-    /// The order the panel draws them in: what you deleted a minute ago by
-    /// accident is what you came here for, and what has been in there for four
-    /// weeks is not.
     pub fn discarded_agents(&self) -> Result<Vec<AgentCard>, StoreError> {
         self.discards(None)
     }
 
-    /// Whoever has been in there long enough. What the sweep acts on.
     pub fn expired_discards(&self, cutoff: i64) -> Result<Vec<AgentCard>, StoreError> {
         self.discards(Some(cutoff))
     }
 
-    /// One query, because the sweep and the panel are the same read with and
-    /// without a deadline on it, and two would be two places for the compost to
-    /// mean something slightly different.
     fn discards(&self, cutoff: Option<i64>) -> Result<Vec<AgentCard>, StoreError> {
         let conn = self.conn()?;
         let (clause, order) = match cutoff {
@@ -850,11 +700,6 @@ impl Store {
         .transpose()
     }
 
-    /// Every agent, terminated ones included.
-    ///
-    /// Terminated agents still appear in old transcripts, so the frontend needs
-    /// their name, avatar, and color to render history. It filters them out of
-    /// the sidebar itself.
     pub fn list_agents(&self) -> Result<Vec<AgentCard>, StoreError> {
         let conn = self.conn()?;
         let mut stmt =
@@ -867,11 +712,6 @@ impl Store {
         Ok(out)
     }
 
-    /// Keeps an agent at the top of the rail, or lets it back down.
-    ///
-    /// Deliberately not part of `update_agent`: where a row is drawn is not an
-    /// edit to the card, and bumping the version for it would tell every peer
-    /// the agent changed under them when nothing about it did.
     pub fn set_agent_pinned(&self, id: AgentId, pinned: bool) -> Result<AgentCard, StoreError> {
         let conn = self.conn()?;
         let changed = conn.execute(
@@ -884,23 +724,6 @@ impl Store {
         self.get_agent(id)?.ok_or(StoreError::AgentNotFound(id))
     }
 
-    /// Puts an agent where the operator dropped it.
-    ///
-    /// One call, because a drag is one gesture that can be both a reorder and a
-    /// move between groups, and doing it as two writes leaves a state where the
-    /// agent has arrived in the group but not in the place it was dropped.
-    ///
-    /// `before` is the row it lands in front of, and `None` means the end of
-    /// `group`. Naming the moved agent itself asks for nothing and does nothing.
-    /// Otherwise honoured only while that row is still live and still in `group`:
-    /// the operator dropped onto something they could see, and a row deleted in
-    /// the meantime must not cost them the half of the intent that still holds.
-    ///
-    /// Renumbers every live agent densely rather than finding a gap between two
-    /// neighbors. A workspace holds tens of agents, so the write is trivial,
-    /// and a scheme with gaps has a state where the gap is used up that this one
-    /// does not have. Not an edit: like `pinned`, this is where a row is drawn,
-    /// so the version does not move and no peer is told.
     pub fn move_agent(
         &self,
         id: AgentId,
@@ -910,10 +733,6 @@ impl Store {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
         {
-            // The arrangement as it stands, which is what `before` refers to.
-            // Terminated agents are left out and left alone: they are not in the
-            // rail, so numbering them would spend positions on rows nobody can
-            // see and would move them under a later reader.
             let mut stmt = tx.prepare(
                 "SELECT id, group_id FROM agents
                   WHERE lifecycle <> 'terminated'
@@ -929,10 +748,6 @@ impl Store {
             }
 
             let target = group.to_string();
-            // A row dropped on itself is not a move. Caught here as well as in
-            // the UI because the fallback for an anchor that is not in the group
-            // is the end of it, so letting this through would spend the
-            // operator's arrangement on a gesture that asked for nothing.
             if before == Some(id) && rows.iter().any(|(r, g)| *r == moving && *g == target) {
                 return self.get_agent(id)?.ok_or(StoreError::AgentNotFound(id));
             }
@@ -945,9 +760,6 @@ impl Store {
 
             let at = match anchor {
                 Some(row) => order.iter().position(|(r, _)| *r == row).unwrap_or(order.len()),
-                // The end of the group rather than the end of the rail: this is
-                // one sequence over every group, and appending past the last
-                // group would put the agent below crews it is not in.
                 None => order
                     .iter()
                     .rposition(|(_, row_group)| *row_group == target)
@@ -965,11 +777,6 @@ impl Store {
         self.get_agent(id)?.ok_or(StoreError::AgentNotFound(id))
     }
 
-    /// Records which sandbox is this agent's computer.
-    ///
-    /// Deliberately not part of `update_agent`: provisioning is not an operator
-    /// edit and must not bump the card version, which peers use to notice that
-    /// an agent changed under them.
     pub fn set_agent_sandbox(
         &self,
         id: AgentId,
@@ -1001,14 +808,6 @@ impl Store {
         Ok(())
     }
 
-    /// Records which hosted browser is this agent's browser.
-    ///
-    /// Separate from `set_agent_sandbox` rather than one call taking both,
-    /// because they are provisioned independently: an agent that only ever
-    /// browses never costs a machine, and one that only ever runs commands
-    /// never costs a browser. A single setter would have to be given the value
-    /// it is not changing, and the caller that guessed wrong would silently
-    /// release the other one.
     pub fn set_agent_browser(&self, id: AgentId, browser: Option<&str>) -> Result<(), StoreError> {
         let conn = self.conn()?;
         let changed = conn.execute(
@@ -1030,41 +829,18 @@ impl Store {
         Ok(())
     }
 
-    /// Records that the operator has given this agent a computer, or taken it
-    /// back.
-    ///
-    /// A decision, not an acquisition, which is why it is here rather than
-    /// folded into `set_agent_sandbox`: the machine under it is made, slept,
-    /// reclaimed and made again, and none of that is the operator changing
-    /// their mind. It does not bump the card version for the same reason
-    /// `set_agent_pinned` does not: peers are told what an agent is for, not
-    /// what it is allowed to rent.
-    ///
-    /// Taking it back deliberately leaves `sandbox_id` alone. The disk is where
-    /// the operator's sign-ins live, and giving the computer back has to find
-    /// them there rather than starting a stranger.
     pub fn set_has_computer(&self, id: AgentId, given: bool) -> Result<(), StoreError> {
         self.set_flag(id, "has_computer", given)
     }
 
-    /// The same decision about the browser.
     pub fn set_has_browser(&self, id: AgentId, given: bool) -> Result<(), StoreError> {
         self.set_flag(id, "has_browser", given)
     }
 
-    /// Whether this agent may send errands. A decision about spend, like the
-    /// two above, and it leaves the card version alone for their reason.
     pub fn set_runs_errands(&self, id: AgentId, given: bool) -> Result<(), StoreError> {
         self.set_flag(id, "runs_errands", given)
     }
 
-    /// Whether that browser asks before it acts in the operator's name.
-    ///
-    /// Beside the two above and not folded into `set_has_browser`, because
-    /// taking a browser back and giving it again must not quietly re-answer
-    /// this: an operator who held one agent back said something about that
-    /// agent, not about the browser it happened to be holding at the time.
-    /// Leaves the card version alone, for the reason `set_has_computer` does.
     pub fn set_browser_consent(&self, id: AgentId, consent: Consent) -> Result<(), StoreError> {
         let conn = self.conn()?;
         let changed = conn.execute(
@@ -1077,8 +853,6 @@ impl Store {
         Ok(())
     }
 
-    /// One boolean column on one agent. The column name is a literal from the
-    /// callers above and never a value from outside this file.
     fn set_flag(&self, id: AgentId, column: &str, value: bool) -> Result<(), StoreError> {
         let conn = self.conn()?;
         let changed = conn.execute(
@@ -1091,10 +865,6 @@ impl Store {
         Ok(())
     }
 
-    /// The traffic token for a sandbox, by sandbox id.
-    ///
-    /// The viewer proxy holds no state of its own: it is handed a sandbox in a
-    /// URL and asks here, so a token never has to travel through the webview.
     pub fn sandbox_traffic_token(&self, sandbox: &str) -> Result<Option<String>, StoreError> {
         let conn = self.conn()?;
         Ok(conn
@@ -1107,13 +877,6 @@ impl Store {
             .flatten())
     }
 
-    // ---- routines --------------------------------------------------------
-
-    /// Files a new routine.
-    ///
-    /// `first_run_at` is `None` for a trigger that does not wait on the clock:
-    /// an event routine holds no slot, and the column is NULL rather than a
-    /// date far enough away to look like never.
     pub fn create_routine(
         &self,
         agent: AgentId,
@@ -1165,12 +928,6 @@ impl Store {
         }
     }
 
-    /// Rewrites a routine in place.
-    ///
-    /// `next_run_at` is passed rather than derived: an operator editing "every
-    /// six hours" into "every hour" usually wants the next one in an hour, and
-    /// an operator fixing a typo does not want the schedule to move at all.
-    /// The caller knows which of the two it is doing.
     pub fn update_routine(
         &self,
         id: RoutineId,
@@ -1207,9 +964,6 @@ impl Store {
     pub fn agent_routines(&self, agent: AgentId) -> Result<Vec<Routine>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            // Soonest first, then whatever holds no slot. NULL sorts before
-            // everything in SQLite, which would put a routine waiting on an
-            // event above one firing in ten minutes.
             "SELECT id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at,skip_if_working
                FROM routines WHERE agent_id=?1
               ORDER BY next_run_at IS NULL, next_run_at, created_at",
@@ -1222,16 +976,6 @@ impl Store {
         Ok(out)
     }
 
-    /// Every switched-on routine's next firing up to `until`, across every
-    /// agent that has not been deleted, soonest first.
-    ///
-    /// A paused agent's routines are kept, unlike in `due_routines`: the slot
-    /// is still held and fires once the agent is resumed, so a timeline that
-    /// dropped it would show an empty hour the operator did not choose. An
-    /// event routine needs no clause of its own: its NULL slot compares to
-    /// nothing, so `next_run_at <= until` already leaves it out. Ties break on
-    /// the name and then the id, so two routines in the same minute keep their
-    /// places between reads.
     pub fn upcoming_runs(&self, until: i64) -> Result<Vec<UpcomingRun>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -1249,15 +993,6 @@ impl Store {
         Ok(out)
     }
 
-    /// Everything due to run, oldest first.
-    ///
-    /// Only for agents that can still act: a routine belonging to a deleted or
-    /// paused agent would otherwise fire into nothing, repeatedly.
-    ///
-    /// A routine with no slot is not due and never will be, which is the whole
-    /// mechanism keeping a trigger that is not a clock out of this sweep: SQL
-    /// compares NULL to nothing, so `next_run_at <= now` excludes it without
-    /// this query needing to know what kinds of trigger exist.
     pub fn due_routines(&self, now: i64) -> Result<Vec<Routine>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -1275,15 +1010,6 @@ impl Store {
         Ok(out)
     }
 
-    /// Everything standing on one event, oldest first.
-    ///
-    /// The counterpart of `due_routines` for the trigger that holds no slot:
-    /// matched on the stored trigger text, which is canonical because
-    /// `EventTrigger::parse` lowers the service on the way in, so one event is
-    /// one string however it was spelled. Same two guards as the clock's sweep,
-    /// for the same reason: a routine switched off or belonging to an agent
-    /// that cannot act would otherwise fire into nothing every time the event
-    /// came.
     pub fn event_routines(&self, event: &EventTrigger) -> Result<Vec<Routine>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -1301,13 +1027,6 @@ impl Store {
         Ok(out)
     }
 
-    /// How many switched-on routines stand on one event under an agent that
-    /// is paused.
-    ///
-    /// The ones `event_routines` leaves out on purpose, counted so the
-    /// sender can be told the routine exists. Without it a paused agent's
-    /// routine reads to the sender exactly like a misspelled topic, and the
-    /// fix for the one is no help with the other.
     pub fn paused_event_routines(&self, event: &EventTrigger) -> Result<usize, StoreError> {
         let conn = self.conn()?;
         let count: i64 = conn.query_row(
@@ -1319,13 +1038,6 @@ impl Store {
         Ok(count as usize)
     }
 
-    /// Records that a routine ran, and what became of its slot.
-    ///
-    /// A one-shot is removed rather than left with a time in the past, so the
-    /// scheduler never has to reason about whether something already happened.
-    /// A routine that holds no slot keeps its row: reading "nothing on the
-    /// clock" and "finished" off the same answer would delete an event routine
-    /// the first time it fired.
     pub fn routine_ran(&self, routine: &Routine, now: i64) -> Result<(), StoreError> {
         let conn = self.conn()?;
         match routine.after_running(now) {
@@ -1425,11 +1137,6 @@ impl Store {
         Ok(true)
     }
 
-    /// Every agent whose group tidies memory overnight, with the hour and the
-    /// moment it was last seen to: its last tidy, or the switch being turned
-    /// on, whichever is later. A paused agent is not here, and neither is a
-    /// deleted one: neither is tidied, and a paused one is here again once it
-    /// is resumed, with the night it missed still owed.
     pub fn tidy_due(&self) -> Result<Vec<TidyDue>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -1451,25 +1158,6 @@ impl Store {
         Ok(out)
     }
 
-    /// Sees to one agent for the tidy the hour struck at `struck`: hands it the
-    /// message `draw` makes from what its work ended with since its last tidy
-    /// that finished, or, when it ended with nothing, only notes that it was
-    /// seen to.
-    ///
-    /// One immediate transaction, read and write, for two reasons. Two sweeps
-    /// cannot both hand over the same night's tidy, because the second finds
-    /// it already seen to. And a run that finishes while this runs is either
-    /// in what is handed over or after the mark, never lost between the two.
-    ///
-    /// Marked at the handing over, not when the tidy ends. A tidy a stop, a
-    /// drain or a crash cuts short has been given for this night, and memory
-    /// is what its last stored rewrite left it; giving it again would be a
-    /// second tidy the operator did not ask for.
-    ///
-    /// The lines are the agent's own runs in its own group that said
-    /// something, newest first and at most [`TIDY_LINES`]. A tidy has no run
-    /// of its own on that list, because it writes no outcome, so a tidy can
-    /// never be the reason for the next one.
     pub fn claim_tidy(
         &self,
         agent: AgentId,
@@ -1519,7 +1207,6 @@ impl Store {
             "UPDATE agents SET last_tidy_at = ?2 WHERE id = ?1",
             params![agent.to_string(), now],
         )?;
-        // Nothing since, so nothing is left behind by counting from here.
         if lines.is_empty() {
             tx.execute(
                 "UPDATE agents SET tidied_through = ?2 WHERE id = ?1",
@@ -1538,9 +1225,6 @@ impl Store {
         Ok(Some(envelope))
     }
 
-    /// Records that `agent`'s tidy read what it was handed: the next one counts
-    /// from when this one was handed over. Anything that finished while it
-    /// ran is after that, and is the next night's.
     pub fn tidied(&self, agent: AgentId) -> Result<(), StoreError> {
         let conn = self.conn()?;
         conn.execute(
@@ -1550,15 +1234,6 @@ impl Store {
         Ok(())
     }
 
-    /// Marks messages as taken up by a turn, before the model reads any of
-    /// them: the conversation each one belongs to is started, and a routine
-    /// firing among them is owned by `owner`, the run of the turn that took
-    /// it.
-    ///
-    /// A conversation marked here is one a restart never delivers again on
-    /// its own, because from now on something may have happened that was
-    /// never written down. One left unmarked has been read by nothing, and a
-    /// crash delivers it again. See `Store::recover`.
     pub fn start_deliveries(&self, messages: &[MessageId], owner: RunId) -> Result<(), StoreError> {
         if messages.is_empty() {
             return Ok(());
@@ -1599,13 +1274,6 @@ impl Store {
         Ok(())
     }
 
-    /// Turns a routine off, or back on.
-    ///
-    /// Deliberately not part of `update_routine`: switching something off is
-    /// not an edit to what it says, and it must not move the next firing. A
-    /// routine turned back on comes due at the slot it was already holding, or
-    /// at the next one the trigger allows if that has gone by; the scheduler
-    /// does the second part on its own, because an overdue slot fires once.
     pub fn set_routine_active(&self, id: RoutineId, active: bool) -> Result<Routine, StoreError> {
         let conn = self.conn()?;
         let changed = conn.execute(
@@ -1619,14 +1287,6 @@ impl Store {
         self.get_routine(id)?.ok_or(StoreError::RoutineNotFound(id))
     }
 
-    /// Records that a routine fired, and under which run.
-    ///
-    /// Separate from `routine_ran`, which moves the schedule: a test run fires
-    /// without the schedule moving at all, and both have to appear in the
-    /// history or "did it run on Tuesday" has no answer.
-    ///
-    /// `run` is `None` for a firing that was skipped, which started no run and
-    /// therefore has nothing to thread back to.
     pub fn record_routine_run(
         &self,
         id: RoutineId,
@@ -1642,15 +1302,6 @@ impl Store {
         Ok(())
     }
 
-    /// What a routine has done lately, newest first, and what each firing spent.
-    ///
-    /// The spend is joined rather than stored on the row. A firing's cost is
-    /// not known when it is recorded and keeps moving until the run settles, so
-    /// a column would be a snapshot of a number that was still changing; the
-    /// model calls are already filed under the run id. Read at the moment the
-    /// operator looks, it also answers the question the history is actually for:
-    /// a firing that bought no model call is a routine that did not run, and
-    /// nothing else in the row tells the two apart.
     pub fn routine_runs(&self, id: RoutineId, limit: usize) -> Result<Vec<RoutineRun>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -1682,7 +1333,6 @@ impl Store {
         Ok(deleted)
     }
 
-    /// Removes an agent's schedule along with the agent.
     pub fn delete_agent_routines(&self, agent: AgentId) -> Result<usize, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
@@ -1692,20 +1342,6 @@ impl Store {
         Ok(deleted)
     }
 
-    // ---- working notes ---------------------------------------------------
-
-    /// Appends a note the agent does not already hold, and drops whatever that
-    /// pushed past `KEPT`.
-    ///
-    /// Both halves in one transaction, because the trim is not housekeeping
-    /// that can run later: between the insert and the delete the agent is over
-    /// its own bound, and a read landing there hands a turn a list that is one
-    /// longer than the list the design says it reads. Cheap to hold, since this
-    /// runs once per note.
-    ///
-    /// The trim is by id and not by count of rows read, so two notes written in
-    /// the same millisecond drop in the order they were written rather than in
-    /// whatever order SQLite returns a tie in.
     pub fn append_working_note(
         &self,
         agent: AgentId,
@@ -1714,13 +1350,6 @@ impl Store {
     ) -> Result<Appended, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
-        // A line the agent already holds is not stored again. Asked inside the
-        // same transaction as the insert for the reason the trim is: an agent
-        // writes from every thread it holds, and a check outside lets two turns
-        // land the same line twice. Only the rows that survived the trim are
-        // here to match against, which is the right set: a note that fell off
-        // the end is one the agent can no longer see, and writing it again is
-        // recording something rather than repeating it.
         let held: Option<i64> = tx
             .query_row(
                 "SELECT at FROM working_notes WHERE agent_id=?1 AND body=?2 ORDER BY id DESC \
@@ -1748,12 +1377,6 @@ impl Store {
         Ok(Appended::Stored)
     }
 
-    /// An agent's working notes, oldest first.
-    ///
-    /// Oldest first because that is reading order: the list is a short account
-    /// of how the agent got to now, and read newest-first it is a stack nobody
-    /// asked for. The newest are the ones kept, which is a separate question
-    /// and is answered by the `DESC` in the trim above.
     pub fn working_notes(&self, agent: AgentId) -> Result<Vec<WorkingNote>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -1769,17 +1392,12 @@ impl Store {
         Ok(out)
     }
 
-    /// Drops every note an agent holds. The operator's way to say "that is all
-    /// done", and what deleting an agent takes with it.
     pub fn clear_working_notes(&self, agent: AgentId) -> Result<usize, StoreError> {
         let conn = self.conn()?;
         Ok(conn
             .execute("DELETE FROM working_notes WHERE agent_id=?1", params![agent.to_string()])?)
     }
 
-    // ---- approvals -------------------------------------------------------
-
-    /// Records a request and returns it pending.
     #[allow(clippy::too_many_arguments)]
     pub fn create_approval(
         &self,
@@ -1791,8 +1409,6 @@ impl Store {
         detail: &[DetailField],
     ) -> Result<Approval, StoreError> {
         let mut conn = self.conn()?;
-        // NULL for a permission, and for a question that takes a written
-        // answer. An empty array is a real state on a question and is not this.
         let options = match &request {
             Request::Question { options } => {
                 Some(serde_json::to_string(options).unwrap_or_else(|_| "[]".into()))
@@ -1814,8 +1430,6 @@ impl Store {
             lapses_at: None,
         };
 
-        // One commit with the row that will announce it, so a request is never
-        // on the desk without a way to reach the operator, or the other way round.
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(
             "INSERT INTO approvals (id,agent_id,group_id,run_id,action,summary,detail,state,created_at,options)
@@ -1859,13 +1473,6 @@ impl Store {
         }
     }
 
-    /// Settles a request, and only from pending.
-    ///
-    /// The `state='pending'` in the WHERE clause is the whole point: the
-    /// operator clicking Allow and the turn's own timeout both land here, and
-    /// whichever arrives second must not overwrite the first. Losing that race
-    /// is how a request the agent has already given up on gets recorded as
-    /// granted, leaving a standing grant for an action that never happened.
     pub fn settle_approval(
         &self,
         id: ApprovalId,
@@ -1874,12 +1481,6 @@ impl Store {
         self.settle_approval_with(id, state, None)
     }
 
-    /// The same, carrying what the operator said.
-    ///
-    /// Separate from [`Self::settle_approval`] rather than an extra argument on
-    /// it, because three of the four things that settle a row have nothing to
-    /// say: a verdict is the state itself, and a timeout and a stop are not
-    /// anybody speaking. Only a question's answer is a value.
     pub fn answer_approval(&self, id: ApprovalId, answer: &str) -> Result<Approval, StoreError> {
         self.settle_approval_with(id, ApprovalState::Answered, Some(answer))
     }
@@ -1910,7 +1511,6 @@ impl Store {
         self.get_approval(id)?.ok_or(StoreError::ApprovalNotFound(id))
     }
 
-    /// Whether this agent has already been let off asking about this action.
     pub fn has_standing_grant(
         &self,
         agent: AgentId,
@@ -1926,7 +1526,6 @@ impl Store {
         Ok(count > 0)
     }
 
-    /// What this agent has been let off asking about.
     pub fn standing_grants(&self, agent: AgentId) -> Result<Vec<ProtectedAction>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -1947,13 +1546,6 @@ impl Store {
         Ok(out)
     }
 
-    /// Takes a standing grant back, so the next attempt asks again.
-    ///
-    /// The rows go rather than moving to another state. Every state this table
-    /// has is a thing the operator did at the time, and a revoked grant is not
-    /// one of them: recording it as denied or expired would put words in their
-    /// mouth about a request they actually allowed. What is lost is one line of
-    /// history; what is kept is that no state ever means two things.
     pub fn revoke_grant(
         &self,
         agent: AgentId,
@@ -1966,11 +1558,6 @@ impl Store {
         )?)
     }
 
-    /// What every recent request came to, for the UI to draw its widgets from.
-    ///
-    /// Bounded because this seeds a lookup table in the webview and a workspace
-    /// that has been running for a year should not send a year of decisions to
-    /// draw the four requests still on screen.
     pub fn approval_states(
         &self,
         limit: u32,
@@ -1993,20 +1580,6 @@ impl Store {
         Ok(out)
     }
 
-    /// What the operator said to every recent question, keyed by id.
-    ///
-    /// Its own read rather than a field on [`Self::approval_states`] because
-    /// the two are facts with different lifetimes: a state is what a request's
-    /// buttons are keyed on and moves while the operator is looking at it, and
-    /// an answer is written once and never moves again. Only a question has
-    /// one — a permission is settled with a token, and the token is the state.
-    ///
-    /// The same window and the same order as the states, so the two agree: a
-    /// row among the newest `limit` requests cannot have `limit` newer rows
-    /// that also carry an answer, so a request whose state is in that map has
-    /// its answer in this one whenever there is an answer to have. A row older
-    /// than the window is drawn from its state alone, which is what the card
-    /// did for every question before this read existed.
     pub fn approval_answers(&self, limit: u32) -> Result<HashMap<ApprovalId, String>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -2026,11 +1599,6 @@ impl Store {
         Ok(out)
     }
 
-    /// What one run is still waiting on the operator to answer.
-    ///
-    /// Read from the row rather than from the runtime's map of waiters, because
-    /// the map is keyed by request and carries no run: the row is where the two
-    /// are related, and it is the record everywhere else in this subsystem.
     pub fn pending_approvals_for_run(&self, run: RunId) -> Result<Vec<ApprovalId>, StoreError> {
         let conn = self.conn()?;
         let mut stmt =
@@ -2044,15 +1612,6 @@ impl Store {
         Ok(out)
     }
 
-    /// Every request still waiting on the operator, oldest first.
-    ///
-    /// Read whole rather than as ids, because the caller is the menu bar and
-    /// what it needs is the wording: a row that says only that something is
-    /// pending is a row that cannot be answered without opening the window.
-    ///
-    /// Oldest first so the request that has least of its ten minutes left is
-    /// the one at the top, and bounded for the same reason as
-    /// [`Self::approval_states`].
     pub fn pending_approvals(&self, limit: u32) -> Result<Vec<Approval>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -2070,11 +1629,6 @@ impl Store {
         Ok(out)
     }
 
-    /// Expires everything still waiting. Called at startup.
-    ///
-    /// The turn that raised a request is holding a channel in memory, so a
-    /// restart takes every waiter with it. Left pending, those rows would draw
-    /// live buttons that answer nothing.
     pub fn expire_pending_approvals(&self) -> Result<usize, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -2091,29 +1645,11 @@ impl Store {
         Ok(expired)
     }
 
-    /// Removes an agent's requests along with the agent, standing grants
-    /// included: a name can be reused, and the next holder of it inherits
-    /// nothing the operator granted this one.
     pub fn delete_agent_approvals(&self, agent: AgentId) -> Result<usize, StoreError> {
         let conn = self.conn()?;
         Ok(conn.execute("DELETE FROM approvals WHERE agent_id=?1", params![agent.to_string()])?)
     }
 
-    // ---- escalations -----------------------------------------------------
-
-    /// Puts an agent's escalation up, or restates the one it already has.
-    ///
-    /// One transaction, because the read and the write are the same decision:
-    /// an agent writes from every thread it holds, and a check outside the
-    /// transaction lets two turns each find nothing open and each insert, which
-    /// the unique index then refuses at the worst possible moment. Inside it,
-    /// the second turn finds the first one's row and counts against it.
-    ///
-    /// `raised_at` never moves and `times` only goes up. That is the whole
-    /// design: what the operator needs is not that an agent is stuck, it is
-    /// that it has been stuck since Tuesday and that six turns have been spent
-    /// walking into it. A fresh stamp on every raise would hide the one number
-    /// that says so, exactly as refreshing a working note's stamp would.
     pub fn raise_escalation(
         &self,
         agent: AgentId,
@@ -2123,14 +1659,6 @@ impl Store {
         at: i64,
     ) -> Result<Raised, StoreError> {
         let mut conn = self.conn()?;
-        // Immediate, not deferred, and that is the difference between this
-        // working and this failing under exactly the concurrency it is for. A
-        // deferred transaction takes its write lock on the first write, so two
-        // turns of one agent both read "nothing open", both try to insert, and
-        // the second is refused with `SQLITE_BUSY_SNAPSHOT` -- which the busy
-        // handler cannot wait out, because there is nothing to wait for: the
-        // snapshot it read from is already stale. Taking the lock at BEGIN
-        // makes the second one queue and then find the first one's row.
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
         let open: Option<(String, String, i64, u32)> = tx
@@ -2144,8 +1672,6 @@ impl Store {
 
         if let Some((id, run_id, raised_at, times)) = open {
             let id = id.parse::<EscalationId>().map_err(|e| StoreError::Corrupt(e.to_string()))?;
-            // The first raise's run, kept rather than replaced: it is the one
-            // with the beginning of the story in it.
             let run_id = run_id.parse::<RunId>().map_err(|e| StoreError::Corrupt(e.to_string()))?;
             let times = times.saturating_add(1);
             tx.execute(
@@ -2197,11 +1723,6 @@ impl Store {
         Ok(Raised::First(escalation))
     }
 
-    /// What one agent currently has up, if anything.
-    ///
-    /// Read on every turn of that agent, so the prompt can say what it already
-    /// told the operator and how long ago. An agent that cannot see its own
-    /// open escalation restates it as news.
     pub fn open_escalation_for(&self, agent: AgentId) -> Result<Option<Escalation>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -2214,16 +1735,6 @@ impl Store {
         }
     }
 
-    /// Everything still up, oldest first.
-    ///
-    /// Oldest first because the age is the point: the row at the top is the one
-    /// that has been true longest, which is the opposite of a feed and is what
-    /// keeps a two-day-old escalation from sinking under this morning's.
-    ///
-    /// Terminated agents are left out, which is the same question fifteen other
-    /// queries ask. An agent in the compost is unreachable and out of every
-    /// crew, so a row on the desk offering to open its channel is an offer
-    /// nothing can take up.
     pub fn open_escalations(&self, limit: u32) -> Result<Vec<Escalation>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -2242,17 +1753,6 @@ impl Store {
         Ok(out)
     }
 
-    /// Takes one off the desk, and only from open.
-    ///
-    /// `cleared_at IS NULL` in the WHERE clause for the reason `settle_approval`
-    /// has `state='pending'` in its own: the operator can press this twice, and
-    /// a second clear must not move a stamp that already says when the first
-    /// one happened.
-    ///
-    /// `false` is a row that was already cleared or was never there, which the
-    /// caller reports as nothing rather than as a failure. Both mean the desk
-    /// the operator is looking at is behind the store, and the read that
-    /// follows is what corrects it.
     pub fn clear_escalation(&self, id: EscalationId, at: i64) -> Result<bool, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -2265,12 +1765,6 @@ impl Store {
         Ok(cleared)
     }
 
-    /// Everything one agent has up, cleared because the agent is going.
-    ///
-    /// A purge would take the rows with it either way -- the foreign key
-    /// cascades -- but a discarded agent is not deleted for thirty days, and
-    /// its escalation would sit on the desk for all of them asking the operator
-    /// to deal with work that has stopped for good.
     pub fn clear_agent_escalations(&self, agent: AgentId, at: i64) -> Result<usize, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -2287,20 +1781,6 @@ impl Store {
         tx.commit()?;
         Ok(cleared)
     }
-
-    // ---- the calendar ----------------------------------------------------
-    //
-    // Every write below takes the crew as a parameter and matches on it in the
-    // WHERE clause, and that is the wall rather than a belt-and-braces filter.
-    // An id is a thing a model can invent, so `update_occasion` given one that
-    // belongs to another crew has to come back empty. It reads as "no such
-    // occasion" and not as a refusal on purpose: telling an agent that a row it
-    // may not touch exists, and whose it is, is the leak the wall exists to
-    // stop.
-    //
-    // The operator's own commands pass the group they read off the row, which
-    // is not a check and is not meant to be one. Their reads and writes are
-    // above the wall: it stands between crews, not between them and a crew.
 
     pub fn create_occasion(&self, clean: &CleanOccasion) -> Result<Occasion, StoreError> {
         let conn = self.conn()?;
@@ -2340,7 +1820,6 @@ impl Store {
         Ok(occasion)
     }
 
-    /// One occasion, if it is on this crew's calendar.
     pub fn occasion(&self, id: OccasionId, group: GroupId) -> Result<Option<Occasion>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(&format!("{OCCASION_COLUMNS} WHERE id=?1 AND group_id=?2"))?;
@@ -2353,8 +1832,6 @@ impl Store {
         }
     }
 
-    /// One occasion from anywhere in the workspace. The operator's read, and
-    /// the only one with no crew on it.
     pub fn any_occasion(&self, id: OccasionId) -> Result<Option<Occasion>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(&format!("{OCCASION_COLUMNS} WHERE id=?1"))?;
@@ -2364,15 +1841,6 @@ impl Store {
         }
     }
 
-    /// Rewrites one, and only inside the crew that holds it.
-    ///
-    /// Everything the caller sends is written, because the caller is the one
-    /// that decided what an absent field meant: the tool and the command both
-    /// read the existing row first and fill in what was not sent. Merging here
-    /// as well would put that decision in two places.
-    ///
-    /// `None` is a row this crew does not have, which is what an id from
-    /// another crew's calendar comes back as.
     pub fn update_occasion(
         &self,
         id: OccasionId,
@@ -2404,12 +1872,6 @@ impl Store {
         self.occasion(id, group)
     }
 
-    /// Takes one off, and only inside the crew that holds it.
-    ///
-    /// `false` is a row that was already gone or was never this crew's. The
-    /// caller reports both as nothing rather than as a failure, for the reason
-    /// `clear_escalation` does: either way the list the caller is holding is
-    /// behind the store, and the read that follows is what corrects it.
     pub fn delete_occasion(&self, id: OccasionId, group: GroupId) -> Result<bool, StoreError> {
         let conn = self.conn()?;
         Ok(conn.execute(
@@ -2418,17 +1880,6 @@ impl Store {
         )? > 0)
     }
 
-    /// What is on a calendar between two moments, soonest first.
-    ///
-    /// `group` is `None` for the operator's view across every crew, which is
-    /// the one read in the app that deliberately crosses the wall. Half-open on
-    /// the far end so two adjacent windows neither drop an occasion nor draw it
-    /// twice.
-    ///
-    /// Soonest first, which is the opposite of every other list here. A
-    /// transcript, a desk and a set of working notes are all about what has
-    /// happened; this is the one surface about what has not, and the row that
-    /// matters most is the one nearest.
     pub fn occasions(
         &self,
         from: i64,
@@ -2455,13 +1906,6 @@ impl Store {
         Ok(out)
     }
 
-    /// Everything one crew has ahead of it, however far ahead that is.
-    ///
-    /// The agent's own read, and it has no far end because `list` is what an
-    /// agent calls when the fortnight in its prompt was not enough. A limit
-    /// rather than a window: what is being asked for is the next N, and a crew
-    /// with nothing this month should still be told about the audit in
-    /// November.
     pub fn crew_calendar(
         &self,
         group: GroupId,
@@ -2482,8 +1926,6 @@ impl Store {
         }
         Ok(out)
     }
-
-    // ---- connectors ------------------------------------------------------
 
     pub fn create_connector(&self, clean: &CleanConnector) -> Result<Connector, StoreError> {
         let mut conn = self.conn()?;
@@ -2550,8 +1992,6 @@ impl Store {
         }
     }
 
-    /// Every credential one crew holds. Secrets are reported as set or not,
-    /// never returned: this is what the UI and the prompt are both built from.
     pub fn group_connectors(&self, group: GroupId) -> Result<Vec<Connector>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn
@@ -2564,7 +2004,6 @@ impl Store {
         Ok(out)
     }
 
-    /// Resolve grants at execution time. A moved or discarded agent fails closed.
     pub fn connector_env(
         &self,
         agent: AgentId,
@@ -2585,7 +2024,6 @@ impl Store {
         Ok(values)
     }
 
-    /// Registered names must not fall back to an inherited daemon credential.
     pub fn connector_names(&self) -> Result<Vec<String>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare("SELECT DISTINCT env_var FROM connectors")?;
@@ -2599,23 +2037,6 @@ impl Store {
         Ok(conn.execute("DELETE FROM connectors WHERE id=?1", params![id.to_string()])? > 0)
     }
 
-    /// What this agent has asked a peer for and not heard back on.
-    ///
-    /// Derived from the messages rather than kept anywhere. This is the state a
-    /// coordinator was writing into its own memory, which is a file it rewrites
-    /// whole every turn: it drifted, it truncated, and one crew's board
-    /// reported an assignment as outstanding that had never been sent at all.
-    /// The record already knows, and the record cannot drift.
-    ///
-    /// Only `work`. A courtesy is by definition not something anybody owes an
-    /// answer to, and counting one would put "thanks, received" on a list of
-    /// things somebody is waiting for.
-    ///
-    /// Anything at all from the peer since closes it, rather than a reply that
-    /// names the request. Agents do not thread, so holding this open until
-    /// something referenced the original would leave every finished piece of
-    /// work on the list forever, which is what makes a list like this worth
-    /// ignoring.
     pub fn outstanding_asks(&self, agent: AgentId) -> Result<Vec<Outstanding>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -2667,10 +2088,6 @@ impl Store {
         Ok(out)
     }
 
-    // ---- plugins ---------------------------------------------------------
-
-    /// The plugins one crew has connected. No grant is on this type and there
-    /// is no command that returns one.
     pub fn group_plugins(&self, group: GroupId) -> Result<Vec<Plugin>, StoreError> {
         let conn = self.conn()?;
         let chosen = self.chosen_agents(&conn, group)?;
@@ -2681,10 +2098,6 @@ impl Store {
             stmt.query_map(params![group.to_string()], |row| row_to_plugin(row, &chosen, &tools))?;
         let mut out = Vec::new();
         for row in rows {
-            // A row whose kind is not one this build knows is skipped rather
-            // than raised. It can only come from a newer build writing to the
-            // same file, and a crew losing one tool list is better than every
-            // agent in it losing its turn.
             if let Some(plugin) = row?? {
                 out.push(plugin);
             }
@@ -2692,11 +2105,6 @@ impl Store {
         Ok(out)
     }
 
-    /// Every named agent in one group's plugins, by the plugin that named them.
-    ///
-    /// One query for the whole group rather than one per row: this is read to
-    /// draw a settings panel and to build a roster, and a query per plugin
-    /// would be five for a screen that shows five tiles.
     fn chosen_agents(
         &self,
         conn: &Conn,
@@ -2718,9 +2126,6 @@ impl Store {
             let (plugin, agent) = row?;
             let (Ok(plugin), Ok(agent)) = (plugin.parse::<PluginId>(), agent.parse::<AgentId>())
             else {
-                // An id that will not parse names nothing, so it grants
-                // nothing. Dropping it is the fail-closed reading, and the
-                // alternative is a settings panel nobody can open.
                 continue;
             };
             out.entry(plugin).or_default().push(agent);
@@ -2728,20 +2133,6 @@ impl Store {
         Ok(out)
     }
 
-    /// Who may call each narrowed tool, by the plugin and tool it belongs to.
-    ///
-    /// The narrowings are what is stored, so a tool missing from this map is
-    /// one every agent the plugin reaches may call: that is what every plugin
-    /// connected before this control existed offers, and what a tool a vendor
-    /// ships next month offers. One query for the whole group, for the reason
-    /// [`Store::chosen_agents`] is one: this is read to draw a panel and to
-    /// build a turn, and neither wants five queries for five tiles.
-    ///
-    /// Two statements rather than a join, because the empty set is meaningful
-    /// and a join cannot return one. A tool narrowed to nobody has a row in
-    /// `plugin_tool_access` and none in `plugin_tool_agents`, and an inner join
-    /// would drop it back to "everyone" — the one mistake this whole shape is
-    /// built to make impossible.
     fn tool_access(
         &self,
         conn: &Conn,
@@ -2761,10 +2152,6 @@ impl Store {
         })?;
         for row in rows {
             let (plugin, tool, agent) = row?;
-            // An id that will not parse names nothing, so it grants nothing.
-            // Dropping it is the fail-closed reading: the tool keeps its
-            // narrowing and loses one name, rather than the narrowing being
-            // lost with it.
             let (Ok(plugin), Ok(agent)) = (plugin.parse::<PluginId>(), agent.parse::<AgentId>())
             else {
                 continue;
@@ -2786,10 +2173,6 @@ impl Store {
         let mut out: HashMap<(PluginId, String), PluginAccess> = HashMap::new();
         for row in rows {
             let (plugin, tool, access) = row?;
-            // An id that will not parse names no plugin this can be read
-            // against: every reader of this map looks up a row whose own id
-            // parsed, and a row whose id does not parse raises rather than
-            // being offered. Dropping it here loses nothing.
             let Ok(plugin) = plugin.parse::<PluginId>() else { continue };
             let key = (plugin, tool);
             let agents = named.remove(&key).unwrap_or_default();
@@ -2798,32 +2181,6 @@ impl Store {
         Ok(out)
     }
 
-    /// What one agent can call, with the schemas the model is shown, and what
-    /// it cannot, split by whose it is instead.
-    ///
-    /// Separate from `group_plugins` for the reason `connector_env` is separate
-    /// from `group_connectors`: this is the bulk nothing but the turn needs,
-    /// and it is read on the hot path rather than to draw a list.
-    ///
-    /// Filtered by agent rather than by group, on both axes, because what is
-    /// offered to a model has to be what that model may actually call. The
-    /// prompt is built from the same list on the same turn, so an agent is
-    /// never told about a plugin or a tool it would be refused.
-    ///
-    /// The ones it cannot call come back beside them rather than being dropped
-    /// here, because the prompt names them: an agent that is simply not shown
-    /// `refund` answers "we cannot do refunds", when the true answer is either
-    /// that the operator switched refunds off and can switch them back on, or
-    /// that the agent next to it does refunds. Which of those it is decides
-    /// which list it lands in. Nothing about either reaches the tool
-    /// definitions.
-    ///
-    /// The tool half of the rule is applied here, in Rust, and in SQL in
-    /// [`Store::plugin_reach`]. Both compare the server's own unprefixed name
-    /// to the same stored string, and a test drives one refusal through both.
-    /// It is not the fragment `PLUGIN_REACHED_BY_AGENT` is, because the tool
-    /// list is a JSON column: there is nothing for SQL to filter here without
-    /// taking the tools apart inside the database.
     pub fn plugin_tools(
         &self,
         group: GroupId,
@@ -2851,16 +2208,9 @@ impl Store {
         let mut out = Vec::new();
         for row in rows {
             let (id, kind, tools, endpoint) = row?;
-            // Skipped rather than raised, for the reason `group_plugins` skips
-            // one: a row this build cannot dial can only come from a newer one
-            // writing to the same file, and a crew losing one tool list is
-            // better than every agent in it losing its turn.
             let Some(kind) = PluginKind::from_row(&kind, &endpoint) else { continue };
             let tools: Vec<PluginTool> = serde_json::from_str(&tools)
                 .map_err(|e| StoreError::Corrupt(format!("bad tool list for {kind:?}: {e}")))?;
-            // Raised rather than skipped, so that a row whose id cannot be read
-            // fails the turn instead of quietly losing every narrowing filed
-            // against it. `group_plugins` reads the same id the same way.
             let id = id
                 .parse::<PluginId>()
                 .map_err(|e| StoreError::Corrupt(format!("bad plugin id {id:?}: {e}")))?;
@@ -2874,10 +2224,6 @@ impl Store {
             for tool in tools {
                 match narrowed.get(&(id, tool.name.clone())) {
                     Some(access) if !access.allows(agent) => {
-                        // Nobody's, or somebody else's. The two are different
-                        // sentences in the prompt and different refusals on the
-                        // call path, and this is the same order `plugin_reach`
-                        // asks in: what is true of everybody first.
                         if access.allows_nobody() {
                             set.withheld.push(tool.name);
                         } else {
@@ -2892,20 +2238,6 @@ impl Store {
         Ok(out)
     }
 
-    /// Which servers one crew has, and nothing else about them.
-    ///
-    /// Not filtered by agent, and that is the whole reason it exists beside
-    /// [`Store::plugin_tools`]. That one answers "what may this agent call",
-    /// which is what the tool definitions are built from. This one answers
-    /// "what is this a name for", which is a different question and has to be
-    /// asked of the crew: an agent the operator did not choose for a plugin
-    /// still has to be told "connected, but not for you — ask a peer" rather
-    /// than "unknown tool", and a name only this crew knows has nowhere else to
-    /// be resolved from. A catalog name needs no lookup at all, so the gap this
-    /// closes is exactly the servers the operator added.
-    ///
-    /// The tool list is not read. This is on the turn's hot path and the
-    /// question is one every row can answer from two columns.
     pub fn group_plugin_kinds(&self, group: GroupId) -> Result<Vec<PluginKind>, StoreError> {
         let conn = self.conn()?;
         let mut stmt =
@@ -2916,9 +2248,6 @@ impl Store {
         let mut out = Vec::new();
         for row in rows {
             let (slug, endpoint) = row?;
-            // Skipped rather than raised, for the reason every unreadable
-            // plugin row is: a name this build cannot dial is a name it cannot
-            // resolve either, and it becomes an unknown tool.
             if let Some(kind) = PluginKind::from_row(&slug, &endpoint) {
                 out.push(kind);
             }
@@ -2926,31 +2255,6 @@ impl Store {
         Ok(out)
     }
 
-    /// What one agent gets when it calls one tool on one of its crew's plugins.
-    ///
-    /// The only path a stored token takes out of this table, and it leads
-    /// straight back to the server that issued it. Nothing here reaches a
-    /// prompt, a transcript, an event or the webview.
-    ///
-    /// Five answers rather than an `Option`, because four of them are refusals
-    /// an agent reads mid-turn and they call for different things. "Nobody has
-    /// connected this" is something to tell the operator about; "you are not
-    /// one of the agents it was connected for" and "this tool is not one of
-    /// yours" are things to hand to a peer; "this tool is switched off" is
-    /// neither, because no peer has it either. Collapsing any two would have an
-    /// agent asking an operator to connect a plugin they are looking at in the
-    /// settings panel, or handing a peer work nobody in the crew can do.
-    ///
-    /// Discovery is checked before policy because a model can name a tool it
-    /// was never offered or one the server no longer publishes.
-    ///
-    /// Asked most-general first, because more than one of these is true at
-    /// once and the widest true answer is the useful one. A tool narrowed to
-    /// nobody is off for the whole crew, so an agent that is also not on the
-    /// plugin is told that rather than sent to a peer who would be refused in
-    /// turn. A plugin this agent is not on is refused before one of its tools
-    /// is, because that answer covers every tool the plugin has rather than
-    /// this one.
     pub fn plugin_reach(
         &self,
         group: GroupId,
@@ -3038,10 +2342,6 @@ impl Store {
             .parse::<PluginId>()
             .map_err(|e| StoreError::Corrupt(format!("bad plugin id {id:?}: {e}")))?;
 
-        // An empty access token is a plugin that needed no sign-in, not a
-        // broken one. A server that authorizes everybody stores no grant, and
-        // reporting one with nothing in it would send the operator to a browser
-        // to fix something that is working, and put `Bearer ` on every call.
         let grant = (!access.is_empty()).then(|| crate::oauth::Grant {
             access_token: access,
             refresh_token: (!refresh.is_empty()).then_some(refresh),
@@ -3062,11 +2362,6 @@ impl Store {
         })))
     }
 
-    /// Narrows a plugin to some of the crew, or opens it to all of it.
-    ///
-    /// The whole set is replaced, never merged. A caller that sent the agents
-    /// it knew about would narrow a plugin by forgetting one, and the panel
-    /// that sends this renders what it last read.
     pub fn set_plugin_access(
         &self,
         id: PluginId,
@@ -3084,11 +2379,6 @@ impl Store {
 
         if let PluginAccess::Chosen { agents } = access {
             for agent in agents {
-                // Refused rather than filtered out. An agent from another crew
-                // could never reach this plugin anyway, because the turn asks
-                // by group as well as by agent, so storing one would be a row
-                // that means nothing and a settings panel drawing a name that
-                // grants nothing.
                 let known: Option<i64> = tx
                     .query_row(
                         "SELECT 1 FROM agents
@@ -3110,9 +2400,6 @@ impl Store {
         tx.execute("DELETE FROM plugin_agents WHERE plugin_id=?1", params![id.to_string()])?;
         if let PluginAccess::Chosen { agents } = access {
             for agent in agents {
-                // A set, so a name sent twice is one row rather than a
-                // conflict. Nothing about who may call this depends on how
-                // many times the caller listed them.
                 tx.execute(
                     "INSERT OR IGNORE INTO plugin_agents (plugin_id, agent_id) VALUES (?1, ?2)",
                     params![id.to_string(), agent.to_string()],
@@ -3130,26 +2417,6 @@ impl Store {
             .ok_or(StoreError::PluginNotFound(id))
     }
 
-    /// Chooses which of a crew's agents may call one of a plugin's tools.
-    ///
-    /// One named tool, and the whole answer for it. Naming the tool is what
-    /// keeps this from being the whole-set write [`Store::set_plugin_access`]
-    /// is: a panel that sent every tool it could see would drop a narrowing
-    /// filed against a tool the vendor has temporarily stopped publishing.
-    /// Inside the named tool the set is replaced rather than merged, for the
-    /// reason it is there — a caller sending the agents it happened to know
-    /// would narrow the tool by forgetting somebody, and the panel that sends
-    /// this renders what it last read.
-    ///
-    /// [`PluginAccess::Everyone`] deletes the rows rather than storing them.
-    /// The absence of a row is the permission, so a tool put back to everyone
-    /// has to look like a tool nobody ever touched: kept as a row it would be a
-    /// stored `everyone` that a later reader has to treat as equivalent to
-    /// absence, which is two ways to say one thing and one of them wrong.
-    ///
-    /// Refused for a tool this plugin does not publish. Storing one would be a
-    /// decision that names nothing, in a table nothing can show the operator,
-    /// and it means the panel is looking at a list older than the server's.
     pub fn set_plugin_tool(
         &self,
         id: PluginId,
@@ -3176,10 +2443,6 @@ impl Store {
 
         if let PluginAccess::Chosen { agents } = access {
             for agent in agents {
-                // Refused rather than filtered out, for the reason
-                // `set_plugin_access` refuses one: a row naming an agent from
-                // another crew grants nothing and draws a name in a settings
-                // panel that means nothing.
                 let known: Option<i64> = tx
                     .query_row(
                         "SELECT 1 FROM agents
@@ -3212,9 +2475,6 @@ impl Store {
                     params![id.to_string(), tool, access.as_str()],
                 )?;
                 for agent in agents {
-                    // A set, so a name sent twice is one row rather than a
-                    // conflict. Nothing about who may call this depends on how
-                    // many times the caller listed them.
                     tx.execute(
                         "INSERT OR IGNORE INTO plugin_tool_agents (plugin_id, tool, agent_id)
                          VALUES (?1, ?2, ?3)",
@@ -3234,16 +2494,6 @@ impl Store {
             .ok_or(StoreError::PluginNotFound(id))
     }
 
-    /// Drops one agent's place on every plugin and every tool that named it.
-    ///
-    /// Called when an agent is retired, for the reason its approvals are: a
-    /// permission the operator gave to an agent that no longer exists is a row
-    /// nothing can act on and a name in a settings panel that points at nobody.
-    ///
-    /// Both tables, and the tool one matters more than it looks: a tool left
-    /// naming a retired agent and nobody else is a tool the panel draws as
-    /// narrowed to somebody, that in fact nobody can call, and the refusal an
-    /// agent gets for it would send it to a peer that is gone.
     pub fn delete_agent_plugin_access(&self, agent: AgentId) -> Result<usize, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
@@ -3257,17 +2507,6 @@ impl Store {
         Ok(removed)
     }
 
-    /// Records a connection, replacing whatever was there for that server.
-    ///
-    /// Replace rather than reject: connecting again is how an operator fixes a
-    /// grant that was revoked at the vendor, and the unique index makes an
-    /// insert the wrong shape for that.
-    ///
-    /// `access` is not in the update, and the row keeps its id, so who may call
-    /// the plugin survives the sign-in being redone. Renewing a grant is not a
-    /// decision about the crew, and a reconnection that quietly handed Stripe
-    /// back to everybody would undo one silently, at the moment the operator
-    /// was fixing something else.
     #[allow(clippy::too_many_arguments)]
     pub fn save_plugin(
         &self,
@@ -3276,14 +2515,7 @@ impl Store {
         account: &str,
         tools: &[PluginTool],
         grant: Option<&crate::oauth::Grant>,
-        // Which authorized identity at the account this crew is using, for an
-        // account-backed kind. Empty is the account's default, which is what a
-        // row written before connections existed keeps meaning.
         connection: &str,
-        // What the operator gave this server beyond a token. Replaced whole on
-        // a reconnection, exactly as the tool list is: a merge would let a
-        // caller drop a header by forgetting it, and the panel that sends these
-        // renders what it last read.
         headers: &Headers,
     ) -> Result<Plugin, StoreError> {
         let conn = self.conn()?;
@@ -3324,32 +2556,17 @@ impl Store {
                 grant.and_then(|g| g.expires_at),
                 now_ms(),
                 connection,
-                // Empty for a catalog kind, whose address belongs to the build.
-                // See `PluginKind::stored_endpoint` and migration 35.
                 kind.stored_endpoint(),
                 headers.encode(),
             ],
         )?;
 
-        // By slug rather than by value: the row that comes back was just
-        // written from this kind, so the two agree, and comparing the identity
-        // is what says which of a kind's fields the answer turns on.
         self.group_plugins(group)?
             .into_iter()
             .find(|plugin| plugin.kind.slug() == kind.slug())
             .ok_or(StoreError::PluginNotFound(id))
     }
 
-    /// What one plugin is dialled with, for a caller holding its id and no agent.
-    ///
-    /// Not a narrower `plugin_reach`, because it answers a different question
-    /// and must not answer that one: this is the operator asking whether their
-    /// own server is reachable, and an operator is not one of the crew. Running
-    /// it through the per-agent rule would make a diagnostic report "not for
-    /// you" about a plugin the person who connected it is looking at.
-    ///
-    /// A row this build cannot dial comes back as `None`, exactly as it is
-    /// skipped in `group_plugins`, and for the same reason.
     pub fn plugin_dial(&self, id: PluginId) -> Result<Option<Dialed>, StoreError> {
         let conn = self.conn()?;
         let row = conn
@@ -3396,8 +2613,6 @@ impl Store {
 
         Ok(Some(Dialed {
             kind,
-            // Empty is a server that asked for nothing, not a broken row. See
-            // the same read in `plugin_reach`.
             grant: (!access.is_empty()).then(|| crate::oauth::Grant {
                 access_token: access,
                 refresh_token: (!refresh.is_empty()).then_some(refresh),
@@ -3412,7 +2627,6 @@ impl Store {
         }))
     }
 
-    /// Writes back a renewed grant, leaving everything else alone.
     pub fn refresh_plugin_grant(
         &self,
         id: PluginId,
@@ -3433,12 +2647,6 @@ impl Store {
         Ok(changed == 1)
     }
 
-    /// Forgets a plugin, its grant, and who was allowed to spend it.
-    ///
-    /// The named agents go first, and not only because the foreign key would
-    /// refuse otherwise: a row naming a plugin that is gone would be a standing
-    /// permission attached to nothing, waiting to attach itself to whatever
-    /// took the id next.
     pub fn delete_plugin(&self, id: PluginId) -> Result<bool, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
@@ -3450,22 +2658,6 @@ impl Store {
         Ok(removed > 0)
     }
 
-    // ---- sign-ins --------------------------------------------------------
-
-    /// Records what one of an agent's two places turned out to be signed in to.
-    ///
-    /// Replaces that surface's whole set rather than merging, because this is a
-    /// cache of something that lives elsewhere: an entry that outlives the
-    /// logout it should have noticed keeps the crew routing work to an agent
-    /// that will hit a login wall. `first_seen_at` is carried across so
-    /// "signed in since Tuesday" survives a rescan.
-    ///
-    /// Scoped to the surface, and that is the whole reason the column exists. A
-    /// computer and a browser are scanned independently and at different
-    /// moments; a replace that took the agent's whole set would mean asking one
-    /// what it holds erases everything the other reported, so an agent's
-    /// accounts would flicker between two halves of the truth depending on
-    /// which scan ran last.
     pub fn replace_signins(
         &self,
         agent: AgentId,
@@ -3515,7 +2707,6 @@ impl Store {
         self.agent_signins(agent)
     }
 
-    /// Everything one agent reaches, wherever it holds the session.
     pub fn agent_signins(&self, agent: AgentId) -> Result<Vec<Signin>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -3530,10 +2721,6 @@ impl Store {
         Ok(out)
     }
 
-    /// What every machine in one group is signed in to.
-    ///
-    /// Terminated agents are excluded: their sandboxes are destroyed, so a row
-    /// left behind would put an unreachable account on the roster.
     pub fn group_signins(&self, group: GroupId) -> Result<Vec<Signin>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -3552,17 +2739,11 @@ impl Store {
         Ok(out)
     }
 
-    /// Forgets what a machine was signed in to. Called when the agent, and
-    /// therefore its sandbox and its cookies, are destroyed.
     pub fn delete_agent_signins(&self, agent: AgentId) -> Result<usize, StoreError> {
         let conn = self.conn()?;
         Ok(conn.execute("DELETE FROM signins WHERE agent_id=?1", params![agent.to_string()])?)
     }
 
-    // ---- groups ----------------------------------------------------------
-
-    /// Every group, with its live agent count, in the order the operator
-    /// arranged them. Every list of crews the app draws is this one.
     pub fn list_groups(&self) -> Result<Vec<Group>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -3592,8 +2773,6 @@ impl Store {
         let limits = draft.limits.unwrap_or_default();
         let tidy = draft.tidy.unwrap_or_default();
         let now = now_ms();
-        // At the bottom of the column, read in the same statement that writes
-        // it so two crews made at once cannot both take the last place.
         conn.execute(
             "INSERT INTO groups (id,name,created_at,base_url,api_key,default_model,
                                  provider,subscription_model,request_timeout_secs,
@@ -3626,15 +2805,8 @@ impl Store {
         self.get_group(id)?.ok_or(StoreError::GroupNotFound(id))
     }
 
-    /// Applies an operator edit. An override the draft does not mention is left
-    /// exactly as it was, which is what lets the UI show a redacted key without
-    /// erasing it on the next save.
     pub fn update_group(&self, id: GroupId, draft: &CleanGroup) -> Result<Group, StoreError> {
         let conn = self.conn()?;
-        // Each block is written or left alone as a whole, which is what the
-        // draft's two rules say. Per-column CASEs inside a block would let a
-        // caller half-write a group's settings, and the second half of a save
-        // that failed halfway is not a state anything here can report.
         let over = draft.inference.clone().unwrap_or_default();
         let limits = draft.limits.unwrap_or_default();
         let changed = conn
@@ -3692,10 +2864,6 @@ impl Store {
         self.get_group(id)?.ok_or(StoreError::GroupNotFound(id))
     }
 
-    /// A group's raw inference overrides, key included.
-    ///
-    /// Separate from `list_groups` on purpose: that shape crosses IPC and must
-    /// never carry the key, and this one never leaves the runtime.
     pub fn group_inference(&self, id: GroupId) -> Result<GroupInference, StoreError> {
         let conn = self.conn()?;
         let found = conn
@@ -3723,13 +2891,6 @@ impl Store {
         Ok(found.unwrap_or_default())
     }
 
-    /// A group's loop limits, unresolved. A field it does not set is `None`,
-    /// and the runtime layers what is left over the app's.
-    ///
-    /// Its own query rather than a field on the one above: this is read on
-    /// every send and every model call, and the inference settings are read
-    /// once a turn. Reading either does not want to carry the other's cost, and
-    /// the key must not be read into memory on a path that does not need it.
     pub fn group_limits(&self, id: GroupId) -> Result<GroupLimits, StoreError> {
         let conn = self.conn()?;
         let found = conn
@@ -3756,23 +2917,12 @@ impl Store {
         Ok(self.list_groups()?.into_iter().find(|g| g.id == id))
     }
 
-    /// Puts a crew where the operator dropped its circle, and answers with
-    /// every crew in the order that now stands.
-    ///
-    /// `before` is the crew it lands in front of, and `None` is the end. The
-    /// rules are `move_agent`'s, for its reasons: an anchor that is gone lands
-    /// the crew at the end rather than losing the gesture, a crew dropped on
-    /// itself asks for nothing and is left where it is, and every crew is
-    /// renumbered densely because a workspace holds a handful of them. Not an
-    /// edit either: where a circle is drawn is nothing an agent reads.
     pub fn move_group(
         &self,
         id: GroupId,
         before: Option<GroupId>,
     ) -> Result<Vec<Group>, StoreError> {
         let mut conn = self.conn()?;
-        // Immediate, so the order read here is still the order when it is
-        // rewritten: a crew made in between would be numbered over.
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         {
             let mut stmt =
@@ -3806,13 +2956,6 @@ impl Store {
         self.list_groups()
     }
 
-    /// The refusals that do not depend on the group being empty: it has to
-    /// exist, and at least one other group has to remain.
-    ///
-    /// Separate from `delete_group` so disbanding a crew can refuse before it
-    /// starts destroying machines. A disband that killed a group's computers
-    /// and browsers and then found the group itself could not go would have
-    /// spent the irreversible half of the work on a call that fails.
     pub fn group_for_removal(&self, id: GroupId) -> Result<Group, StoreError> {
         let group = self.get_group(id)?.ok_or(StoreError::GroupNotFound(id))?;
         let conn = self.conn()?;
@@ -3820,22 +2963,8 @@ impl Store {
         Ok(group)
     }
 
-    /// Deletes a group that no live agent is in.
-    ///
-    /// Refuses while it still holds agents that can act, rather than moving
-    /// them: relocating an agent would quietly put it inside a boundary it was
-    /// deliberately kept out of, and deleting it would destroy work on what
-    /// reads like a tidy-up. The operator decides.
-    ///
-    /// Deleted agents are a different matter. They are kept only so their
-    /// transcripts still render, and they cannot be reached or act, so they are
-    /// moved to the first surviving group rather than holding a group open forever.
-    /// Counting them was why deleting every agent in a group still reported
-    /// three agents in it.
     pub fn delete_group(&self, id: GroupId) -> Result<(), StoreError> {
         let mut conn = self.conn()?;
-        // Hold the write lock from the last-group check through cleanup. Two
-        // deletions must not each count the other group and leave none.
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let (name, agents): (String, u32) = tx
             .query_row(
@@ -3855,15 +2984,7 @@ impl Store {
             "UPDATE agents SET group_id=?2 WHERE group_id=?1",
             params![id.to_string(), fallback.to_string()],
         )?;
-        // The group's accounts go with it. They are scoped to it, so moving
-        // them would hand another crew credentials nobody gave it, and leaving
-        // them would fail the foreign key on the row below.
         tx.execute("DELETE FROM connectors WHERE group_id=?1", params![id.to_string()])?;
-        // And its plugins, for both of those reasons and one more: the row
-        // holds a grant against the operator's own Neon or Cloudflare account,
-        // and a disbanded crew is not a reason to keep one. Whoever was named
-        // on one goes first, along with whatever was switched off on it, or the
-        // foreign key refuses the line below.
         tx.execute(
             "DELETE FROM plugin_agents WHERE plugin_id IN
                  (SELECT id FROM plugins WHERE group_id=?1)",
@@ -3880,12 +3001,7 @@ impl Store {
             params![id.to_string()],
         )?;
         tx.execute("DELETE FROM plugins WHERE group_id=?1", params![id.to_string()])?;
-        // And its calendar. Nothing outside the crew reads it, so there is
-        // nobody left for the dates to be true for; leaving them would fail the
-        // foreign key on the line below in any case.
         tx.execute("DELETE FROM occasions WHERE group_id=?1", params![id.to_string()])?;
-        // And its artifacts, for the same reason: they are the crew's. The log
-        // goes first, or its foreign key refuses the line after it.
         tx.execute(
             "DELETE FROM artifact_history WHERE artifact_id IN
                  (SELECT id FROM artifacts WHERE group_id=?1)",
@@ -3896,8 +3012,6 @@ impl Store {
         tx.commit()?;
         Ok(())
     }
-
-    // ---- messages --------------------------------------------------------
 
     pub fn append(&self, envelope: &Envelope) -> Result<(), StoreError> {
         let conn = self.conn()?;
@@ -3936,8 +3050,6 @@ impl Store {
         Ok(())
     }
 
-    /// Acceptance and its recovery point are one commit. A crash between this
-    /// write and enqueueing must still leave work the operator can find.
     pub fn append_delivery(&self, envelope: &Envelope) -> Result<(), StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
@@ -3960,11 +3072,6 @@ impl Store {
         self.claim_send(key, fingerprint, envelope, accepting, None)
     }
 
-    /// The same, while the host is stopping: a new send is accepted and put
-    /// down for the next host, whole at `steps` and `snapshot`, in the commit
-    /// that accepts it. The rows are the ones `append_put_down` writes for a
-    /// send with no key, so a message sent in the last seconds is neither lost
-    /// nor reported interrupted when it never began.
     pub fn claim_operator_send_put_down(
         &self,
         key: &str,
@@ -4062,20 +3169,10 @@ impl Store {
         )))
     }
 
-    /// Ends a run that finished on its own, with no count of what it spent.
-    /// What a caller with no runtime behind it settles; the runtime says how a
-    /// run ended through [`Self::settle_run_as`].
     pub fn settle_run(&self, run: RunId) -> Result<(), StoreError> {
         self.settle_run_as(run, Settled::Finished, 0).map(drop)
     }
 
-    /// Ends a run: its recovery point goes, and its outcome is written, in one
-    /// commit. Two commits would leave a window in which a crash loses the run
-    /// from both places that could say it finished.
-    ///
-    /// `settled` and `steps` are what only the runtime knows: which runs a
-    /// turn took in, which ones the operator stopped, and what each spent.
-    /// The new outcome, if there is one, is for the caller to announce.
     pub fn settle_run_as(
         &self,
         run: RunId,
@@ -4083,14 +3180,7 @@ impl Store {
         steps: u32,
     ) -> Result<Option<Outcome>, StoreError> {
         let mut conn = self.conn()?;
-        // Immediate, because the outcome is read before anything is written.
-        // A deferred transaction would take its write lock at the insert, and
-        // two runs settling at once would have the second refused with a
-        // snapshot that is already stale, which no busy wait can fix.
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        // A run whose outcome cannot be read is still finished. Failing the
-        // settle over it would keep the recovery point, and the next start
-        // would report a conversation that ended as one that was cut off.
         let outcome =
             super::outcomes::record(&tx, run, settled, steps, now_ms()).unwrap_or_else(|err| {
                 tracing::error!(%err, %run, "could not record what a run ended in");
@@ -4122,10 +3212,6 @@ impl Store {
         Ok(())
     }
 
-    /// The newest `limit` messages in a channel, returned oldest-first for
-    /// direct rendering.
-    /// One message, by id. Used to put a failed turn back on its feet: what to
-    /// deliver again is exactly what was delivered before.
     pub fn get_message(&self, id: MessageId) -> Result<Option<Envelope>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -4138,18 +3224,6 @@ impl Store {
         }
     }
 
-    /// Whether the operator wrote to this agent themselves on this run.
-    ///
-    /// Which is the whole of what tells a report from commentary. Being
-    /// addressable is not being the audience, and the difference is per run:
-    /// the operator is in the conversation they started, and not in the seven
-    /// the agent they wrote to then started on their behalf.
-    ///
-    /// Read off the messages rather than tracked beside the run's other
-    /// bookkeeping, because it is already written down and a copy would have to
-    /// be inserted under the same lock the run is counted in to survive a
-    /// concurrent settle. Bounded by the run's own step budget, and the
-    /// `messages_run` index is on `run_id`.
     pub fn operator_addressed(&self, run: RunId, agent: AgentId) -> Result<bool, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -4179,8 +3253,6 @@ impl Store {
         Ok(out)
     }
 
-    /// A saved attachment remains reachable after its message leaves the prompt.
-    /// The visibility rule matches agent_history, including replies filed under peers.
     pub fn agent_file(
         &self,
         agent: AgentId,
@@ -4201,26 +3273,6 @@ impl Store {
             .map(|hit| hit.map(|hit| hit.file))
     }
 
-    /// What an agent has read and written, oldest first, for its next turn.
-    ///
-    /// Incoming messages newer than the batch stay in the inbox. Its own
-    /// completed work stays visible even if it was written after that batch
-    /// queued, including replies filed in a peer's channel. Reading only this
-    /// agent's channel made it forget every automatic answer it sent a peer.
-    ///
-    /// Bound each indexed read before merging ids, then load only the newest
-    /// `limit` bodies. A backlog cannot displace earlier context, and a long
-    /// conversation cannot turn a small prompt into a scan of every message.
-    ///
-    /// Only a row the prompt will draw takes one of the `limit` places. Every
-    /// turn that called a tool files an activity record in this channel, and a
-    /// record holding nothing but calls and notices renders as nothing, so
-    /// counting rows rather than messages gave a tool-using agent about 26 of
-    /// its 40 and dropped real messages to make room for blanks. `SHOWN` is
-    /// the prompt's own test for an empty message, `prompt::is_empty`, written
-    /// in SQL: a part with words in it, a file, a routine firing or a decision.
-    /// A record that carries the agent's commentary has words in it and still
-    /// counts, because it is still drawn.
     pub fn agent_history(
         &self,
         agent: AgentId,
@@ -4264,19 +3316,6 @@ impl Store {
         Ok(out)
     }
 
-    /// What two agents said to each other, oldest first.
-    ///
-    /// Read from the messages rather than assembled from either channel, and
-    /// that is the whole point of it existing. A send is filed under the
-    /// recipient and the reply under the sender, so each channel holds one half
-    /// of the exchange; worse, an automatic reply leaves no trace at all in the
-    /// channel of the agent that wrote it, since only explicit tool calls are
-    /// recorded there. A thread built from one side would be missing messages
-    /// nobody could account for.
-    ///
-    /// Both directions, because a conversation is not directional. Agent
-    /// activity records are excluded by the `to_kind` predicate: they are
-    /// bookkeeping filed against `system`, not something said to a peer.
     pub fn pair_messages(
         &self,
         a: AgentId,
@@ -4300,21 +3339,6 @@ impl Store {
         Ok(out)
     }
 
-    /// One crew's conversation, oldest last, for the flow board.
-    ///
-    /// Includes the operator's messages and the replies back to them, not just
-    /// peer traffic: a flow that starts partway through, at the first agent to
-    /// agent message, hides who set it off. An agent's private activity records
-    /// are excluded, since they are bookkeeping rather than a message passing
-    /// between two participants.
-    ///
-    /// Scoped to a group in SQL rather than filtered after the read, and the
-    /// limit is why. The board is the newest `limit` messages, so a workspace
-    /// where one busy crew fills that window would hand a quiet crew a board
-    /// with nothing on it and no way to tell that apart from a crew that has
-    /// not spoken. The channel is the scope because agents in different groups
-    /// cannot message each other: every message in a run is filed under an
-    /// agent, and that agent's group is the run's.
     pub fn conversation_flow(
         &self,
         group: GroupId,
@@ -4337,14 +3361,6 @@ impl Store {
         Ok(out)
     }
 
-    /// A channel's newest messages, guaranteed to reach back through one of
-    /// them.
-    ///
-    /// What a search result needs in order to be openable: the transcript is
-    /// normally read as "the newest few hundred", and a hit older than that
-    /// would open its channel without itself in it. Still bounded, so a hit
-    /// older than `cap` messages opens the channel at its newest end rather
-    /// than pulling a year of history into the webview.
     pub fn channel_messages_through(
         &self,
         channel: AgentId,
@@ -4352,10 +3368,6 @@ impl Store {
         cap: u32,
     ) -> Result<Vec<Envelope>, StoreError> {
         let conn = self.conn()?;
-        // A row value, so the cut is made on exactly the ordering the channel
-        // is drawn in. Comparing `created_at` on its own would drop whatever
-        // was written in the same millisecond as the target, and a reply and
-        // the record of the call that produced it are usually that close.
         let mut stmt = conn.prepare(
             r"SELECT id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,intent,cause,created_at
                 FROM messages
@@ -4373,18 +3385,6 @@ impl Store {
         Ok(out)
     }
 
-    // ---- search ----------------------------------------------------------
-
-    /// Everything stored here that matches a query.
-    ///
-    /// Four categories from three statements, because a file and a link are a
-    /// message read from a different angle: both are found by the scan that
-    /// finds the message and neither is stored anywhere of its own. Ordering
-    /// across the categories is left to the caller, since which one a person
-    /// wants first depends on what they were doing when they started typing.
-    ///
-    /// An empty query is not an error and not empty-handed: it matches
-    /// everything, so what comes back is the newest of each kind.
     pub fn search(&self, query: &str, limit: u32) -> Result<SearchHits, StoreError> {
         let pattern = like_pattern(query);
         let want = limit as usize;
@@ -4412,8 +3412,6 @@ impl Store {
                 if links.len() >= want {
                     break;
                 }
-                // The message matched, which does not mean this URL did: a
-                // message can mention a subject and link somewhere unrelated.
                 if !contains_fold(url, query) || !seen_urls.insert(url.to_string()) {
                     continue;
                 }
@@ -4435,16 +3433,6 @@ impl Store {
         })
     }
 
-    /// Messages with matching text, newest first.
-    ///
-    /// Matched part by part rather than against the stored blob. `parts` is
-    /// JSON, and a substring search over it also matches the keys: "text",
-    /// "name" and "type" are in every row, so searching for any of them
-    /// returned the entire transcript.
-    ///
-    /// A decision's answer is matched on the answer and the question, which
-    /// are what the operator remembers of it. It was a text part once, and
-    /// findable by its words.
     fn matching_messages(&self, pattern: &str, limit: u32) -> Result<Vec<Envelope>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -4469,7 +3457,6 @@ impl Store {
         Ok(out)
     }
 
-    /// Attachments with matching names, newest first and one row per file.
     fn matching_files(&self, pattern: &str, limit: usize) -> Result<Vec<FileHit>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -4482,9 +3469,6 @@ impl Store {
         )?;
         let rows = stmt.query_map(params![pattern, SEARCH_SCAN], row_to_file_hit)?;
 
-        // Deduplicated by digest, keeping the newest appearance. The bytes are
-        // addressed by content, so the same document sent to three agents is
-        // one file and belongs on one row.
         let mut seen = HashSet::new();
         let mut out = Vec::new();
         for row in rows {
@@ -4499,13 +3483,6 @@ impl Store {
         Ok(out)
     }
 
-    /// Routines whose name or instruction matches, in the order they will next
-    /// fire.
-    ///
-    /// Both columns, because either is what somebody would type: a routine
-    /// carries a title and the instruction it delivers, and only one of them is
-    /// ever filled in when an agent sets its own schedule. Switched-off ones are
-    /// included, since finding one is usually how it gets switched back on.
     fn matching_routines(&self, pattern: &str, limit: u32) -> Result<Vec<Routine>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -4522,12 +3499,6 @@ impl Store {
         Ok(out)
     }
 
-    // ---- usage -----------------------------------------------------------
-
-    /// Records what one model call cost.
-    ///
-    /// Best-effort by design: a call that produced real work must not be
-    /// reported as a failure because its accounting row would not write.
     pub fn record_usage(&self, entry: &UsageEntry) -> Result<(), StoreError> {
         let conn = self.conn()?;
         conn.execute(
@@ -4548,7 +3519,6 @@ impl Store {
         Ok(())
     }
 
-    /// Everything each group has spent, ever.
     pub fn usage_by_group(&self) -> Result<HashMap<GroupId, Tokens>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -4570,8 +3540,6 @@ impl Store {
         let mut out = HashMap::new();
         for row in rows {
             let (id, tokens) = row?;
-            // A row whose group id no longer parses is accounting for a group
-            // that is gone. It stays in the table and out of the summary.
             if let Ok(group) = id.parse::<GroupId>() {
                 out.insert(group, tokens);
             }
@@ -4579,7 +3547,6 @@ impl Store {
         Ok(out)
     }
 
-    /// What each run cost, for the runs given. Empty input, empty answer.
     pub fn usage_by_run(&self, runs: &[RunId]) -> Result<HashMap<RunId, Tokens>, StoreError> {
         if runs.is_empty() {
             return Ok(HashMap::new());
@@ -4613,16 +3580,6 @@ impl Store {
         Ok(out)
     }
 
-    /// Empties every channel in a group: a fresh start for a whole crew.
-    ///
-    /// Agents survive, along with their notes and their machines. Only what was
-    /// said goes, which is also what an agent reads back as its history, so the
-    /// crew genuinely starts over rather than carrying a conversation it can no
-    /// longer be shown.
-    ///
-    /// Agents cannot message across a group boundary, so every message a group
-    /// produced is filed in a channel belonging to one of its agents. Deleted
-    /// agents are included: their transcripts are part of what this group said.
     pub fn delete_group_messages(&self, group: GroupId) -> Result<usize, StoreError> {
         let conn = self.conn()?;
         Ok(conn.execute(
@@ -4632,7 +3589,6 @@ impl Store {
         )?)
     }
 
-    /// Every routine held by a group's agents.
     pub fn delete_group_routines(&self, group: GroupId) -> Result<usize, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
@@ -4646,13 +3602,6 @@ impl Store {
         Ok(deleted)
     }
 
-    /// Every working note held by a group's agents.
-    ///
-    /// The other half of what a crew carries between turns, and it goes with
-    /// the memories for the same reason: an agent whose transcript and page are
-    /// gone but which still opens tomorrow waiting on a decision from a
-    /// conversation nobody can read has not started fresh, it has been left
-    /// holding the one part of its state nothing can now explain.
     pub fn delete_group_working_notes(&self, group: GroupId) -> Result<usize, StoreError> {
         let conn = self.conn()?;
         Ok(conn.execute(
@@ -4662,22 +3611,11 @@ impl Store {
         )?)
     }
 
-    /// Everything a group has spent.
-    ///
-    /// Booked against the group rather than the agent, so an agent that has
-    /// since moved elsewhere does not take its old group's bill with it.
     pub fn delete_group_usage(&self, group: GroupId) -> Result<usize, StoreError> {
         let conn = self.conn()?;
         Ok(conn.execute("DELETE FROM usage WHERE group_id=?1", params![group.to_string()])?)
     }
 
-    /// Every live agent in a group, whole cards.
-    ///
-    /// Terminated ones are left out. They have already been retired: their
-    /// machines are destroyed and their memories gone, and they are only still
-    /// filed under the group so old transcripts render. Handing one back to a
-    /// disband would mean a second attempt to kill a sandbox that no longer
-    /// exists, which is the failure the operator would then be shown.
     pub fn group_crew(&self, group: GroupId) -> Result<Vec<AgentCard>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(&format!(
@@ -4692,10 +3630,6 @@ impl Store {
         Ok(out)
     }
 
-    /// The agents a group holds, deleted ones included.
-    ///
-    /// Deleted agents still have transcripts and notes on disk, so a reset that
-    /// skipped them would leave the group half cleared.
     pub fn group_agent_ids(&self, group: GroupId) -> Result<Vec<AgentId>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare("SELECT id FROM agents WHERE group_id=?1 ORDER BY rowid")?;
@@ -4716,11 +3650,6 @@ impl Store {
         Ok(conn.execute("DELETE FROM messages WHERE channel_id=?1", params![channel.to_string()])?)
     }
 
-    /// Newest message timestamp per agent, counting both ends of a message.
-    ///
-    /// An agent that messaged a peer has that message filed in the *peer's*
-    /// channel, so grouping by channel alone would leave the sender looking
-    /// idle. Both endpoints are considered.
     pub fn last_activity(&self) -> Result<HashMap<AgentId, i64>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -4743,7 +3672,6 @@ impl Store {
                 Ok(id) => {
                     out.insert(id, at);
                 }
-                // A malformed id should not sink the whole sidebar ordering.
                 Err(err) => tracing::warn!(%err, id = %raw, "skipping unparseable agent id"),
             }
         }
@@ -4756,11 +3684,6 @@ impl Store {
     }
 }
 
-// ---- row mapping ---------------------------------------------------------
-
-/// Writes the row that tells the operator an agent is stuck, in the commit
-/// that raised it. Once a day: a repeat on a day that already has one adds
-/// nothing, and the first raise on a new day is one more.
 fn announce_escalation(
     tx: &rusqlite::Connection,
     id: EscalationId,
@@ -4799,16 +3722,8 @@ fn participant_from_columns(kind: &str, agent: Option<String>) -> Result<Partici
     }
 }
 
-/// Returns a nested Result so a malformed row surfaces as a domain error
-/// rather than being coerced into a rusqlite error with no context.
 pub(super) type RowResult<T> = Result<Result<T, StoreError>, rusqlite::Error>;
 
-/// Every column [`row_to_card`] reads, in the order it reads them.
-///
-/// Spelled once because the reader is indexed by position: a column added to
-/// one of the five queries that share this mapper and not the others is four
-/// reads that silently take the wrong field, which is what a card carrying
-/// somebody else's sandbox token looks like on the way out.
 const AGENT_COLUMNS: &str = "id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser,browser_consent,discarded_at,reasoning_effort,runs_errands,subscription_model";
 
 fn read_effort(
@@ -4839,8 +3754,6 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
             .map_err(|e| StoreError::Corrupt(format!("bad agent id {id_raw:?}: {e}")))?;
         let lifecycle = Lifecycle::parse(&lifecycle_raw)
             .ok_or_else(|| StoreError::Corrupt(format!("unknown lifecycle {lifecycle_raw:?}")))?;
-        // A malformed skills blob should not make the agent unloadable; the
-        // card is still usable without it.
         let skills: Vec<String> = serde_json::from_str(&skills_raw).unwrap_or_default();
 
         Ok(AgentCard {
@@ -4877,11 +3790,6 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
     })())
 }
 
-/// One attachment, out of the message that carried it.
-///
-/// The part is deserialized rather than read field by field, so the shape a
-/// message was written with is the shape it is read back with, and a part that
-/// is not a file cannot be mistaken for one.
 fn row_to_file_hit(row: &Row<'_>) -> RowResult<FileHit> {
     let id_raw: String = row.get(0)?;
     let channel_raw: String = row.get(1)?;
@@ -4967,8 +3875,6 @@ fn row_to_routine_run(row: &Row<'_>) -> RowResult<RoutineRun> {
 
     Ok((|| {
         Ok(RoutineRun {
-            // Absent on a firing that was skipped: nothing ran, so there is no
-            // run to point at.
             run_id: run_raw
                 .map(|raw| {
                     raw.parse::<RunId>()
@@ -4981,8 +3887,6 @@ fn row_to_routine_run(row: &Row<'_>) -> RowResult<RoutineRun> {
             spent: Tokens {
                 prompt: row.get::<_, i64>(3)? as u64,
                 completion: row.get::<_, i64>(4)? as u64,
-                // NULL where nothing was priced, which is not the same as free
-                // and must not be summed as zero.
                 cost: row.get::<_, Option<f64>>(5)?,
                 calls: row.get::<_, i64>(6)? as u64,
             },
@@ -4992,9 +3896,6 @@ fn row_to_routine_run(row: &Row<'_>) -> RowResult<RoutineRun> {
     })())
 }
 
-/// Every column an occasion is read back from, in the order `row_to_occasion`
-/// expects them. One string because five queries select the same eleven
-/// columns, and a list written five times is a list that disagrees with itself.
 const OCCASION_COLUMNS: &str = "SELECT id,group_id,agent_id,title,detail,place,starts_at,minutes,\
                                 all_day,created_at,updated_at FROM occasions";
 
@@ -5082,17 +3983,12 @@ fn row_to_approval(row: &Row<'_>) -> RowResult<Approval> {
             run_id: run_raw
                 .parse::<RunId>()
                 .map_err(|e| StoreError::Corrupt(format!("bad run id {run_raw:?}: {e}")))?,
-            // One column says which kind this is, because a question stores a
-            // token no protected action can be. Both halves are decoded here
-            // and nowhere else, so the shape the rest of the app sees is the
-            // enum rather than the pair of columns behind it.
             request: if action_raw == QUESTION {
                 Request::Question {
                     options: match &options_raw {
                         Some(raw) => serde_json::from_str(raw).map_err(|e| {
                             StoreError::Corrupt(format!("bad question options: {e}"))
                         })?,
-                        // A question that takes a written answer.
                         None => Vec::new(),
                     },
                 }
@@ -5104,8 +4000,6 @@ fn row_to_approval(row: &Row<'_>) -> RowResult<Approval> {
                 }
             },
             summary: row.get(5)?,
-            // The wording is what the operator reads, and a request whose
-            // fields would not parse is one nobody should be asked to answer.
             detail: serde_json::from_str(&detail_raw)
                 .map_err(|e| StoreError::Corrupt(format!("bad approval detail: {e}")))?,
             answer: row.get(11)?,
@@ -5119,8 +4013,6 @@ fn row_to_approval(row: &Row<'_>) -> RowResult<Approval> {
     })())
 }
 
-/// The column list every connector read uses, kept in one place so a new column
-/// cannot be added to one query and forgotten in the other.
 const CONNECTOR_COLUMNS: &str =
     "SELECT id,group_id,service,account,env_var,(trim(secret) <> ''),note,\
                                  created_at,updated_at, \
@@ -5128,8 +4020,6 @@ const CONNECTOR_COLUMNS: &str =
      JOIN agents a ON a.id=ca.agent_id AND a.group_id=connectors.group_id \
      WHERE ca.connector_id=connectors.id AND a.discarded_at IS NULL) FROM connectors";
 
-/// Maps the unique index on `(group_id, env_var)` onto something an operator
-/// can act on. The raw driver message names an index, not a decision.
 fn classify_connector(err: rusqlite::Error, env_var: &str) -> StoreError {
     if let rusqlite::Error::SqliteFailure(inner, _) = &err {
         if inner.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE {
@@ -5150,7 +4040,6 @@ fn write_connector_agents(
         })
         .optional()?
         .ok_or(StoreError::ConnectorNotFound(id))?;
-    // Validate all recipients before replacing any grant. The caller holds a transaction.
     for agent in agents {
         let valid: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM agents WHERE id=?1 AND group_id=?2 AND discarded_at IS NULL)",
@@ -5196,39 +4085,15 @@ fn row_to_connector(row: &Row<'_>) -> RowResult<Connector> {
     })())
 }
 
-/// What one agent gets when it names one of its crew's plugins.
-///
-/// The refusals are separate because they are read by a model mid-turn and they
-/// have different answers: one is the operator's to fix, two are a peer's to
-/// do, and one is nobody's.
 #[derive(Debug)]
 pub enum PluginReach {
-    /// No row: this crew has not connected it, and no agent can.
     NotConnected,
-    /// Connected, and this agent is not one of the ones it was connected for.
     NotChosen,
-    /// Connected, and the operator narrowed this tool to nobody. Off for the
-    /// whole crew, so there is no peer to ask.
     ToolDenied,
-    /// Connected and this agent's, but this tool was narrowed to other agents.
-    /// Somebody in the crew has it.
     ToolNotChosen,
-    /// The row, what to reach it with, and the shape the call takes.
-    ///
-    /// Boxed and named rather than four fields on the variant, because the four
-    /// travel together everywhere and because a refusal is a discriminant with
-    /// nothing on it: inline, every "not for you" would carry the width of a
-    /// grant it does not have.
     Granted(Box<Reached>),
 }
 
-/// What one agent's call on one plugin tool is allowed to use.
-///
-/// The grant is `None` for a server that authorized nobody because it asked for
-/// nothing. The headers are the operator's own and are usually empty: they are
-/// here rather than looked up separately because a call made without them does
-/// not fail at the server, it fails at whatever is in front of it, with a
-/// refusal that says nothing about MCP. The schema comes from the stored tool.
 #[derive(Debug)]
 pub struct Reached {
     pub id: PluginId,
@@ -5238,13 +4103,6 @@ pub struct Reached {
     pub schema: Option<serde_json::Value>,
 }
 
-/// One plugin, as the thing that dials it needs it.
-///
-/// Four fields because dialling a server takes four answers and three of them
-/// live nowhere else: which server it is, what to present, what to send to get
-/// past whatever is in front of it, and which identity at the account when the
-/// server is the account. A caller holding three of these would be guessing the
-/// fourth, which is the bug `AccountUse` exists to prevent one level down.
 pub struct Dialed {
     pub kind: PluginKind,
     pub grant: Option<crate::oauth::Grant>,
@@ -5256,38 +4114,11 @@ pub struct Dialed {
 const PLUGIN_COLUMNS: &str = "SELECT id,group_id,kind,account,tools,access_token,connected_at,\
      access,connection,endpoint,headers FROM plugins";
 
-/// The one rule that decides whether an agent is offered a plugin's tools and
-/// whether a call it makes may spend the grant.
-///
-/// Written once and pasted into both queries, because a turn where the two
-/// disagree is either a model calling something it was never told it had, or a
-/// model refused something it was told it had and told to try again. Named
-/// parameters rather than numbered so the fragment does not care where it lands
-/// in the statement around it.
-///
-/// The comparison is what makes it fail closed: only the literal `everyone`
-/// widens a plugin past its named agents, so a value written by a build this
-/// one has never met restricts rather than opens.
 const PLUGIN_REACHED_BY_AGENT: &str = "(plugins.access = 'everyone'
      OR EXISTS (SELECT 1 FROM plugin_agents
                  WHERE plugin_agents.plugin_id = plugins.id
                    AND plugin_agents.agent_id = :agent))";
 
-/// Whether this agent may call one named tool, given that it may call the
-/// plugin at all.
-///
-/// The narrowings are what is stored, so a tool with no row is one every agent
-/// the plugin reaches may call: a plugin nobody has narrowed offers everything
-/// it published, and so does a tool the vendor added after the operator last
-/// looked. An allow-list over tools would switch off every tool a server
-/// started publishing between one connection and the next, with nothing on
-/// screen saying a decision had been taken.
-///
-/// Inside a narrowed tool it is the other way round, and deliberately: the
-/// named agents are stored and everybody else is refused, so an agent hired
-/// next week does not inherit the one capability the operator fenced off. The
-/// same comparison against the literal `everyone` makes it fail closed, for the
-/// reason [`PLUGIN_REACHED_BY_AGENT`] does.
 const PLUGIN_TOOL_REACHED_BY_AGENT: &str = "NOT EXISTS (SELECT 1 FROM plugin_tool_access
                  WHERE plugin_tool_access.plugin_id = plugins.id
                    AND plugin_tool_access.tool = :tool
@@ -5297,11 +4128,6 @@ const PLUGIN_TOOL_REACHED_BY_AGENT: &str = "NOT EXISTS (SELECT 1 FROM plugin_too
                                       AND plugin_tool_agents.tool = :tool
                                       AND plugin_tool_agents.agent_id = :agent))";
 
-/// Whether anybody at all may call one named tool.
-///
-/// The same question with the agent taken out, and it is what separates the two
-/// tool refusals. A tool narrowed to nobody is off for the crew, and an agent
-/// told to ask a peer about one spends a turn proving that no peer has it.
 const PLUGIN_TOOL_REACHED_BY_ANYONE: &str = "NOT EXISTS (SELECT 1 FROM plugin_tool_access
                  WHERE plugin_tool_access.plugin_id = plugins.id
                    AND plugin_tool_access.tool = :tool
@@ -5310,15 +4136,6 @@ const PLUGIN_TOOL_REACHED_BY_ANYONE: &str = "NOT EXISTS (SELECT 1 FROM plugin_to
                                     WHERE plugin_tool_agents.plugin_id = plugins.id
                                       AND plugin_tool_agents.tool = :tool))";
 
-/// `None` for a row naming a plugin this build does not have, which is what a
-/// downgrade leaves behind. Corrupt rows still raise: a tool list that will not
-/// parse is a bug here, not a version skew.
-///
-/// `chosen` is the row's named agents and `narrowed` is who may call each of
-/// its tools, both read separately because both are second tables. A plugin
-/// missing from the first map is one with nobody named; a tool missing from the
-/// second is one every agent the plugin reaches may call, which is where every
-/// tool starts.
 fn row_to_plugin(
     row: &Row<'_>,
     chosen: &HashMap<PluginId, Vec<AgentId>>,
@@ -5365,9 +4182,6 @@ fn row_to_plugin(
                 .collect(),
             access: PluginAccess::from_row(&reach, chosen.get(&id).cloned().unwrap_or_default()),
             connection,
-            // Names only. The values are in the same column and stay there:
-            // this struct is what every plugin command answers with, and there
-            // is no field on it for a secret to arrive in.
             headers: Headers::decode(&headers).names(),
             signed_in: !access.is_empty(),
             connected_at: row.get(6)?,
@@ -5462,9 +4276,6 @@ pub(super) fn row_to_envelope(row: &Row<'_>) -> RowResult<Envelope> {
             trust,
             hop,
             expects_reply,
-            // Anything unrecognized reads as a courtesy, which is the same
-            // conservative default the parser uses: a stored word nobody
-            // defined must not be the one that wakes an agent to act.
             intent: Intent::parse(&intent_raw),
             cause: match cause_raw {
                 Some(raw) => Some(
@@ -5545,7 +4356,6 @@ mod tests {
         );
     }
 
-    /// A trigger on the clock, which is what most of these are about.
     fn clock(cadence: Cadence) -> Trigger {
         Trigger::Clock(cadence)
     }
@@ -5561,8 +4371,6 @@ mod tests {
         Fixture { store, _dir: dir }
     }
 
-    /// One tool on a connected plugin. What it does is never read here; what
-    /// matters is whether it is offered at all.
     fn tool(name: &str) -> PluginTool {
         PluginTool {
             name: name.into(),
@@ -5571,7 +4379,6 @@ mod tests {
         }
     }
 
-    /// A tool narrowed to nobody: what the old two-way switch called off.
     fn nobody() -> PluginAccess {
         PluginAccess::Chosen { agents: Vec::new() }
     }
@@ -5666,7 +4473,6 @@ mod tests {
             RunId::new(),
         );
         f.store.append_delivery(&original).unwrap();
-        // Another delivery in this conversation must not replace its origin.
         let mut followup = original.clone();
         followup.id = MessageId::new();
         f.store.append_delivery(&followup).unwrap();
@@ -5700,8 +4506,6 @@ mod tests {
         assert_eq!(f.store.channel_messages(agent.id, 20).unwrap().len(), 1);
     }
 
-    /// A peer-to-peer message that gives the recipient something to do, which
-    /// is the only kind `outstanding_asks` counts.
     fn work(from: AgentId, to: AgentId, text: &str) -> Envelope {
         let mut envelope = envelope(
             Participant::Agent { id: from },
@@ -5717,7 +4521,6 @@ mod tests {
         CleanGroup { name: name.into(), ..Default::default() }
     }
 
-    /// An agent in a named crew.
     fn draft_in(name: &str, group: GroupId) -> CleanDraft {
         CleanDraft { group_id: Some(group), ..draft(name) }
     }
@@ -5748,9 +4551,6 @@ mod tests {
 
     #[test]
     fn an_agent_is_made_with_neither_place_and_keeps_the_one_it_is_given() {
-        // A new agent gets nothing, including one another agent made: handing
-        // out a machine is the operator's, and a crew that could grant itself
-        // one by hiring would route around the decision entirely.
         let f = fixture();
         let card = f.store.create_agent(&draft("Talker")).unwrap();
         assert!(!card.has_computer);
@@ -5762,9 +4562,6 @@ mod tests {
         assert!(!given.has_browser, "the two are given separately or they are one switch");
         assert_eq!(given.version, card.version, "a grant is not an edit to the card");
 
-        // Taken back, and the machine underneath deliberately left where it is:
-        // the disk holds whatever the operator signed it in to, and giving the
-        // computer back has to find those sessions rather than a stranger.
         f.store.set_agent_sandbox(card.id, Some(("sb-1", "envd", "traffic"))).unwrap();
         f.store.set_has_computer(card.id, false).unwrap();
         let taken = f.store.get_agent(card.id).unwrap().unwrap();
@@ -5774,10 +4571,6 @@ mod tests {
 
     #[test]
     fn a_new_agents_browser_asks_nobody_and_the_operator_can_change_that() {
-        // Open by default, because giving an agent a browser is already the
-        // decision about what that browser is signed in to. Held back is a
-        // second decision, and it survives the browser being taken away and
-        // handed back: the operator said something about the agent.
         let f = fixture();
         let card = f.store.create_agent(&draft("Researcher")).unwrap();
         assert_eq!(card.browser_consent, Consent::Open);
@@ -5800,9 +4593,6 @@ mod tests {
 
     #[test]
     fn a_new_agent_sends_no_errands_until_the_operator_says_so() {
-        // Off at creation, including for an agent another agent made: an
-        // errand spends the model again, and a crew that could switch that on
-        // by hiring would route around the operator's decision.
         let f = fixture();
         let card = f.store.create_agent(&draft("Coordinator")).unwrap();
         assert!(!card.runs_errands);
@@ -5854,7 +4644,6 @@ mod tests {
         let json = serde_json::to_string(&stored).unwrap();
         assert!(!json.contains("hunter2"), "a secret reached the wire: {json}");
 
-        // And the value is still there, on the one path that is allowed to see it.
         let env = f.store.connector_env(agent.id).unwrap();
         assert_eq!(env.get("GITHUB_TOKEN").map(String::as_str), Some("ghp_hunter2"));
     }
@@ -5922,15 +4711,6 @@ mod tests {
         f.store.discard_agent(discarded.id, 1_000).unwrap();
         f.store.create_connector(&key_for(mine.group_id, "TOKEN", "private-token")).unwrap();
         let mut conn = f.store.conn().unwrap();
-        // Everything the migrations after 51 made, so the database is the one a
-        // version-51 install really has. Each new migration adds its undo here:
-        // 58's puts back the repository column and table it rebuilds away,
-        // 59's and 62's drop the tables they add, 64's drops the column it
-        // adds to groups, which no migration since 51 rebuilds, and 65's needs
-        // none: what it drops, 54, 59 and 62 make again on the way back up.
-        // 67 adds the workspace identity, resource ledger and resume marker.
-        // 72 adds the outcomes table and the run that filed a decision.
-        // 73 adds the outbox. 74 adds the grants and where a decision came from.
         conn.execute_batch("ALTER TABLE agents DROP COLUMN tidied_through; ALTER TABLE agents DROP COLUMN last_tidy_at; ALTER TABLE groups DROP COLUMN tidy_since; ALTER TABLE groups DROP COLUMN tidy_hour; ALTER TABLE usage DROP COLUMN cached; ALTER TABLE pending_runs DROP COLUMN started_at; DROP TABLE permission_grants; ALTER TABLE decisions DROP COLUMN origin_ref; ALTER TABLE decisions DROP COLUMN origin; DROP TABLE outbox; DROP TABLE outcomes; ALTER TABLE decisions DROP COLUMN filed_run; DROP TABLE onboarding_hires; DROP TABLE operator_sends; DROP TRIGGER routine_delete_history; DROP TABLE routine_occurrences; ALTER TABLE plugins DROP COLUMN grant_generation; DROP TABLE pending_sandbox_resume; DROP TABLE resource_ledger; DROP TABLE workspace_identity; DROP TABLE approval_policies; ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
         migrations::run(&mut conn).unwrap();
         drop(conn);
@@ -5939,8 +4719,6 @@ mod tests {
         let later = f.store.create_agent(&draft("Later")).unwrap();
         assert!(f.store.connector_env(later.id).unwrap().is_empty());
     }
-
-    // ---- the compost -----------------------------------------------------
 
     #[test]
     fn a_discarded_agent_is_terminated_and_stamped() {
@@ -5952,8 +4730,6 @@ mod tests {
         assert_eq!(gone.discarded_at, Some(1_000));
         assert!(gone.discarded(), "and findable again, which is the whole of the compost");
 
-        // Every question the rest of the store asks about a deleted agent still
-        // gets the answer it has always got.
         assert!(
             f.store.group_crew(agent.group_id).unwrap().is_empty(),
             "a composted agent must not be handed to a disband"
@@ -5962,9 +4738,6 @@ mod tests {
 
     #[test]
     fn a_discarded_agent_keeps_the_name_out_of_the_way() {
-        // The partial index covers live rows only, so throwing an agent out
-        // frees its name at once. That is what lets the crew hire a
-        // replacement, and it is why a restore has to settle the name again.
         let f = fixture();
         let agent = f.store.create_agent(&draft("Researcher")).unwrap();
         f.store.discard_agent(agent.id, 1).unwrap();
@@ -5975,10 +4748,6 @@ mod tests {
 
     #[test]
     fn discarding_twice_does_not_buy_another_thirty_days() {
-        // A second click on a delete button, or a restore raced from another
-        // window. Re-stamping would restart a wait most of the way through, and
-        // the operator would find an agent they thought they had finished with
-        // back at the top of a list they had just emptied.
         let f = fixture();
         let agent = f.store.create_agent(&draft("Researcher")).unwrap();
         f.store.discard_agent(agent.id, 1_000).unwrap();
@@ -5990,9 +4759,6 @@ mod tests {
 
     #[test]
     fn a_restore_brings_an_agent_back_paused_and_unstamped() {
-        // Paused, not active: an agent restored three weeks on comes back to a
-        // schedule that has been coming due without it, and starting it is the
-        // operator's decision rather than a side effect of undoing a delete.
         let f = fixture();
         let agent = f.store.create_agent(&draft("Researcher")).unwrap();
         f.store.discard_agent(agent.id, 1).unwrap();
@@ -6010,9 +4776,6 @@ mod tests {
 
     #[test]
     fn a_restore_can_take_a_name_that_was_given_away() {
-        // The name was freed the moment the agent was thrown out, so the crew
-        // may be holding it. The caller settles it; what this asserts is that
-        // the store takes the settled one rather than refusing the restore.
         let f = fixture();
         let agent = f.store.create_agent(&draft("Researcher")).unwrap();
         f.store.discard_agent(agent.id, 1).unwrap();
@@ -6024,9 +4787,6 @@ mod tests {
 
     #[test]
     fn a_restore_is_refused_for_an_agent_whose_wait_is_over() {
-        // Two rows with no stamp on them: one nobody deleted, and one whose
-        // memory, schedule and machines are already gone. Neither has anything
-        // to bring back, so both are refused by the same clause.
         let f = fixture();
         let live = f.store.create_agent(&draft("Researcher")).unwrap();
         let spent = f.store.create_agent(&draft("Scribe")).unwrap();
@@ -6079,16 +4839,11 @@ mod tests {
             f.store.expired_discards(500).unwrap().into_iter().map(|c| c.name).collect();
         assert_eq!(expired, vec!["Scribe"]);
 
-        // The boundary is inclusive, or an agent stamped exactly on the cutoff
-        // waits another whole pass for no reason anybody could explain.
         assert_eq!(f.store.expired_discards(900).unwrap().len(), 2);
     }
 
     #[test]
     fn a_discarded_agent_keeps_everything_a_restore_has_to_find() {
-        // The whole argument for the compost. Deleting used to take all of this
-        // on the click; now it is what waits, and a restore that came back with
-        // an agent that had forgotten its work would not be worth offering.
         let f = fixture();
         let agent = f.store.create_agent(&draft("Researcher")).unwrap();
         f.store.append_working_note(agent.id, "waiting on the vendor", 5).unwrap();
@@ -6134,8 +4889,6 @@ mod tests {
 
     #[test]
     fn a_deleted_group_takes_its_credentials_with_it() {
-        // Not tidiness: connectors carry a foreign key to the group, so leaving
-        // them makes the delete fail outright.
         let f = fixture();
         let group = f.store.create_group(&group_named("Research")).unwrap();
         f.store.create_connector(&key_for(group.id, "TOKEN", "a")).unwrap();
@@ -6146,9 +4899,6 @@ mod tests {
 
     #[test]
     fn a_scan_replaces_what_a_machine_was_signed_in_to() {
-        // A cache of something that lives on the machine, so a logout has to
-        // remove the row. Left behind, the crew keeps routing work to an agent
-        // that will hit a login wall.
         let f = fixture();
         let agent = f.store.create_agent(&draft("Researcher")).unwrap();
 
@@ -6164,7 +4914,6 @@ mod tests {
             .unwrap();
         assert_eq!(f.store.agent_signins(agent.id).unwrap().len(), 2);
 
-        // Logged out of GitHub; the next scan only sees LinkedIn.
         let after = f
             .store
             .replace_signins(
@@ -6179,8 +4928,6 @@ mod tests {
 
     #[test]
     fn rescanning_keeps_how_long_a_session_has_been_there() {
-        // "Signed in since Tuesday" has to survive a scan, or every refresh
-        // makes every session look brand new.
         let f = fixture();
         let agent = f.store.create_agent(&draft("Researcher")).unwrap();
 
@@ -6251,7 +4998,6 @@ mod tests {
     #[test]
     fn every_pooled_connection_comes_up_configured() {
         let f = fixture();
-        // Hold them all at once so the pool is forced to open its full size.
         let conns: Vec<_> = (0..8).map(|_| f.store.conn().unwrap()).collect();
         for conn in &conns {
             let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0)).unwrap();
@@ -6344,9 +5090,6 @@ mod tests {
 
     #[test]
     fn a_group_emptied_by_deleting_its_agents_can_then_be_deleted() {
-        // The bug this covers: deleting every agent in a group left it
-        // reporting three agents and refusing to go, because the rows are kept
-        // for their transcripts and were still being counted.
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("guac.db")).unwrap();
 
@@ -6368,7 +5111,6 @@ mod tests {
         );
         store.delete_group(group.id).expect("an emptied group must be deletable");
 
-        // Their transcripts still have to render, so they keep a group.
         let orphans: Vec<_> =
             store.list_agents().unwrap().into_iter().filter(|c| c.group_id == group.id).collect();
         assert!(orphans.is_empty(), "no agent may point at a group that is gone");
@@ -6399,10 +5141,6 @@ mod tests {
 
     #[test]
     fn usage_is_written_and_summed_against_the_real_schema() {
-        // The bug this covers: every query here was written against a table
-        // that a later edit was supposed to have given a `cost` column, and
-        // nothing in the suite ever ran one of them. The app compiled, shipped
-        // and failed on the first group that had spent anything.
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
         let run = RunId::new();
@@ -6419,7 +5157,6 @@ mod tests {
                 cost: Some(0.25),
             })
             .unwrap();
-        // A local server prices nothing, and that is not the same as free.
         f.store
             .record_usage(&UsageEntry {
                 agent_id: card.id,
@@ -6443,15 +5180,11 @@ mod tests {
         let by_run = f.store.usage_by_run(&[run]).unwrap();
         assert_eq!(by_run.get(&run).unwrap().total(), 1215);
 
-        // Asking about nothing is not an error, and must not build a query
-        // with an empty IN list.
         assert!(f.store.usage_by_run(&[]).unwrap().is_empty());
     }
 
     #[test]
     fn editing_a_routine_leaves_its_next_firing_alone_unless_asked() {
-        // Correcting a typo in what a routine says must not silently reset the
-        // schedule it is keeping.
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
         let made = f
@@ -6482,8 +5215,6 @@ mod tests {
         assert_eq!(fixed.trigger, clock(Cadence::Every(3600)));
         assert_eq!(fixed.name, "Listings sweep");
 
-        // And a routine that is gone is a clear error rather than a silent
-        // success, so an operator editing a stale screen is told.
         f.store.delete_routine(made.id).unwrap();
         assert!(matches!(
             f.store.update_routine(made.id, "", "anything", clock(Cadence::Once), Some(1), false),
@@ -6491,7 +5222,6 @@ mod tests {
         ));
     }
 
-    /// The arrangement, read back the way the rail reads it.
     fn arrangement(f: &Fixture) -> Vec<(String, i32)> {
         let mut agents: Vec<_> = f
             .store
@@ -6507,9 +5237,6 @@ mod tests {
 
     #[test]
     fn agents_arrive_at_the_bottom_of_the_rail_in_the_order_they_were_made() {
-        // The rail used to float whoever spoke last, so where a new agent
-        // landed did not matter. It does now: an agent that arrived in the
-        // middle of an arrangement would look like the arrangement moved.
         let f = fixture();
         for name in ["First", "Second", "Third"] {
             f.store.create_agent(&draft(name)).unwrap();
@@ -6533,14 +5260,10 @@ mod tests {
             vec!["Third", "First", "Second"]
         );
 
-        // Where a row is drawn, and nothing a peer reads. Same reasoning as a
-        // pin: bumping the version would tell every peer the card was rewritten.
         assert_eq!(moved.version, c.version, "a move is not an edit");
         assert_eq!(moved.updated_at, c.updated_at);
         assert_eq!(moved.rail_order, 0);
 
-        // Densely renumbered, so the next drop has a whole position to land in
-        // rather than a gap that can run out.
         assert_eq!(
             arrangement(&f).into_iter().map(|(_, order)| order).collect::<Vec<_>>(),
             vec![0, 1, 2]
@@ -6549,9 +5272,6 @@ mod tests {
 
     #[test]
     fn a_move_with_nothing_to_land_in_front_of_goes_to_the_end_of_that_group() {
-        // Not the end of the rail. One sequence covers every group, so
-        // appending past the last row would file the agent below crews it is
-        // not in and the rail would draw it under their heading.
         let f = fixture();
         let research = f.store.create_group(&group_named("Research")).unwrap();
 
@@ -6561,8 +5281,6 @@ mod tests {
         f.store.create_agent(&second).unwrap();
         let cook = f.store.create_agent(&draft("Cook")).unwrap();
 
-        // Everyone in the default group, then Research, then Cook back in the
-        // default one: the arrangement interleaves groups until someone moves.
         let moved = f.store.move_agent(cook.id, research.id, None).unwrap();
         assert_eq!(moved.group_id, research.id, "one call moved it and placed it");
         assert_eq!(
@@ -6570,8 +5288,6 @@ mod tests {
             vec!["Scout", "Reader", "Cook"]
         );
 
-        // And landing in front of a row in another group ignores the anchor
-        // rather than dragging the agent somewhere it was not dropped.
         f.store.move_agent(cook.id, research.id, Some(scout.id)).unwrap();
         assert_eq!(
             f.store.get_agent(cook.id).unwrap().unwrap().group_id,
@@ -6586,9 +5302,6 @@ mod tests {
 
     #[test]
     fn a_row_dropped_on_itself_stays_where_it_is() {
-        // The fallback for an anchor that is not in the group is the end of it,
-        // so a null gesture that reached this far would move the row to the
-        // bottom of the rail: the one outcome the operator did not ask for.
         let f = fixture();
         f.store.create_agent(&draft("First")).unwrap();
         let middle = f.store.create_agent(&draft("Middle")).unwrap();
@@ -6603,9 +5316,6 @@ mod tests {
 
     #[test]
     fn a_move_leaves_terminated_agents_out_of_the_numbering() {
-        // A terminated agent is not in the rail, so a position spent on it is a
-        // position the operator cannot drop into, and renumbering one would move
-        // a row in an old transcript's sidebar order for no reason.
         let f = fixture();
         let gone = f.store.create_agent(&draft("Gone")).unwrap();
         let here = f.store.create_agent(&draft("Here")).unwrap();
@@ -6632,7 +5342,6 @@ mod tests {
         ));
     }
 
-    /// The crews, by name, in the order every list of them is drawn.
     fn column(f: &Fixture) -> Vec<String> {
         f.store.list_groups().unwrap().into_iter().map(|g| g.name).collect()
     }
@@ -6650,8 +5359,6 @@ mod tests {
 
     #[test]
     fn a_crew_dropped_on_itself_stays_where_it_is() {
-        // The fallback for an anchor that is not there is the end, so a null
-        // gesture that reached it would send the crew to the bottom.
         let f = fixture();
         let research = f.store.create_group(&group_named("Research")).unwrap();
         f.store.create_group(&group_named("Kitchen")).unwrap();
@@ -6670,8 +5377,6 @@ mod tests {
         f.store.move_group(default_group_id(), None).unwrap();
         assert_eq!(column(&f), vec!["Research", "Kitchen", "Everyone"]);
 
-        // An anchor deleted since the operator saw it loses the place and
-        // keeps the move, which is the half of the gesture that still applies.
         f.store.delete_group(kitchen.id).unwrap();
         f.store.move_group(research.id, Some(kitchen.id)).unwrap();
         assert_eq!(column(&f), vec!["Everyone", "Research"]);
@@ -6691,7 +5396,6 @@ mod tests {
         );
         assert_eq!(column(&f), vec!["Kitchen", "Everyone", "Research"]);
 
-        // Densely renumbered, so the next drop has a whole place to land in.
         let conn = f.store.conn().unwrap();
         let slots: Vec<i32> = conn
             .prepare("SELECT rail_order FROM groups ORDER BY rail_order")
@@ -6705,9 +5409,6 @@ mod tests {
 
     #[test]
     fn crews_arrive_at_the_bottom_of_the_column_whatever_was_arranged_above_them() {
-        // Created at the bottom rather than by timestamp: a new crew that
-        // landed among circles the operator had arranged would look like the
-        // arrangement moved.
         let f = fixture();
         let research = f.store.create_group(&group_named("Research")).unwrap();
         f.store.move_group(research.id, Some(default_group_id())).unwrap();
@@ -6717,9 +5418,6 @@ mod tests {
 
     #[test]
     fn an_agent_nobody_placed_joins_the_crew_at_the_top_of_the_column() {
-        // The fallback is the first crew in the list, as it always was. That
-        // used to mean the oldest, and now means the one the operator put
-        // first, which is also the one they can see.
         let f = fixture();
         let research = f.store.create_group(&group_named("Research")).unwrap();
         f.store.move_group(research.id, Some(default_group_id())).unwrap();
@@ -6730,9 +5428,6 @@ mod tests {
 
     #[test]
     fn pinning_moves_a_row_on_screen_and_nothing_a_peer_can_see() {
-        // The version is how a peer notices a card changed under it. Where the
-        // operator likes the row drawn is not a change to the card, and
-        // bumping it would say a card was rewritten when it was not.
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
         assert!(!card.pinned, "nothing arrives pinned");
@@ -6748,8 +5443,6 @@ mod tests {
 
     #[test]
     fn a_calendar_trigger_survives_the_round_trip_through_the_database() {
-        // The column is text, so a trigger that stored as something nothing can
-        // parse would be a schedule that silently never fires again.
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
         for cadence in
@@ -6767,8 +5460,6 @@ mod tests {
 
     #[test]
     fn a_weekday_routine_that_fires_advances_to_the_next_weekday_not_the_next_day() {
-        // `routine_ran` is the only thing that moves a schedule forward, and it
-        // used to add a fixed gap. A Friday routine has to land on Monday.
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
         let friday = friday_at_nine();
@@ -6788,8 +5479,6 @@ mod tests {
 
     #[test]
     fn a_routine_that_is_switched_off_is_not_due_and_keeps_everything_else() {
-        // Deleting was the only way to stop something, which threw away the
-        // wording and the history along with the schedule.
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
         let made = f
@@ -6812,8 +5501,6 @@ mod tests {
         assert_eq!(off.next_run_at, made.next_run_at, "and its slot did not move");
         assert_eq!(off.what, made.what);
 
-        // Back on, still holding the slot it was holding. The scheduler fires
-        // an overdue slot once, which is what "resume" has to mean.
         let on = f.store.set_routine_active(made.id, true).unwrap();
         assert_eq!(on.next_run_at, made.next_run_at);
         assert_eq!(f.store.due_routines(2_000).unwrap().len(), 1);
@@ -6821,8 +5508,6 @@ mod tests {
 
     #[test]
     fn upcoming_runs_leave_out_a_routine_that_is_switched_off() {
-        // A switched-off routine keeps its slot so it can resume, and that slot
-        // is not a firing anyone should be shown as coming.
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
         let off = f
@@ -6836,7 +5521,6 @@ mod tests {
 
     #[test]
     fn upcoming_runs_leave_out_a_routine_waiting_on_an_event() {
-        // An event routine holds no slot, so there is no moment to place it at.
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
         let paid = Trigger::parse("event:stripe/invoice.paid").unwrap();
@@ -6847,8 +5531,6 @@ mod tests {
 
     #[test]
     fn upcoming_runs_leave_out_the_routines_of_a_deleted_agent() {
-        // A deleted agent's rows wait out the compost with it, slots included,
-        // and nothing will fire them while it is there.
         let f = fixture();
         let gone = f.store.create_agent(&draft("Gone")).unwrap();
         f.store
@@ -6861,8 +5543,6 @@ mod tests {
 
     #[test]
     fn upcoming_runs_stop_at_the_moment_asked_for() {
-        // The window asks for a span it can draw; a firing past its edge is
-        // not one it has room for.
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
         let at_edge = f
@@ -6880,8 +5560,6 @@ mod tests {
 
     #[test]
     fn upcoming_runs_come_soonest_first_across_agents_then_by_name() {
-        // One timeline for everyone: a routine is placed by its moment, not by
-        // which agent holds it or when it was written.
         let f = fixture();
         let scout = f.store.create_agent(&draft("Scout")).unwrap();
         let clerk = f.store.create_agent(&draft("Clerk")).unwrap();
@@ -6912,8 +5590,6 @@ mod tests {
 
     #[test]
     fn a_history_says_which_firings_were_tests() {
-        // "Did it run on Tuesday" has no answer if a button press and a real
-        // firing look the same in the list.
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
         let made = f
@@ -6935,11 +5611,6 @@ mod tests {
 
     #[test]
     fn a_skipped_firing_is_in_the_history_with_no_run_behind_it() {
-        // The alternative to recording it is a gap, and a gap in this list is
-        // also what a scheduler that has stopped working looks like. What it
-        // must not do is invent a run: that reads back identically to a
-        // delivery that spent nothing, which is the one thing this history is
-        // for telling apart.
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
         let made = f
@@ -6959,9 +5630,6 @@ mod tests {
 
     #[test]
     fn skipping_a_firing_is_kept_on_the_routine_through_an_edit() {
-        // Set by an operator in the panel or by an agent through `schedule`,
-        // and read on every sweep. A row that lost it on an unrelated edit is a
-        // routine that quietly starts stacking again.
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
         let made = f
@@ -6996,8 +5664,6 @@ mod tests {
 
     #[test]
     fn deleting_a_routine_takes_its_history_with_it() {
-        // Rows pointing at a routine that no longer exists are rows nothing can
-        // ever draw, and the id is free to be reused.
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
         let made = f
@@ -7012,10 +5678,6 @@ mod tests {
 
     #[test]
     fn a_routine_waiting_on_an_event_is_never_due_and_survives_firing() {
-        // The scheduler asks one question: what is due. A trigger that is not a
-        // clock has to answer "not me" without the query knowing it exists, and
-        // it must not be deleted like a one-shot when it does fire: it fires
-        // every time its event happens.
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
         let trigger = Trigger::Event(EventTrigger {
@@ -7033,7 +5695,6 @@ mod tests {
             "and no moment, however far ahead, makes it due"
         );
 
-        // Fired anyway, which today is the operator pressing Test run.
         f.store.routine_ran(&made, 5_000).unwrap();
         let after = f.store.get_routine(made.id).unwrap().unwrap();
         assert_eq!(after.trigger, trigger, "the trigger survives the round trip");
@@ -7043,18 +5704,10 @@ mod tests {
 
     #[test]
     fn an_event_finds_every_live_routine_standing_on_it_and_nothing_else() {
-        // The receiver's one query. Matched on the canonical stored text, so a
-        // post to `Stripe/invoice.paid` reaches a routine set as `stripe`; and
-        // guarded the way the clock's sweep is, so a routine switched off or
-        // belonging to an agent that cannot act is not fired into nothing on
-        // every event.
         let f = fixture();
         let scout = f.store.create_agent(&draft("Scout")).unwrap();
         let clerk = f.store.create_agent(&draft("Clerk")).unwrap();
         let paused = f.store.create_agent(&draft("Paused")).unwrap();
-        // Through the parser, which is the only way a trigger arrives from
-        // the panel and where the service is lowered: constructed by hand, a
-        // capital would be stored as typed and never match.
         let paid =
             |service: &str| Trigger::parse(&format!("event:{service}/invoice.paid")).unwrap();
 
@@ -7094,8 +5747,6 @@ mod tests {
 
     #[test]
     fn a_schedule_lists_what_is_due_soonest_and_what_is_waiting_last() {
-        // NULL sorts first in SQLite, so the panel drew a routine waiting on an
-        // event above one firing in ten minutes.
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
         f.store
@@ -7122,9 +5773,6 @@ mod tests {
 
     #[test]
     fn a_firing_reports_what_it_spent_and_a_firing_that_did_nothing_says_so() {
-        // The history's job is "has this been working". A delivery that bought
-        // no model call is a routine that did not run, and the row is otherwise
-        // identical to one that did.
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
         let made = f
@@ -7173,7 +5821,6 @@ mod tests {
         assert!(f.store.get_routine(made.id).unwrap().is_none());
     }
 
-    /// 2025-01-03 at nine in the morning, wherever this is running.
     fn friday_at_nine() -> i64 {
         use chrono::{Local, NaiveDate, TimeZone};
         let naive = NaiveDate::from_ymd_opt(2025, 1, 3)
@@ -7206,8 +5853,6 @@ mod tests {
         f.store.append_working_note(scholar.id, "waiting on the listings", 1_000).unwrap();
         f.store.append_working_note(bystander.id, "waiting on Robert", 1_000).unwrap();
 
-        // A deleted agent's transcript is part of what the group said, so it
-        // goes too: leaving it behind is what "start fresh" is not.
         f.store.set_lifecycle(scholar.id, Lifecycle::Terminated).unwrap();
 
         f.store
@@ -7251,8 +5896,6 @@ mod tests {
             !f.store.usage_by_group().unwrap().contains_key(&other.id),
             "a reset group has spent nothing, or the meter keeps counting what is gone"
         );
-        // A deleted agent is still one of the group's, so a reset takes its
-        // transcript too rather than leaving half of one behind.
         assert!(f.store.group_agent_ids(other.id).unwrap().contains(&scholar.id));
         assert!(f.store.channel_messages(scholar.id, 50).unwrap().is_empty());
         assert_eq!(
@@ -7264,10 +5907,6 @@ mod tests {
 
     #[test]
     fn a_disband_is_told_the_group_cannot_go_before_it_takes_anything() {
-        // The failure path this covers: a disband kills every computer and
-        // browser in a crew and only then asks whether the group itself may be
-        // deleted. The last group may not, and the operator would be left with
-        // the machines gone, the agents gone and the group still there.
         let f = fixture();
         let default = default_group_id();
         let mut d = draft("Resident");
@@ -7279,8 +5918,6 @@ mod tests {
             Err(StoreError::CannotDeleteLastGroup)
         ));
 
-        // The same question answered for a group that can go, while it is still
-        // full: the check is about the group, not about whether it is empty.
         let group = f
             .store
             .create_group(&CleanGroup { name: "Research".into(), ..Default::default() })
@@ -7298,9 +5935,6 @@ mod tests {
 
     #[test]
     fn a_disband_takes_the_live_crew_and_not_the_agents_already_deleted() {
-        // A terminated agent's sandbox is already destroyed and its memory is
-        // already gone. Handing one back would make a disband try to kill a
-        // machine that is not there and show the operator that failure.
         let f = fixture();
         let group = f
             .store
@@ -7316,15 +5950,12 @@ mod tests {
         let gone = f.store.create_agent(&gone).unwrap();
         f.store.set_lifecycle(gone.id, Lifecycle::Terminated).unwrap();
 
-        // And somebody in another crew, who a disband must never reach.
         let bystander = f.store.create_agent(&draft("Bystander")).unwrap();
 
         let crew = f.store.group_crew(group.id).unwrap();
         assert_eq!(crew.iter().map(|c| c.id).collect::<Vec<_>>(), vec![live.id]);
         assert!(!crew.iter().any(|c| c.id == bystander.id));
 
-        // What the command does after retiring them, which is the reason the
-        // count above has to be right: the group is empty and goes.
         f.store.set_lifecycle(live.id, Lifecycle::Terminated).unwrap();
         assert!(f.store.group_crew(group.id).unwrap().is_empty());
         f.store.delete_group(group.id).expect("a disbanded group must be deletable");
@@ -7423,8 +6054,6 @@ mod tests {
         assert_eq!(group.limits.max_steps_per_run, Some(9));
         assert_eq!(group.limits.max_hops, None, "an unset limit inherits");
 
-        // The card the UI sees says a key is set and nothing more, and the
-        // runtime's read is the only place the value exists.
         assert!(group.api_key_set);
         assert_eq!(group.api_key_hint, "...9999");
         let json = serde_json::to_string(&group).unwrap();
@@ -7438,8 +6067,6 @@ mod tests {
 
     #[test]
     fn an_absent_block_leaves_that_half_of_a_groups_settings_alone() {
-        // What lets the editor save a name without holding the key, and what
-        // stops a caller that knows nothing about limits from clearing them.
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("guac.db")).unwrap();
 
@@ -7505,9 +6132,6 @@ mod tests {
 
     #[test]
     fn a_provider_written_by_a_newer_build_reads_as_inherit() {
-        // A group whose provider nothing here recognizes has to keep working on
-        // the app settings. Refusing to read the row would take a whole crew
-        // offline over a column this build has never heard of.
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("guac.db")).unwrap();
         let group = store.create_group(&group_named("Future")).unwrap();
@@ -7526,10 +6150,6 @@ mod tests {
 
     #[test]
     fn opening_the_same_database_concurrently_does_not_fail() {
-        // Regression: journal_mode is a file-level setting behind an exclusive
-        // lock. When several connections raced to set it, the losers failed
-        // outright rather than waiting, because SQLite reports a shared vs
-        // exclusive conflict inside one process as a deadlock.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("guac.db");
 
@@ -7595,7 +6215,6 @@ mod tests {
         let names: Vec<&str> = cards.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["Manager", "Researcher", "Critic"], "order is the order asked for");
         assert_eq!(f.store.list_agents().unwrap().len(), 3);
-        // Every one is a real card, not a half-written row.
         for card in &cards {
             assert_eq!(f.store.get_agent(card.id).unwrap().as_ref(), Some(card));
         }
@@ -7603,10 +6222,6 @@ mod tests {
 
     #[test]
     fn a_hired_crew_lands_at_the_bottom_of_the_rail_in_the_order_it_was_picked() {
-        // The rail is an arrangement the operator made by hand, so a crew has
-        // to arrive under it rather than inside it, and every hire needs its own
-        // slot. Asking for the bottom once per agent would hand the whole batch
-        // the same answer, because none of them is written until the commit.
         let f = fixture();
         let first = f.store.create_agent(&draft("Chief of Staff")).unwrap();
         let second = f.store.create_agent(&draft("Executive Assistant")).unwrap();
@@ -7623,7 +6238,6 @@ mod tests {
         );
         assert!(slots.iter().all(|slot| *slot > first.rail_order));
 
-        // And the rail agrees: `list_agents` reads back in the arrangement.
         let order: Vec<String> =
             f.store.list_agents().unwrap().into_iter().map(|c| c.name).collect();
         assert_eq!(
@@ -7634,9 +6248,6 @@ mod tests {
 
     #[test]
     fn a_crew_that_cannot_be_written_in_full_is_not_written_at_all() {
-        // The realistic failure: a name taken between the check and the write.
-        // Three agents landing plus an error about a fourth is a workspace the
-        // operator did not ask for and no list of what arrived.
         let f = fixture();
         f.store.create_agent(&draft("Critic")).unwrap();
 
@@ -7724,10 +6335,6 @@ mod tests {
 
     #[test]
     fn agents_created_in_the_same_millisecond_keep_their_creation_order() {
-        // `created_at` is not a total order at millisecond resolution, and
-        // falling back to the id sorts by random UUID. Ordering by rowid gives
-        // exact insertion order, which is what the sidebar has to show. Rows are
-        // never hard-deleted, so rowids are never reused.
         let f = fixture();
         for name in ["A", "B", "C", "D", "E"] {
             f.store.create_agent(&draft(name)).unwrap();
@@ -7736,7 +6343,6 @@ mod tests {
             f.store.list_agents().unwrap().iter().map(|c| c.name.clone()).collect();
         assert_eq!(names, vec!["A", "B", "C", "D", "E"]);
 
-        // And it must not drift between reads.
         let first = f.store.list_agents().unwrap();
         for _ in 0..5 {
             assert_eq!(f.store.list_agents().unwrap(), first, "ordering must be deterministic");
@@ -7772,10 +6378,6 @@ mod tests {
 
     #[test]
     fn only_the_agent_the_operator_wrote_to_counts_as_addressed_on_that_run() {
-        // What tells a manager's report from a worker's commentary, and it is
-        // per run in both directions: the agent the operator wrote to is the
-        // one they are waiting on, and the crew it then delegates to is not,
-        // however much traffic passes through them.
         let f = fixture();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         let chef = f.store.create_agent(&draft("Chef")).unwrap();
@@ -7791,8 +6393,6 @@ mod tests {
             "the operator never wrote to Chef; Manager did, on their behalf"
         );
 
-        // And it does not carry: the operator's next message is a new run, and
-        // a manager that is only a peer's peer there is not owed a report.
         let later = RunId::new();
         f.store.append(&envelope(Participant::Human, agent(chef.id), "directly", later)).unwrap();
         assert!(f.store.operator_addressed(later, chef.id).unwrap());
@@ -7861,10 +6461,6 @@ mod tests {
 
     #[test]
     fn a_turn_that_called_a_tool_leaves_the_history_window_to_messages() {
-        // A working agent's channel: the operator asks, the agent notes where
-        // it is, the agent answers. The note is filed as an activity record the
-        // prompt draws as nothing, and while every row took a place, thirteen
-        // of the forty went to records and the agent was shown 27 messages.
         let f = fixture();
         let writer = f.store.create_agent(&draft("Writer")).unwrap().id;
         let me = Participant::Agent { id: writer };
@@ -7898,10 +6494,6 @@ mod tests {
 
     #[test]
     fn what_the_history_window_leaves_out_is_what_the_prompt_would_not_draw() {
-        // `SHOWN` is the prompt's test for an empty message restated in SQL,
-        // and the two must agree. One that skips a row the prompt would draw
-        // takes a message away from the agent; one that keeps a row the prompt
-        // would not draw gives its place to a blank.
         use crate::domain::decision::DecisionRequest;
         use crate::domain::ids::{DecisionId, RoutineId};
 
@@ -7990,7 +6582,6 @@ mod tests {
         }
     }
 
-    /// An agent in a group of its own that tidies memory overnight at three.
     fn tidying(f: &Fixture, name: &str) -> AgentCard {
         let group = f
             .store
@@ -8003,7 +6594,6 @@ mod tests {
         f.store.create_agent(&CleanDraft { group_id: Some(group.id), ..draft(name) }).unwrap()
     }
 
-    /// A run of the agent's that finished at a given moment, as a settle files it.
     fn ended(f: &Fixture, agent: &AgentCard, headline: &str, status: &str, at: i64) {
         f.store
             .conn()
@@ -8024,13 +6614,10 @@ mod tests {
             .unwrap();
     }
 
-    /// The strike of the tidy hour some nights after a moment.
     fn night(after: i64, nights: i64) -> i64 {
         crate::domain::group::Tidy::last_struck(3, after + nights * 86_400_000).unwrap()
     }
 
-    /// Hands the agent the tidy for the night struck at that moment, a minute
-    /// after it, and says which lines it was handed.
     fn claim(f: &Fixture, agent: &AgentCard, struck: i64) -> Option<Vec<String>> {
         f.store
             .claim_tidy(agent.id, struck, struck + 60_000, |lines| {
@@ -8090,7 +6677,6 @@ mod tests {
         let first = night(start, 1);
 
         assert_eq!(claim(&f, &me, first), None, "nothing finished since the switch");
-        // Finished later that same morning: the next night's, not a tidy at ten.
         ended(&f, &me, "late", "done", first + 7 * 3_600_000);
         assert_eq!(claim(&f, &me, first), None);
         let second = night(start, 2);
@@ -8106,7 +6692,6 @@ mod tests {
         ended(&f, &me, "first week", "done", start + 1_000);
 
         assert_eq!(claim(&f, &me, night(start, 1)), Some(vec!["first week".to_string()]));
-        // Never finished, so the lines it was handed are handed again.
         assert_eq!(claim(&f, &me, night(start, 2)), Some(vec!["first week".to_string()]));
         f.store.tidied(me.id).unwrap();
         assert_eq!(claim(&f, &me, night(start, 3)), None, "read, and nothing since");
@@ -8144,15 +6729,12 @@ mod tests {
         assert_eq!(switch(false).tidy, crate::domain::group::Tidy { on: false, hour: 5 });
         assert!(f.store.tidy_due().unwrap().is_empty());
         assert_eq!(claim(&f, &me, night(start, 1)), None);
-        // Untouched by an edit that does not mention it.
         let renamed = f
             .store
             .update_group(group.id, &CleanGroup { name: "Renamed".into(), ..Default::default() })
             .unwrap();
         assert_eq!(renamed.tidy, crate::domain::group::Tidy { on: false, hour: 5 });
 
-        // Back on, it counts from now: what finished while it was off is not
-        // a backlog the first night has to read.
         let back_on = crate::domain::now_ms();
         switch(true);
         let due = f.store.tidy_due().unwrap();
@@ -8213,8 +6795,6 @@ mod tests {
         let run = RunId::new();
         let agent = |id| Participant::Agent { id };
 
-        // Explicit timestamps: these are written in the same millisecond, and
-        // the tie-break is by id, which is a random UUID.
         let mut at = 1_000;
         let mut send = |from, to, text: &str| {
             let mut e = envelope(from, to, text, run);
@@ -8225,7 +6805,6 @@ mod tests {
         send(Participant::Human, agent(a.id), "you asked");
         send(agent(a.id), agent(b.id), "peer msg");
         send(agent(b.id), Participant::Human, "answer");
-        // An agent's own activity record is not a message between participants.
         send(agent(a.id), Participant::System, "tool trail");
 
         let flow: Vec<String> = f
@@ -8239,10 +6818,6 @@ mod tests {
         assert!(b.group_id == a.group_id, "both land in the default group");
     }
 
-    /// The board is drawn in one crew's settings, so it must hold one crew's
-    /// traffic. Scoped after the read instead, a busy crew filling the newest
-    /// four hundred messages would hand the quiet crew beside it an empty
-    /// board, which reads as a crew that has never spoken.
     #[test]
     fn the_flow_is_one_crew_and_not_the_workspace() {
         let f = fixture();
@@ -8293,9 +6868,6 @@ mod tests {
         assert_eq!(flow, vec!["m0", "m1", "m2", "m3", "m4"]);
     }
 
-    // ---- search ----------------------------------------------------------
-
-    /// A workspace with something of every searchable kind in it.
     struct Searchable {
         f: Fixture,
         writer: AgentId,
@@ -8397,9 +6969,6 @@ mod tests {
 
     #[test]
     fn a_json_key_is_not_a_word_anybody_wrote() {
-        // `parts` is stored as JSON, so a substring search over the blob also
-        // matches its keys. Every row has "text", "type" and "name" in it, and
-        // searching for any of them used to return the whole transcript.
         let s = searchable();
         for key in ["text", "type", "name", "digest", "mime"] {
             let hits = s.f.store.search(key, 20).unwrap();
@@ -8415,8 +6984,6 @@ mod tests {
     fn matching_ignores_case_and_a_wildcard_is_a_character() {
         let s = searchable();
         assert_eq!(s.f.store.search("QUARTERLY", 20).unwrap().messages.len(), 1);
-        // Unescaped this is `%%%`, which matches every row and reports the
-        // whole database as a hit for a query nothing contains.
         assert!(s.f.store.search("%", 20).unwrap().messages.is_empty());
         assert!(s.f.store.search("_", 20).unwrap().messages.is_empty());
     }
@@ -8425,9 +6992,6 @@ mod tests {
     fn a_file_is_found_by_name_and_appears_once_however_often_it_was_sent() {
         let s = searchable();
         let run = RunId::new();
-        // The same document again, to a second agent. Content addressing means
-        // this is one file, so a result list showing it twice is showing the
-        // same row twice.
         let other = s.f.store.create_agent(&draft("Critic")).unwrap();
         let mut again = envelope(Participant::Human, Participant::Agent { id: other.id }, "", run);
         again.parts = vec![Part::File(Attachment {
@@ -8451,8 +7015,6 @@ mod tests {
         let s = searchable();
         let hits = s.f.store.search("budget", 20).unwrap();
         let urls: Vec<&str> = hits.links.iter().map(|l| l.url.as_str()).collect();
-        // The other URL is in a message that matched, which is not the same as
-        // the URL matching: a message can mention a subject and link elsewhere.
         assert_eq!(urls, vec!["https://example.com/budget-q3"]);
         assert_eq!(hits.links[0].channel_id, s.writer);
     }
@@ -8464,8 +7026,6 @@ mod tests {
         assert_eq!(hits.routines.len(), 1);
         assert_eq!(hits.routines[0].what, "post the budget summary");
 
-        // A routine an operator titled is found by the title, which is the part
-        // they see in the list and therefore the part they will type.
         let titled = s.f.store.search("watering", 20).unwrap();
         assert_eq!(titled.routines.len(), 1);
         assert_eq!(titled.routines[0].name, "Watering");
@@ -8489,8 +7049,6 @@ mod tests {
 
     #[test]
     fn an_empty_query_comes_back_with_the_newest_of_each_kind() {
-        // The palette opens before anybody types. Empty-handed there reads as
-        // a workspace with nothing in it.
         let s = searchable();
         let hits = s.f.store.search("", 20).unwrap();
         assert_eq!(hits.messages.len(), 4);
@@ -8540,9 +7098,6 @@ mod tests {
 
     #[test]
     fn widening_to_a_message_that_is_gone_returns_nothing_rather_than_everything() {
-        // The caller falls back to the newest window. Returning the whole
-        // channel here would make a cleared history look like a successful
-        // jump to a message that no longer exists.
         let f = fixture();
         let card = f.store.create_agent(&draft("Manager")).unwrap();
         f.store
@@ -8560,9 +7115,6 @@ mod tests {
 
     #[test]
     fn a_pair_thread_holds_both_directions_and_nobody_else() {
-        // The reason this query exists: neither agent's channel has the
-        // exchange. A to B is filed under B, B's answer under A, and the
-        // operator opening the thread expects to read it in order.
         let f = fixture();
         let a = f.store.create_agent(&draft("A")).unwrap();
         let b = f.store.create_agent(&draft("B")).unwrap();
@@ -8581,8 +7133,6 @@ mod tests {
         send(agent(a.id), agent(b.id), "ask");
         send(agent(b.id), agent(a.id), "answer");
         send(agent(a.id), agent(c.id), "someone else entirely");
-        // Bookkeeping A filed against itself. Filed to `system`, so not said to
-        // anyone, and it carries A's private working notes.
         send(agent(a.id), Participant::System, "tool trail");
         send(agent(a.id), agent(b.id), "thanks");
 
@@ -8595,8 +7145,6 @@ mod tests {
             .collect();
         assert_eq!(thread, vec!["ask", "answer", "thanks"]);
 
-        // And the pair is unordered: which one you clicked from does not change
-        // what was said.
         let reversed: Vec<String> = f
             .store
             .pair_messages(b.id, a.id, 50)
@@ -8757,8 +7305,6 @@ mod tests {
 
     #[test]
     fn concurrent_writers_do_not_deadlock() {
-        // Agents write from independent tasks. WAL plus a busy timeout should
-        // make this boring; if it is not, it fails here and not in the field.
         let f = fixture();
         let card = f.store.create_agent(&draft("Manager")).unwrap();
         let run = RunId::new();
@@ -8783,9 +7329,6 @@ mod tests {
         assert_eq!(f.store.count_messages().unwrap(), 200);
     }
 
-    // ---- approvals -------------------------------------------------------
-
-    /// One request from `agent`, pending.
     fn ask(store: &Store, agent: &AgentCard) -> Approval {
         store
             .create_approval(
@@ -8799,7 +7342,6 @@ mod tests {
             .unwrap()
     }
 
-    /// One question from `agent`, pending.
     fn asks(store: &Store, agent: &AgentCard, options: &[&str]) -> Approval {
         store
             .create_approval(
@@ -8864,9 +7406,6 @@ mod tests {
 
     #[test]
     fn a_question_with_no_choices_is_one_that_takes_a_written_answer() {
-        // An empty list and an absent list are the same thing to read back and
-        // must not be: the column is NULL for a permission, which has no list
-        // at all, and an empty list is a real state on a question.
         let f = fixture();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         let written = asks(&f.store, &manager, &[]);
@@ -8899,9 +7438,6 @@ mod tests {
 
     #[test]
     fn a_question_that_has_been_answered_cannot_be_answered_again() {
-        // The same race the verdict path has: the operator's answer and the
-        // turn's own timeout both land here, and whichever is second must not
-        // overwrite the first.
         let f = fixture();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         let written = asks(&f.store, &manager, &[]);
@@ -8919,9 +7455,6 @@ mod tests {
 
     #[test]
     fn a_question_is_never_a_standing_grant_and_never_shows_up_as_one() {
-        // `alwaysAllow` is the one state that outlives its turn, and there is
-        // no standing yes to a question: nothing to be let off asking, because
-        // asking is the whole of what it does.
         let f = fixture();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         asks(&f.store, &manager, &["Northwind"]);
@@ -8933,8 +7466,6 @@ mod tests {
 
     #[test]
     fn a_question_waits_in_the_same_queue_a_permission_does() {
-        // One desk, one queue. A question left out of this read would be a
-        // parked turn the operator has no list of.
         let f = fixture();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         ask(&f.store, &manager);
@@ -8948,9 +7479,6 @@ mod tests {
 
     #[test]
     fn a_standing_grant_belongs_to_the_one_agent_it_was_given_to() {
-        // "Always allow" is an answer about the agent that asked. Reading it as
-        // a workspace-wide setting would let an agent the operator has never
-        // been asked about act on somebody else's permission.
         let f = fixture();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         let critic = f.store.create_agent(&draft("Critic")).unwrap();
@@ -8978,10 +7506,6 @@ mod tests {
 
     #[test]
     fn a_request_can_only_be_answered_once() {
-        // The operator's click and the turn's own timeout both land here. The
-        // loser must not overwrite the winner: a request the agent has already
-        // given up on, recorded as granted, is a standing grant for something
-        // that never happened.
         let f = fixture();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         let request = ask(&f.store, &manager);
@@ -9004,8 +7528,6 @@ mod tests {
 
     #[test]
     fn a_restart_closes_what_was_still_waiting_and_leaves_the_rest() {
-        // Nothing holds a parked turn across a restart, so a pending row is a
-        // question nobody can answer any more.
         let f = fixture();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         let answered = ask(&f.store, &manager);
@@ -9026,16 +7548,10 @@ mod tests {
 
     #[test]
     fn what_is_still_waiting_is_read_whole_and_oldest_first() {
-        // The menu bar reads this to offer an answer without the window. Whole,
-        // because a row that says only that something is pending cannot be
-        // answered from a menu; oldest first, because the request with least of
-        // its ten minutes left is the one worth putting at the top.
         let f = fixture();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
 
         let first = ask(&f.store, &manager);
-        // `created_at` is milliseconds, and two rows written in the same
-        // millisecond would make the order the tiebreak rather than the clock.
         std::thread::sleep(std::time::Duration::from_millis(2));
         let second = ask(&f.store, &manager);
         let answered = ask(&f.store, &manager);
@@ -9061,8 +7577,6 @@ mod tests {
 
     #[test]
     fn deleting_an_agent_takes_the_permission_it_was_given() {
-        // A deleted agent frees its name, and the next agent to hold it must
-        // not inherit what the operator allowed somebody else.
         let f = fixture();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         let request = ask(&f.store, &manager);
@@ -9073,9 +7587,6 @@ mod tests {
         assert!(f.store.get_approval(request.id).unwrap().is_none());
     }
 
-    // ---- the calendar ----------------------------------------------------
-
-    /// One occasion on a crew's calendar, at a fixed instant.
     fn occasion_at(store: &Store, group: GroupId, title: &str, starts_at: i64) -> Occasion {
         let clean = CleanOccasion::new(
             group,
@@ -9131,9 +7642,6 @@ mod tests {
 
     #[test]
     fn one_crew_cannot_move_another_crews_meeting() {
-        // The wall, and the whole reason every write below takes a group. An id
-        // is a thing a model can invent, and an invented one that landed on
-        // another crew's board call would move it.
         let f = fixture();
         let ours = f.store.create_group(&group_named("Ops")).unwrap();
         let theirs = f.store.create_group(&group_named("Legal")).unwrap();
@@ -9154,15 +7662,12 @@ mod tests {
         assert_eq!(f.store.update_occasion(mine.id, ours.id, &moved).unwrap(), None);
         assert!(!f.store.delete_occasion(mine.id, ours.id).unwrap());
 
-        // Still where it was, still saying what it said.
         let untouched = f.store.occasion(mine.id, theirs.id).unwrap().unwrap();
         assert_eq!(untouched.starts_at, mine.starts_at);
     }
 
     #[test]
     fn a_crew_cannot_even_read_another_crews_calendar() {
-        // Not found rather than refused: telling an agent that a row exists and
-        // whose it is would be the leak the wall exists to stop.
         let f = fixture();
         let ours = f.store.create_group(&group_named("Ops")).unwrap();
         let theirs = f.store.create_group(&group_named("Legal")).unwrap();
@@ -9174,8 +7679,6 @@ mod tests {
 
     #[test]
     fn the_operators_view_crosses_every_crew_and_a_filtered_one_does_not() {
-        // The one read in the app that is deliberately above the wall: it is
-        // the operator's workspace and all of it is theirs to see at once.
         let f = fixture();
         let ops = f.store.create_group(&group_named("Ops")).unwrap();
         let legal = f.store.create_group(&group_named("Legal")).unwrap();
@@ -9216,12 +7719,6 @@ mod tests {
 
     #[test]
     fn an_occasion_outlives_the_agent_that_noticed_it() {
-        // A deleted agent's memory, schedule and working notes all go with it,
-        // because those are the agent's own. This is not: a board call does not
-        // stop happening because the agent that heard about it was let go, and
-        // the calendar it is on belongs to the crew. `Runtime::purge_agent`
-        // names every store this clears and deliberately does not name this
-        // one.
         let f = fixture();
         let crew = f.store.create_group(&group_named("Ops")).unwrap();
         let agent = f.store.create_agent(&draft_in("Manager", crew.id)).unwrap();
@@ -9247,8 +7744,6 @@ mod tests {
 
     #[test]
     fn disbanding_a_crew_takes_its_calendar_with_it() {
-        // These foreign keys are enforced, so a row left behind would refuse
-        // the delete rather than dangle.
         let f = fixture();
         let crew = f.store.create_group(&group_named("Ops")).unwrap();
         occasion_at(&f.store, crew.id, "Board call", 1_800_000_000_000);
@@ -9257,9 +7752,6 @@ mod tests {
         assert!(f.store.occasions(0, i64::MAX, None, 50).unwrap().is_empty());
     }
 
-    // ---- escalations -----------------------------------------------------
-
-    /// One escalation from `agent`, raised at `at`.
     fn stuck(store: &Store, agent: &AgentCard, summary: &str, at: i64) -> Raised {
         store.raise_escalation(agent.id, agent.group_id, RunId::new(), summary, at).unwrap()
     }
@@ -9280,10 +7772,6 @@ mod tests {
 
     #[test]
     fn raising_it_again_counts_the_turn_and_leaves_the_stamp_where_it_is() {
-        // The whole reason a row beats the message it replaces. What the
-        // operator needs is not that an agent is stuck, it is that it has been
-        // stuck since Tuesday and that three turns have gone into it. A fresh
-        // stamp on every raise hides the one number that says so.
         let f = fixture();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         stuck(&f.store, &manager, "the tooling is down", 1_000);
@@ -9301,8 +7789,6 @@ mod tests {
 
     #[test]
     fn two_agents_stuck_are_two_rows() {
-        // One per agent, not one per workspace. A crew where three agents have
-        // each run into a different wall is three things to deal with.
         let f = fixture();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         let critic = f.store.create_agent(&draft("Critic")).unwrap();
@@ -9326,9 +7812,6 @@ mod tests {
         assert!(f.store.open_escalations(50).unwrap().is_empty());
         assert!(f.store.open_escalation_for(manager.id).unwrap().is_none());
 
-        // The unique index is over the open rows only, so a cleared one does
-        // not block the next. An agent that gets stuck twice with a fortnight
-        // between must not be refused the second time.
         let next = stuck(&f.store, &manager, "no machine either", 9_000);
         assert!(matches!(next, Raised::First(_)));
         assert_eq!(f.store.open_escalation_for(manager.id).unwrap().unwrap().raised_at, 9_000);
@@ -9336,9 +7819,6 @@ mod tests {
 
     #[test]
     fn clearing_one_twice_changes_nothing_the_second_time() {
-        // The operator pressed it twice, or two windows are looking at one
-        // desk. The second press must not move a stamp that already says when
-        // the first one happened.
         let f = fixture();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         let Raised::First(one) = stuck(&f.store, &manager, "no key", 1_000) else {
@@ -9351,9 +7831,6 @@ mod tests {
 
     #[test]
     fn a_composted_agents_escalation_is_not_on_the_desk() {
-        // The same question fifteen other queries ask. An agent in the compost
-        // is unreachable and out of every crew, so a row offering to open its
-        // channel is an offer nothing can take up.
         let f = fixture();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         stuck(&f.store, &manager, "no key", 1_000);
@@ -9364,8 +7841,6 @@ mod tests {
 
     #[test]
     fn a_discarded_agents_escalation_is_cleared_rather_than_left_open() {
-        // Left open it would come back with a restore three weeks later, as
-        // news about a wall nobody has walked into since.
         let f = fixture();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         stuck(&f.store, &manager, "no key", 1_000);
@@ -9398,8 +7873,6 @@ mod tests {
 
     #[test]
     fn an_escalation_is_not_an_approval_and_shares_no_queue_with_one() {
-        // Two reads, two tables. Folding them would put a row with no verdict
-        // and no expiry into a list every caller answers with a decision.
         let f = fixture();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         ask(&f.store, &manager);
@@ -9411,10 +7884,6 @@ mod tests {
 
     #[test]
     fn concurrent_raises_from_one_agent_are_one_row() {
-        // An agent writes from every thread it holds. A check outside the
-        // transaction lets two turns each find nothing open and each insert,
-        // which the unique index then refuses at the worst possible moment:
-        // inside a turn that had already given up on getting anywhere.
         let f = fixture();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
 
@@ -9443,9 +7912,6 @@ mod tests {
 
     #[test]
     fn a_standing_grant_can_be_taken_back() {
-        // "Always allow" is one click about every future request. A permission
-        // that could only ever be given would make that click a decision to
-        // agonize over, which is the opposite of what it is for.
         let f = fixture();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         let request = ask(&f.store, &manager);
@@ -9459,15 +7925,11 @@ mod tests {
         assert!(f.store.standing_grants(manager.id).unwrap().is_empty());
         assert!(!f.store.has_standing_grant(manager.id, ProtectedAction::CreateAgent).unwrap());
 
-        // And revoking again is a no-op rather than an error: the operator
-        // clicking twice has already got what they asked for.
         assert_eq!(f.store.revoke_grant(manager.id, ProtectedAction::CreateAgent).unwrap(), 0);
     }
 
     #[test]
     fn revoking_leaves_answered_requests_alone() {
-        // Only the standing grant goes. A one-off yes was an answer about one
-        // request and stays in the record as one.
         let f = fixture();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         let once = ask(&f.store, &manager);
@@ -9503,10 +7965,6 @@ mod tests {
 
     #[test]
     fn the_answers_read_carries_what_was_said_and_only_what_was_said() {
-        // What the transcript asks for once a question's buttons are gone. Only
-        // a question is in here, and only after it was answered: a permission
-        // is settled with a token and the token is its state, and a question
-        // nobody answered has nothing to draw beside its sentence.
         let f = fixture();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         let question = asks(&f.store, &manager, &["Northwind", "Contoso"]);
@@ -9531,10 +7989,6 @@ mod tests {
 
     #[test]
     fn a_plugin_row_naming_something_this_build_has_never_heard_of_is_skipped() {
-        // What a downgrade leaves behind, and what a withdrawn plugin leaves
-        // behind on a database migration 25 has not reached: a row naming a
-        // kind this build has no variant for. Raising would cost every agent in
-        // the crew its turn, over a tool list one of them was not going to use.
         let f = fixture();
         let group = default_group_id();
         f.store
@@ -9554,9 +8008,6 @@ mod tests {
 
     #[test]
     fn deleting_a_group_takes_its_plugins_and_their_grants_with_it() {
-        // Two reasons, and the second one bites first: a grant left behind is a
-        // token against the operator's own account with nothing on screen that
-        // owns it, and the row itself fails the foreign key on the delete.
         let f = fixture();
         let group = f
             .store
@@ -9576,12 +8027,6 @@ mod tests {
 
     #[test]
     fn a_server_the_operator_added_keeps_its_address_and_a_catalog_one_does_not() {
-        // The one asymmetry migration 35 introduced, and both halves matter.
-        // Where a vendor's server lives is a decision the build makes and
-        // re-makes on every release, so a stored copy would keep a crew
-        // dialling the old host after the vendor moved — the failure migration
-        // 26 exists to clean up after. A server the operator added has nowhere
-        // else to keep it.
         let f = fixture();
         let group = default_group_id();
         let mine = PluginKind::custom("Home Assistant", "https://ha.example.com/mcp").unwrap();
@@ -9620,10 +8065,6 @@ mod tests {
 
     #[test]
     fn a_row_this_build_cannot_dial_is_skipped_rather_than_failing_every_turn() {
-        // A slug the catalog does not have and no address beside it, which is
-        // what a newer build's plugin looks like after a downgrade. A crew
-        // losing one tool list is better than every agent in it losing its
-        // turn, which is what raising here would cost.
         let f = fixture();
         let group = default_group_id();
         f.store
@@ -9655,11 +8096,6 @@ mod tests {
 
     #[test]
     fn headers_go_out_with_the_grant_and_come_back_as_names_alone() {
-        // Two boundaries in one row. The call path needs the values, because a
-        // call made without them does not fail at the server but at whatever is
-        // in front of it; the panel needs the names, because "is x-api-key on
-        // the request" is the question an operator debugging their own server
-        // is asking; and neither wants the other's half.
         let f = fixture();
         let group = default_group_id();
         let agent = f.store.create_agent(&draft("Manager")).unwrap();
@@ -9679,13 +8115,10 @@ mod tests {
         };
         assert_eq!(reached.headers, headers, "the call path gets the values");
 
-        // And a caller holding the id and no agent gets the same, because an
-        // operator testing their own server is not one of the crew.
         let dialed = f.store.plugin_dial(saved.id).unwrap().expect("the row it was written as");
         assert_eq!(dialed.headers, headers);
         assert_eq!(dialed.kind, kind);
 
-        // Replaced whole on a reconnection, exactly as the tool list is.
         let again =
             f.store.save_plugin(group, &kind, "", &[tool("turn_on")], None, "", &Headers::none());
         assert!(again.unwrap().headers.is_empty());
@@ -9693,10 +8126,6 @@ mod tests {
 
     #[test]
     fn what_a_tool_was_published_with_comes_back_with_the_grant_that_calls_it() {
-        // Not for the model, which has had the schema since the turn was built,
-        // but for the transport: a modern MCP server may ask for some of a
-        // call's arguments to be mirrored into HTTP headers and says which in
-        // the schema, and a call built without it is refused as a mismatch.
         let f = fixture();
         let group = default_group_id();
         let agent = f.store.create_agent(&draft("Manager")).unwrap();
@@ -9807,10 +8236,6 @@ mod tests {
 
     #[test]
     fn a_plugin_that_needed_no_sign_in_reports_no_grant_rather_than_an_empty_one() {
-        // What `connect` writes for a server that asked for nothing. A blank
-        // access token read back as a grant would send the operator to a
-        // browser to fix something that is working, and would make every call
-        // carry `Bearer `. The kind is incidental: the column is what decides.
         let f = fixture();
         let group = default_group_id();
         f.store
@@ -9837,9 +8262,6 @@ mod tests {
 
     #[test]
     fn a_plugin_is_the_whole_crew_s_until_somebody_says_otherwise() {
-        // The default, and the reading every plugin connected before this
-        // existed keeps. An operator who has never opened this control has a
-        // crew that works exactly as it did.
         let f = fixture();
         let group = default_group_id();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
@@ -9858,8 +8280,6 @@ mod tests {
         assert_eq!(f.store.group_plugins(group).unwrap()[0].access, PluginAccess::Everyone);
         assert_eq!(f.store.plugin_tools(group, manager.id).unwrap().len(), 1);
 
-        // Including an agent hired after the plugin was connected, which is the
-        // half a list of ids could not express.
         let hired = f.store.create_agent(&draft("Researcher")).unwrap();
         assert_eq!(f.store.plugin_tools(group, hired.id).unwrap().len(), 1);
     }
@@ -9892,8 +8312,6 @@ mod tests {
         assert_eq!(f.store.plugin_tools(group, revenue.id).unwrap().len(), 1);
         assert!(f.store.plugin_tools(group, scribe.id).unwrap().is_empty());
 
-        // And the tool list and the grant agree, because a model can name a
-        // tool it was never offered.
         assert!(matches!(
             f.store.plugin_reach(group, revenue.id, &PluginKind::Stripe, "refund").unwrap(),
             PluginReach::Granted(_)
@@ -9906,9 +8324,6 @@ mod tests {
 
     #[test]
     fn a_plugin_narrowed_to_nobody_is_a_plugin_nobody_gets() {
-        // Reachable in the UI on the way to naming the first agent, so it has
-        // to mean what it says. An empty list read as "everyone" would hand the
-        // plugin back to the crew at the moment the last name was removed.
         let f = fixture();
         let group = default_group_id();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
@@ -9936,8 +8351,6 @@ mod tests {
 
     #[test]
     fn opening_a_plugin_back_up_leaves_nothing_behind_that_still_names_anybody() {
-        // The stored state has to be what is true. A remembered list would be a
-        // decision the operator has already changed, waiting to come back.
         let f = fixture();
         let group = default_group_id();
         let revenue = f.store.create_agent(&draft("Revenue")).unwrap();
@@ -9963,9 +8376,6 @@ mod tests {
 
     #[test]
     fn an_agent_from_another_crew_cannot_be_named_on_a_plugin() {
-        // It could never reach it — the turn asks by group as well as by agent
-        // — so the row would grant nothing and draw as a name in a panel that
-        // means nothing.
         let f = fixture();
         let other = f
             .store
@@ -9997,10 +8407,6 @@ mod tests {
 
     #[test]
     fn connecting_again_does_not_hand_a_narrowed_plugin_back_to_the_crew() {
-        // Reconnecting is how an operator fixes a grant revoked at the vendor.
-        // It is not a decision about who may use it, and one that quietly
-        // widened the plugin would undo the narrowing at the moment the
-        // operator was fixing something else.
         let f = fixture();
         let group = default_group_id();
         let revenue = f.store.create_agent(&draft("Revenue")).unwrap();
@@ -10061,8 +8467,6 @@ mod tests {
 
     #[test]
     fn disconnecting_a_narrowed_plugin_leaves_no_permission_behind() {
-        // The foreign key would refuse the delete, and a row naming a plugin
-        // that is gone is a standing permission attached to nothing.
         let f = fixture();
         let group = default_group_id();
         let revenue = f.store.create_agent(&draft("Revenue")).unwrap();
@@ -10086,9 +8490,6 @@ mod tests {
 
     #[test]
     fn a_plugin_arrives_with_everything_it_published_switched_on() {
-        // The default, and what every plugin connected before this control
-        // existed keeps. An operator who never opens the tool list has a crew
-        // that works exactly as it did.
         let f = fixture();
         let group = default_group_id();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
@@ -10119,10 +8520,6 @@ mod tests {
 
     #[test]
     fn a_switched_off_tool_leaves_the_turn_and_the_call_path_saying_the_same_thing() {
-        // The one that matters. A model names tools it was never offered, so
-        // the definitions being right is not the enforcement: the call path
-        // asks again. The two disagreeing is either a tool an agent is offered
-        // and refused, or one it is refused and could have had.
         let f = fixture();
         let group = default_group_id();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
@@ -10146,8 +8543,6 @@ mod tests {
             "the panel draws what was stored"
         );
 
-        // Told: one tool, and the other named as switched off rather than
-        // silently missing.
         let offered = f.store.plugin_tools(group, manager.id).unwrap().remove(0);
         assert_eq!(
             offered.offered.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
@@ -10155,7 +8550,6 @@ mod tests {
         );
         assert_eq!(offered.withheld, vec!["drop_project".to_string()]);
 
-        // And got: the same answer, from the other query.
         assert!(matches!(
             f.store.plugin_reach(group, manager.id, &PluginKind::Neon, "drop_project").unwrap(),
             PluginReach::ToolDenied
@@ -10168,10 +8562,6 @@ mod tests {
 
     #[test]
     fn a_tool_switched_off_is_off_for_the_agent_the_plugin_was_narrowed_to() {
-        // The two axes are not one axis. Being chosen for a plugin is not being
-        // handed every tool on it, and the refusal an agent gets says the thing
-        // that is true of the whole crew rather than sending it to a peer who
-        // would be refused in turn.
         let f = fixture();
         let group = default_group_id();
         let revenue = f.store.create_agent(&draft("Revenue")).unwrap();
@@ -10210,10 +8600,6 @@ mod tests {
 
     #[test]
     fn two_agents_on_one_plugin_get_different_tools() {
-        // The thing a crew-wide switch could not say, and the reason this axis
-        // grew a list. One sign-in, one inbox: the agent that triages it reads
-        // and the agent that answers it sends, and neither is offered the
-        // other's half.
         let f = fixture();
         let group = default_group_id();
         let triage = f.store.create_agent(&draft("Triage")).unwrap();
@@ -10242,8 +8628,6 @@ mod tests {
             .set_plugin_tool(plugin.id, "send", &PluginAccess::Chosen { agents: vec![reply.id] })
             .unwrap();
 
-        // Told: one each, and the other named as somebody else's rather than
-        // as switched off. The two lists are what the prompt says differently.
         let told = f.store.plugin_tools(group, triage.id).unwrap().remove(0);
         assert_eq!(
             told.offered.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
@@ -10252,8 +8636,6 @@ mod tests {
         assert_eq!(told.elsewhere, vec!["send".to_string()]);
         assert!(told.withheld.is_empty(), "somebody has it, so nobody is the wrong answer");
 
-        // And got: the same answer, from the other query, and the refusal is
-        // the one that sends the turn to a peer.
         assert!(matches!(
             f.store.plugin_reach(group, triage.id, &PluginKind::Agentmail, "send").unwrap(),
             PluginReach::ToolNotChosen
@@ -10270,9 +8652,6 @@ mod tests {
 
     #[test]
     fn a_tool_nobody_has_is_refused_before_one_somebody_else_has() {
-        // Both refusals send the turn somewhere, and only one of them is worth
-        // going. "Nobody has this" is true of the whole crew and stops the
-        // asking; "not yours" spends a peer's turn as well if it is wrong.
         let f = fixture();
         let group = default_group_id();
         let one = f.store.create_agent(&draft("One")).unwrap();
@@ -10304,9 +8683,6 @@ mod tests {
             PluginReach::ToolNotChosen
         ));
 
-        // And the wider answer wins over the narrower one when both are true:
-        // an agent that is off the plugin entirely and asks for a tool nobody
-        // has is told the thing that is true of everybody.
         f.store
             .set_plugin_access(plugin.id, &PluginAccess::Chosen { agents: vec![two.id] })
             .unwrap();
@@ -10314,8 +8690,6 @@ mod tests {
             f.store.plugin_reach(group, one.id, &PluginKind::Stripe, "refund").unwrap(),
             PluginReach::ToolDenied
         ));
-        // Off the plugin covers every tool on it, so it is said before one of
-        // them is.
         assert!(matches!(
             f.store.plugin_reach(group, one.id, &PluginKind::Stripe, "charges").unwrap(),
             PluginReach::NotChosen
@@ -10324,10 +8698,6 @@ mod tests {
 
     #[test]
     fn a_tool_narrowed_to_an_agent_the_plugin_does_not_reach_grants_nothing() {
-        // The two answers compose rather than override. An operator sets them
-        // in either order, so a name on the tool before the plugin is widened
-        // is a state to pass through, not one to refuse: it just does not grant
-        // anything on its own.
         let f = fixture();
         let group = default_group_id();
         let inside = f.store.create_agent(&draft("Inside")).unwrap();
@@ -10369,10 +8739,6 @@ mod tests {
 
     #[test]
     fn a_tool_may_not_be_narrowed_to_an_agent_from_another_crew() {
-        // The boundary `set_plugin_access` draws, one level down. A name from
-        // another group grants nothing here either, because the turn asks by
-        // group as well, so storing one is a row that means nothing and a
-        // settings panel drawing a name that does nothing.
         let f = fixture();
         let elsewhere = f
             .store
@@ -10404,8 +8770,6 @@ mod tests {
             )
             .unwrap_err();
         assert!(matches!(refused, StoreError::AgentNotInGroup(id) if id == stranger.id));
-        // And nothing was written on the way to refusing: a narrowing that
-        // survived a rejected write is a tool switched off by an error.
         let left: i64 = f
             .store
             .conn()
@@ -10417,9 +8781,6 @@ mod tests {
 
     #[test]
     fn retiring_an_agent_takes_the_tools_it_was_named_on() {
-        // A tool naming a retired agent and nobody else draws as narrowed to
-        // somebody and is callable by nobody, and the refusal an agent gets for
-        // it points at a peer that is gone.
         let f = fixture();
         let group = default_group_id();
         let gone = f.store.create_agent(&draft("Gone")).unwrap();
@@ -10454,9 +8815,6 @@ mod tests {
 
     #[test]
     fn switching_a_tool_back_on_leaves_nothing_behind_that_still_refuses_it() {
-        // The stored state has to be what is true. A remembered refusal is a
-        // decision the operator has already changed, waiting to come back the
-        // next time anything reads the table.
         let f = fixture();
         let group = default_group_id();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
@@ -10484,9 +8842,6 @@ mod tests {
 
         assert_eq!(back.tools[0].access, PluginAccess::Everyone);
         assert!(f.store.plugin_tools(group, manager.id).unwrap()[0].withheld.is_empty());
-        // Both tables, because everyone is stored as the absence of a row: a
-        // narrowing kept beside a stored `everyone` is two ways to say one
-        // thing, and the next reader picks one of them.
         let conn = f.store.conn().unwrap();
         for table in ["plugin_tool_access", "plugin_tool_agents"] {
             let left: i64 = conn
@@ -10498,9 +8853,6 @@ mod tests {
 
     #[test]
     fn a_tool_the_server_never_published_cannot_be_switched_off() {
-        // A refusal filed against a name nothing publishes is a row no panel
-        // can show and no call can hit. It means the list on screen is older
-        // than the one the server last sent, which is what the error says.
         let f = fixture();
         let plugin = f
             .store
@@ -10526,10 +8878,6 @@ mod tests {
 
     #[test]
     fn connecting_again_does_not_switch_a_denied_tool_back_on() {
-        // Reconnecting is how an operator fixes a grant revoked at the vendor,
-        // exactly as it is for who may use the plugin. One that quietly handed
-        // `drop_project` back would undo the decision at the moment the
-        // operator was fixing something else.
         let f = fixture();
         let group = default_group_id();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
@@ -10540,10 +8888,6 @@ mod tests {
             .unwrap();
         f.store.set_plugin_tool(plugin.id, "drop_project", &nobody()).unwrap();
 
-        // And a tool the vendor started publishing since arrives switched on,
-        // which is the half an allow-list could not express: nobody has made a
-        // decision about it, and the decision that was made was about the
-        // plugin.
         let again = f
             .store
             .save_plugin(
@@ -10573,8 +8917,6 @@ mod tests {
 
     #[test]
     fn disconnecting_a_plugin_takes_the_tools_it_had_switched_off_with_it() {
-        // A refusal naming a plugin that is gone is a decision attached to
-        // nothing, waiting to attach itself to whatever takes the id next.
         let f = fixture();
         let group = default_group_id();
         let plugin = f
@@ -10634,8 +8976,6 @@ mod tests {
         f.store
             .set_plugin_tool(plugin.id, "run_sql", &PluginAccess::Chosen { agents: vec![hand.id] })
             .unwrap();
-        // A group is only deleted once it is empty, so the crew is gone by the
-        // time this runs. The rows naming them must not outlive either.
         f.store.set_lifecycle(hand.id, Lifecycle::Terminated).unwrap();
 
         f.store.delete_group(group.id).unwrap();
@@ -10650,9 +8990,6 @@ mod tests {
 
     #[test]
     fn an_access_value_this_build_does_not_know_shuts_the_plugin_rather_than_opening_it() {
-        // What a downgrade leaves behind. A permission that cannot be read has
-        // to fail closed: the crew losing a plugin is visible and fixable, and
-        // a crew silently gaining one is neither.
         let f = fixture();
         let group = default_group_id();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
@@ -10690,8 +9027,6 @@ mod tests {
 
     #[test]
     fn working_notes_come_back_oldest_first() {
-        // Reading order. The list is a short account of how the agent got to
-        // now, and newest-first it is a stack nobody asked for.
         let f = fixture();
         let agent = f.store.create_agent(&draft("Manager")).unwrap();
         for (i, body) in
@@ -10707,8 +9042,6 @@ mod tests {
 
     #[test]
     fn the_oldest_working_notes_fall_off_once_there_are_too_many() {
-        // The whole reason this is a store and not a second file the agent
-        // maintains: forgetting happens without anybody deciding to.
         let f = fixture();
         let agent = f.store.create_agent(&draft("Manager")).unwrap();
         for i in 0..(KEPT + 6) {
@@ -10723,10 +9056,6 @@ mod tests {
 
     #[test]
     fn notes_written_in_the_same_millisecond_keep_the_order_they_were_written() {
-        // Two notes from one turn share a timestamp, so the trim and the read
-        // both order by id. Ordered by `at`, which was the obvious column, the
-        // pair comes back in whatever order SQLite resolves a tie in, and the
-        // one that falls off the end is not reliably the older one.
         let f = fixture();
         let agent = f.store.create_agent(&draft("Manager")).unwrap();
         for i in 0..(KEPT + 2) {
@@ -10741,10 +9070,6 @@ mod tests {
 
     #[test]
     fn a_line_the_agent_already_holds_is_not_stored_again() {
-        // The one mechanical brake on a list that fills with one fact. An agent
-        // saying "still waiting on Robert" for the fourth time is not recording
-        // anything, and acknowledging it teaches that repeating is how you say
-        // something is still true.
         let f = fixture();
         let agent = f.store.create_agent(&draft("Manager")).unwrap();
         assert_eq!(
@@ -10767,9 +9092,6 @@ mod tests {
 
     #[test]
     fn one_agents_note_does_not_block_anothers() {
-        // Two agents on one errand write the same line, and each is recording
-        // its own state. Deduping across the crew would leave the second with
-        // no note of work it is genuinely in the middle of.
         let f = fixture();
         let a = f.store.create_agent(&draft("Manager")).unwrap();
         let b = f.store.create_agent(&draft("Chef")).unwrap();
@@ -10783,9 +9105,6 @@ mod tests {
 
     #[test]
     fn a_note_that_has_already_fallen_off_the_end_can_be_written_again() {
-        // The match is against what the agent still holds, which is the set it
-        // can see. A line that aged out is one the next turn is not being told
-        // about, so writing it is recording something rather than repeating it.
         let f = fixture();
         let agent = f.store.create_agent(&draft("Manager")).unwrap();
         f.store.append_working_note(agent.id, "the first thing", 1).unwrap();
@@ -10813,9 +9132,6 @@ mod tests {
 
     #[test]
     fn trimming_one_agent_leaves_every_other_agents_notes_alone() {
-        // The delete is bounded by agent, and a `LIMIT` that lost its `WHERE`
-        // would quietly empty the rest of the crew the moment one agent got
-        // busy. Nothing else in the build would notice.
         let f = fixture();
         let busy = f.store.create_agent(&draft("Manager")).unwrap();
         let quiet = f.store.create_agent(&draft("Chef")).unwrap();
@@ -10846,8 +9162,6 @@ mod tests {
         assert!(f.store.working_notes(agent.id).unwrap().is_empty());
     }
 
-    // ---- what an agent is waiting on ------------------------------------
-
     #[test]
     fn a_work_message_with_no_answer_is_what_the_agent_is_waiting_on() {
         let f = fixture();
@@ -10862,16 +9176,11 @@ mod tests {
         assert_eq!(waiting[0].peer, "SRE");
         assert!(waiting[0].asked.contains("readiness package"));
 
-        // And it is one-sided: the agent that was asked is not waiting on
-        // anybody, which is what stops every crew reporting itself blocked.
         assert!(f.store.outstanding_asks(sre.id).unwrap().is_empty());
     }
 
     #[test]
     fn anything_back_from_the_peer_closes_it() {
-        // Anything, not a reply that names the request. Agents do not thread,
-        // so holding it open until something referenced the original leaves
-        // every finished piece of work on the list forever.
         let f = fixture();
         let group = f.store.create_group(&group_named("Platform")).unwrap();
         let pm = f.store.create_agent(&draft_in("Product", group.id)).unwrap();
@@ -10901,9 +9210,6 @@ mod tests {
 
     #[test]
     fn a_courtesy_is_not_something_anybody_is_waiting_for() {
-        // By definition it gives the recipient nothing to do, so counting one
-        // puts "thanks, received" on a list of things somebody owes an answer
-        // to, and a list like that is one nobody reads.
         let f = fixture();
         let group = f.store.create_group(&group_named("Platform")).unwrap();
         let pm = f.store.create_agent(&draft_in("Product", group.id)).unwrap();
@@ -10918,7 +9224,6 @@ mod tests {
 
     #[test]
     fn a_retired_peer_drops_off_the_list() {
-        // A name pointing at nobody is a thing to chase that cannot be chased.
         let f = fixture();
         let group = f.store.create_group(&group_named("Platform")).unwrap();
         let pm = f.store.create_agent(&draft_in("Product", group.id)).unwrap();
@@ -10932,8 +9237,6 @@ mod tests {
 
     #[test]
     fn the_line_says_how_long_rather_than_when() {
-        // Nobody chases a thing because it happened at 14:03. They chase it
-        // because it has been two hours.
         let now = now_ms();
         let one = Outstanding {
             peer: "SRE".into(),

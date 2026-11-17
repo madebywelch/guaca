@@ -54,7 +54,6 @@ const published = {
     notes: "https://github.com/madebywelch/guaca/releases/tag/v0.2.0",
   },
 };
-/** What a release of the app says about rebuilding itself. */
 const released = {
   checkout: null,
   unavailable: "This is a release of Guaca. Download the next release to update it.",
@@ -106,7 +105,6 @@ function mount() {
     </HostMonitor>,
   );
 }
-/** What the facts list says beside `term`. */
 function fact(term: string): Element {
   const value = screen.getByText(term, { selector: "dt" }).nextElementSibling;
   if (!value) throw new Error(`Nothing beside "${term}".`);
@@ -209,11 +207,9 @@ describe("host updates in either client", () => {
     );
     mount();
     fireEvent.click(await screen.findByRole("button", { name: "Back up and update host" }));
-    // The journal still holds the last update, which finished. That is not this one.
     await screen.findByText("Starting update · step 1 of 5");
     expect(screen.queryByRole("button", { name: "Back up and update host" })).toBeNull();
 
-    // Stopped for the backup, the host cannot answer. That is the update working.
     docker.mockResolvedValue(status(true, journal("Backing up data")));
     fetched.mockImplementation(() => Promise.reject(new TypeError("Load failed")));
     await poke();
@@ -221,7 +217,6 @@ describe("host updates in either client", () => {
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByText("Keep Guaca open until the update finishes.")).toBeTruthy();
 
-    // A poll in flight is not a check the operator asked for.
     docker.mockResolvedValue(status(true, journal("Verifying host")));
     let answer = () => {};
     fetched.mockImplementation(
@@ -378,9 +373,6 @@ describe("host updates in either client", () => {
     ).toBeNull();
   });
   it("does not call one version on two builds compatible, or draw them as one", async () => {
-    // A source-built app against the release its version names: every
-    // version on the pane agreed while the host refused the app's commands.
-    // The two rows read "0.1.0" twice, and the operator believed them.
     health.build = "c15bd9a".padEnd(40, "0");
     release = { ...published, latest: null };
     mount();
@@ -431,7 +423,6 @@ describe("a box that updates itself", () => {
         headers: { "content-type": "application/json" },
       }),
     );
-  /** Serves the box, and answers an update request with `answer`. */
   function serve(answer: () => Promise<Response>) {
     fetched.mockImplementation((url: string, init?: RequestInit) => {
       if (init?.method === "POST") return answer();
@@ -526,11 +517,9 @@ describe("a box that updates itself", () => {
     await poke();
     await screen.findByText("Downloading update · step 1 of 5");
     expect(screen.queryByRole("button", { name: "Back up and update host" })).toBeNull();
-    // The host stops for the swap. That is the update working, not a failure.
     health.down = true;
     await poke();
     await screen.findByText("The host is not answering.");
-    // Stopping, backing up or starting: the updater cannot be asked which.
     expect(screen.getAllByText("The host is not answering.")).toHaveLength(1);
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByText(/closing Guaca does not stop it/)).toBeTruthy();
@@ -598,7 +587,6 @@ describe("a box that updates itself", () => {
     await waitFor(() =>
       expect(fetched.mock.calls.some(([, init]) => init?.method === "POST")).toBe(true),
     );
-    // Accepted, with the journal still holding the last update's ending.
     await screen.findByText("Starting update · step 1 of 5");
     expect(screen.queryByText("Host updated")).toBeNull();
     box = { ...box, updating: false, error: "Another Guaca process is managing this host." };

@@ -1,11 +1,3 @@
-/**
- * Application state.
- *
- * The Rust side is the source of truth for everything durable; this store is a
- * cache plus the few things that only exist while you are looking at them
- * (which channel is open, what text is mid-stream, which pulses are in flight).
- */
-
 import { useCallback, useMemo } from "react";
 import { create } from "zustand";
 import { diagnostic } from "./diagnostic";
@@ -23,7 +15,6 @@ let escalationRead = 0;
 let outcomeRead = 0;
 const channelReads = new Map<string, number>();
 
-/** A desktop's answer, which is every capability there is. */
 const EVERYTHING: Capabilities = {
   loopbackEndpoints: true,
   claudeProvider: true,
@@ -62,14 +53,6 @@ import type {
 } from "./types";
 import { asSentence, errorMessage, skillScopeKey } from "./types";
 
-/**
- * A channel is an agent, and nothing else is one.
- *
- * The flow board used to be addressed as a channel here, which made every
- * function that took a channel take a value that was not an agent and cost
- * seven of them a branch. It is analysis rather than a place you talk, so it
- * moved into the group editor and reads its own history: `GroupActivity`.
- */
 export type ChannelKey = AgentId;
 
 export interface StreamBuffer {
@@ -77,11 +60,9 @@ export interface StreamBuffer {
   agentId: AgentId;
   text: string;
   truncated?: boolean;
-  /** Who the finished message is for. Peer-bound streams are not shown as text. */
   to: Participant;
 }
 
-/** One inter-agent message, animated down the rail. */
 export interface Pulse {
   id: number;
   from: AgentId;
@@ -89,31 +70,17 @@ export interface Pulse {
   color: string;
 }
 
-/** How long the group meters look back. */
 export const PULSE_WINDOW_MS = 90_000;
 
-/**
- * The one-line surface for something that went wrong, or right.
- *
- * `fix` is what can be done about it, and it is a short list rather than a
- * callback: a banner is stored in the store and read by two clients — the
- * window and the menu bar panel — and a closure in here would be a control the
- * panel cannot draw and still has to carry. `host` is the one failure with a
- * control: nothing answered, and the two things that help are trying again and
- * looking at which host this is.
- */
 export interface Banner {
   tone: "error" | "info" | "ok";
   text: string;
   fix?: "host";
 }
 
-/** Where a move leaves an agent. */
 export interface Placement {
   groupId: GroupId;
-  /** The row it lands in front of. `null` is the end of the group. */
   before: AgentId | null;
-  /** Absent leaves the section it is in alone. */
   pinned?: boolean;
 }
 
@@ -121,281 +88,62 @@ export interface State {
   agents: AgentCard[];
   groups: Group[];
   activity: Record<AgentId, Activity>;
-  /** Newest message timestamp per agent. Drives the sidebar order. */
   lastActive: Record<AgentId, number>;
   settings: Settings | null;
-  /**
-   * What this workspace can do, read once when the window opens.
-   *
-   * The desktop deployment's answer, everything, is what is assumed until the
-   * read lands: a panel drawn before it can offer nothing a desktop would not,
-   * and nothing draws before `ready` anyway. Every running workspace answers
-   * as a server, and the four flags are what stand between an operator and a control that fails only
-   * after they have filled it in.
-   */
   capabilities: Capabilities;
-  /** Local preferences. See `lib/prefs`: the runtime never reads these. */
   prefs: Prefs;
-  /**
-   * The conversation each agent is currently part of, so it can be stopped.
-   *
-   * Learned from the placeholder that opens in the agent's channel, which is
-   * the runtime's own statement that this agent is working on that run, and
-   * dropped when the run settles. Not read from `sendMessage`'s return value:
-   * that only knows about conversations the operator started, and a routine or
-   * a peer's request is exactly as worth stopping.
-   *
-   * Keyed by agent rather than by run because that is the question the button
-   * asks: the operator is looking at one channel and wants what is happening in
-   * it to stop.
-   */
   activeRun: Record<AgentId, RunId | undefined>;
 
-  /** Everything each group has spent, ever. Keyed by group id. */
   usage: Record<GroupId, Tokens | undefined>;
-  /**
-   * Calls in the last {@link PULSE_WINDOW_MS}, for the meters.
-   *
-   * Kept as raw points rather than as buckets: buckets would have to be
-   * rotated on a timer whether or not anything was happening, and the one
-   * thing this is for is showing that something is.
-   */
   pulse: Record<GroupId, { at: number; tokens: number }[] | undefined>;
 
-  /**
-   * What each permission request came to. The request itself lives in the
-   * transcript, which is immutable; this is the part that moves.
-   */
   approvals: Record<ApprovalId, ApprovalState | undefined>;
 
-  /**
-   * What each question was answered with, keyed by the same ids.
-   *
-   * Its own map rather than a field beside the state, because the two have
-   * different lifetimes: a state moves while a question is live and an answer
-   * is written once and never again. Only a question is in here at all, and
-   * only once somebody has answered it; a card with no entry is drawn from its
-   * state alone, which is all there is to say about a request older than the
-   * window this is seeded from.
-   */
   answers: Record<ApprovalId, string | undefined>;
 
-  /**
-   * Every request still waiting on the operator, oldest first, whole.
-   *
-   * The queue the desk draws. Held as what the runtime last said rather than
-   * accumulated from events, which is the same discipline the menu bar's
-   * presence is built on and for the same reason: a list added to on
-   * `approvalRequested` and removed from on `approvalSettled` is one dropped
-   * event away from offering a decision that reaches nobody, and the operator
-   * has no way to tell that card from a live one. Both events invalidate this
-   * and the answer comes back from the runtime.
-   *
-   * Whole rather than by id because the desk exists to be answered from: an
-   * entry that carried only an id would send the operator to find the channel,
-   * which is the walk the desk is for.
-   */
   pending: Approval[];
 
-  /**
-   * Every escalation still open, oldest first.
-   *
-   * The other half of the desk's queue, held the same way and for the same
-   * reason. Beside `pending` rather than merged into it because the two are
-   * answered differently: one takes a verdict or a value and has ten minutes to
-   * take it in, and this one is cleared when the operator has dealt with it and
-   * waits as long as it takes.
-   */
   stuck: Escalation[];
   decisions: WorkDecision[];
   decisionError: string | null;
-  /**
-   * Every finished run the operator has not seen, newest first.
-   *
-   * Held as the host last said, like the desk's queues, and for the same
-   * reason: seeing happens on the host, from any window or from opening a
-   * channel, so a list kept by events here would drift from the one the other
-   * windows draw. `outcomeRecorded` re-reads it; `outcomesSeen` drops the runs
-   * it names at once and re-reads it too.
-   */
   outcomes: Outcome[];
   refreshOutcomes: (valid?: () => boolean) => Promise<void>;
-  /**
-   * Marks finished runs seen, by name or through a time, and drops what the
-   * host says it marked. A refusal is shown and the list is left as it was.
-   */
   seeOutcomes: (target: { runIds?: RunId[]; before?: number }) => Promise<void>;
   forYou: boolean;
-  /**
-   * How many times For you has been asked to open, whether or not it already
-   * was. A notification click or the panel's "And N more in For you" asks while
-   * For you may be open on another view, and `forYou` is already true then, so
-   * this is what lets For you see the ask and go back to Needs you.
-   */
   forYouAsked: number;
   showForYou: (open: boolean) => void;
-  /**
-   * The Artifacts dialog: closed, open on the list, or open on one artifact.
-   *
-   * Here rather than in `App` beside the calendar's flag, because a card in a
-   * transcript opens it on the artifact that card names, and a card is several
-   * components below the one that would otherwise own the flag.
-   */
   artifactsOpen: { id: ArtifactId | null } | null;
   showArtifacts: (open: { id: ArtifactId | null } | null) => void;
   refreshDecisions: (valid?: () => boolean) => Promise<void>;
 
   selected: ChannelKey | null;
-  /**
-   * The group the rail is looking inside, or `null` for all of them.
-   *
-   * Here rather than in the sidebar because it and the open channel have to
-   * agree, and both are here. One rule holds them together: the rail draws the
-   * row of the channel the pane is showing. `select` repairs it by following the
-   * agent into its crew, and `focusGroup` repairs it from the other end, by
-   * letting go of a channel the crew being opened does not contain.
-   */
   railGroup: GroupId | null;
   messages: Record<ChannelKey, Envelope[] | undefined>;
   streams: Record<MessageId, StreamBuffer | undefined>;
-  /**
-   * What each agent is thinking, while it is thinking it.
-   *
-   * Kept apart from `streams` rather than folded into the buffer, and that is
-   * not tidiness: the component drawing the live bubbles subscribes to
-   * `streams`, so a thought written into one would re-render and re-parse the
-   * markdown of every bubble on screen for text that is not in any of them.
-   * Keyed by agent because that is who is thinking; a turn writing to a peer
-   * streams into the peer's channel while the operator watching it work is
-   * reading its own.
-   */
   reasoning: Record<AgentId, string | undefined>;
-  /**
-   * What each agent's turn has reached for, while it is reaching.
-   *
-   * The same lifetime as `reasoning`, from the same mechanism: the runtime
-   * addresses both to the placeholder, so both are filed under the agent that
-   * opened it and both go when it ends. What a turn did is the message that
-   * lands at the end of it, and the transcript draws these chips again from
-   * that; this is the only account of the same work while it is still under
-   * way, which for a turn that spends ten minutes on tool calls is the whole of
-   * what there is to watch.
-   */
   trail: Record<AgentId, LiveCall[] | undefined>;
-  /**
-   * When each agent's last reply landed.
-   *
-   * A stamp rather than a flag, so the one thing that reads it can decide for
-   * itself how long a finished turn is worth looking pleased about without a
-   * timer here putting it back. Never cleared: the value is what it says, and
-   * an agent that finished an hour ago is not a different fact from an agent
-   * that has never run.
-   */
   finishedAt: Record<AgentId, number | undefined>;
   pulses: Pulse[];
 
-  /**
-   * The message a search result asked for, until the transcript has scrolled
-   * to it. Held here rather than passed as a prop because the channel it is in
-   * has to be opened first, and the two happen in different renders.
-   */
   focused: MessageId | null;
 
-  /**
-   * The routine a transcript row asked the panel to open, until it has.
-   *
-   * Held here for the same reason as `focused`: the two ends are in different
-   * columns of the window. A fired routine is drawn in the channel and read in
-   * the panel beside it, and threading a callback from the app root through
-   * every message to get there would put a prop on every row for the sake of
-   * one kind of chip.
-   */
   openingRoutine: RoutineId | null;
 
-  /**
-   * How many times each agent's schedule has changed since the window opened.
-   *
-   * A counter rather than the routines themselves: the panel reads them from
-   * Rust when it draws, and holding a second copy here would be a cache to keep
-   * in step with the one the component already has. What the component cannot
-   * work out for itself is *when* to read again, and an agent that sets a
-   * routine mid-turn is exactly when: the list was drawn before the routine
-   * existed, and closing the panel and opening it again was the only way to see
-   * it.
-   */
   routineVersion: Record<AgentId, number | undefined>;
 
-  /**
-   * A counter bumped whenever any crew's calendar moves.
-   *
-   * One number for the workspace rather than one per crew, which is the
-   * opposite of `routineVersion` beside it and is the right shape for the same
-   * reason that one is per agent: the surface that reads it draws every crew at
-   * once by default. Keyed by crew, the view showing all of them would have to
-   * watch every key, and the operator filtered to one crew would still want the
-   * count on the others to be right.
-   */
   calendarVersion: number;
 
-  /**
-   * The same counter for artifacts, one for the workspace for the calendar's
-   * reason: the dialog reads every crew's while the rail is showing every crew.
-   */
   artifactsVersion: number;
 
-  /**
-   * The same counter for each agent's memory, and it is a second one rather
-   * than a share of the first. A schedule and a memory move on different
-   * occasions, and a panel that read the whole file back every time a routine
-   * came due would throw away an edit the operator was in the middle of
-   * writing.
-   */
   memoryVersion: Record<AgentId, number | undefined>;
-  /** Its own counter, because notes move far more often than memory does. */
   workingNotesVersion: Record<AgentId, number | undefined>;
-  /** Its own counter per agent, for the notebook panel. */
   notebookVersion: Record<AgentId, number | undefined>;
-  /** One counter per skill scope, by `skillScopeKey`: a list redraws on its own. */
   skillsVersion: Record<string, number | undefined>;
 
-  /** Non-blocking surface for the last thing that went wrong. */
   banner: Banner | null;
-  /**
-   * Whether this page is hearing from its host.
-   *
-   * The socket's fact rather than a read's. A call that fails says so on the
-   * banner, and this is the quieter half that lasts: a page whose events have
-   * stopped is a page of the state of a moment that has passed. Two surfaces
-   * draw it — the transcript, and the status bar that names the host and when
-   * it last heard from it.
-   */
   link: Link;
-  /**
-   * When the host last said anything this page applied, while nothing is
-   * arriving. `null` whenever it is.
-   *
-   * Written once, on the close, rather than on every event: it is read by the
-   * one row that draws it and would otherwise redraw that row on every frame of
-   * a streaming turn.
-   */
   lastHeard: number | null;
-  /**
-   * A sign-in page the runtime asked this browser to open, while the flow
-   * behind it is still waiting.
-   *
-   * Set from the host's `openUrl` event, which every workspace sends. Drawn as
-   * a link as well as opened, because a window opened from an event rather
-   * than a click is one a browser may refuse, and a sign-in that opened
-   * nothing looks exactly like one that hung.
-   */
   handoff: string | null;
-  /**
-   * Model calls since this window opened, summed.
-   *
-   * The one number with nowhere else to be read from, and the menu bar's
-   * "this session" row when the window is showing a box: the box's runtime
-   * cannot know when this window opened.
-   */
   sessionSpend: Tokens;
 
   bootstrap: (valid?: () => boolean) => Promise<void>;
@@ -403,122 +151,36 @@ export interface State {
   refreshAgents: (valid?: () => boolean) => Promise<void>;
   refreshUsage: (valid?: () => boolean) => Promise<void>;
   refreshApprovals: (valid?: () => boolean) => Promise<void>;
-  /**
-   * Re-reads the open escalations.
-   *
-   * Its own call rather than a third read inside `refreshApprovals`: the two
-   * queues change on different events, and folding them together would make
-   * every answered permission re-read a list that cannot have moved.
-   */
   refreshEscalations: (valid?: () => boolean) => Promise<void>;
-  /** Takes one off the desk. Nothing is waiting on it, so nothing resumes. */
   clearEscalation: (id: EscalationId) => Promise<void>;
   select: (key: ChannelKey, valid?: () => boolean) => Promise<void>;
-  /**
-   * Looks inside one group, or back out at all of them. Closes the open channel
-   * if the crew being opened is not the one it belongs to.
-   */
   focusGroup: (id: GroupId | null) => Promise<void>;
-  /** Back to the opening screen: no channel open, the group kept. */
   leaveChannel: () => void;
-  /**
-   * Puts an agent somewhere: which group, in front of which row, and whether it
-   * is pinned. Absent `pinned` leaves the section it is in alone.
-   */
   moveAgent: (id: AgentId, at: Placement) => Promise<void>;
-  /** One drop, resolved against the rules that drew the rail. */
   dropAgent: (id: AgentId, target: DropTarget) => Promise<void>;
-  /** A crew's circle, let go over another crew's. */
   dropGroup: (id: GroupId, onto: GroupId) => Promise<void>;
   loadChannel: (key: ChannelKey, through?: MessageId, valid?: () => boolean) => Promise<void>;
-  /** Opens a message's channel with the message itself in the window. */
   openMessage: (channel: AgentId, message: MessageId) => Promise<void>;
   clearFocus: () => void;
-  /** Asks the panel beside the transcript to open one routine. */
   openRoutine: (id: RoutineId) => void;
   routineOpened: () => void;
-  /**
-   * Answers one request, from wherever it was seen.
-   *
-   * In the store rather than in the card because there are two cards: the one
-   * in the transcript and the one on the desk, and the same request is live on
-   * both at once. A refusal here is the runtime saying this was already
-   * answered, or that it lapsed while the operator was reading it, and the
-   * runtime's copy is the truth: it is taken rather than argued with, and both
-   * readings of it are corrected together.
-   */
   decideApproval: (id: ApprovalId, decision: Decision) => Promise<void>;
-  /**
-   * Answers a question with what the operator picked or wrote.
-   *
-   * Beside the verdict rather than folded into it, because a question is
-   * settled with a value and a permission with one of three tokens. Everything
-   * after the call is the same, which is why both go through one refresh.
-   */
   answerQuestion: (id: ApprovalId, answer: string) => Promise<void>;
-  /**
-   * One request answered, however it was answered.
-   *
-   * Both ways in do the same two things afterward, and this is the one place
-   * that knows what they are: a refusal is the runtime saying this was already
-   * settled or lapsed while it was being read, and its copy is the truth, so it
-   * is taken rather than argued with and both readings of it are corrected
-   * together. Private in spirit; on the store because the two callers are.
-   */
   settle: (answer: () => Promise<unknown>) => Promise<void>;
   applyEvent: (event: UiEvent, valid?: () => boolean) => void;
   dismissPulse: (id: number) => void;
   setBanner: (banner: Banner | null) => void;
-  /**
-   * The event socket closed and did not come back: the page is not live.
-   *
-   * `heardAt` is the last thing the host said to it, which is the one fact that
-   * turns "not live" into a time a person can act on.
-   */
   linkDown: (error: unknown, heardAt: number) => void;
   linkReconciling: (heardAt: number) => void;
-  /**
-   * The event socket opened again: what the page draws is current, and the
-   * sentence about it not being current goes with it.
-   */
   linkUp: (forget?: boolean) => void;
-  /**
-   * Puts a failure on the banner, with whatever can be done about it.
-   *
-   * One place rather than at each call site, because which failures carry a
-   * control is a fact about the failure and a caller made to remember it is a
-   * caller that will forget. The host being gone is the one with something to
-   * offer — trying again, and looking at which host this is — so it is the one
-   * that says so; everything else is a sentence and a dismissal, which is
-   * right, because nothing on screen can change it.
-   */
   showFailure: (error: unknown) => void;
   setHandoff: (url: string | null) => void;
   setSettings: (settings: Settings) => void;
-  /**
-   * Merges a change into the local preferences and writes them back.
-   *
-   * The write is here rather than in an effect beside the reader, so there is
-   * one place a preference is persisted and no component has to remember to.
-   */
   setPrefs: (patch: Partial<Prefs>) => void;
 }
 
 let pulseSeq = 0;
 
-/**
- * The banner for a failure, wherever it came from.
- *
- * One place, because which failures carry a control is a fact about the failure
- * and a caller made to remember it is a caller that will forget. The host being
- * gone is the one with something to offer — trying again, and looking at which
- * host this is — so it is the one that says so; everything else is a sentence
- * and a dismissal, which is right, because nothing on screen can change it.
- *
- * Its words are finished before they are stored: a refusal from the transport or
- * the runtime is written for a log as often as for a person, and the banner is
- * the one line that is read as prose. See `asSentence`.
- */
 function failureBanner(error: unknown): Banner {
   return {
     tone: "error",
@@ -527,7 +189,6 @@ function failureBanner(error: unknown): Banner {
   };
 }
 
-/** Group totals, addressed the way the UI reads them. */
 function byGroup(rows: GroupUsage[]): Record<GroupId, Tokens> {
   const out: Record<GroupId, Tokens> = {};
   for (const row of rows) {
@@ -541,10 +202,7 @@ function byGroup(rows: GroupUsage[]): Record<GroupId, Tokens> {
   return out;
 }
 
-/** Keeps a channel's messages ordered and free of duplicates. */
 function insert(existing: Envelope[] | undefined, message: Envelope): Envelope[] | undefined {
-  // An unloaded channel stays unloaded: appending here would produce a
-  // transcript with a hole in the middle the first time it is opened.
   if (existing === undefined) return undefined;
   if (existing.some((m) => m.id === message.id)) return existing;
 
@@ -553,42 +211,12 @@ function insert(existing: Envelope[] | undefined, message: Envelope): Envelope[]
   return next;
 }
 
-/**
- * Which crew the rail is inside once a channel has been opened.
- *
- * One invariant, from this end: the rail has to be drawing the row of whatever
- * the pane is showing. A search hit can land on a member of any crew, and a
- * rail still showing the one you were in has the open channel nowhere on it.
- *
- * It follows the agent rather than dropping out to the overview, which is what
- * it used to do. Dropping out was the only honest answer while the crews lived
- * in a strip inside the rail: going to the overview was the one state where
- * every row was drawable, and which crew you had ended up in was a heading you
- * had to read. The crews now have a column of their own that is on screen
- * whichever one you are in, so following is both possible and less: one lit
- * circle moves, instead of the whole rail changing shape.
- *
- * The overview stays the overview. It draws everybody, so a channel opened from
- * it is already on screen and there is nothing to repair.
- */
 function keptFocus(state: State, key: ChannelKey): GroupId | null {
   if (state.railGroup === null) return state.railGroup;
   const agent = state.agents.find((a) => a.id === key);
   return agent ? agent.groupId : state.railGroup;
 }
 
-/**
- * Whether the open channel survives the rail going inside a group.
- *
- * The same invariant as `keptFocus` read from the other end: the rail has to be
- * able to draw the channel that is open. Going back out to the overview keeps
- * whatever was open, because the overview draws everybody.
- *
- * This end still lets go rather than following, and the asymmetry is the point.
- * `select` is the operator naming an agent, so taking them to that agent's crew
- * is what they asked for. `focusGroup` is the operator naming a crew, and
- * following the channel out of it would undo the click.
- */
 function keptChannel(state: State, group: GroupId | null): boolean {
   const key = state.selected;
   if (group === null || key === null) return true;
@@ -620,10 +248,6 @@ export const useStore = create<State>((set, get) => ({
       const outcomes = await api.listOutcomes({ unseenOnly: true, limit: UNSEEN_LIMIT });
       if (valid() && read === outcomeRead) set({ outcomes });
     } catch (error) {
-      // Finished work is something to read when there is time, so a read that
-      // failed keeps the last list rather than taking the window down with it.
-      // A host too old to know the command is the likely one, and every other
-      // read of the bootstrap reports a link that is really down.
       console.warn(`Finished work could not be read: ${errorMessage(error)}`);
     }
   },
@@ -703,17 +327,8 @@ export const useStore = create<State>((set, get) => ({
       api.capabilities(),
       api.usageSummary(),
       api.approvalStates(),
-      // What a question was answered with, which is the half of its record a
-      // channel draws rather than a status: without it the first paint of a
-      // transcript says a question was answered and never what with.
       api.approvalAnswers(),
-      // A turn parked before the window was opened is still parked. The desk
-      // has to be right on the first paint, or the operator's first read of
-      // it says nobody is waiting.
       api.pendingApprovals(),
-      // And an agent that gave up on a Friday is still stuck on Monday. This
-      // one has no window at all, so first paint is the only thing that decides
-      // whether the operator ever sees it.
       api.openEscalations(),
       api.listDecisions(),
       get().refreshOutcomes(valid),
@@ -730,9 +345,6 @@ export const useStore = create<State>((set, get) => ({
       ...(escalationSnapshot === escalationRead ? { stuck } : {}),
       ...(decisionSnapshot === decisionRead ? { decisions, decisionError: null } : {}),
     });
-
-    // Nothing is opened for the operator: the window starts on today, where
-    // whoever needs them is drawn first, and a channel is one press from there.
   },
 
   async resynchronize(valid = () => true) {
@@ -759,20 +371,14 @@ export const useStore = create<State>((set, get) => ({
 
   async refreshAgents(valid = () => true) {
     const rosterSnapshot = ++rosterRead;
-    // Groups come back with the roster because an agent moving between them
-    // changes both counts, and one refresh keeps the two consistent on screen.
     const [agents, groups] = await Promise.all([api.listAgents(), api.listGroups()]);
     if (!valid() || rosterSnapshot !== rosterRead) return;
-    // A group the rail was looking inside can be deleted from the group editor,
-    // and a focus on one that is gone draws an empty rail with no way out of it.
     set((state) => ({
       agents,
       groups,
       railGroup: groups.some((g) => g.id === state.railGroup) ? state.railGroup : null,
     }));
 
-    // If the open channel was just deleted, go back to today rather than show
-    // a dead pane or open someone the operator did not ask for.
     const selected = get().selected;
     if (selected && !agents.some((a) => a.id === selected && a.lifecycle !== "terminated")) {
       set({ selected: null, focused: null });
@@ -781,10 +387,6 @@ export const useStore = create<State>((set, get) => ({
 
   async select(key, valid = () => true) {
     diagnostic("select.requested", key);
-    // A pending routine request goes with the channel it was asked from, for
-    // the same reason `focused` does: it is about a row on the screen the
-    // operator is leaving, and honoring it later would open something they
-    // asked for somewhere else.
     if (!valid()) {
       diagnostic("select.invalid", key);
       return;
@@ -799,21 +401,6 @@ export const useStore = create<State>((set, get) => ({
     await get().loadChannel(key, undefined, valid);
   },
 
-  /**
-   * A crew, opened.
-   *
-   * A channel from the crew you came from does not stay open behind it. The rail
-   * would not be drawing its row, so there is nothing on screen that says which
-   * crew the pane belongs to, and two crews can hold two agents with the same
-   * name and the same face: one left open from the group you just left reads as
-   * a member of the group you are looking at, working while nobody here is. The
-   * agent goes on working. It is the reading of it that was wrong.
-   *
-   * What it falls back to is nothing, rather than the first row of the crew
-   * being entered. Opening a channel is the operator naming somebody, and a
-   * crew that picked one for them would put an agent's history on screen as a
-   * side effect of a click that was about the crew.
-   */
   async focusGroup(id) {
     const closing = !keptChannel(get(), id);
     set({ railGroup: id, ...(closing ? { selected: null, focused: null } : {}) });
@@ -823,18 +410,6 @@ export const useStore = create<State>((set, get) => ({
     set({ selected: null, focused: null });
   },
 
-  /**
-   * The whole of a move, applied.
-   *
-   * Read back rather than patched locally. The runtime renumbers every live row
-   * to close the gap the agent left, so the one card that came back is not the
-   * change: guessing the rest here would leave the rail drawing an arrangement
-   * the database does not have until the next unrelated refresh.
-   *
-   * Pinning first, and only when it differs. It is a separate command because
-   * it is a separate fact, and doing it second would mean a refresh that draws
-   * the row in its new place and its old section.
-   */
   async moveAgent(id, at) {
     const current = get().agents.find((a) => a.id === id);
     if (at.pinned !== undefined && current && current.pinned !== at.pinned) {
@@ -844,23 +419,6 @@ export const useStore = create<State>((set, get) => ({
     await get().refreshAgents();
   },
 
-  /**
-   * One drop, resolved.
-   *
-   * Which section the target row belongs to is worked out here rather than
-   * handed in, because the same rules that drew the rail have to decide where
-   * the row lands and a component recomputing them would be a second place for
-   * them to drift.
-   *
-   * A pin is the head of a crew, so the row landed on says both things at once:
-   * which crew, and whether the place aimed at is the pinned band above it or
-   * the rest below. Dropping onto a pinned row pins the dragged agent, dropping
-   * below the band unpins it, and either can also change the crew.
-   *
-   * Dropping on a group is the one gesture that says nothing about the band, so
-   * it says nothing: the pin is the operator's standing instruction about that
-   * agent, and moving somebody between crews is not a decision to drop it.
-   */
   async dropAgent(id, target) {
     const state = get();
     const dragged = state.agents.find((a) => a.id === id);
@@ -887,18 +445,8 @@ export const useStore = create<State>((set, get) => ({
     await get().moveAgent(id, { groupId: onto.groupId, before, pinned: onto.pinned });
   },
 
-  /**
-   * One crew, moved in the column.
-   *
-   * Drawn from what the runtime answers rather than reordered here, for the
-   * reason a moved agent is read back: the runtime renumbers every crew, and
-   * the answer is the order that now stands rather than this window's guess
-   * at it. Every other list of crews in the app is this one, so they all move.
-   */
   async dropGroup(id, onto) {
     const { groups } = get();
-    // A crew deleted from another window while it was in the hand. Asked
-    // anyway, the runtime would refuse it by name; there is nothing to move.
     if (!groups.some((g) => g.id === id)) return;
     const before = landsBefore(groups, id, onto);
     if (before === undefined) return;
@@ -920,15 +468,6 @@ export const useStore = create<State>((set, get) => ({
     });
   },
 
-  /**
-   * A search result, opened.
-   *
-   * The channel is read again even when it is already the open one: the window
-   * on screen is the newest three hundred, and the message being asked for may
-   * be older than that. `focused` is set before the read so the transcript can
-   * mark the row the moment it arrives, and the channel is switched first so
-   * the operator sees where they are going rather than a pause.
-   */
   async openMessage(channel, message) {
     set((state) => ({
       selected: channel,
@@ -956,17 +495,6 @@ export const useStore = create<State>((set, get) => ({
     if (valid() && read === usageRead) set({ usage: byGroup(usage) });
   },
 
-  /**
-   * Re-reads every half of what is being asked: what each request came to,
-   * what an answered question was answered with, and which are still waiting.
-   *
-   * One call for the three, because they are three views of one table and a
-   * refresh that took only some leaves the transcript's buttons, its answer
-   * and the desk's queue disagreeing about the same request. The answers are
-   * here rather than fetched per card for the reason the states are: a settled
-   * question is drawn deep in a transcript that scrolls, and a read per card
-   * would be one round trip per question on screen.
-   */
   async refreshApprovals(valid = () => true) {
     const read = ++approvalRead;
     const [approvals, answers, pending] = await Promise.all([
@@ -989,9 +517,6 @@ export const useStore = create<State>((set, get) => ({
     } catch (error) {
       get().showFailure(error);
     }
-    // Read back either way, for the reason `settle` does: a clear that failed
-    // must not leave the desk missing a row the store still has, and one that
-    // worked is confirmed rather than assumed.
     await get().refreshEscalations();
   },
 
@@ -1009,10 +534,6 @@ export const useStore = create<State>((set, get) => ({
     } catch (error) {
       get().showFailure(error);
     }
-    // Read back whether it was taken or refused. A refusal means this side was
-    // holding a stale answer; a success is confirmed by the same read rather
-    // than assumed, so one path corrects the queue and there is no state where
-    // the desk has dropped a card the runtime still has.
     await get().refreshApprovals();
   },
 
@@ -1027,7 +548,6 @@ export const useStore = create<State>((set, get) => ({
       case "agentsChanged": {
         void get().refreshAgents(valid);
         void get().refreshDecisions(valid);
-        // A deleted agent takes its outcomes with it.
         void get().refreshOutcomes(valid);
         break;
       }
@@ -1039,8 +559,6 @@ export const useStore = create<State>((set, get) => ({
       case "outcomesSeen": {
         const seen = new Set(event.runIds);
         set((state) => ({ outcomes: state.outcomes.filter((one) => !seen.has(one.runId)) }));
-        // And read again, because a read already in flight began before these
-        // were seen and would put them back. The newer read wins it.
         void get().refreshOutcomes(valid);
         return;
       }
@@ -1067,8 +585,6 @@ export const useStore = create<State>((set, get) => ({
       }
 
       case "openUrl": {
-        // Another window's sign-in. Opening it here too put the same consent
-        // page in front of the operator once per open window.
         if (event.client && event.client !== PAGE_ID) break;
         set({ handoff: event.url });
         void openExternal(event.url);
@@ -1081,9 +597,6 @@ export const useStore = create<State>((set, get) => ({
           const messages = { ...state.messages };
           messages[message.channelId] = insert(messages[message.channelId], message);
 
-          // Draw the pulse from the event, not from a channel read, so it
-          // fires whether or not either channel is open. Bound to locals
-          // because narrowing on a property does not survive into a callback.
           const from = message.from;
           const to = message.to;
           let pulses = state.pulses;
@@ -1095,9 +608,6 @@ export const useStore = create<State>((set, get) => ({
             ];
           }
 
-          // Both ends count as active: a message an agent sent lives in the
-          // recipient's channel, so tracking the channel alone would leave the
-          // sender looking idle and sink it down the rail.
           const lastActive = { ...state.lastActive };
           for (const end of [from, to]) {
             if (end.kind === "agent") {
@@ -1112,10 +622,6 @@ export const useStore = create<State>((set, get) => ({
 
       case "streamStarted": {
         set((state) => {
-          // Whatever this agent was thinking belonged to the attempt this one
-          // replaces. A failed call reopens under a new id, and its half-formed
-          // last thought is not what the retry is doing. The trail goes with
-          // it, for the plainer reason that this is where a turn begins.
           const reasoning = { ...state.reasoning };
           delete reasoning[event.agentId];
           const trail = { ...state.trail };
@@ -1154,9 +660,6 @@ export const useStore = create<State>((set, get) => ({
 
       case "reasoningDelta": {
         set((state) => {
-          // The stream is what says whose thought this is, and whether anything
-          // is still waiting for it. A delta for a placeholder that has already
-          // gone is dropped, exactly as its text would be.
           const stream = state.streams[event.messageId];
           if (!stream) return state;
           const before = state.reasoning[stream.agentId] ?? "";
@@ -1164,8 +667,6 @@ export const useStore = create<State>((set, get) => ({
           const dropped = before.length + event.text.length - next.length;
           return {
             reasoning: { ...state.reasoning, [stream.agentId]: next },
-            // The buffer keeps its tail. Move call boundaries with it so long
-            // turns cannot attach a later thought to an earlier tool call.
             ...(dropped > 0 && state.trail[stream.agentId]
               ? {
                   trail: {
@@ -1184,9 +685,6 @@ export const useStore = create<State>((set, get) => ({
 
       case "toolStarted": {
         set((state) => {
-          // The stream says whose call this is, exactly as it does for a
-          // thought, and a call for a placeholder that has gone is dropped for
-          // the same reason: there is nobody left waiting on it.
           const stream = state.streams[event.messageId];
           if (!stream) return state;
           const call: LiveCall = {
@@ -1194,9 +692,6 @@ export const useStore = create<State>((set, get) => ({
             name: event.name,
             arguments: event.arguments,
             done: null,
-            // Read here rather than sent, because what this is used for is how
-            // long the operator has been waiting, and the operator's clock is
-            // the one they are waiting by.
             startedAt: Date.now(),
             reasoningOffset: state.reasoning[stream.agentId]?.length ?? 0,
           };
@@ -1234,9 +729,6 @@ export const useStore = create<State>((set, get) => ({
           delete streams[event.messageId];
           if (!ending) return { streams };
 
-          // The turn is over, so the thinking goes with it, and so does the
-          // record of what it reached for. This is the whole of what makes both
-          // ephemeral: nothing else ever clears them.
           const reasoning = { ...state.reasoning };
           delete reasoning[ending.agentId];
           const trail = { ...state.trail };
@@ -1253,11 +745,6 @@ export const useStore = create<State>((set, get) => ({
 
       case "activityChanged": {
         set((state) => {
-          // An agent that has gone quiet is not working on anything, so the run
-          // it was working on stops being the one to stop. Left behind, the
-          // entry would still be here when the agent was next handed work, and
-          // the Stop button would name the conversation before this one.
-          // Absent is the right kind of wrong: no button beats the wrong one.
           const activeRun =
             event.activity.state === "idle" && state.activeRun[event.agentId] !== undefined
               ? (() => {
@@ -1273,10 +760,6 @@ export const useStore = create<State>((set, get) => ({
       }
 
       case "channelsCleared": {
-        // Dropping the cache is not enough on its own: the channel on screen
-        // has to be read again, or it keeps showing what it already had until
-        // the operator clicks away and back, which is exactly what they had to
-        // do before this event existed.
         const emptied = new Set<ChannelKey>(event.agents);
         for (const key of emptied) channelReads.set(key, (channelReads.get(key) ?? 0) + 1);
         set((state) => {
@@ -1291,10 +774,6 @@ export const useStore = create<State>((set, get) => ({
         if (open && emptied.has(open)) {
           void get().loadChannel(open, undefined, valid);
         }
-        // The agent's Memory tab holds the two stores a reset also takes, and
-        // neither is read again on its own. Left alone, the tab draws a
-        // memory and a list of working notes that no longer exist,
-        // beside the empty channel that says they should not.
         set((state) => {
           const memory = { ...state.memoryVersion };
           const working = { ...state.workingNotesVersion };
@@ -1304,14 +783,11 @@ export const useStore = create<State>((set, get) => ({
           }
           return { memoryVersion: memory, workingNotesVersion: working };
         });
-        // The meters are counting rows that no longer exist.
         void get().refreshUsage(valid);
         break;
       }
 
       case "tokensUsed": {
-        // Applied here rather than refetched: the whole point is a number that
-        // moves while an agent is still working. `runSettled` reconciles.
         const spent = event.prompt + event.completion;
         set((state) => {
           const held = state.usage[event.groupId] ?? {
@@ -1338,8 +814,6 @@ export const useStore = create<State>((set, get) => ({
               [event.groupId]: {
                 prompt: held.prompt + event.prompt,
                 completion: held.completion + event.completion,
-                // Null stays null: a provider that prices nothing has not
-                // made this run free, and adding it up as zero would say so.
                 cost: event.cost === null ? held.cost : (held.cost ?? 0) + event.cost,
                 calls: held.calls + 1,
               },
@@ -1354,9 +828,6 @@ export const useStore = create<State>((set, get) => ({
       }
 
       case "runSettled": {
-        // Every agent that was working on this one has stopped, whether it
-        // finished, was refused or was stopped. Cleared by run rather than by
-        // agent because a cascade leaves several entries pointing at it.
         set((state) => {
           const activeRun = { ...state.activeRun };
           let changed = false;
@@ -1368,19 +839,10 @@ export const useStore = create<State>((set, get) => ({
           }
           return changed ? { activeRun } : {};
         });
-        // The live totals are additions to a number this corrects. Cheap: one
-        // grouped sum over a local table, and only when a run has gone quiet.
         void get().refreshUsage(valid);
         break;
       }
 
-      // Both of these patch the state map and then re-read the queue, which
-      // looks like one thing done twice and is not. The map is what the buttons
-      // on a request already drawn in a transcript are keyed on, and patching it
-      // is what makes them go live or go dead in the same frame as the event.
-      // The queue is the wording of every request still waiting, which no event
-      // carries: `approvalRequested` says an id and an agent, deliberately, so
-      // the read is where the desk's card comes from.
       case "approvalRequested": {
         set((state) => ({
           approvals: { ...state.approvals, [event.approvalId]: "pending" },
@@ -1397,9 +859,6 @@ export const useStore = create<State>((set, get) => ({
         break;
       }
 
-      // Nothing to patch first, unlike the two above: an escalation has no
-      // state a card is keyed on, and the wording is the whole row. Both events
-      // invalidate the queue and the read is where the desk's card comes from.
       case "escalationRaised":
       case "escalationCleared": {
         void get().refreshEscalations(valid);
@@ -1407,17 +866,11 @@ export const useStore = create<State>((set, get) => ({
       }
 
       case "calendarChanged": {
-        // No payload kept. The panel reads the window it is showing back from
-        // Rust, and holding a copy here would be a second cache to keep in step
-        // with the one the component already has — the argument `routineVersion`
-        // makes one field up.
         set((state) => ({ calendarVersion: state.calendarVersion + 1 }));
         break;
       }
 
       case "artifactsChanged": {
-        // No payload kept, for the calendar's reason: the dialog reads what it
-        // is showing back from Rust.
         set((state) => ({ artifactsVersion: state.artifactsVersion + 1 }));
         break;
       }
@@ -1490,10 +943,6 @@ export const useStore = create<State>((set, get) => ({
   },
 
   linkDown(error, heardAt) {
-    // A host an update stopped is the update working, and the panel that
-    // started it is already saying the host is restarting. A banner and a mark
-    // here would argue with it, and a page that dimmed on every update would
-    // flicker for a reason it already knows.
     if (restarting()) return;
     set({ banner: failureBanner(error), link: "down", lastHeard: heardAt });
   },
@@ -1505,15 +954,10 @@ export const useStore = create<State>((set, get) => ({
   linkUp(forget = true) {
     const { link, banner } = get();
     if (forget) forgetRestart();
-    // Nothing to take back, and nothing to redraw: the ordinary case, on every
-    // page open.
     if (link === "up" && banner?.fix !== "host") return;
     set({
       link: "up",
       lastHeard: null,
-      // Only the sentence about a host that was not answering: a refused write
-      // or a missing key is still true, and the host coming back says nothing
-      // about either.
       ...(banner?.fix === "host" ? { banner: null } : {}),
     });
   },
@@ -1535,26 +979,6 @@ export const useStore = create<State>((set, get) => ({
   },
 }));
 
-/**
- * Every agent still in the workspace, in the order the operator arranged them.
- *
- * The arrangement and not the drawn order: this is one flat list across every
- * group, and where a row is lifted for working is a question about one section
- * of the rail. `lib/rail.ts` answers that, and the sidebar asks it per section.
- * A caller that just wants the roster, like the composer's mention list, gets
- * the arrangement, which is the order the operator would look for a name in.
- *
- * Memoized, and that is load-bearing rather than an optimization. `filter`
- * allocates a new array on every render, so an unmemoized result is a fresh
- * reference each time. Put that in a dependency list next to a `setState` and
- * you get effect -> render -> new reference -> effect, which React aborts by
- * unmounting the whole tree. The window paints its background and nothing else.
- */
-/**
- * What For you holds for the operator: decisions still open or cut short by a
- * lapse, requests waiting, and runs that stopped. One count, so the window and
- * the groups sheet never disagree about it.
- */
 export function forYouCount(state: State): number {
   const decisions = state.decisions.filter(
     (item) => item.status === "pending" || (item.status === "answered" && item.interrupted),
@@ -1574,10 +998,6 @@ export function useLiveAgents(): AgentCard[] {
   }, [agents]);
 }
 
-/**
- * Resolves agents for rendering history. Deleted agents are included: they
- * still appear in transcripts, and a message from a nameless id is unreadable.
- */
 export function useAgentLookup(): {
   byId: (id: AgentId) => AgentCard | undefined;
   byName: (name: string) => AgentCard | undefined;

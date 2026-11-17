@@ -457,6 +457,57 @@ because `ci.sh` runs inside a container that has no daemon to hand.
 KEEP=1 ./scripts/image.sh       # and leave it on http://127.0.0.1:8787
 ```
 
+### Running the image, the compose file and the service
+
+Built and run by hand, the commit is the one argument the image needs:
+
+```sh
+docker build --build-arg GUACA_COMMIT=$(git rev-parse --short=7 HEAD) -t guacad .
+docker run --rm -p 127.0.0.1:8787:8787 -v guaca:/var/lib/guaca guacad
+```
+
+`docker-compose.yml` is the same daemon, and the same file serves this machine
+and a box:
+
+```sh
+GUACA_COMMIT=$(git rev-parse --short=7 HEAD) docker compose up -d
+docker compose logs guacad | grep 'open this'
+```
+
+It publishes the port to `127.0.0.1` only. A box is reached through a tunnel,
+and a default that exposed every interface would be one firewall away from a
+public workspace holding somebody's keys and transcripts. The variables it
+forwards from the environment it is started in:
+
+- `GUACA_TOKEN`: the workspace token. Left out, the daemon generates one on its
+  first run and prints it.
+- `TZ`: the zone that routines, the 9:00 and 16:00 reminders and an agent's
+  date keep, by its IANA name (`America/New_York`). Left out, the host keeps
+  UTC.
+- `ANTHROPIC_API_KEY`: read by the `claude` program, separately from the model
+  key in Settings. Set, it bills the API instead of the plan `claude` is
+  signed in to.
+
+`host.docker.internal` reaches the machine the container runs on. Docker
+Desktop supplies that name, and the compose file maps it to `host-gateway` so
+Linux has it too.
+
+`deploy/guacad.service` runs the daemon under systemd on a box without a
+container runtime:
+
+```sh
+install -m 755 guacad /usr/local/bin/guacad
+mkdir -p /usr/share/guaca && cp -r dist /usr/share/guaca/web
+install -m 644 deploy/guacad.service /etc/systemd/system/
+systemctl enable --now guacad
+journalctl -u guacad | grep 'open this'
+```
+
+The bind stays on loopback, the daemon's own default, because a box is reached
+through a tunnel on the same machine. Anything else the operator sets
+(`GUACA_BIND`, `GUACA_TOKEN`, `GUAC_LOG`) goes in `/etc/guaca/guacad.env`,
+one `NAME=value` per line.
+
 ## What is not built
 
 Said here rather than discovered. A hosted workspace today is the whole
@@ -920,7 +971,8 @@ get past the error.
 curl -fsSL https://raw.githubusercontent.com/madebywelch/guaca/main/deploy/box/install.sh | sudo sh
 ```
 
-It needs Docker Engine and nothing else. It makes `guaca-updater`, which holds
+`sh deploy/box/install.sh --help` lists every setting it reads. It needs
+Docker Engine and nothing else. It makes `guaca-updater`, which holds
 the Docker socket and runs nothing else, and the updater makes `guacad`, which
 is published to `127.0.0.1:8787` and never sees the socket. Put a tunnel in
 front of that port (`tailscale serve --bg http://127.0.0.1:8787`, or a TLS

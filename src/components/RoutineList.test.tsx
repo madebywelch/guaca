@@ -11,7 +11,6 @@ vi.mock("../lib/ipc", () => ({
   api: { agentRoutines: () => agentRoutines() },
 }));
 
-/** 2025-06-10 at 09:28 local, which is what the labels are written against. */
 const MORNING = new Date(2025, 5, 10, 9, 28, 0, 0).getTime();
 
 function routine(over: Partial<Routine> = {}): Routine {
@@ -43,14 +42,10 @@ describe("RoutineList", () => {
 
     expect(await screen.findByText("Boss commitment nudge")).toBeTruthy();
     expect(screen.getByText(/Weekdays at 9:28/)).toBeTruthy();
-    // The instruction is not in the row at all. It runs to several sentences,
-    // and a list that drew it was one routine tall.
     expect(screen.queryByText("check what I promised and remind me")).toBeNull();
   });
 
   it("cuts an unnamed routine down to a title instead of drawing the whole instruction", async () => {
-    // Agents set routines for themselves with the `schedule` tool and need not
-    // name them, and their instructions are long by design.
     agentRoutines.mockResolvedValue([
       routine({
         name: "",
@@ -64,9 +59,6 @@ describe("RoutineList", () => {
   });
 
   it("says which routines are switched off, and when they last ran", async () => {
-    // Off is not deleted. It still has to be findable, and it must not claim a
-    // next firing it is never going to make. When it last ran is the only news
-    // left about it, and the answer to "was this ever working".
     agentRoutines.mockResolvedValue([
       routine({ active: false, lastRunAt: MORNING - 2 * 86_400_000 }),
     ]);
@@ -77,17 +69,12 @@ describe("RoutineList", () => {
   });
 
   it("says the day a weekly routine keeps, not just the hour", async () => {
-    // Nothing else on screen records which day it is: the row said "Every week
-    // at 9:28 AM" whichever day that was.
     agentRoutines.mockResolvedValue([routine({ trigger: "weekly" })]);
     render(<RoutineList agentId="a1" onOpen={vi.fn()} />);
     expect(await screen.findByText(/Every Tuesday at 9:28/)).toBeTruthy();
   });
 
   it("draws a routine waiting on an event without counting down to anything", async () => {
-    // Nothing delivers an event yet, so this is a row a future build writes and
-    // this one has to read. A countdown here would be to a moment nothing is
-    // holding.
     agentRoutines.mockResolvedValue([
       routine({ trigger: "event:stripe/invoice.payment_failed", nextRunAt: null }),
     ]);
@@ -146,9 +133,6 @@ describe("RoutineList", () => {
   });
 
   it("reads itself again when the agent it belongs to changes its own schedule", async () => {
-    // An agent sets a routine for itself mid-turn, with the operator looking at
-    // this panel. Until the runtime said so, the list stayed as it was drawn and
-    // the only way to see the routine was to close the panel and open it again.
     render(<RoutineList agentId="a1" onOpen={vi.fn()} />);
     expect(await screen.findByText(/Nothing standing/)).toBeTruthy();
 
@@ -161,8 +145,6 @@ describe("RoutineList", () => {
   });
 
   it("ignores a schedule change belonging to another agent", async () => {
-    // Every agent's panel would otherwise refetch on every firing anywhere in
-    // the workspace.
     render(<RoutineList agentId="a1" onOpen={vi.fn()} />);
     expect(await screen.findByText(/Nothing standing/)).toBeTruthy();
     expect(agentRoutines).toHaveBeenCalledTimes(1);

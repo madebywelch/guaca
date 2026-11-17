@@ -8,20 +8,8 @@ import { Sidebar } from "./Sidebar";
 
 type Props = ComponentProps<typeof Sidebar> & { onClose: () => void };
 
-/** The sheet opens at the window's left edge, where a Mac draws its window buttons. */
 const LIGHTS = desktop && IS_MAC;
 
-/**
- * Every group and every agent in it, as the rail drew them, in a sheet.
- *
- * The rail used to stand beside every conversation. The timeline at the top
- * now says who did what and when, which is what the rail was mostly read for,
- * and a column of names beside it would say the same thing twice. What the
- * rail also did, and nothing else does, is arrange: groups and the agents in
- * them, the order, pins, moving an agent between groups, each group's
- * settings, making one. That is all here unchanged, one click away, and opening
- * someone from it closes it.
- */
 export function GroupsSheet({ onClose, onOpenChannel, ...rest }: Props) {
   const panel = useRef<HTMLDivElement>(null);
   const many = useStore((state) => state.groups.length > 1);

@@ -1,56 +1,14 @@
-//! Where the runtime is running, and the handful of things that decides.
-//!
-//! Every running workspace is a `guacad` daemon reached over HTTP and a
-//! socket, whether it is a container on the operator's Mac or a machine
-//! somewhere else, and `server/mod.rs` always builds it as
-//! [`Deployment::Server`]. [`Deployment::Desktop`] is the arrangement from
-//! before that, a `tokio` runtime inside the desktop app's own process with
-//! the operator's disk and programs; nothing that runs constructs it now, and
-//! only tests do.
-//!
-//! ## Two, not three
-//!
-//! An operator chooses between three things: run it here, run it on a box I
-//! rent, or let guaca.ai hand me one. The runtime only ever sees two, because
-//! the difference between the last two is who pressed the button at the
-//! provider. A managed box and an operator's own box run the same binary, hold
-//! the same state and refuse the same things, and nothing below this line can
-//! tell them apart or has any business trying. Whoever provisioned it is a fact
-//! about the bill, and the bill is not the runtime's subject.
-//!
-//! That is also what makes bring-your-own-box free rather than a second
-//! product: there is no managed code path to fall out of step with.
-//!
-//! ## What it decides, and where the decision is read
-//!
-//! Resource paths and endpoint addresses are resolved by the backend. Both
-//! hosts can use their own directories and network; neither can read the
-//! other machine's files or credentials just because a client connects.
-//!
-//! The rule is that a refusal is drawn **in the panel, before anything is
-//! spent**, and never discovered at turn time. This is the same shape as a
-//! model named on a group running on Claude, which is kept and never used and
-//! says so on the row: a capability that is quietly absent is the one thing
-//! nothing else on screen would explain.
-
 use serde::{Deserialize, Serialize};
 
-/// Where this runtime is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum Deployment {
-    /// Inside the desktop app's own process, on the operator's machine. No
-    /// running workspace is one: only tests construct it.
     #[default]
     Desktop,
-    /// A daemon on a machine the operator reaches over a network. Their own box
-    /// or one guaca.ai provisioned; this type cannot tell, and neither can
-    /// anything that reads it.
     Server,
 }
 
 impl Deployment {
-    /// What this deployment can do, which is the value every panel asks.
     pub const fn capabilities(self) -> Capabilities {
         match self {
             Deployment::Desktop => Capabilities {
@@ -73,43 +31,15 @@ impl Deployment {
     }
 }
 
-/// What a deployment can do.
-///
-/// A struct of flags rather than a set of `matches!` calls scattered through
-/// the panels. The list is short and it is meant to stay short: a fifth flag
-/// has to be something that is physically on the operator's machine, not a
-/// feature somebody has not got round to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capabilities {
-    /// An address on the backend's network. Localhost names the backend;
-    /// host.docker.internal can reach the container host.
     pub loopback_endpoints: bool,
-    /// Whether the backend may run the official Claude CLI for turns.
-    /// Authentication belongs to that CLI, under the operator's backend user.
     pub claude_provider: bool,
-    /// Whether a file may be named by a path on the operator's disk, and a
-    /// saved copy land in their downloads folder.
-    ///
-    /// On a server both become the browser's own upload and download. The
-    /// capability is gone; the ability to hand a document over is not.
     pub local_files: bool,
-    /// Whether the machine the runtime runs on is the operator's own, and a
-    /// sign-in already sitting on it may therefore be offered to them.
-    ///
-    /// False for every server, even one this person rents: the offer is about
-    /// the desktop they are looking at, the panel says "This Mac" when it makes
-    /// it, and a box may be shared with people who are not in this window. A
-    /// host that guessed from `claude_provider` would be offering somebody
-    /// else's account, which is the reason this is a capability of its own.
     pub borrowed_signins: bool,
 }
 
-/// Why a capability is absent, phrased for whoever is about to hit it.
-///
-/// Every one of these says the same two things in different words: what is
-/// missing, and what to do instead. A refusal that only says no gets reworded
-/// and retried, and on a panel it gets reported as a bug.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Absent {
     LoopbackEndpoints,
@@ -145,12 +75,6 @@ impl std::fmt::Display for Absent {
 }
 
 impl Capabilities {
-    /// Refuses when the capability is absent, with the sentence to say.
-    ///
-    /// Written as a `Result` so a call site is a `?` rather than an `if` with
-    /// a hand-written message beside it. Two panels writing their own wording
-    /// for one refusal is how an operator gets told two different things about
-    /// one fact.
     pub const fn require(self, what: Absent) -> Result<(), Absent> {
         let have = match what {
             Absent::LoopbackEndpoints => self.loopback_endpoints,
@@ -165,27 +89,11 @@ impl Capabilities {
     }
 }
 
-/// Whether a URL names the backend itself or its container host.
-///
-/// Read before an endpoint is stored rather than when a turn fails against it,
-/// which is the difference between a sentence in a settings pane and a crew
-/// that silently cannot think. Covers the three spellings of loopback plus the
-/// name every local model server prints in its own console, because an operator
-/// copying that console line is the whole case this exists for.
-///
-/// It reads the address and never resolves it. A hostname that happens to point
-/// at loopback (`127.0.0.1.nip.io`, or an entry somebody put in `/etc/hosts`)
-/// is not caught, and could not honestly be: a name resolves differently on two
-/// machines and differently tomorrow, so an answer computed here would be a
-/// guess presented as a rule. What is caught is the mistake this exists for,
-/// which is a console line pasted into a settings box.
 pub fn is_loopback(url: &str) -> bool {
     let Some(rest) = url.split_once("://").map(|(_, rest)| rest) else {
         return false;
     };
     let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
-    // Strip credentials and the port. An IPv6 literal keeps its brackets until
-    // the port is taken off, so the bracket check comes first.
     let host = host.rsplit_once('@').map(|(_, h)| h).unwrap_or(host);
     let host = if let Some(end) = host.find(']') {
         &host[..=end]
@@ -197,15 +105,9 @@ pub fn is_loopback(url: &str) -> bool {
         || host == "::1"
         || host == "0.0.0.0"
         || is_loopback_v4(&host)
-        // The host as reached from inside a container.
         || host == "host.docker.internal"
 }
 
-/// Whether a host is a dotted-quad in `127.0.0.0/8`.
-///
-/// Four numeric octets, checked rather than prefix-matched. `127.0.0.1.nip.io`
-/// starts with the same four characters and is a *name*: this function is about
-/// literals, and the paragraph above says why nothing here resolves one.
 fn is_loopback_v4(host: &str) -> bool {
     let mut octets = host.split('.');
     let first = octets.next().and_then(|o| o.parse::<u8>().ok());
@@ -233,10 +135,6 @@ mod tests {
 
     #[test]
     fn every_refusal_says_what_to_do_instead() {
-        // The rule the whole app is written to: a refusal that only says no
-        // gets reworded and retried by a model, and reported as a bug by a
-        // person. Each of these has to carry a way forward, and the cheapest
-        // check that it does is that it offers an alternative in words.
         for what in [Absent::LoopbackEndpoints, Absent::ClaudeProvider, Absent::LocalFiles] {
             let said = what.sentence();
             assert!(said.len() > 60, "{what:?} is too short to have said anything: {said}");
@@ -244,9 +142,6 @@ mod tests {
                 said.contains(" or ") || said.contains("instead") || said.contains(", and "),
                 "{what:?} refuses without offering a way forward: {said}"
             );
-            // Interpolated mid-sentence, so it opens lowercase. A proper noun
-            // is the one thing that legitimately does not, and it is named
-            // here rather than the rule being dropped for it.
             assert!(
                 !said.starts_with(char::is_uppercase) || said.starts_with("Claude Code"),
                 "{what:?} is interpolated mid-sentence and must not open with a capital: {said}"
@@ -256,10 +151,6 @@ mod tests {
 
     #[test]
     fn a_box_may_not_offer_a_signin_its_machine_already_has() {
-        // The offer names "This Mac", so the capability has to be the one fact
-        // that means the runtime is on the operator's own machine. A server
-        // offers the Claude provider and still may not do this: the programs
-        // there may be signed in to somebody else's account.
         assert!(Deployment::Desktop.capabilities().borrowed_signins);
         assert!(Deployment::Server.capabilities().claude_provider);
         assert!(!Deployment::Server.capabilities().borrowed_signins);
@@ -267,16 +158,11 @@ mod tests {
 
     #[test]
     fn the_default_is_the_desktop_because_that_is_what_exists_today() {
-        // A missing value must never silently take capabilities away from an
-        // app that has always had them.
         assert_eq!(Deployment::default(), Deployment::Desktop);
     }
 
     #[test]
     fn a_server_is_a_server_however_it_was_provisioned() {
-        // The whole argument for two variants rather than three. If this ever
-        // needs a third, something below this line has started caring who paid
-        // for the box, and that is the thing to undo.
         assert!(Deployment::Server.is_server());
         assert!(!Deployment::Desktop.is_server());
     }
@@ -299,16 +185,11 @@ mod tests {
 
     #[test]
     fn a_reachable_endpoint_is_not_mistaken_for_a_local_one() {
-        // The expensive direction. A wrong "this is loopback" refuses an
-        // endpoint that works, in a settings pane, with no way round it.
         for url in [
             "https://openrouter.ai/api/v1",
             "https://api.openai.com/v1",
             "http://192.168.1.10:1234/v1",
             "http://10.0.0.4:1234/v1",
-            // Names that merely start the same way. A server called
-            // `localhost.example.com` is somebody else's machine, and
-            // `127.0.0.1.nip.io` is a name this deliberately does not resolve.
             "https://localhost.example.com/v1",
             "https://127.0.0.1.nip.io/v1",
             "http://127.0.0.1.example.com/v1",

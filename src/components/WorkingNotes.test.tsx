@@ -43,8 +43,6 @@ describe("WorkingNotes", () => {
     agentWorkingNotes.mockResolvedValue([note(HOUR, "waiting on Robert")]);
     const first = render(<WorkingNotes agentId="a1" />);
     const disclosure = await screen.findByRole("button", {
-      // The count and the age are their own spans, and an accessible name
-      // joins inline children without the spaces between them.
       name: /Working notes.*1.*newest 1h ago/,
     });
     expect(disclosure.getAttribute("aria-expanded")).toBe("false");
@@ -59,8 +57,6 @@ describe("WorkingNotes", () => {
   });
 
   it("draws each note beside how long ago it was written", async () => {
-    // The age is the whole reason the list is worth reading: it is what tells
-    // the operator the difference between an agent working and an agent stuck.
     agentWorkingNotes.mockResolvedValue([
       note(6 * DAY, "asked the paralegal for the regulatory read"),
       note(2 * HOUR, "handed the scope document over"),
@@ -87,8 +83,6 @@ describe("WorkingNotes", () => {
   });
 
   it("reads itself again when the agent notes something", async () => {
-    // The operator reads this panel while the agent works, which is exactly
-    // when it moves. Same argument the memory panel above it has.
     render(<WorkingNotes agentId="a1" />);
     fireEvent.click(screen.getByRole("button", { name: /Working notes/ }));
     await waitFor(() => expect(agentWorkingNotes).toHaveBeenCalledTimes(1));
@@ -114,9 +108,6 @@ describe("WorkingNotes", () => {
   });
 
   it("does not react to the memory beside it moving", async () => {
-    // Two counters rather than one. Notes are written far more often than
-    // memory, so a shared counter would have every note refetch a page that
-    // has not changed.
     render(<WorkingNotes agentId="a1" />);
     fireEvent.click(screen.getByRole("button", { name: /Working notes/ }));
     await waitFor(() => expect(agentWorkingNotes).toHaveBeenCalledTimes(1));
@@ -129,11 +120,6 @@ describe("WorkingNotes", () => {
   });
 
   it("draws the newest few and keeps the older ones behind a button", async () => {
-    // The panel shares one column with the agent's screen, its schedule and
-    // its memory. A full list of sixteen notes, each wrapping to three lines in
-    // a sidebar this narrow, is a screen of text everything else sits below.
-    // Which end is kept is the decision: the notes read oldest first, so the
-    // tail is where the work is now.
     agentWorkingNotes.mockResolvedValue([
       note(6 * DAY, "asked the paralegal for the read"),
       note(5 * DAY, "chased the vendor"),
@@ -149,8 +135,6 @@ describe("WorkingNotes", () => {
     expect(screen.getByText("handed the scope over")).toBeTruthy();
     expect(screen.queryByText("asked the paralegal for the read")).toBeNull();
 
-    // The count is on the button because the alternative is an operator who
-    // cannot tell a list of six from a list of sixteen without opening it.
     fireEvent.click(screen.getByRole("button", { name: "Show 2 older" }));
 
     expect(screen.getByText("asked the paralegal for the read")).toBeTruthy();
@@ -189,8 +173,6 @@ describe("WorkingNotes", () => {
   });
 
   it("draws the read that failed rather than an empty list", async () => {
-    // An empty panel is a claim that the agent has nothing in flight, which is
-    // a different thing from not having been able to find out.
     agentWorkingNotes.mockRejectedValue(new Error("database is locked"));
     render(<WorkingNotes agentId="a1" />);
     fireEvent.click(screen.getByRole("button", { name: /Working notes/ }));
@@ -274,8 +256,6 @@ describe("ago", () => {
   });
 
   it("reads a note from the future as current rather than negative", () => {
-    // Two clocks, or a note written either side of a system time change.
-    // "-1d ago" is worse than slightly wrong.
     expect(ago(now + 60_000, now)).toBe("just now");
   });
 });

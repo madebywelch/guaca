@@ -73,8 +73,6 @@ describe("SigninList", () => {
   });
 
   it("asks the machine on open rather than trusting the stored answer", async () => {
-    // Sessions change on the machine, so a panel that only ever read the cache
-    // would show a login the operator ended ten minutes ago.
     render(<SigninList agent={card()} />);
     await waitFor(() => expect(scanAgentSignins).toHaveBeenCalledWith("a1"));
   });
@@ -90,8 +88,6 @@ describe("SigninList", () => {
   });
 
   it("marks a guess as a guess", async () => {
-    // The weaker rule matches a session-shaped cookie on a visited site. It is
-    // usually right and must not be presented as though it were certain.
     agentSignins.mockResolvedValue([
       signin({ service: "internal.example", domain: "internal.example", recognized: false }),
     ]);
@@ -104,9 +100,6 @@ describe("SigninList", () => {
   });
 
   it("draws nothing for an agent with neither place, and asks no machine", async () => {
-    // A row that said "nothing holding a session" over a disabled Check was
-    // read on every new agent and could not be acted on. It appears when a
-    // place is given.
     const { container } = render(<SigninList agent={card({ sandboxId: null, browserId: null })} />);
     await waitFor(() => expect(container.querySelector(".field__hint")).toBeNull());
     expect(container.textContent).toBe("");
@@ -114,9 +107,6 @@ describe("SigninList", () => {
   });
 
   it("scans an agent that has only a browser", async () => {
-    // Either place can hold a session, so an agent that has only ever used the
-    // web is still worth asking. Keying this off the machine alone left every
-    // browser-only agent reporting nothing for ever.
     render(<SigninList agent={card({ sandboxId: null, browserId: "kb-1" })} />);
     await screen.findByText(/Signed in/);
     expect(scanAgentSignins).toHaveBeenCalled();
@@ -129,9 +119,6 @@ describe("SigninList", () => {
   });
 
   it("says which of the two places holds a session", async () => {
-    // A computer and a browser have unrelated cookie jars. An operator looking
-    // at "LinkedIn" needs to know which window the agent will find it in, and
-    // an agent told only the service name reaches for the wrong tool.
     const both = [
       signin({ service: "LinkedIn", surface: "browser" }),
       signin({ service: "Gmail", domain: "google.com", surface: "computer" }),

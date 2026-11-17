@@ -1,24 +1,3 @@
-/**
- * Settings, as a nav and a pane rather than one scroll.
- *
- * Every piece of state lives here, in the shell, and the panes are given values
- * and setters. That is not tidiness: the shell is unmounted when the dialog
- * closes, so state held by a pane would be discarded every time the operator
- * changed section, and typing an endpoint, glancing at Limits and coming back
- * would silently lose the endpoint.
- *
- * Save stays in the foot, outside the scrolling half, for the same reason it
- * used to be at the bottom of one column: it acts on everything, not on the
- * section that happens to be open. It is drawn only while something is waiting
- * for it, which is what keeps that from being a lie. Five of the nine panes
- * stage nothing at all — Appearance and Notifications write as they are
- * clicked, Account acts at once, Shortcuts and About are read-only — so a Save
- * pinned there regardless spent most of its life offering to save settings that
- * were already saved, which reads as the opposite. Test is in the Provider pane
- * because it reads that pane and acts on none of the others, and it deliberately
- * sends what is on screen rather than what is stored. Save does not close.
- */
-
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
@@ -93,10 +72,7 @@ import { SkillList } from "./SkillList";
 
 interface Props {
   onClose: () => void;
-  /** Which pane to open on. The palette and the missing-key banner both point
-   *  at a specific one, and landing on General to hunt for it is a step. */
   section?: Section;
-  /** Told which pane is open, so the host can tell an agent what is on screen. */
   onSection?: (section: Section) => void;
 }
 
@@ -122,13 +98,11 @@ const CONTRAST_LABELS: Record<ContrastLevel, string> = {
   more: "More",
 };
 
-/* Not "Paper" and "Ink": those are the surface's names, one field up. */
 const CAST_LABELS: Record<Cast, string> = {
   cut: "Cut",
   drawn: "Drawn",
 };
 
-/** Three of the cast in three pigments, drawn inside each choice so it can be seen before it is made. */
 const CAST_SAMPLE = [
   { avatar: "orb", color: "Olive" },
   { avatar: "slab", color: "Slate" },
@@ -138,11 +112,6 @@ const CAST_SAMPLE = [
   color: ACCENTS.find((accent) => accent.name === one.color)?.value ?? DEFAULT_ACCENT,
 }));
 
-/**
- * The Host's three switches, in the order the pane draws them. The label is
- * the row and the hint says what is in it, since "needs you" covers four
- * different requests and none of them is obvious from the name.
- */
 const ATTENTION_ROWS: { key: keyof Attention; label: string; hint: string }[] = [
   {
     key: "needsYou",
@@ -161,14 +130,8 @@ const ATTENTION_ROWS: { key: keyof Attention; label: string; hint: string }[] = 
   },
 ];
 
-/** A test macOS allows and then refuses to take, which no switch explains. */
 const NOT_ACCEPTED = "Not sent. macOS did not accept the notification.";
 
-/**
- * What the Notifications pane says about macOS, above the test button. Only a
- * Mac has a per-app answer to read; everywhere else the test is still the only
- * way to find out.
- */
 const MAC_ACCESS: Record<NotificationAccess, string> = {
   allowed: "macOS allows Guaca to show notifications.",
   notAsked:
@@ -178,29 +141,20 @@ const MAC_ACCESS: Record<NotificationAccess, string> = {
     "This copy of Guaca is not running as an installed app, so macOS will not show its notifications.",
 };
 
-/** The two shapes a push takes, as the pane names them. */
 const PUSH_FORMATS: { value: PushFormat; label: string }[] = [
   { value: "ntfy", label: "ntfy" },
   { value: "json", label: "JSON webhook" },
 ];
 
-/** How much a push says. The line is the default; the other is one press away. */
 const PUSH_CONTENTS: { value: PushContent; label: string }[] = [
   { value: "outcome", label: "Include what finished" },
   { value: "generic", label: "Only say that something finished" },
 ];
 
-/** A time in a sentence: "today 9:02 AM", "Tuesday 9:02 AM". */
 function said(at: number, now: number): string {
   return whenLabel(at, now).replace(/^(Today|Yesterday)/, (day) => day.toLowerCase());
 }
 
-/**
- * The status line under the push address. A test just pressed is newest, so it
- * is said first; otherwise it is the Host's record of the last real attempt.
- * Every failure is in the Host's words, which are built from the status code
- * and never repeat the address.
- */
 export function pushLine(
   report: PushReport | null,
   test: { ok: boolean; text: string } | null,
@@ -219,12 +173,6 @@ export function pushLine(
   return { tone: "info", text: "Nothing sent yet." };
 }
 
-/**
- * A duration box, which is blank while it is inheriting what is stored.
- *
- * So an edit is a number that is not the stored one, and retyping what the
- * placeholder already says is not one.
- */
 const differs = (text: string, stored: number | undefined) =>
   text.trim() !== "" && Number(text) !== stored;
 
@@ -253,14 +201,8 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
   const [systemDark, setSystemDark] = useState(prefersDark);
   useEffect(() => watchSystemSurface(setSystemDark), []);
   const setPrefs = useStore((s) => s.setPrefs);
-  /* Which host this dialog is about, in the three ways the bar tells them
-     apart, and what this client keeps of it. Both sentences below that name a
-     machine are built from these rather than assuming the runtime runs in the
-     window they are drawn in. */
   const place = hostPlace();
   const keeps = clientKeeps({ desktop, attached: attached() !== null });
-  /* Kept, and drawn at once. `App` would redraw on the next render anyway; this
-     is so the pane the choice was made in is already in it. */
   const setLook = (patch: Partial<Prefs>) => {
     setPrefs(patch);
     applyAppearance({ ...prefs, ...patch });
@@ -311,12 +253,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
   );
   const [busy, setBusy] = useState(false);
   const [macAccess, setMacAccess] = useState<NotificationAccess | null>(null);
-  // The switch being written, so a second click on it waits for the first.
   const [attending, setAttending] = useState<keyof Attention | null>(null);
-  // The push address, held here like every other field so that an address
-  // typed and left for a glance at another section is still there. Blank
-  // means keep what is saved, as with a key: the address is never read back.
-  // The link is null until it is touched, and then it is what is on screen.
   const [pushUrl, setPushUrl] = useState("");
   const [pushToken, setPushToken] = useState("");
   const [pushLink, setPushLink] = useState<string | null>(null);
@@ -326,10 +263,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
   const panelRef = useRef<HTMLDivElement>(null);
   const pending = useRef<SettingsPatch | null>(null);
 
-  // Settings change under an open dialog: another window, a browser on the
-  // same host, or an agent. A field the operator has not touched follows the
-  // change; one they have edited keeps their edit. Without this the form keeps
-  // what it read on open, and Save writes it back over the change.
   const base = useRef(initial?.baseline ?? settings);
   useEffect(() => {
     const was = base.current;
@@ -367,38 +300,18 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
   const currentKeys = useRef({ apiKey, e2bKey, kernelKey });
   currentKeys.current = { apiKey, e2bKey, kernelKey };
 
-  // The sign-in, which is three states rather than a boolean: not signed in,
-  // waiting for the operator to enter a code in a browser, and signed in. All
-  // three live here for the reason everything else does — the shell survives a
-  // section change and the pane does not, and a sign-in half finished must not
-  // be discarded by a glance at Limits.
   const [subscription, setSubscription] = useState<SubscriptionStatus | null>(null);
   const [pendingCode, setPendingCode] = useState<DeviceCode | null>(null);
 
-  // The Guaca account, which is three states for the same reason: signed out,
-  // waiting on a browser, and signed in. `connectors` is what the service says
-  // the account holds, and it is read rather than kept because it changes when
-  // the operator authorizes something in a browser rather than when this app
-  // does anything.
-  // Whether the `claude` program is on this machine. Read rather than assumed.
-  // Null while it is still being asked, which is not the same as "not
-  // installed" and must not draw as it.
   const [claudeInstalled, setClaudeInstalled] = useState<boolean | null>(null);
   const [account, setAccount] = useState<AccountStatus | null>(null);
   const [connectors, setConnectors] = useState<AccountConnectors | null>(null);
   const [linking, setLinking] = useState(false);
 
-  // Focus moves into the dialog on open, as it does in every other dialog here.
-  // Onto the panel rather than the first field: the first thing on this surface
-  // is a choice of section, not something to type into.
   useEffect(() => {
     panelRef.current?.focus();
   }, []);
 
-  // Asked on mount rather than when the section opens: it is a process spawn,
-  // it is wanted the moment the provider list draws, and an operator who opens
-  // Settings to change their provider should not watch a row resolve under
-  // them.
   useEffect(() => {
     let live = true;
     void api
@@ -406,10 +319,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
       .then((program) => {
         if (live) setClaudeInstalled(program.installed);
       })
-      .catch(() => {
-        // Asked again next time Settings opens. A row that cannot say whether
-        // the program is there says nothing, which is what null draws as.
-      });
+      .catch(() => {});
     return () => {
       live = false;
     };
@@ -419,35 +329,17 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
     provider,
     baseUrl,
     defaultModel: model,
-    // Both models are always sent, whichever provider is chosen. Each belongs
-    // to one provider and neither is cleared by the other, so an operator who
-    // tries a subscription and goes back finds their endpoint model intact.
     reasoningEffort,
     ...(subscriptionModel.trim() ? { subscriptionModel: subscriptionModel.trim() } : {}),
-    // Omitted when blank, so saving without retyping keeps the stored key.
     ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
     ...(e2bKey.trim() ? { e2bApiKey: e2bKey.trim() } : {}),
     ...(idleMinutes.trim() ? { computerIdleMinutes: Number(idleMinutes) } : {}),
     ...(kernelKey.trim() ? { kernelApiKey: kernelKey.trim() } : {}),
     ...(browserIdleMinutes.trim() ? { browserIdleMinutes: Number(browserIdleMinutes) } : {}),
-    // A checkbox is never blank, so it goes every time. Omitting it would leave
-    // the only way to turn stealth back off unreachable.
     browserStealth: stealth,
     ...(timeout.trim() ? { requestTimeoutSecs: Number(timeout) } : {}),
   });
 
-  /**
-   * Whether anything on this dialog is waiting to be saved.
-   *
-   * Read across every pane rather than the open one, because the shell holds
-   * all of their state: an endpoint typed on Provider and left there while the
-   * operator reads Limits is still unsaved, and a Save that went missing on the
-   * way past is how it would get lost.
-   *
-   * A key is compared with blank rather than with what is stored, because what
-   * is stored cannot be read back. A blank box is not an edit, and a box of
-   * spaces is not one either: that is exactly what `patch` omits.
-   */
   const dirty =
     operatorName !== (settings?.operatorName ?? "") ||
     provider !== (settings?.provider ?? "compatible") ||
@@ -464,13 +356,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
     differs(timeout, settings?.requestTimeoutSecs) ||
     LIMITS.some((field) => limits[field.key] !== settings?.limits[field.key]);
 
-  /**
-   * What Save sends: only what differs from the settings as they stand now.
-   *
-   * `patch` is the whole form, which is right for a connection test and wrong
-   * for a save: a field this operator never touched would carry the value it
-   * had on open, over whatever another client saved since.
-   */
   const changes = (): SettingsPatch => {
     const changedLimits = Object.fromEntries(
       LIMITS.filter(({ key }) => limits[key] !== settings?.limits[key]).map(({ key }) => [
@@ -499,9 +384,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
     return sent as SettingsPatch;
   };
 
-  // What macOS will do with a banner, read when the pane opens and again each
-  // time the window comes back to the front, which is how the operator returns
-  // from turning Guaca on in System Settings. Null off macOS.
   useEffect(() => {
     if (section !== "notifications" || !desktop) return;
     let live = true;
@@ -518,9 +400,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
     };
   }, [section]);
 
-  // What the Host last did with the address, read when the pane is opened on
-  // one and after every change to it, rather than kept up to date: nothing
-  // else in the window needs it.
   const pushSaved = settings?.delivery?.urlSet ?? false;
   useEffect(() => {
     if (section !== "notifications" || !pushSaved) return;
@@ -534,7 +413,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
     };
   }, [section, pushSaved, settings?.delivery]);
 
-  /** One change to the push address, kept at once. True when the Host kept it. */
   const writePush = async (delivery: DeliveryPatch) => {
     setPushBusy(true);
     setStatus(null);
@@ -550,7 +428,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
     }
   };
 
-  /** Only what was typed: a blank box keeps what is saved. */
   const pushTyped = (): DeliveryPatch => {
     const delivery: DeliveryPatch = {};
     if (pushUrl.trim()) delivery.url = pushUrl.trim();
@@ -579,11 +456,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
     }
   };
 
-  /**
-   * Flips one of the Host's attention switches at once, like the rest of the
-   * Notifications pane. A patch of the one key, so a switch flipped in another
-   * window a moment ago is not written back.
-   */
   const toggleAttention = async (key: keyof Attention) => {
     const now = settings?.attention;
     if (!now) return;
@@ -641,11 +513,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
       }
       pending.current = null;
       setSettings(next);
-      // Read the limits back rather than leaving what was typed. The `max` on a
-      // number input is advisory — a pasted or typed value sails past it — and
-      // the runtime sanitizes what it stores, so a relay depth of 40 is kept as
-      // 16. Saying "Saved." over a box still reading 40 tells the operator
-      // something untrue about what is running.
       setLimits(
         (current) =>
           Object.fromEntries(
@@ -655,8 +522,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
             ]),
           ) as unknown as GuardLimits,
       );
-      // Clear staged secrets and close their editors only after storage succeeds.
-      // Timers return to the stored placeholder because the runtime clamps them.
       setApiKey((value) => (value === apiKey ? "" : value));
       if (apiKey && currentKeys.current.apiKey === apiKey) setEditingApiKey(false);
       setE2bKey((value) => (value === e2bKey ? "" : value));
@@ -731,11 +596,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
     setBusy(true);
     setStatus({ tone: "info", text: "Testing…" });
     try {
-      // Sends what is on screen, so testing before saving does the obvious
-      // thing rather than reporting on a key the operator has already replaced.
-      // Deliberately without operatorName and limits: neither is something an
-      // endpoint can be tested against, and a blank model would fail
-      // validation here instead of reporting on the endpoint.
       const result = await api.testConnection(patch());
       setStatus({ tone: "ok", text: result });
     } catch (error) {
@@ -746,18 +606,12 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
   };
 
   const choose = (preset: Preset) => {
-    // Choosing an endpoint is also choosing to pay with a key. Leaving the
-    // provider on the subscription would have the operator fill in a URL and a
-    // key that nothing used, with no error to explain why.
     setProvider("compatible");
     setBaseUrl(preset.baseUrl);
     if (preset.baseUrl !== baseUrl) setEditingApiKey(true);
     if (preset.model) setModel(preset.model);
   };
 
-  // Read when the pane that shows it is opened, not at startup: nothing else in
-  // the app needs to know, and a status nobody is looking at is a round trip
-  // spent for nothing.
   useEffect(() => {
     if (section !== "provider" || subscription) return;
     let live = true;
@@ -767,8 +621,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
         if (live) setSubscription(value);
       })
       .catch(() => {
-        // A status that cannot be read is drawn as not signed in, which is what
-        // it is as far as anything here can act on.
         if (live) setSubscription({ signedIn: false, email: "", plan: "", includesCodex: false });
       });
     return () => {
@@ -776,9 +628,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
     };
   }, [section, subscription]);
 
-  // Same rule as above: read when the pane is opened. An install that never
-  // opens this pane never asks the service anything, which is the whole point
-  // of the account being optional.
   useEffect(() => {
     if (section !== "account" || account) return;
     let live = true;
@@ -795,9 +644,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
     };
   }, [section, account]);
 
-  // What the account holds, once there is one. Separate from the status because
-  // it is a network call to the service and the status is a local read, so a
-  // service that is slow or down still draws the account correctly.
   useEffect(() => {
     if (section !== "account" || !account?.signedIn || connectors) return;
     let live = true;
@@ -807,9 +653,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
         if (live) setConnectors(value);
       })
       .catch((error) => {
-        // A sign-in the service no longer recognizes comes back as `signedOut`,
-        // and the honest thing to draw is a signed-out pane rather than an
-        // account with an empty list under it.
         if (!live) return;
         if ((error as { kind?: string })?.kind === "signedOut") {
           setAccount({ ...account, signedIn: false, email: "" });
@@ -820,13 +663,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
     };
   }, [section, account, connectors]);
 
-  /**
-   * The whole account sign-in, in one call.
-   *
-   * A browser opens and the answer comes back to a port Rust bound before it
-   * asked, so there is nothing for the operator to carry and nothing to draw in
-   * between. Closing the dialog abandons it and leaves nothing behind.
-   */
   const linkAccount = async () => {
     setStatus(null);
     setLinking(true);
@@ -844,8 +680,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
       setStatus({ tone: "error", text: errorMessage(error) });
     } finally {
       setLinking(false);
-      // A sign-in page the host asked the browser to open is stale the moment
-      // the flow behind it has ended, either way.
       useStore.getState().setHandoff(null);
     }
   };
@@ -865,13 +699,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
     }
   };
 
-  /**
-   * Starts the sign-in and then waits for it, in one action.
-   *
-   * The wait is the whole point of the two-command split: the code is drawn as
-   * soon as the first call returns, and the second is left parked for as long as
-   * the operator takes. Closing the dialog abandons it and leaves nothing behind.
-   */
   const signIn = async () => {
     setStatus(null);
     setBusy(true);
@@ -885,29 +712,17 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
       return;
     }
 
-    // Opened for the operator rather than left as a link to find. It goes to
-    // the system browser: the sign-in belongs to a ChatGPT session this webview
-    // has no business holding.
-    void openExternal(code.verificationUrl).catch(() => {
-      // The URL is on screen beside the code, so a browser that will not open
-      // is a copy-and-paste rather than a dead end.
-    });
+    void openExternal(code.verificationUrl).catch(() => {});
 
     try {
       const next = await api.completeSubscriptionSignin(code);
       setSubscription(next);
       setPendingCode(null);
-      // Chosen on success rather than offered as a further step: nobody signs
-      // in to a subscription in order to keep paying with a key.
       setProvider("chatgpt");
       setStatus({
         tone: next.includesCodex ? "ok" : "error",
         text: next.includesCodex
-          ? // The second sentence only where there is a Save to press. An
-            // operator whose sign-in expired is already on the subscription, so
-            // signing back in leaves nothing waiting to be saved and the button
-            // is not drawn: sending them to it would be sending them nowhere.
-            `Signed in as ${next.email || "your ChatGPT account"}.${
+          ? `Signed in as ${next.email || "your ChatGPT account"}.${
               settings?.provider === "chatgpt" ? "" : " Save to start using it."
             }`
           : `Signed in as ${next.email || "your ChatGPT account"}, but a ${planLabel(next.plan)} plan does not include Codex. Use an API key instead.`,
@@ -938,8 +753,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
 
   return (
     <div className="scrim">
-      {/* A real button, so dismissing by clicking away is reachable from the
-          keyboard and announced, rather than being an invisible div handler. */}
       <button type="button" className="scrim__close" aria-label="Close dialog" onClick={close} />
       <div
         className="dialog dialog--settings"
@@ -1013,11 +826,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   />
                 </label>
 
-                {/* Its own field with a label, not a hint under the name: help
-                    text for a box sits under that box, and this is a fact about
-                    the window. A browser and a box have no menu bar, and a line
-                    telling somebody to click something that is not on their
-                    screen is worse than saying nothing. */}
                 {desktop && (
                   <div className="field">
                     <span className="field__label">Menu bar</span>
@@ -1040,15 +848,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   anything on this page.
                 </p>
 
-                {/* Its own block, above the endpoint list, because it is not an
-                    endpoint. Nothing here is typed: there is no URL to get
-                    wrong and no key to paste, which is most of what the list
-                    below exists to protect against.
-
-                    One line under the name, and the whole sentence is the
-                    row's own title. The slot beside the name gives up its room
-                    first, so the second half of a sentence — which is the
-                    reason to choose the card — was the half that was cut. */}
                 <div
                   className="preset preset--plain"
                   aria-current={provider === "chatgpt"}
@@ -1106,10 +905,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   )}
                 </div>
 
-                {/* Shown for as long as the sign-in is parked. The code is the
-                    thing the operator has to carry, so it is the largest thing
-                    here, and the URL is beside it because a browser that did
-                    not open leaves them nothing else to go on. */}
                 {pendingCode && (
                   <div className="devicecode" role="status">
                     <p className="devicecode__lede">
@@ -1229,11 +1024,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       />
                     </label>
 
-                    {/* The one line under the box is about the key that is
-                        stored, so it is drawn only while a stored key is
-                        being replaced: a blank editor keeping it is the fact
-                        an operator who was just sent here by an endpoint
-                        change needs. */}
                     <ApiKeyField
                       label="API key"
                       title="Stored on the host and never read back into this form. A local server usually wants none. Test connection checks the endpoint and the key."
@@ -1342,14 +1132,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   A sandbox each: a desktop and a terminal an agent can actually work in.
                 </p>
 
-                {/* The line under each key is the state a missing one leaves
-                    the workspace in, and nothing once a key is stored.
-
-                    What a key does is stated as what it does. It gives nobody a
-                    machine: it is what lets the workspace hand one out, and
-                    `agents.has_computer` is who was handed one, so a legend
-                    promising every agent a computer sends somebody to buy E2B
-                    and then look for whoever did not get one. */}
                 <ApiKeyField
                   label="E2B API key"
                   title="Lets this host rent a computer for an agent: a desktop and a terminal in a sandbox, shown in the corner of its channel. Which agents have one is set on each agent's Computer panel."
@@ -1426,18 +1208,12 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
             {section === "account" && (
               <>
                 <h3 className="settings__title">Account</h3>
-                {/* Where the runtime is, in the words this window can honestly
-                    use: "this machine" was true of the desktop app's own
-                    runtime and false of a host reached over a network, and this
-                    is the pane that explains what leaves which. */}
                 <p className="settings__lede">
                   {account?.broker
                     ? "Your connector runs with your own Google OAuth client and keeps its grants on your host."
                     : `Optional, and it stays that way. Guaca runs on ${hostAt(place)} with your own keys, and everything it does today it does without an account. Signing in adds one thing: guaca.bot holds an OAuth client, so an agent can reach a service that only issues access to a registered application. Gmail is the example. Guaca cannot be that application, because its client secret would be inside a download anybody can read.`}
                 </p>
 
-                {/* What leaves the host is said on the row that decides
-                    it, read by whoever hovers before pressing Sign in. */}
                 <div
                   className="preset preset--plain"
                   aria-current={account?.signedIn === true}
@@ -1448,10 +1224,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       {account?.broker ? "Your connector" : "Guaca account"}
                     </span>
                     <span className="preset__url">
-                      {/* Short enough for the row. The long version of this
-                          sentence is the row's own title, which also says what
-                          leaves the host and when: the endpoint-width line
-                          under the name clipped it mid-word instead. */}
                       {account?.signedIn
                         ? account.email || (account.broker ? "connected" : "signed in")
                         : account?.broker
@@ -1504,9 +1276,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   </p>
                 )}
 
-                {/* Shown for as long as the browser has it. There is no code to
-                    carry here, so this says what is happening rather than
-                    giving the operator something to do. */}
                 {linking && (
                   <div className="devicecode" role="status">
                     <p className="devicecode__lede">
@@ -1556,9 +1325,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                 )}
 
                 {account && account.origin !== "https://guaca.bot" && account.origin !== "" && (
-                  /* Development, or a self-hosted service. Worth saying out loud
-                     rather than leaving an operator to assume guaca.bot: the two
-                     hold different accounts and only one of them is the real one. */
                   <p className="field__hint" style={{ marginTop: "1.4rem" }}>
                     {account.broker ? "Your connector is at " : "This build signs in to "}
                     <code>{account.origin}</code>, not guaca.bot.
@@ -1972,8 +1738,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                         "Guaca",
                         "This is what a notification looks like.",
                       );
-                      // On a Mac the answer is the system's own, read again
-                      // because sending may have been what asked the question.
                       const access = desktop
                         ? await api.notificationAccess().catch(() => null)
                         : null;
@@ -1994,12 +1758,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                         );
                         return;
                       }
-                      // Deliberately not "it worked". Off macOS there is no
-                      // per-app grant for the plugin to read, so a machine with
-                      // notifications switched off accepts this and shows
-                      // nothing: claiming success would be the one message that
-                      // cannot be checked. The refusal branch is reachable on
-                      // the platforms that do answer the question.
                       setStatus(
                         sent
                           ? {
@@ -2018,8 +1776,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   {!macAccess && (
                     <p className="hint" style={{ marginTop: "0.4rem" }}>
                       The only way to find out whether this machine will show them.
-                      {/* A browser may refuse to ask without a click, and until
-                        it is answered this window claims nothing. */}
                       {!desktop && " In a browser, this is also where it asks for permission."}
                     </p>
                   )}
@@ -2347,20 +2103,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
   );
 }
 
-/**
- * Which workspace this window shows: this machine's, or a box's.
- *
- * The desktop app is a window over exactly one workspace at a time. Pointed
- * at a box it becomes a client of it, over the same HTTP a browser uses, and
- * the menu bar follows. This machine's own runtime keeps running underneath
- * and its crew keeps working, exactly as it does with the window closed; the
- * pane says so, because a crew working out of sight is the one thing an
- * operator would not guess.
- *
- * A change takes effect on reload rather than in place: which host the page
- * is in was decided when it loaded, on purpose, so there is nothing that can
- * be half-switched.
- */
 function WorkspacePane() {
   return (
     <div className="workspace-settings">
@@ -2372,13 +2114,6 @@ function WorkspacePane() {
   );
 }
 
-/**
- * The runtime reports storage, not a live connection check.
- *
- * What the key is for is the legend's title. The children are the one line
- * drawn under the box, which is a fact about the key's current state or
- * nothing, so the box only claims a description when there is one.
- */
 function ApiKeyField({
   label,
   title,

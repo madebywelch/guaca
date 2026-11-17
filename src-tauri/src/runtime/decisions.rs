@@ -21,9 +21,6 @@ impl Runtime {
         Ok(decision)
     }
 
-    /// Try again on a message that delivered a decision's answer, which goes
-    /// through the decision so the row names the run that carries it now. See
-    /// `Store::retry_decision`.
     pub(super) fn retry_decision(
         &self,
         id: DecisionId,
@@ -35,8 +32,6 @@ impl Runtime {
         Ok(run)
     }
 
-    /// Writes a delivery under the run lock and books or puts it down, as every
-    /// delivery of an answer is.
     fn deliver_decision(
         &self,
         id: DecisionId,
@@ -46,15 +41,6 @@ impl Runtime {
         let (decision, envelope) = write(&self.inner.store)?;
         let run = envelope.run_id;
         if runs.draining {
-            // Nothing on this host starts another turn, so the answer is the
-            // next host's from the start, as `deliver` treats a message. Put
-            // down here rather than queued, because the actor it would wait
-            // behind may still be inside a tool call when the process ends.
-            //
-            // A second commit, after the one that recorded the answer: the
-            // decision's own rows are written elsewhere. A process that ends
-            // between the two reports the follow-through interrupted, and For
-            // you offers to resume it.
             if let Err(err) = self.put_down_answer(&mut runs, &envelope) {
                 tracing::error!(%err, decision = %id, "could not put a decision answer down; the next host reports it interrupted");
             }
@@ -87,11 +73,6 @@ impl Runtime {
         Ok(())
     }
 
-    /// Claims the reminders that are due. The claim writes the outbox row
-    /// that delivers them, so a batch nobody is connected for waits there
-    /// rather than being spent. `DecisionReminder` is still said, for the
-    /// windows that raise their own banner from it until they claim
-    /// deliveries instead.
     pub fn sweep_decisions(&self, now: i64) {
         match self.inner.store.decision_reminders(now) {
             Ok(0) => {}
@@ -105,8 +86,6 @@ impl Runtime {
         }
     }
 
-    /// The `decision` tool. `run` is the run whose turn called it, written on
-    /// a decision it files so that run's outcome can say it left one open.
     pub(super) fn use_decision(
         &self,
         card: &AgentCard,

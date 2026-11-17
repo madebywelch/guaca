@@ -26,9 +26,6 @@ beforeEach(() => {
 
 describe("where a parked request stops waiting", () => {
   it("leaves the timeline once the request is filed in For you", async () => {
-    // A lapse files the request as a decision and takes it off the pending
-    // list. The point said when Dara would stop waiting, and Dara has stopped,
-    // so a point left behind would be a deadline for something already past.
     useStore.setState({
       pending: [anApproval({ agentId: "dara", createdAt: NOW - 60_000, lapsesAt: NOW + 540_000 })],
     });
