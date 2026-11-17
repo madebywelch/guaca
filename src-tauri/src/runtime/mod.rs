@@ -5,8 +5,10 @@ pub mod events;
 pub mod guard;
 mod outbox;
 pub mod prompt;
+mod watch;
 
 pub use drain::Drained;
+use watch::Watch;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicI64, AtomicU16, AtomicU64, AtomicUsize, Ordering};
@@ -380,7 +382,7 @@ fn browser_answer(permission: &Permission, service: &str, unchecked: bool) -> Op
         )),
     }
 }
-use crate::db::{Store, StoreError};
+use crate::db::{RunGuard, RunLock, Store, StoreError};
 use crate::domain::agent::{
     copy_name, AgentCard, CleanDraft, Consent, DirectoryEntry, Lifecycle, COMPOST_MS,
 };
@@ -622,7 +624,7 @@ struct Inner {
     inboxes: Mutex<HashMap<AgentId, Inbox>>,
     activity: Mutex<HashMap<AgentId, Activity>>,
     routine_delivery: Mutex<()>,
-    runs: Mutex<Runs>,
+    runs: RunLock<Runs>,
     waiting: Mutex<HashMap<ApprovalId, tokio::sync::oneshot::Sender<()>>>,
     approval_window: AtomicU64,
     workspace: Workspace,
@@ -723,7 +725,7 @@ impl Runtime {
                 inboxes: Mutex::new(HashMap::new()),
                 activity: Mutex::new(HashMap::new()),
                 routine_delivery: Mutex::new(()),
-                runs: Mutex::new(Runs::default()),
+                runs: RunLock::default(),
                 waiting: Mutex::new(HashMap::new()),
                 approval_window: AtomicU64::new(crate::probe_clock::scaled(
                     APPROVAL_WINDOW.as_millis() as i64,
@@ -1354,7 +1356,7 @@ impl Runtime {
             let mut runs = self.inner.runs.lock();
             if runs.draining && !runs.stopped.contains(&envelope.run_id) {
                 if runs.outstanding.contains_key(&envelope.run_id) {
-                    self.inner.store.append_put_down(&envelope, None)?;
+                    self.inner.store.append_put_down(&runs, &envelope, None)?;
                     if let (
                         Some(limits),
                         Participant::Agent { id: from },
@@ -1390,7 +1392,7 @@ impl Runtime {
                     state.note_sent(from, to, envelope.expects_reply);
                 }
                 let whole = Some((state.steps_used(), state.snapshot()));
-                self.inner.store.append_put_down(&envelope, whole)?;
+                self.inner.store.append_put_down(&runs, &envelope, whole)?;
                 self.hand_on(&mut runs, envelope.run_id, state);
                 drop(runs);
                 self.inner.events.emit(UiEvent::MessageAppended { message: Box::new(envelope) });
@@ -2244,7 +2246,7 @@ impl Runtime {
                 let absorbed = runs.absorbed.remove(&run);
                 let cut_short = runs.cut_short.remove(&run);
                 if runs.put_down.contains(&run) {
-                    self.mark_whole(&[run]);
+                    self.mark_whole(&runs, &[run]);
                     None
                 } else {
                     let ending = if cut_short {
@@ -3407,17 +3409,14 @@ impl Runtime {
 
         tokio::pin!(work);
         loop {
-            let woken = signal.notified();
-            tokio::pin!(woken);
-            woken.as_mut().enable();
-
-            if self.stopped(run_id) {
+            let watch = Watch::arm(&signal, || self.stopped(run_id));
+            if *watch.stop() {
                 return None;
             }
 
             tokio::select! {
                 done = &mut work => return Some(done),
-                () = woken => {}
+                () = watch.woken() => {}
             }
         }
     }
@@ -5125,7 +5124,14 @@ impl Runtime {
                     && (command.contains(&format!("${}", connector.env_var))
                         || command.contains(&format!("${{{}}}", connector.env_var)))
             })
-            .map(|connector| format!("{} (${})", connector.service, connector.env_var))
+            .map(|connector| {
+                let service = if connector.service.contains([',', '"', '·']) {
+                    format!("\"{}\"", connector.service.replace('"', "\"\""))
+                } else {
+                    connector.service
+                };
+                format!("{service} (${})", connector.env_var)
+            })
             .collect();
 
         if named.is_empty() {
@@ -7252,16 +7258,21 @@ async fn actor_loop(
                 }
                 Some(card) if card.lifecycle.accepts_work() => break,
                 Some(card) => {
-                    let waiter = resume.notified();
-                    tokio::pin!(waiter);
-                    waiter.as_mut().enable();
+                    let watch = Watch::arm(&resume, || {
+                        (
+                            runtime.draining() && !runtime.called_off(first.run_id),
+                            runtime.stopped(first.run_id),
+                            runtime.anything_stopped(),
+                        )
+                    });
+                    let &(for_next_host, stopped, anything_stopped) = watch.stop();
 
-                    if runtime.draining() && !runtime.called_off(first.run_id) {
+                    if for_next_host {
                         put_down = true;
                         break;
                     }
 
-                    if runtime.stopped(first.run_id) {
+                    if stopped {
                         runtime.notice(
                             id,
                             first.run_id,
@@ -7275,7 +7286,7 @@ async fn actor_loop(
                         called_off = true;
                         break;
                     }
-                    if runtime.anything_stopped() {
+                    if anything_stopped {
                         while let Ok(queued) = rx.try_recv() {
                             if runtime.called_off(queued.run_id) {
                                 depth.fetch_sub(1, Ordering::SeqCst);
@@ -7299,7 +7310,7 @@ async fn actor_loop(
                     }
 
                     runtime.set_activity(id, Activity::Paused);
-                    waiter.await;
+                    watch.woken().await;
                 }
             }
         }
@@ -8446,7 +8457,14 @@ mod tests {
             .unwrap();
         let filed = store.lapse_approval(earlier.id, Some("granted"), now_ms()).unwrap().unwrap();
         store
-            .answer_decision(filed.id, crate::domain::approval::ALLOW, false, None, now_ms())
+            .answer_decision(
+                &RunLock::new(()).lock(),
+                filed.id,
+                crate::domain::approval::ALLOW,
+                false,
+                None,
+                now_ms(),
+            )
             .unwrap();
 
         let mut reading = Reading {
