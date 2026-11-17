@@ -62,7 +62,7 @@ const FIXES = {
   comment:
     "A comment. If it states a constraint, encode it as a type, an assertion or a test that fails when it is broken. If it explains why, put that in the commit message. If it excuses a workaround, fix the cause.",
   suppression:
-    "A suppression. Fix what the check found and delete the suppression. A skipped or focused test: make it pass in the gate, or delete it. A sleep in a test or script: wait on the event if the system offers one; otherwise poll the real condition in a loop whose bound the lint can see, a counted for loop or one that reads the clock, and that re-checks the condition each attempt.",
+    "A suppression. Fix what the check found and delete the suppression. A skipped or focused test: make it pass in the gate, or delete it. A sleep in a test or script: wait on the event if the system offers one; otherwise poll the real condition in a loop whose bound the lint can see, a counted for loop or one that reads the clock, and that re-checks the condition each attempt through its own condition or an exit under an if. A break, return or exit that every attempt reaches checks nothing.",
   unread:
     "A text file of a type the lint has no reader for, so it cannot see what the file says. Add a reader for the type to languageOf in " +
     READERS +

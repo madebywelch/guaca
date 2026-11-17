@@ -176,11 +176,17 @@ move, so `scripts/check-grants.mjs` refuses all three in what a change adds or
 modifies: every kind of comment, docstrings included; `#[allow]`, `#[expect]`,
 `#[ignore]`, `@ts-ignore`, `@ts-expect-error`, `biome-ignore`, lint-disable
 lines, `noqa`, `type: ignore`, `.skip`, `.only` and `.todo`; a sleep standing in
-for a check in a test or script; and any new `.md`, `.mdx`, `.markdown`, `.rst`,
-`.adoc` or `.txt` file. What is already there stays until its line is touched.
-A poll is not a sleep: a loop whose bound the lint can see (a counted `for`, or
-one that reads the clock) and that re-checks its condition each attempt may wait
-between attempts. Lines a tool reads and that silence nothing pass by rule
+for a check in a test or script; and any new prose file (`.md`, `.mdx`,
+`.markdown`, `.rst`, `.adoc`, `.txt`, `.org`, an HTML page or a license). What
+is already there stays until its line is touched. The lint has to read every
+file a change touches, so a text file that is neither code it has a reader for,
+prose, nor data on the lint's own list fails until it gets a reader or a place on
+that list with its reason. A poll is not a sleep: a loop whose bound the lint can
+see (a counted `for`, or one that reads the clock) may wait between attempts when
+it re-checks its condition each attempt, through its own non-constant condition
+or an exit under a condition (an `if`, a `match` arm, a `case`, a `catch` or an
+`&&`); an exit at the top of the loop body checks nothing and does not count.
+Lines a tool reads and that silence nothing pass by rule
 (shebangs, `# syntax=`, `/// <reference>`, `@vitest-environment`, SPDX
 identifiers, `# shellcheck source=`, the version beside a pinned action, and
 `SAFETY:` directly above an `unsafe` block). Everything else needs the owner,

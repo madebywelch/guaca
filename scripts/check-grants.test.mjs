@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { check, hashText, report, unitsOf } from "./check-grants.mjs";
+import { check, hashText, PROSE, report, unitsOf } from "./check-grants.mjs";
 import { scanFiles } from "./grants/lex.mjs";
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), "check-grants.mjs");
@@ -37,6 +37,11 @@ const LANGUAGES = [
       ["// SAFETY: not followed by unsafe\nfn a() {}", "comment"],
       ["#[test]\nfn t() { loop { if ready() { break; } std::thread::sleep(D); } }", "sleep"],
       ["#[test]\nfn t() { for _ in 0..3 { std::thread::sleep(D); } }", "sleep"],
+      ["#[test]\nfn t() { for _ in 0..1 { std::thread::sleep(D); break; } }", "sleep"],
+      ["#[test]\nfn t() { for _ in 0..1 { std::thread::sleep(D); return; } }", "sleep"],
+      ["#[test]\nfn t() { for _ in 0..1 { std::thread::sleep(D); { break; } } }", "sleep"],
+      ["#[test]\nfn t() { loop { let _ = Instant::now(); std::thread::sleep(D); break; } }", "sleep"],
+      ["#[test]\nfn t() { for _ in 0..1 { std::thread::sleep(D); if true { break; } } }", "sleep"],
     ],
     pass: [
       'fn a() { let u = "http://x//y /* no */"; }',
@@ -48,6 +53,7 @@ const LANGUAGES = [
       "#[cfg(test)]\nmod tests {\n    fn t() { for _ in 0..50 { if ready() { break; } std::thread::sleep(D); } }\n}",
       "#[test]\nfn t() {\n    while !check() {\n        assert!(Instant::now() < deadline);\n        std::thread::sleep(D);\n    }\n}",
       "impl Iterator for X { fn next(&mut self) -> Option<u8> { None } }\nfn main() {}",
+      "#[test]\nfn t() { for _ in 0..50 { match probe() { Some(v) => return v, None => {} } std::thread::sleep(D); } }",
     ],
   },
   {
@@ -81,6 +87,12 @@ const LANGUAGES = [
       ['it("x", async () => { await sleep(10); });', "sleep"],
       ['it("x", async () => { while (!done()) { await new Promise((r) => setTimeout(r, 10)); } });', "sleep"],
       ['it("x", async () => { for (const step of steps) { await sleep(10); } });', "sleep"],
+      ['it("x", async () => { for (let i = 0; i < 1; i++) { await sleep(30000); break; } });', "sleep"],
+      ['it("x", async () => { for (let i = 0; i < 1; i++) { await sleep(30000); return; } });', "sleep"],
+      ['it("x", async () => { for (let i = 0; i < 1; i++) { await sleep(30000); { break; } } });', "sleep"],
+      ['it("x", async () => { while (true) { if (Date.now() > 0) {} await sleep(30000); break; } });', "sleep"],
+      ['it("x", async () => { for (let i = 0; i < 1; i++) { await sleep(30000); if (true) break; } });', "sleep"],
+      ['it("x", async () => { for (let i = 0; i < 1; i++) { await sleep(30000); true && (() => {})(); return; } });', "sleep"],
     ],
     pass: [
       "// @vitest-environment jsdom\nexport {};",
@@ -102,6 +114,11 @@ const LANGUAGES = [
       ['import unittest\n@unittest.skip("later")\ndef test_a():\n    pass', "@unittest.skip"],
       ["import time\ntime.sleep(1)", "sleep"],
       ["import time\nwhile not ready():\n    time.sleep(1)", "sleep"],
+      ["import time\nfor _ in range(1):\n    time.sleep(30)\n    break", "sleep"],
+      ["import time\ndef f():\n    for _ in range(1):\n        time.sleep(30)\n        return", "sleep"],
+      ["import time\nfor _ in range(1):\n    time.sleep(30)\n    with open(p):\n        break", "sleep"],
+      ["import time\nwhile True:\n    time.monotonic()\n    time.sleep(30)\n    break", "sleep"],
+      ["import time\nfor _ in range(1):\n    time.sleep(30)\n    if True:\n        break", "sleep"],
     ],
     pass: [
       "#!/usr/bin/env python3\nx = 1",
@@ -122,6 +139,11 @@ const LANGUAGES = [
       ["make && sleep 1", "sleep"],
       ["until curl -sf localhost; do\n  sleep 1\ndone", "sleep"],
       ["while true; do\n  date\n  sleep 1\ndone", "sleep"],
+      ["for _ in 1; do\n  sleep 30\n  break\ndone", "sleep"],
+      ["for _ in 1; do sleep 30; exit 0; done", "sleep"],
+      ["for _ in 1; do\n  sleep 30\n  if true; then break; fi\ndone", "sleep"],
+      ["for _ in 1; do\n  sleep 30\n  true && break\ndone", "sleep"],
+      ["for _ in 1; do\n  if true; then\n    echo\n  fi\n  sleep 30\n  break\ndone", "sleep"],
     ],
     pass: [
       "#!/usr/bin/env bash\necho hi",
@@ -130,6 +152,8 @@ const LANGUAGES = [
       "cat <<EOF\n# inside a heredoc\nEOF\necho done",
       "for _ in $(seq 30); do\n  curl -sf localhost && break\n  sleep 1\ndone",
       "while ! curl -sf localhost; do\n  [ $SECONDS -lt 30 ] || exit 1\n  sleep 1\ndone",
+      "for _ in $(seq 30); do\n  if curl -sf localhost; then\n    break\n  fi\n  sleep 1\ndone",
+      "for _ in $(seq 30); do\n  case $(state) in\n    up) exit 0 ;;\n  esac\n  sleep 1\ndone",
       "echo \"$(printf '%s' \"# no\")\"",
     ],
   },
@@ -141,6 +165,9 @@ const LANGUAGES = [
       ["/* a /* nested */ b */ let a = 1", "comment"],
       ["sleep(1)", "sleep"],
       ["while !ready() { usleep(1000) }", "sleep"],
+      ["for _ in 0..<1 { usleep(30_000_000); break }", "sleep"],
+      ["for _ in 0..<1 { usleep(30_000_000); return }", "sleep"],
+      ["for _ in 0..<1 { usleep(30_000_000); if true { break } }", "sleep"],
     ],
     pass: [
       'let s = "// no /* no */"',
@@ -148,6 +175,7 @@ const LANGUAGES = [
       'let m = """\n// no\n"""',
       'let i = "a \\(b + "// no") c"',
       "for _ in 0..<50 { if ready() { break }; usleep(1000) }",
+      "for _ in 0..<50 { guard !ready() else { return }; usleep(1000) }",
     ],
   },
   {
@@ -221,6 +249,16 @@ const LANGUAGES = [
     ],
     pass: ['x == a /\\ b \\/ c\ny == "\\* no"'],
   },
+  {
+    path: "release-keys.pub",
+    fail: [["# why this key\nAAAAC3NzaC1lZDI1NTE5", "comment"]],
+    pass: ["AAAAC3NzaC1lZDI1NTE5\nAAAAC3NzaC1lZDI1NTE6"],
+  },
+  {
+    path: "public/_headers",
+    fail: [["# why\n/*\n  X-Frame-Options: DENY", "comment"]],
+    pass: ["/*\n  X-Frame-Options: DENY"],
+  },
 ];
 
 describe("each language", () => {
@@ -279,7 +317,7 @@ function repoWith(files) {
   git(dir, "add", "-A");
   git(dir, "commit", "-qm", "base");
   const ledger = {
-    existing: { commit: git(dir, "rev-parse", "HEAD"), files: Object.keys(files).filter((path) => path.endsWith(".md")) },
+    existing: { commit: git(dir, "rev-parse", "HEAD"), files: Object.keys(files).filter((path) => PROSE.test(path)) },
     upstream: [{ path: "vendor/up/", except: ["ours.rs"], reason: "test" }],
     grants: [],
   };
@@ -355,6 +393,85 @@ describe("a change", () => {
         ["docs/NOTES.md", "document"],
         ["notes.txt", "document"],
       ]);
+    }),
+  );
+  for (const [path, text] of [
+    ["docs/NOTES", "Remember that the cache is cold on boot.\n"],
+    ["docs/notes.org", "* Why\nThe cache is cold on boot.\n"],
+    ["scripts/zz.xyz", "// a comment\n"],
+    ["Makefile.zz", "# a comment\n"],
+    ["docs/design.html", "<p>The cache is cold on boot because nothing warms it.</p>\n"],
+  ]) {
+    it(
+      "fails on a new " + path + " instead of passing it unread",
+      scenario({ "src/a.ts": SOURCE }, (repo, run) => {
+        write(repo.dir, { [path]: text });
+        assert.deepEqual(
+          run().findings.map((f) => f.path),
+          [path],
+        );
+      }),
+    );
+  }
+  it(
+    "fails on a file of an unknown type committed on the branch, and names both fixes",
+    scenario({ "src/a.ts": SOURCE }, (repo) => {
+      write(repo.dir, { "scripts/zz.xyz": "// a comment\n" });
+      git(repo.dir, "add", "-A");
+      git(repo.dir, "commit", "-qm", "add");
+      const result = check(repo.dir, { base: repo.base, head: "HEAD" });
+      assert.deepEqual(
+        result.findings.map((f) => [f.path, f.kind]),
+        [["scripts/zz.xyz", "unread"]],
+      );
+      const printed = report(result, { rev: repo.base, label: "test" });
+      assert.match(printed, /scripts\/zz\.xyz/);
+      assert.match(printed, /add a reader/i);
+      assert.match(printed, /DATA/);
+      assert.doesNotMatch(printed, / grant /);
+    }),
+  );
+  it(
+    "fails on a change to a file of an unknown type already in the tree",
+    scenario({ "src/a.ts": SOURCE, "docs/OLD.xyz": "old\n" }, (repo, run) => {
+      write(repo.dir, { "docs/OLD.xyz": "old\nnew words\n" });
+      assert.deepEqual(
+        run().findings.map((f) => [f.path, f.kind]),
+        [["docs/OLD.xyz", "unread"]],
+      );
+    }),
+  );
+  it(
+    "fails on a file of an unknown type renamed into place",
+    scenario({ "src/a.ts": SOURCE, "docs/OLD.xyz": "old words that stay the same\n" }, (repo, run) => {
+      git(repo.dir, "mv", "docs/OLD.xyz", "docs/NOTES");
+      assert.deepEqual(
+        run().findings.map((f) => [f.path, f.kind]),
+        [["docs/NOTES", "unread"]],
+      );
+    }),
+  );
+  it(
+    "passes an untouched file of an unknown type, a data file, a binary file and an empty file",
+    scenario({ "src/a.ts": SOURCE, "docs/OLD.xyz": "// old\n", "Cargo.lock": "version = 4\n" }, (repo, run) => {
+      write(repo.dir, {
+        "src/a.ts": SOURCE + "export const b = 2;\n",
+        "Cargo.lock": "version = 4\n[[package]]\n",
+        "assets/blob.bin": "a\u0000b",
+        "assets/.gitkeep": "",
+      });
+      const result = run();
+      assert.deepEqual([...result.findings, ...result.problems], []);
+    }),
+  );
+  it(
+    "lets a change edit an existing HTML page and refuses a new one",
+    scenario({ "src/a.ts": SOURCE, "index.html": "<p>old</p>\n" }, (repo, run) => {
+      write(repo.dir, { "index.html": "<p>new</p>\n", "page.html": "<p>new</p>\n" });
+      assert.deepEqual(
+        run().findings.map((f) => [f.path, f.kind]),
+        [["page.html", "document"]],
+      );
     }),
   );
   it(

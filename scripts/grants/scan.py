@@ -28,12 +28,23 @@ def bare_string(node):
     return isinstance(value, ast.JoinedStr) or (isinstance(value, ast.Constant) and isinstance(value.value, str))
 
 
-def exits(node):
+def guarded_branches(node):
+    if isinstance(node, ast.If) and not isinstance(node.test, ast.Constant):
+        return node.body + node.orelse
+    if isinstance(node, ast.Match):
+        return node.cases
+    if isinstance(node, ast.Try):
+        return node.handlers + node.orelse
+    return []
+
+
+def exits(node, guarded):
     if isinstance(node, (ast.Break, ast.Return)):
-        return True
+        return guarded
     if isinstance(node, SCOPES + LOOPS):
         return False
-    return any(exits(child) for child in ast.iter_child_nodes(node))
+    branches = guarded_branches(node)
+    return any(exits(child, guarded or child in branches) for child in ast.iter_child_nodes(node))
 
 
 def reads_clock(node):
@@ -47,7 +58,7 @@ def reads_clock(node):
 def bounded_poll(loop):
     counted = isinstance(loop, (ast.For, ast.AsyncFor))
     conditional = isinstance(loop, ast.While) and not isinstance(loop.test, ast.Constant)
-    rechecks = conditional or any(exits(statement) for statement in loop.body)
+    rechecks = conditional or any(exits(statement, False) for statement in loop.body)
     return (counted or reads_clock(loop)) and rechecks
 
 

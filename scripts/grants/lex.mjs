@@ -239,7 +239,7 @@ function isTestAttribute(inner) {
 }
 
 function poll(counted, rechecks) {
-  return { counted, rechecks, exits: false, clock: false, sleeps: [] };
+  return { counted, rechecks, exits: false, clock: false, guards: [], sleeps: [] };
 }
 
 function settle(region, out) {
@@ -249,6 +249,11 @@ function settle(region, out) {
 
 function innermost(stack) {
   return stack.findLast((entry) => entry !== null && typeof entry === "object");
+}
+
+function exitUnderGuard(stack) {
+  const region = innermost(stack);
+  if (region && stack.slice(stack.lastIndexOf(region) + 1).includes("guard")) region.exits = true;
 }
 
 function sleepIn(stack, out, mark) {
@@ -262,6 +267,7 @@ function rustStructure(tokens, out, ctx) {
   let parens = 0;
   let pendingTest = null;
   let pendingLoop = null;
+  let pendingGuard = null;
   let inImpl = false;
   for (let k = 0; k < tokens.length; k++) {
     const token = tokens[k];
@@ -288,10 +294,8 @@ function rustStructure(tokens, out, ctx) {
       if (loopWord && !(token.v === "for" && (inImpl || tokens[k + 1]?.v === "<"))) {
         pendingLoop = { parens, region: poll(token.v === "for", token.v === "while" && tokens[k + 1]?.v !== "true") };
       }
-      if (token.v === "break" || token.v === "return") {
-        const region = innermost(stack);
-        if (region) region.exits = true;
-      }
+      if ((token.v === "if" && tokens[k + 1]?.v !== "true") || token.v === "else" || token.v === "match") pendingGuard = parens;
+      if (token.v === "break" || token.v === "return") exitUnderGuard(stack);
       if (token.v === "Instant" || token.v === "elapsed" || token.v === "SystemTime") {
         const region = pendingLoop?.region ?? innermost(stack);
         if (region) region.clock = true;
@@ -315,7 +319,8 @@ function rustStructure(tokens, out, ctx) {
       } else if (pendingTest === parens) {
         kind = "test";
         pendingTest = null;
-      }
+      } else if (pendingGuard === parens) kind = "guard";
+      pendingGuard = null;
       inImpl = false;
       stack.push(kind);
     } else if (token.v === "}") {
@@ -323,6 +328,7 @@ function rustStructure(tokens, out, ctx) {
       if (closed !== null && typeof closed === "object") settle(closed, out);
     } else if (token.v === ";") {
       inImpl = false;
+      pendingGuard = null;
       if (pendingTest === parens) pendingTest = null;
     }
   }
@@ -404,7 +410,7 @@ function boundedPoll(ancestors) {
   if (!loop) return false;
   const counted = loop.type === "ForOfStatement" || loop.type === "ForInStatement" || (loop.type === "ForStatement" && loop.test);
   const conditional = (loop.type === "WhileStatement" || loop.type === "DoWhileStatement") && loop.test.type !== "Literal";
-  return Boolean(counted || readsClock(loop)) && (conditional || exitsLoop(loop.body));
+  return Boolean(counted || readsClock(loop)) && (conditional || exitsLoop(loop.body, false, false));
 }
 
 function readsClock(node) {
@@ -419,13 +425,30 @@ function readsClock(node) {
   );
 }
 
-function exitsLoop(node) {
+const GUARDED_BRANCHES = {
+  IfStatement: ["consequent", "alternate"],
+  SwitchStatement: ["cases"],
+  ConditionalExpression: ["consequent", "alternate"],
+  LogicalExpression: ["right"],
+  TryStatement: ["handler"],
+};
+
+function exitsLoop(node, guarded, inSwitch) {
   if (!node || typeof node.type !== "string" || FUNCTION_NODES.has(node.type) || LOOP_NODES.has(node.type)) return false;
-  if (node.type === "BreakStatement" || node.type === "ReturnStatement") return true;
-  return Object.values(node).some((value) =>
-    Array.isArray(value) ? value.some((child) => exitsLoop(child)) : value && typeof value === "object" && exitsLoop(value),
-  );
+  if (node.type === "ReturnStatement") return guarded;
+  if (node.type === "BreakStatement") return guarded && (node.label !== null || !inSwitch);
+  const test = node.type === "LogicalExpression" ? node.left : node.test;
+  const branches = test?.type === "Literal" ? [] : (GUARDED_BRANCHES[node.type] ?? []);
+  const switching = inSwitch || node.type === "SwitchStatement";
+  return Object.entries(node).some(([key, value]) => {
+    const under = guarded || branches.includes(key);
+    return Array.isArray(value)
+      ? value.some((child) => exitsLoop(child, under, switching))
+      : value && typeof value === "object" && exitsLoop(value, under, switching);
+  });
 }
+
+const CONSTANT_COMMANDS = new Set(["true", "false", ":"]);
 
 const KEEPS_COMMAND_POSITION = new Set(["then", "do", "else", "elif", "if", "while", "until", "!", "{", "time", "exec", "command", "env"]);
 
@@ -437,6 +460,9 @@ function lexShell(text, out, ctx) {
   let commandPosition = true;
   const loops = [];
   let pendingCounted = null;
+  let afterAndOr = false;
+  let listHead = null;
+  let pendingIf = null;
   let heredocs = [];
   let word = null;
   const finishWord = () => {
@@ -452,9 +478,20 @@ function lexShell(text, out, ctx) {
       } else if (value === "done") {
         const closed = loops.pop();
         if (closed) settle(closed, out);
+      } else if ((value === "if" || value === "case") && loops.length > 0) {
+        loops[loops.length - 1].guards.push(value === "case");
+        pendingIf = value === "if" ? loops[loops.length - 1] : null;
+      } else if ((value === "fi" || value === "esac") && loops.length > 0) {
+        loops[loops.length - 1].guards.pop();
       } else if ((value === "break" || value === "return" || value === "exit") && loops.length > 0) {
-        loops[loops.length - 1].exits = true;
+        const region = loops[loops.length - 1];
+        if (region.guards.some(Boolean) || (afterAndOr && !CONSTANT_COMMANDS.has(listHead))) region.exits = true;
       } else if (value === "sleep" && ctx.wait) sleepIn(loops, out, { start: base + word.s, end: base + i, what: "sleep" });
+      if (pendingIf && value !== "if") {
+        pendingIf.guards[pendingIf.guards.length - 1] = !CONSTANT_COMMANDS.has(value);
+        pendingIf = null;
+      }
+      if (!afterAndOr) listHead = value;
       if (pendingCounted?.first && value !== "for" && value !== "while" && value !== "until") {
         if (value === "true" || value === ":") pendingCounted.rechecks = false;
         pendingCounted.first = false;
@@ -475,6 +512,7 @@ function lexShell(text, out, ctx) {
     const c = text[i];
     if (c === "\n") {
       finishWord();
+      afterAndOr = false;
       i++;
       for (const delimiter of heredocs) {
         while (i < n) {
@@ -539,6 +577,7 @@ function lexShell(text, out, ctx) {
     } else if (";&|()<>".includes(c)) {
       finishWord();
       const operator = matchAt(/;;&?|;&|&&|\|\||\|&|<<<|[;&|()<>]/y, text, i)[0];
+      if (!"<>".includes(operator[0])) afterAndOr = operator === "&&" || operator === "||";
       i += operator.length;
       wordStart = true;
       commandPosition = !"<>".includes(operator[0]);
@@ -582,6 +621,8 @@ function lexSwift(text, out, ctx) {
   const n = text.length;
   const stack = [];
   let pendingLoop = null;
+  let pendingGuard = null;
+  let parens = 0;
   let i = 0;
   if (text.startsWith("#!")) {
     i = lineEnd(text, 0);
@@ -604,10 +645,8 @@ function lexSwift(text, out, ctx) {
       if (id === "while" || id === "for" || id === "repeat") {
         pendingLoop = poll(id === "for", id === "while" && !matchAt(/\s+true\b/y, text, i + id.length));
       }
-      if (id === "break" || id === "return") {
-        const region = innermost(stack);
-        if (region) region.exits = true;
-      }
+      if (((id === "if" || id === "guard") && !matchAt(/\s+true\b/y, text, i + id.length)) || id === "else") pendingGuard = parens;
+      if (id === "break" || id === "return") exitUnderGuard(stack);
       if (id === "Date" || id === "DispatchTime" || id === "ContinuousClock" || id === "CFAbsoluteTimeGetCurrent") {
         const region = pendingLoop ?? innermost(stack);
         if (region) region.clock = true;
@@ -618,12 +657,15 @@ function lexSwift(text, out, ctx) {
       }
       i += id.length;
     } else {
-      if (c === "{") {
-        stack.push(pendingLoop);
+      if (c === "(") parens++;
+      else if (c === ")") parens--;
+      else if (c === "{") {
+        stack.push(pendingLoop ?? (pendingGuard === parens ? "guard" : null));
         pendingLoop = null;
+        pendingGuard = null;
       } else if (c === "}") {
         const closed = stack.pop();
-        if (closed) settle(closed, out);
+        if (closed !== null && typeof closed === "object") settle(closed, out);
       }
       i++;
     }
