@@ -166,7 +166,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib \
 
 ```sh
 ./scripts/ci.sh          # lint, typecheck, build, every test suite, the icons
-./scripts/ci.sh rust     # Rust only
+./scripts/ci.sh rust     # Rust only: desktop, then daemon
 ./scripts/image.sh       # the daemon's image: build it, run it, prove it answers
 scripts/probe.py         # on a Mac: what only a Mac does, see docs/PROBE.md
 GUAC_LOG=guac=debug pnpm app
@@ -202,6 +202,50 @@ The other suites, one per subsystem with something live behind it, are in
 this file: the group recording, the subscription, the account, the
 plugins, the two machine providers, and the two reads off OpenRouter's catalog.
 Run the one you touched.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs the gate on every pull request and every push
+to `main`. It runs `./scripts/ci.sh` itself, one part per job, so a job that
+fails here fails on a laptop with the same command, and the jobs together run
+exactly what `./scripts/ci.sh` with no argument runs.
+
+| Job | Runs | Needs |
+|---|---|---|
+| web, scripts, assets, connector | `ci.sh assets`, `scripts`, `web`, `connector`, one step each | Node 22 and pnpm |
+| rust desktop | `ci.sh desktop`: format, Clippy and every test with the desktop features | the Tauri headers, Rust, a built `dist/` |
+| rust daemon (no Tauri, no frontend) | `ci.sh daemon`: Clippy and every test built as the daemon | Rust only, so a dependency on Tauri or `dist/` fails here |
+| formal (TLA+ model check) | `ci.sh formal`: the conversation recovery model | Java, and the TLA+ tools jar, cached by its pinned version |
+| images (Dockerfile.ci and the daemon image) | builds `Dockerfile.ci`, then `./scripts/image.sh` | Docker |
+| gate | passes only when every job above passed | nothing |
+
+Each job starts on a fresh GitHub-hosted Ubuntu 24.04 machine, never on one of
+the repository's own: a pull request from a fork runs its own code in these
+jobs. The workflow can read the repository and nothing more, holds no secret,
+and uses `pull_request`, so a fork's run cannot write anywhere. Actions are
+pinned by commit. The cargo registry and target and the pnpm store are cached
+between runs; a push to a pull request cancels that pull request's older run,
+and every commit on `main` keeps its own. Debug info is off in CI
+(`CARGO_PROFILE_DEV_DEBUG=0`), which changes nothing a test asserts and keeps
+the target small enough to cache.
+
+**Reading a failure.** Open the red job, then the red step: its name is the
+`ci.sh` part, and each `==>` line inside it is one step of that part. A
+failing Rust test prints `test <path> ... FAILED` and its panic under
+`failures:`, and Cargo stops at the first test binary that fails, so the
+binaries after it have not run; a failing Vitest test prints `FAIL` and the
+file. Rerun the same
+part locally, `./scripts/ci.sh desktop` for example, before anything else. A
+job that is red only in CI is a finding about the test, not a reason to retry
+until it passes.
+
+**Adding a job.** Add one block under `jobs:` with its own `runs-on:
+ubuntu-24.04` and `timeout-minutes`, and add its id to `gate`'s `needs`. A
+part of the gate belongs in `ci.sh` first, as a new argument that `all` runs
+too, so a laptop and CI keep running the same thing:
+`scripts/check-ci-parts.py`, in `ci.sh scripts`, fails while a part `ci.sh`
+runs has no job here. Never use a macOS runner here. Require `gate` and only
+`gate` in branch protection, so a new job never needs a settings change.
 
 ## What looks like a simplification and is not
 

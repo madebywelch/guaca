@@ -18,7 +18,7 @@ test("verified history selects exact commits and refuses bad feeds", () => {
     const signature = sign(null, valid ? bytes : Buffer.from("wrong"), privateKey).toString("base64");
     writeFileSync(join(dir, "guaca-main.json"), JSON.stringify({ manifest: bytes.toString("base64"), signature }));
     git("add", "guaca-main.json");
-    git("commit", "--quiet", "-m", commit);
+    git("-c", "user.name=Feed Test", "-c", "user.email=feed-test@example.invalid", "commit", "--quiet", "-m", commit);
   };
   try {
     git("init", "--quiet", "-b", "main-feed");

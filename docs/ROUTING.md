@@ -174,3 +174,4 @@ the gotchas file says what it already cost somebody to change it.
 | The Groups sheet, the groups' column, deleting an agent | `docs/gotchas/workspace.md` |
 | The menu bar, its panel, the tray, closing the window | `docs/gotchas/menubar.md` |
 | A test, a stub, or which suite would catch this | `docs/TESTING.md` |
+| The checks on a pull request, a CI job, what runs where in CI | *Continuous integration* in `docs/TESTING.md`, then `.github/workflows/ci.yml` and `scripts/ci.sh` |

@@ -50,6 +50,10 @@ run_scripts() {
   # opening a packaged image is a release step in docs/RELEASING.md.
   step "Release disk image layout"
   python3 scripts/package-dmg.test.py
+
+  step "CI runs every part of this gate"
+  python3 scripts/check-ci-parts.test.py
+  python3 scripts/check-ci-parts.py
 }
 
 run_formal() {
@@ -90,7 +94,7 @@ run_web() {
   pnpm test
 }
 
-run_rust() {
+run_desktop() {
   ensure_dist
 
   step "Rust format"
@@ -106,7 +110,9 @@ run_rust() {
     step "Native notification action ordering and shutdown"
     python3 scripts/test-notification-actions.py
   fi
+}
 
+run_daemon() {
   # The daemon is a second host over the same library, and it is built without
   # Tauri on purpose: `app.rs` expands a macro that reads dist/, so a server
   # that needed the desktop feature could not be built in a container that has
@@ -127,11 +133,19 @@ run_rust() {
   cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --features server
 }
 
+run_rust() {
+  run_desktop
+  run_daemon
+}
+
 case "${1:-all}" in
   assets) run_assets ;;
   scripts) run_scripts ;;
   web) run_web ;;
   rust) run_rust ;;
+  desktop) run_desktop ;;
+  daemon) run_daemon ;;
+  connector) run_connector ;;
   formal) run_formal ;;
   all)
     run_assets
@@ -142,7 +156,7 @@ case "${1:-all}" in
     run_formal
     ;;
   *)
-    echo "usage: $0 [all|assets|scripts|web|rust|formal]" >&2
+    echo "usage: $0 [all|assets|scripts|web|rust|desktop|daemon|connector|formal]" >&2
     exit 2
     ;;
 esac
