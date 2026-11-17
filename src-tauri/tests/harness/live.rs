@@ -207,8 +207,21 @@ pub fn answer_permission_requests(
 }
 
 pub struct Machines {
-    config: AppConfig,
-    before: Vec<String>,
+    release: Option<Box<dyn FnOnce() + Send>>,
+}
+
+impl Machines {
+    pub fn releasing(release: impl FnOnce() + Send + 'static) -> Self {
+        Machines { release: Some(Box::new(release)) }
+    }
+}
+
+impl Drop for Machines {
+    fn drop(&mut self) {
+        if let Some(release) = self.release.take() {
+            release();
+        }
+    }
 }
 
 pub async fn machines_now(config: &AppConfig) -> Machines {
@@ -216,7 +229,19 @@ pub async fn machines_now(config: &AppConfig) -> Machines {
         Some(client) => client.list_ours().await.unwrap_or_default(),
         None => Vec::new(),
     };
-    Machines { config: config.clone(), before }
+    let config = config.clone();
+    Machines::releasing(move || {
+        let released = std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map(|runtime| runtime.block_on(release_machines(config, before)))
+        })
+        .join();
+        if !matches!(released, Ok(Ok(()))) {
+            eprintln!("could not release the machines this run started");
+        }
+    })
 }
 
 pub async fn settle_and_release(
@@ -224,15 +249,14 @@ pub async fn settle_and_release(
     run: RunId,
     secs: u64,
     answering: tokio::task::JoinHandle<()>,
-    machines: Machines,
+    _machines: Machines,
 ) -> bool {
     let settled = h.settled_within(run, secs).await;
     answering.abort();
-    release_machines(machines).await;
     settled
 }
 
-async fn release_machines(Machines { config, before }: Machines) {
+async fn release_machines(config: AppConfig, before: Vec<String>) {
     let Some(client) = guac_lib::e2b::E2bClient::new(&config.e2b.api_key) else {
         return;
     };
