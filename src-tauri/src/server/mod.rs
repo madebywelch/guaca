@@ -18,7 +18,7 @@ use tower_http::cors::CorsLayer;
 use crate::commands::{AppState, Reach};
 use crate::domain::attachment::MAX_FILE_BYTES;
 use crate::domain::deployment::Deployment;
-use crate::runtime::events::{EventSink, UiEvent};
+use crate::runtime::events::UiEvent;
 
 const BACKLOG: usize = 2048;
 
@@ -45,24 +45,11 @@ pub struct Settings {
     pub updater: Option<PathBuf>,
 }
 
-struct SocketSink {
-    events: broadcast::Sender<UiEvent>,
-    live: parking_lot::Mutex<live::Snapshot>,
-}
-
-impl EventSink for SocketSink {
-    fn emit(&self, event: UiEvent) {
-        let mut live = self.live.lock();
-        live.observe(&event);
-        let _ = self.events.send(event);
-    }
-}
-
 #[derive(Clone)]
 struct Serving {
     state: Arc<AppState>,
     token: Arc<str>,
-    sink: Arc<SocketSink>,
+    sink: Arc<live::SocketSink>,
     updates: Arc<crate::updates::Checker>,
     updater: Option<Arc<std::path::Path>>,
     revocations: Arc<parking_lot::Mutex<PathBuf>>,
@@ -102,7 +89,7 @@ pub async fn serve(settings: Settings) -> Result<(), String> {
 
 pub async fn bind(settings: Settings) -> Result<Bound, String> {
     let (events, _) = broadcast::channel(BACKLOG);
-    let sink = Arc::new(SocketSink { events: events.clone(), live: Default::default() });
+    let sink = Arc::new(live::SocketSink::new(events.clone()));
 
     let paths = crate::boot::Paths::under(&settings.root);
     let booted = crate::boot::open(&paths, tokio::runtime::Handle::current(), sink.clone()).await?;
@@ -325,18 +312,24 @@ async fn relay(socket: &std::path::Path, request: crate::updater::Request) -> Re
     #[cfg(unix)]
     let answer = crate::updater::ask(socket, &request).await;
     #[cfg(not(unix))]
-    let answer: Result<Value, String> = {
+    let answer: Result<Value, crate::updater::Failure> = {
         let _ = (socket, request);
-        Err("An updater is reached over a Unix socket, which this system does not have.".into())
+        Err(crate::updater::Failure::unanswered(
+            "An updater is reached over a Unix socket, which this system does not have.",
+        ))
     };
     match answer {
         Ok(mut report) => {
             report["managed"] = json!(true);
             Json(report).into_response()
         }
-        Err(message) => (
+        Err(failure) => (
             StatusCode::CONFLICT,
-            Json(json!({ "err": { "kind": "updater", "message": message } })),
+            Json(json!({ "err": {
+                "kind": "updater",
+                "reason": failure.reason,
+                "message": failure.message,
+            }})),
         )
             .into_response(),
     }
@@ -677,13 +670,7 @@ async fn events_socket(
     if let Err(refused) = proof {
         return *refused;
     }
-    let (feed, snapshot) = {
-        let live = serving.sink.live.lock();
-        (
-            serving.sink.events.subscribe(),
-            serde_json::to_string(&*live).expect("live state serializes"),
-        )
-    };
+    let (feed, snapshot) = serving.sink.tune_in();
     let session = if shell {
         None
     } else {

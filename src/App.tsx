@@ -118,6 +118,15 @@ export default function App() {
   const leaveChannel = useStore((state) => state.leaveChannel);
   const focused = useStore((state) => state.focused);
 
+  useEffect(
+    () =>
+      useStore.subscribe((state) => {
+        if (revealing.current !== null && state.selected !== revealing.current)
+          revealing.current = null;
+      }),
+    [],
+  );
+
   useEffect(() => {
     const revealed = revealing.current;
     revealing.current = null;

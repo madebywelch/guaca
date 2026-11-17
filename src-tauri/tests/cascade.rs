@@ -3333,7 +3333,7 @@ async fn a_routine_that_is_due_wakes_its_agent() {
         )
         .unwrap();
 
-    h.runtime.start_scheduler();
+    h.start_scheduler();
     h.wait_until("the routine to fire", |h| {
         h.channel_texts("Watcher").iter().any(|t| t.contains("checked the listings"))
     })
@@ -3365,7 +3365,7 @@ async fn a_one_off_routine_does_not_come_due_twice() {
         )
         .unwrap();
 
-    h.runtime.start_scheduler();
+    h.start_scheduler();
     h.wait_until("the alarm to go off", |h| {
         h.channel_texts("Sleeper").iter().any(|t| t.contains("woke up"))
     })
@@ -3416,7 +3416,7 @@ async fn a_routine_that_skips_lands_on_the_idle_agent_and_not_on_the_working_one
         );
     }
 
-    h.runtime.start_scheduler();
+    h.start_scheduler();
     h.wait_until("both routines to come due", |h| {
         booked.values().all(|r| !h.runtime.store().routine_runs(r.id, 20).unwrap().is_empty())
     })
@@ -3485,7 +3485,7 @@ async fn a_routine_left_on_the_ordinary_rule_waits_its_turn_rather_than_being_dr
         )
         .unwrap();
 
-    h.runtime.start_scheduler();
+    h.start_scheduler();
     h.wait_until("the routine to be delivered", |h| {
         h.runtime
             .store()
@@ -4181,6 +4181,60 @@ async fn update_and_cancel_still_work_at_the_cap() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn every_change_an_agent_makes_to_its_schedule_redraws_the_panel() {
+    let ids: Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+    let script_ids = ids.clone();
+    let stub = serve(move |body| {
+        let done = body["messages"]
+            .as_array()
+            .map(|m| m.iter().filter(|msg| msg["role"] == "tool").count())
+            .unwrap_or(0);
+        let ids = script_ids.lock().unwrap();
+        match done {
+            0 => Script::Book {
+                name: "Newsletter".into(),
+                what: "Draft the weekly newsletter from this week's notes.".into(),
+                repeat: "weekly".into(),
+            },
+            1 => Script::Retime { id: ids[0].clone(), repeat: "weekly".into() },
+            2 => Script::Plugin {
+                name: "schedule".into(),
+                arguments: serde_json::json!({ "action": "cancel", "id": ids[1] }),
+            },
+            _ => Script::Say("Added one, moved one and dropped one.".into()),
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Watcher"], GuardLimits::default());
+    let kept = keep_routines(&h, "Watcher", 2);
+    *ids.lock().unwrap() = kept.iter().map(|r| r.id.to_string()).collect();
+    let watcher = h.id("Watcher");
+    let checkpoint = h.sink.snapshot().len();
+
+    let asked = h
+        .runtime
+        .send_from_human(
+            watcher,
+            "Add the newsletter, make the first sweep weekly, drop the second.",
+        )
+        .unwrap();
+    h.settle(asked).await;
+
+    let told = last_tool_results(&stub);
+    assert!(told[0].starts_with("Scheduled: "), "{told:?}");
+    assert!(told[1].starts_with("Updated "), "{told:?}");
+    assert!(told[2].starts_with("Canceled "), "{told:?}");
+    let redrawn = h.sink.snapshot()[checkpoint..]
+        .iter()
+        .filter(|e| matches!(e, UiEvent::RoutinesChanged { agent_id } if *agent_id == watcher))
+        .count();
+    assert_eq!(
+        redrawn, 3,
+        "each write the agent made has to reach the panel beside its transcript"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_fired_one_off_and_a_cancelled_routine_do_not_count_toward_the_cap() {
     let stub = serve(|body| {
         if anyone_said(body, "every week") {
@@ -4228,7 +4282,7 @@ async fn a_fired_one_off_and_a_cancelled_routine_do_not_count_toward_the_cap() {
         )
         .unwrap();
 
-    h.runtime.start_scheduler();
+    h.start_scheduler();
     h.wait_until("the one-off to fire and go", |h| {
         h.channel_texts("Watcher").iter().any(|t| t.contains("Woke up."))
             && h.runtime.store().agent_routines(h.id("Watcher")).unwrap().len() == 19
@@ -4266,7 +4320,7 @@ async fn a_weekday_routine_slept_through_a_weekend_records_the_two_slots_it_miss
         .unwrap();
     h.runtime.set_up_since(local(6, 15));
 
-    h.runtime.start_scheduler();
+    h.start_scheduler();
     h.wait_until("the catch-up firing", |h| {
         h.channel_texts("Watcher").iter().any(|t| t.contains("swept"))
     })
@@ -4298,7 +4352,7 @@ async fn a_routine_that_comes_due_while_the_host_is_up_missed_nothing() {
         .unwrap();
     h.runtime.set_up_since(now_ms() - 5000);
 
-    h.runtime.start_scheduler();
+    h.start_scheduler();
     h.wait_until("the firing", |h| {
         !h.runtime.store().routine_runs(routine.id, 20).unwrap().is_empty()
     })
@@ -4644,7 +4698,7 @@ async fn a_routine_that_is_switched_off_stays_quiet_and_starts_again_when_asked(
         .unwrap();
     h.runtime.store().set_routine_active(routine.id, false).unwrap();
 
-    h.runtime.start_scheduler();
+    h.start_scheduler();
     tokio::time::sleep(Duration::from_millis(400)).await;
     assert!(
         h.channel_texts("Watcher").is_empty(),
@@ -4672,7 +4726,7 @@ fn a_schedule_that_cannot_be_read_parks_until_the_next_tick() {
             let h = harness(&stub, &["Watcher"], GuardLimits::default());
             h.runtime.store().conn().unwrap().execute_batch("DROP TABLE routines").unwrap();
 
-            h.runtime.start_scheduler();
+            h.start_scheduler();
 
             tokio::time::sleep(Duration::from_secs(60)).await;
         });
@@ -6207,8 +6261,8 @@ async fn absorbed_routine_resumes_with_its_consuming_turn_and_records() {
         OnDisk::under(h._dir.path()),
         sink.clone(),
     );
-    runtime.start_all().unwrap();
-    runtime.pick_up(recovered);
+    let started = runtime.start_all().unwrap();
+    runtime.pick_up(&started, recovered);
     assert!(runtime.drain(Duration::from_secs(5)).await.is_complete());
     runtime.stop_agent(agent);
     let store = Store::open(&h._dir.path().join("guac.db")).unwrap();
@@ -6224,8 +6278,8 @@ async fn absorbed_routine_resumes_with_its_consuming_turn_and_records() {
         OnDisk::under(h._dir.path()),
         sink.clone(),
     );
-    runtime.start_all().unwrap();
-    runtime.pick_up(recovered);
+    let started = runtime.start_all().unwrap();
+    runtime.pick_up(&started, recovered);
     let h = Harness { runtime, sink, ids: h.ids, _dir: h._dir };
     h.settle(run).await;
     h.wait_until("the resumed call", |_| stub.transcript.lock().iter().any(picked_up)).await;
@@ -6936,8 +6990,8 @@ fn crash(h: Harness, paused: &[&str]) -> (Harness, Vec<RunId>, usize) {
         OnDisk::under(h._dir.path()),
         sink.clone(),
     );
-    runtime.start_all().unwrap();
-    runtime.pick_up(recovered);
+    let started = runtime.start_all().unwrap();
+    runtime.pick_up(&started, recovered);
     (Harness { runtime, sink, ids: h.ids, _dir: h._dir }, again, interrupted)
 }
 

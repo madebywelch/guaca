@@ -16,6 +16,7 @@ import {
   type Manager,
   parseManager,
   thisApp,
+  type UpdateFailure,
 } from "../lib/host";
 import { expectRestart } from "../lib/link";
 import {
@@ -531,10 +532,11 @@ export function HostUpdatePanel() {
       });
       const body: unknown = await response.json().catch(() => null);
       if (!response.ok) {
-        const message = (body as { err?: { message?: string } } | null)?.err?.message;
-        if (response.status === 409 && message?.startsWith("The latest release is Guaca ")) {
+        const err = (body as { err?: { reason?: UpdateFailure; message?: string } } | null)?.err;
+        if (response.status === 409 && err?.reason === "refused" && err.message) {
           setAccepted(null);
-          setFailure(message);
+          setFailure(err.message);
+          void refresh(true);
           return;
         }
         throw new Error("The update outcome is unknown.");

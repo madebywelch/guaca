@@ -1093,7 +1093,26 @@ async fn a_box_relays_its_updater_and_only_for_the_token() {
     assert_eq!(stale.status(), 409);
     let body: Value = stale.json().await.unwrap();
     assert!(body["err"]["message"].as_str().unwrap().contains("review it again"), "{body}");
+    assert_eq!(body["err"]["reason"], "refused", "the updater answered, so nothing started");
     updater.abort();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_box_whose_updater_does_not_answer_says_the_outcome_is_unknown() {
+    let sockets = tempfile::tempdir().unwrap();
+    let (addr, _dir) = workspace_beside(Some(sockets.path().join("nobody.sock"))).await;
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/host/update"))
+        .bearer_auth(TOKEN)
+        .json(&json!({ "version": "0.3.0" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 409);
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["err"]["reason"], "unanswered", "{body}");
+    assert!(body["err"]["message"].as_str().unwrap().contains("not answering"), "{body}");
 }
 
 #[cfg(unix)]
