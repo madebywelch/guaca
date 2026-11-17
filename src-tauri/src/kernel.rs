@@ -67,13 +67,52 @@ fn uncertain_creation(err: KernelError) -> KernelError {
 pub struct Browser {
     pub session_id: String,
     pub state: String,
-    pub live_view_url: Option<String>,
-    pub unwatchable: Option<String>,
+    #[serde(flatten)]
+    pub view: LiveView,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(into = "LiveViewFields", try_from = "LiveViewFields")]
+pub enum LiveView {
+    Framed(String),
+    Refused(String),
+    Absent,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LiveViewFields {
+    live_view_url: Option<String>,
+    unwatchable: Option<String>,
+}
+
+impl From<LiveView> for LiveViewFields {
+    fn from(view: LiveView) -> Self {
+        let (live_view_url, unwatchable) = match view {
+            LiveView::Framed(url) => (Some(url), None),
+            LiveView::Refused(origin) => (None, Some(origin)),
+            LiveView::Absent => (None, None),
+        };
+        LiveViewFields { live_view_url, unwatchable }
+    }
+}
+
+impl TryFrom<LiveViewFields> for LiveView {
+    type Error = &'static str;
+
+    fn try_from(fields: LiveViewFields) -> Result<Self, Self::Error> {
+        match (fields.live_view_url, fields.unwatchable) {
+            (Some(_), Some(_)) => Err("a live view is framed or refused, never both"),
+            (Some(url), None) => Ok(LiveView::Framed(url)),
+            (None, Some(origin)) => Ok(LiveView::Refused(origin)),
+            (None, None) => Ok(LiveView::Absent),
+        }
+    }
 }
 
 impl Browser {
     pub fn running(session: Session) -> Self {
-        let (live_view_url, unwatchable) = match session.live_view_url {
+        let view = match session.live_view_url {
             Some(url) if !framable(&url) => {
                 let origin = origin_of(&url);
                 tracing::warn!(
@@ -82,11 +121,12 @@ impl Browser {
                     "Kernel served a live view this window is not allowed to frame; \
                      the browser is running and only watching it is refused"
                 );
-                (None, Some(origin))
+                LiveView::Refused(origin)
             }
-            watchable => (watchable, None),
+            Some(url) => LiveView::Framed(url),
+            None => LiveView::Absent,
         };
-        Browser { session_id: session.id, state: "running".to_string(), live_view_url, unwatchable }
+        Browser { session_id: session.id, state: "running".to_string(), view }
     }
 }
 
@@ -795,8 +835,7 @@ mod tests {
             cdp_ws_url: "wss://x".into(),
             live_view_url: Some("https://prod-jfk-1.example.com:8443/browser/live/tok".into()),
         });
-        assert_eq!(refused.live_view_url, None);
-        assert_eq!(refused.unwatchable.as_deref(), Some("https://prod-jfk-1.example.com:8443"));
+        assert_eq!(refused.view, LiveView::Refused("https://prod-jfk-1.example.com:8443".into()));
         assert_eq!(refused.state, "running", "the browser is fine; only watching it is refused");
 
         let shown = Browser::running(Session {
@@ -805,10 +844,35 @@ mod tests {
             live_view_url: Some("https://prod-jfk-1.kernel.sh:8443/browser/live/tok".into()),
         });
         assert_eq!(
-            shown.live_view_url.as_deref(),
-            Some("https://prod-jfk-1.kernel.sh:8443/browser/live/tok")
+            shown.view,
+            LiveView::Framed("https://prod-jfk-1.kernel.sh:8443/browser/live/tok".into())
         );
-        assert_eq!(shown.unwatchable, None);
+    }
+
+    #[test]
+    fn a_browser_is_never_both_framed_and_refused_on_the_wire() {
+        let both = json!({
+            "sessionId": "s",
+            "state": "running",
+            "liveViewUrl": "https://prod-jfk-1.kernel.sh:8443/browser/live/tok",
+            "unwatchable": "https://prod-jfk-1.example.com:8443",
+        });
+        assert!(serde_json::from_value::<Browser>(both).is_err());
+
+        for (url, unwatchable) in [
+            (json!("https://prod-jfk-1.kernel.sh:8443/browser/live/tok"), Value::Null),
+            (Value::Null, json!("https://prod-jfk-1.example.com:8443")),
+            (Value::Null, Value::Null),
+        ] {
+            let wire = json!({
+                "sessionId": "s",
+                "state": "running",
+                "liveViewUrl": url,
+                "unwatchable": unwatchable,
+            });
+            let browser: Browser = serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!(serde_json::to_value(&browser).unwrap(), wire);
+        }
     }
 
     #[test]
