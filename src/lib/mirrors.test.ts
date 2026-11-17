@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { money } from "../components/Spend";
+import { readableSize } from "./files";
 import { LIMITS } from "./limits";
 import { allows } from "./plugins";
 import { otherBuild } from "./releases";
@@ -95,6 +96,7 @@ const CHECKS: Record<string, Check> = {
     allows(access, agent),
   ),
   "plugin-call": each(splitPluginTool),
+  sizes: each(readableSize),
   "tool-names": each(({ tool, args }: { tool: string; args: unknown }) =>
     tool === "attach_file" ? attachedFiles(args) : sendRecipients(args),
   ),

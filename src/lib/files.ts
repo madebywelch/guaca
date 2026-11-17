@@ -55,7 +55,13 @@ export function screenUrl(vncUrl: string): string {
 }
 
 export function readableSize(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024 * 1024) {
+    const tenths = (bytes * 10) / (1024 * 1024);
+    const below = Math.floor(tenths);
+    const rounded =
+      tenths - below > 0.5 || (tenths - below === 0.5 && below % 2 === 1) ? below + 1 : below;
+    return `${Math.floor(rounded / 10)}.${rounded % 10} MB`;
+  }
   if (bytes >= 1024) return `${Math.ceil(bytes / 1024)} KB`;
   return `${bytes} bytes`;
 }

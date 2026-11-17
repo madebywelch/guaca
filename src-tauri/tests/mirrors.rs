@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 use guac_lib::config::AppConfig;
 use guac_lib::db::Store;
 use guac_lib::domain::agent::{CleanDraft, MAX_NAME_LEN};
+use guac_lib::domain::attachment::Attachment;
 use guac_lib::domain::connector::CleanConnector;
 use guac_lib::domain::envelope::Envelope;
 use guac_lib::domain::ids::AgentId;
@@ -33,6 +34,7 @@ const CHECKS: &[(&str, Check)] = &[
     ("plain-text", plain_text),
     ("plugin-access", plugin_access),
     ("plugin-call", plugin_call),
+    ("sizes", sizes),
     ("tool-names", tool_names),
     ("tool-surfaces", tool_surfaces),
     ("trigger", trigger),
@@ -235,6 +237,12 @@ fn builds(file: &Value) {
 
 fn money(file: &Value) {
     each(file, guac_lib::menubar::money);
+}
+
+fn sizes(file: &Value) {
+    each(file, |bytes: u64| {
+        Attachment { digest: String::new(), name: String::new(), mime: String::new(), bytes }.size()
+    });
 }
 
 fn constants(file: &Value) {
