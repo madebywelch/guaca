@@ -1,0 +1,574 @@
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync, appendFileSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
+import { lineEnd, lineStarts, scanFiles } from "./grants/lex.mjs";
+
+export const LEDGER = "grants.json";
+export const PROSE = /\.(md|mdx|markdown|rst|adoc|txt)$/i;
+const KINDS = new Set(["comment", "suppression", "document"]);
+const GRANT_COMMAND = "node scripts/check-grants.mjs grant";
+
+const DIRECTIVES = [
+  (unit) => unit.line === 1 && unit.raw.startsWith("#!"),
+  (unit) => unit.lang === "js" && /^\/\/\/\s*<reference\s[^>]*\/>$/.test(unit.raw),
+  (unit) => unit.lang === "js" && /^@(vitest-environment|jest-environment|jsxImportSource)\s+\S+$|^@ts-check$/.test(unit.body),
+  (unit) => /^SPDX-License-Identifier:\s*\S+$/.test(unit.body),
+  (unit) => unit.lang === "python" && unit.line <= 2 && /coding[:=]\s*[-\w.]+/.test(unit.body),
+  (unit) => unit.lang === "shell" && /^shellcheck\s+(shell|source|source-path|external-sources)=\S+$/.test(unit.body),
+  (unit) => unit.lang === "yaml" && /^yaml-language-server:\s*\$schema=\S+$/.test(unit.body),
+  (unit) => unit.lang === "swift" && unit.line === 1 && /^swift-tools-version:/.test(unit.body),
+  (unit) =>
+    unit.lang === "dockerfile" &&
+    /^#\s*(syntax|escape|check)\s*=\s*\S+$/.test(unit.raw) &&
+    unit.before.split("\n").every((line) => line === "" || /^#\s*(syntax|escape|check)\s*=/.test(line)),
+];
+
+const COMMENT_SUPPRESSIONS = [
+  [/@ts-(ignore|expect-error|nocheck)\b/, (m) => "@ts-" + m[1]],
+  [/\bbiome-ignore/, () => "biome-ignore"],
+  [/\b(eslint|oxlint)-disable/, (m) => m[1] + "-disable"],
+  [/\bshellcheck\s+disable=/, () => "shellcheck disable"],
+  [/(^|\s)noqa\b/i, () => "noqa"],
+  [/\btype:\s*ignore\b/, () => "type: ignore"],
+  [/\bpyright:\s*ignore\b/, () => "pyright: ignore"],
+  [/\bpylint:\s*disable\b/, () => "pylint: disable"],
+  [/\byamllint\s+disable/, () => "yamllint disable"],
+  [/\bhadolint\s+ignore=/, () => "hadolint ignore"],
+  [/\bswiftlint:disable\b/, () => "swiftlint:disable"],
+  [/\bstylelint-disable/, () => "stylelint-disable"],
+  [/\bprettier-ignore\b/, () => "prettier-ignore"],
+  [/\b(istanbul|c8|v8)\s+ignore\b/, (m) => m[1] + " ignore"],
+];
+
+const FIXES = {
+  comment:
+    "A comment. If it states a constraint, encode it as a type, an assertion or a test that fails when it is broken. If it explains why, put that in the commit message. If it excuses a workaround, fix the cause.",
+  suppression:
+    "A suppression. Fix what the check found and delete the suppression. A skipped or focused test: make it pass in the gate, or delete it. A sleep in a test or script: wait on the event if the system offers one; otherwise poll the real condition in a loop whose bound the lint can see, a counted for loop or one that reads the clock, and that re-checks the condition each attempt.",
+  document:
+    "A new prose file. Say it where it is enforced or read instead: a rule becomes a check or a test, history goes in the commit message, and design goes in the section of an existing document that docs/ROUTING.md names.",
+};
+
+export function hashText(text) {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+function normalize(text) {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .join("\n");
+}
+
+function bodyOf(raw) {
+  return raw
+    .split("\n")
+    .map((line) =>
+      line
+        .trim()
+        .replace(/^(\/\/+!?|\/\*+!?|#+!?|<!--|--|;|\\\*|\(\*)\s?/, "")
+        .replace(/\s*(\*\/|-->|\*\))$/, "")
+        .replace(/^\*+\s?/, "")
+        .trim(),
+    )
+    .join("\n")
+    .trim();
+}
+
+function suppressionIn(body) {
+  for (const [pattern, name] of COMMENT_SUPPRESSIONS) {
+    const match = pattern.exec(body);
+    if (match) return name(match);
+  }
+  return null;
+}
+
+export function unitsOf(path, text, scan) {
+  const starts = lineStarts(text);
+  const lineOf = (offset) => {
+    let lo = 0;
+    let hi = starts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (starts[mid] <= offset) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo + 1;
+  };
+  const unsafeLines = new Set(scan.unsafeOffsets.map(lineOf));
+  const raws = [...scan.comments]
+    .sort((a, b) => a.start - b.start)
+    .map((span) => {
+      const line = lineOf(span.start);
+      const raw = text.slice(span.start, span.end).replace(/\s+$/, "");
+      const unit = {
+        path,
+        lang: scan.lang,
+        start: span.start,
+        end: span.end,
+        line,
+        endLine: lineOf(Math.max(span.start, span.end - 1)),
+        own: text.slice(starts[line - 1], span.start).trim() === "",
+        raw,
+        body: bodyOf(raw),
+        before: text.slice(0, span.start),
+      };
+      const what = suppressionIn(unit.body);
+      unit.kind = what ? "suppression" : DIRECTIVES.some((rule) => rule(unit)) ? "allowed" : "comment";
+      unit.what = what ?? (unit.raw.startsWith("///") || unit.raw.startsWith("//!") || unit.raw.startsWith("/**") ? "doc comment" : "comment");
+      return unit;
+    });
+  const units = [];
+  for (const unit of raws) {
+    const previous = units[units.length - 1];
+    const joins =
+      previous &&
+      previous.kind === "comment" &&
+      unit.kind === "comment" &&
+      previous.own &&
+      unit.own &&
+      unit.line === unit.endLine &&
+      previous.line === previous.endLine - (previous.endLine - previous.line) &&
+      unit.line === previous.endLine + 1 &&
+      previous.raw.split("\n").every((line) => !line.trim().startsWith("/*")) &&
+      !unit.raw.startsWith("/*") &&
+      previous.raw.trim().slice(0, 2) === unit.raw.trim().slice(0, 2);
+    if (joins) {
+      previous.end = unit.end;
+      previous.endLine = unit.endLine;
+      previous.raw = previous.raw + "\n" + unit.raw;
+      previous.body = bodyOf(previous.raw);
+    } else units.push(unit);
+  }
+  for (const unit of units) {
+    if (unit.kind === "comment" && unit.lang === "rust" && unit.body.startsWith("SAFETY:") && unsafeLines.has(unit.endLine + 1)) {
+      unit.kind = "allowed";
+    }
+    unit.text = normalize(unit.raw);
+    delete unit.before;
+  }
+  for (const mark of scan.marks) {
+    const line = lineOf(mark.start);
+    const endLine = lineOf(Math.max(mark.start, mark.end - 1));
+    const source = text.slice(starts[line - 1], lineEnd(text, starts[endLine - 1]));
+    units.push({ path, lang: scan.lang, line, endLine, kind: "suppression", what: mark.what, raw: source.trim(), text: normalize(source) });
+  }
+  for (const unit of units) unit.sha256 = hashText(unit.text);
+  return units.sort((a, b) => a.line - b.line);
+}
+
+function git(repo, args, input) {
+  return execFileSync("git", args, { cwd: repo, encoding: "utf8", maxBuffer: 1 << 30, input, stdio: ["pipe", "pipe", "pipe"] });
+}
+
+function gitOk(repo, args) {
+  try {
+    return git(repo, args).trim();
+  } catch {
+    return null;
+  }
+}
+
+export function resolveBase(repo, env = process.env) {
+  if (env.GRANTS_BASE) return { rev: git(repo, ["rev-parse", env.GRANTS_BASE]).trim(), label: env.GRANTS_BASE };
+  const branch = gitOk(repo, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  const onMain = env.GITHUB_REF === "refs/heads/main" || (!env.GITHUB_BASE_REF && branch === "main");
+  if (onMain) {
+    const parent = gitOk(repo, ["rev-parse", "HEAD^"]);
+    if (!parent) throw new Error("HEAD has no parent commit to compare with; fetch more history (git fetch --deepen=1)");
+    return { rev: parent, label: "the previous commit on main" };
+  }
+  const target = env.GITHUB_BASE_REF || "main";
+  for (const ref of ["origin/" + target, target]) {
+    const base = gitOk(repo, ["merge-base", "HEAD", ref]);
+    if (base) return { rev: base, label: "the merge base with " + ref };
+  }
+  throw new Error("no merge base with origin/" + target + "; fetch it (git fetch origin " + target + ") or set GRANTS_BASE");
+}
+
+export function changedLines(repo, base, head) {
+  const args = ["diff", "-M", "-w", "--unified=0", "--no-color", "--no-ext-diff", base];
+  if (head) args.push(head);
+  const changes = new Map();
+  let current = null;
+  for (const line of git(repo, args).split("\n")) {
+    if (line.startsWith("diff --git ")) current = null;
+    else if (line.startsWith("+++ ")) {
+      current = line === "+++ /dev/null" ? null : line.slice(6);
+      if (current && !changes.has(current)) changes.set(current, new Set());
+    } else if (line.startsWith("@@") && current) {
+      const hunk = /\+(\d+)(?:,(\d+))?/.exec(line);
+      const from = Number(hunk[1]);
+      const count = hunk[2] === undefined ? 1 : Number(hunk[2]);
+      for (let n = from; n < from + count; n++) changes.get(current).add(n);
+    }
+  }
+  if (!head) {
+    for (const path of git(repo, ["ls-files", "--others", "--exclude-standard"]).split("\n").filter(Boolean)) {
+      changes.set(path, "all");
+    }
+  }
+  return changes;
+}
+
+function readBlobs(repo, rev, paths) {
+  const files = new Map();
+  if (paths.length === 0) return files;
+  if (!rev) {
+    for (const path of paths) {
+      const full = join(repo, path);
+      if (existsSync(full)) files.set(path, readFileSync(full));
+    }
+    return files;
+  }
+  const out = execFileSync("git", ["cat-file", "--batch"], {
+    cwd: repo,
+    input: paths.map((path) => rev + ":" + path).join("\n") + "\n",
+    maxBuffer: 1 << 30,
+  });
+  let at = 0;
+  for (const path of paths) {
+    const newline = out.indexOf(10, at);
+    const header = out.subarray(at, newline).toString();
+    at = newline + 1;
+    if (header.endsWith("missing")) continue;
+    const size = Number(header.split(" ")[2]);
+    files.set(path, out.subarray(at, at + size));
+    at += size + 1;
+  }
+  return files;
+}
+
+function asText(buffer) {
+  return buffer.includes(0) ? null : buffer.toString("utf8");
+}
+
+export function upstreamOf(ledger) {
+  const entries = ledger?.upstream ?? [];
+  return (path) =>
+    entries.some((entry) => path.startsWith(entry.path) && !(entry.except ?? []).some((own) => path === entry.path + own));
+}
+
+function readLedger(repo, rev) {
+  if (!rev) {
+    const full = join(repo, LEDGER);
+    return existsSync(full) ? readFileSync(full, "utf8") : null;
+  }
+  return gitOk(repo, ["show", rev + ":" + LEDGER]);
+}
+
+function parseLedger(text, problems) {
+  if (text === null) return null;
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    problems.push({ path: LEDGER, message: "is not valid JSON: " + error.message });
+    return null;
+  }
+}
+
+function listFiles(repo, rev) {
+  if (rev) return git(repo, ["ls-tree", "-r", "--name-only", rev]).split("\n").filter(Boolean);
+  return git(repo, ["ls-files", "--cached", "--others", "--exclude-standard"])
+    .split("\n")
+    .filter((path) => path && existsSync(join(repo, path)));
+}
+
+function validateLedger(repo, ledger, head, problems) {
+  const existing = ledger.existing ?? {};
+  const files = new Set(listFiles(repo, head));
+  if (gitOk(repo, ["cat-file", "-e", existing.commit + "^{commit}"]) === null) {
+    problems.push({ path: LEDGER, message: "names existing.commit " + existing.commit + ", which is not in this clone; fetch full history (git fetch --unshallow)" });
+    return { files, renamedFrom: new Map() };
+  }
+  const atCommit = new Set(git(repo, ["ls-tree", "-r", "--name-only", existing.commit]).split("\n"));
+  const renameArgs = ["diff", "-M", "--name-status", "--diff-filter=R", existing.commit];
+  if (head) renameArgs.push(head);
+  const renamedFrom = new Map();
+  const renamedAway = new Set();
+  for (const line of git(repo, renameArgs).split("\n").filter(Boolean)) {
+    const [, from, to] = line.split("\t");
+    renamedFrom.set(to, from);
+    renamedAway.add(from);
+  }
+  for (const path of existing.files ?? []) {
+    if (!atCommit.has(path)) {
+      problems.push({ path: LEDGER, message: path + " is listed as existing but was not a file at " + existing.commit.slice(0, 12) + "; a new document needs the owner's grant" });
+    } else if (!files.has(path) && !renamedAway.has(path)) {
+      problems.push({ path: LEDGER, message: path + " is listed as existing but is gone; remove it from " + LEDGER });
+    }
+  }
+  for (const [index, grant] of (ledger.grants ?? []).entries()) {
+    const where = "grant " + (index + 1) + " (" + grant.kind + " in " + grant.path + ")";
+    if (!KINDS.has(grant.kind)) problems.push({ path: LEDGER, message: where + " has an unknown kind; use comment, suppression or document" });
+    if (typeof grant.words !== "string" || grant.words.trim() === "") problems.push({ path: LEDGER, message: where + " has no words from the owner" });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(grant.date ?? "")) problems.push({ path: LEDGER, message: where + " needs a date as YYYY-MM-DD" });
+    if (grant.kind !== "document" && !/^[0-9a-f]{64}$/.test(grant.sha256 ?? "")) {
+      problems.push({ path: LEDGER, message: where + " needs the sha256 of the text it grants" });
+    }
+  }
+  return { files, renamedFrom };
+}
+
+export function check(repo, { base, head = null, ledgerOverride, proseByDiff = false }) {
+  const problems = [];
+  const findings = [];
+  const ledgerText = ledgerOverride === undefined ? readLedger(repo, head) : ledgerOverride;
+  const ledger = parseLedger(ledgerText, problems);
+  const upstream = upstreamOf(ledger);
+  const changes = changedLines(repo, base, head);
+  const grants = ledger?.grants ?? [];
+  const grantFiles = grants.filter((grant) => grant.kind !== "document").map((grant) => grant.path);
+  const wanted = [...new Set([...changes.keys(), ...grantFiles])].filter((path) => !upstream(path));
+  const blobs = readBlobs(repo, head, wanted);
+  const texts = [];
+  for (const [path, blob] of blobs) {
+    const text = asText(blob);
+    if (text !== null) texts.push({ path, text });
+  }
+  const scans = scanFiles(texts);
+  const unitsByPath = new Map();
+  for (const { path, text } of texts) {
+    const scan = scans.get(path);
+    if (!scan) continue;
+    if (scan.error) {
+      if (changes.has(path)) problems.push({ path, message: "could not be read as " + scan.lang + ": " + scan.error });
+      continue;
+    }
+    unitsByPath.set(path, unitsOf(path, text, scan));
+  }
+  const key = (kind, path, sha256) => kind + "\u0000" + path + "\u0000" + sha256;
+  const available = new Map();
+  for (const grant of grants) {
+    if (grant.kind === "document") continue;
+    const k = key(grant.kind, grant.path, grant.sha256);
+    available.set(k, (available.get(k) ?? 0) + 1);
+  }
+  const instances = new Map();
+  for (const units of unitsByPath.values()) {
+    for (const unit of units) {
+      if (unit.kind === "allowed") continue;
+      const k = key(unit.kind, unit.path, unit.sha256);
+      instances.set(k, (instances.get(k) ?? 0) + 1);
+    }
+  }
+  for (const [path, lines] of changes) {
+    for (const unit of unitsByPath.get(path) ?? []) {
+      if (unit.kind === "allowed") continue;
+      let touched = lines === "all";
+      for (let n = unit.line; !touched && n <= unit.endLine; n++) touched = lines.has(n);
+      if (!touched) continue;
+      const k = key(unit.kind, unit.path, unit.sha256);
+      const left = available.get(k) ?? 0;
+      if (left > 0) {
+        available.set(k, left - 1);
+        continue;
+      }
+      findings.push(unit);
+    }
+  }
+  if (ledger) {
+    const counted = new Map();
+    for (const grant of grants) {
+      if (grant.kind === "document") continue;
+      const k = key(grant.kind, grant.path, grant.sha256);
+      counted.set(k, (counted.get(k) ?? 0) + 1);
+      if (counted.get(k) > (instances.get(k) ?? 0)) {
+        problems.push({ path: LEDGER, message: "a " + grant.kind + " grant for " + grant.path + " (" + grant.sha256.slice(0, 12) + ") matches nothing; remove it" });
+      }
+    }
+  }
+  if (ledger && !proseByDiff) {
+    const { files, renamedFrom } = validateLedger(repo, ledger, head, problems);
+    const existing = new Set(ledger.existing?.files ?? []);
+    const documents = new Set(grants.filter((grant) => grant.kind === "document").map((grant) => grant.path));
+    for (const path of documents) {
+      if (!files.has(path)) problems.push({ path: LEDGER, message: "a document grant for " + path + " matches no file; remove it" });
+    }
+    for (const path of files) {
+      if (!PROSE.test(path) || existing.has(path) || documents.has(path)) continue;
+      if (existing.has(renamedFrom.get(path))) continue;
+      findings.push({ path, line: null, kind: "document", what: "new document" });
+    }
+  } else {
+    const args = ["diff", "-M", "--name-status", "--diff-filter=A", base];
+    if (head) args.push(head);
+    const added = git(repo, args)
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => line.split("\t")[1]);
+    if (!head) added.push(...[...changes].filter(([, lines]) => lines === "all").map(([path]) => path));
+    for (const path of new Set(added)) {
+      if (PROSE.test(path)) findings.push({ path, line: null, kind: "document", what: "new document" });
+    }
+  }
+  return { findings, problems, filesRead: texts.length, ledgerChanges: ledger ? ledgerChanges(readLedger(repo, base), ledger, unitsByPath) : null };
+}
+
+function grantKey(grant) {
+  return [grant.kind, grant.path, grant.sha256 ?? ""].join(" ");
+}
+
+function ledgerChanges(baseText, ledger, unitsByPath) {
+  let before = {};
+  try {
+    before = baseText === null ? {} : JSON.parse(baseText);
+  } catch {
+    before = {};
+  }
+  const describe = (grant) => {
+    const unit = (unitsByPath.get(grant.path) ?? []).find((u) => u.sha256 === grant.sha256 && u.kind === grant.kind);
+    const where = unit ? grant.path + ":" + unit.line : grant.path;
+    const text = unit ? "\n      " + unit.raw.split("\n").join("\n      ") : "";
+    return grant.kind + " in " + where + ", " + grant.date + ', "' + grant.words + '"' + text;
+  };
+  const tally = (list) => {
+    const map = new Map();
+    for (const grant of list ?? []) map.set(grantKey(grant), [...(map.get(grantKey(grant)) ?? []), grant]);
+    return map;
+  };
+  const was = tally(before.grants);
+  const now = tally(ledger.grants);
+  const added = [];
+  const removed = [];
+  const altered = [];
+  for (const k of new Set([...was.keys(), ...now.keys()])) {
+    const a = was.get(k) ?? [];
+    const b = now.get(k) ?? [];
+    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+      if (!a[i]) added.push(describe(b[i]));
+      else if (!b[i]) removed.push(describe(a[i]));
+      else if (a[i].words !== b[i].words || a[i].date !== b[i].date) altered.push(describe(a[i]) + "\n    now " + describe(b[i]));
+    }
+  }
+  if (baseText === null) {
+    return [
+      "  + new ledger: " + (ledger.existing?.files ?? []).length + " prose files recorded as existing at " + ledger.existing?.commit,
+      ...(ledger.upstream ?? []).map((entry) => "  + upstream " + JSON.stringify(entry)),
+      ...added.map((item) => "  + added    " + item),
+    ];
+  }
+  const setDiff = (x, y) => (x ?? []).filter((item) => !(y ?? []).includes(item));
+  const upstreamText = (list) => (list ?? []).map((entry) => JSON.stringify(entry));
+  const lines = [];
+  for (const item of added) lines.push("  + added    " + item);
+  for (const item of removed) lines.push("  - removed  " + item);
+  for (const item of altered) lines.push("  ~ altered  " + item);
+  for (const path of setDiff(ledger.existing?.files, before.existing?.files)) lines.push("  + existing " + path);
+  for (const path of setDiff(before.existing?.files, ledger.existing?.files)) lines.push("  - existing " + path);
+  if ((before.existing?.commit ?? null) !== (ledger.existing?.commit ?? null)) {
+    lines.push("  ~ existing.commit " + (before.existing?.commit ?? "none") + " -> " + ledger.existing?.commit);
+  }
+  for (const entry of setDiff(upstreamText(ledger.upstream), upstreamText(before.upstream))) lines.push("  + upstream " + entry);
+  for (const entry of setDiff(upstreamText(before.upstream), upstreamText(ledger.upstream))) lines.push("  - upstream " + entry);
+  return lines;
+}
+
+export function report(result, base) {
+  const out = [];
+  const { findings, problems } = result;
+  if (result.ledgerChanges?.length) {
+    out.push(
+      "",
+      "GRANTS CHANGED. This change edits " + LEDGER + ". Only the owner grants an exception; check each line below against the owner's own words before merging:",
+      ...result.ledgerChanges,
+      "",
+    );
+  }
+  if (findings.length === 0 && problems.length === 0) {
+    out.push("grants: nothing new since " + base.rev.slice(0, 12) + " (" + base.label + "), " + result.filesRead + " files read");
+    return out.join("\n");
+  }
+  out.push("grants: " + (findings.length + problems.length) + " to fix since " + base.rev.slice(0, 12) + " (" + base.label + ")", "");
+  for (const finding of findings) {
+    const where = finding.line ? finding.path + ":" + finding.line : finding.path;
+    const label = finding.kind === "document" ? "new document" : finding.what;
+    const first = finding.raw ? "  " + finding.raw.split("\n")[0].trim().slice(0, 100) : "";
+    out.push(where + "  " + label + first);
+  }
+  for (const problem of problems) out.push(problem.path + "  " + problem.message);
+  const kinds = new Set(findings.map((finding) => finding.kind));
+  if (kinds.size > 0) out.push("");
+  for (const kind of ["comment", "suppression", "document"]) {
+    if (!kinds.has(kind)) continue;
+    const target = kind === "document" ? "<file>" : "<file>:<line>";
+    out.push(FIXES[kind] + " Only if none of that can work, ask the owner, then record their words: " + GRANT_COMMAND + " " + target + ' --words "<the owner\'s words>"');
+  }
+  return out.join("\n");
+}
+
+function annotate(result) {
+  if (!process.env.GITHUB_ACTIONS) return;
+  for (const finding of result.findings) {
+    const line = finding.line ? ",line=" + finding.line : "";
+    console.log("::error file=" + finding.path + line + "::" + (finding.kind === "document" ? "new document" : finding.what) + " needs the owner's grant");
+  }
+  if (result.ledgerChanges?.length) {
+    console.log("::warning file=" + LEDGER + ",title=Grants changed::" + result.ledgerChanges.length + " ledger changes; read them before merging");
+    if (process.env.GITHUB_STEP_SUMMARY) {
+      appendFileSync(process.env.GITHUB_STEP_SUMMARY, "## Grants changed\n\nOnly the owner grants. Read each before merging.\n\n~~~\n" + result.ledgerChanges.join("\n") + "\n~~~\n");
+    }
+  }
+}
+
+export function grant(repo, target, words, date) {
+  const ledgerPath = join(repo, LEDGER);
+  const ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  const match = /^(.*?)(?::(\d+))?$/.exec(target);
+  const path = relative(repo, resolve(repo, match[1]));
+  let entry;
+  if (!match[2]) {
+    if (!PROSE.test(path)) throw new Error(path + " is not a prose file; name a line for a comment or a suppression: <file>:<line>");
+    entry = { kind: "document", path, words, date };
+  } else {
+    const line = Number(match[2]);
+    const text = readFileSync(join(repo, path), "utf8");
+    const scan = scanFiles([{ path, text }]).get(path);
+    if (!scan || scan.error) throw new Error("cannot read comments in " + path + (scan?.error ? ": " + scan.error : ""));
+    const unit = unitsOf(path, text, scan).find((u) => u.kind !== "allowed" && u.line <= line && line <= u.endLine);
+    if (!unit) throw new Error("no comment or suppression at " + path + ":" + line);
+    entry = { kind: unit.kind, path, sha256: unit.sha256, words, date };
+  }
+  ledger.grants = [...(ledger.grants ?? []), entry];
+  writeFileSync(ledgerPath, JSON.stringify(ledger, null, 2) + "\n");
+  const biome = join(repo, "node_modules", ".bin", "biome");
+  if (existsSync(biome)) execFileSync(biome, ["format", "--write", LEDGER], { cwd: repo, stdio: "ignore" });
+  return entry;
+}
+
+function parseArgs(argv) {
+  const options = { positional: [] };
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg.startsWith("--")) options[arg.slice(2)] = argv[++i];
+    else options.positional.push(arg);
+  }
+  return options;
+}
+
+function main() {
+  const options = parseArgs(process.argv.slice(2));
+  const repo = git(options.repo ?? process.cwd(), ["rev-parse", "--show-toplevel"]).trim();
+  if (options.positional[0] === "grant") {
+    if (!options.words) throw new Error('grant needs the owner\'s words: --words "..."');
+    const date = options.date ?? new Date().toISOString().slice(0, 10);
+    const entry = grant(repo, options.positional[1], options.words, date);
+    console.log("recorded " + JSON.stringify(entry) + " in " + LEDGER + "; the gate prints it to whoever merges this change");
+    return 0;
+  }
+  const base = options.base ? { rev: git(repo, ["rev-parse", options.base]).trim(), label: options.base } : resolveBase(repo);
+  const result = check(repo, { base: base.rev, head: options.head ?? null });
+  annotate(result);
+  console.log(report(result, base));
+  return result.findings.length + result.problems.length > 0 ? 1 : 0;
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.url).pathname)) {
+  try {
+    process.exitCode = main();
+  } catch (error) {
+    console.error("grants: " + error.message);
+    process.exitCode = 2;
+  }
+}

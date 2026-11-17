@@ -24,6 +24,12 @@ ensure_dist() {
   fi
 }
 
+run_grants() {
+  step "No comment, suppression or prose file without the owner's grant"
+  node --test scripts/check-grants.test.mjs
+  node scripts/check-grants.mjs
+}
+
 run_assets() {
   # The icons are compiled in, so a stale one is invisible until the app is
   # opened on a Mac. The check is a regeneration into a temp directory, which
@@ -139,6 +145,7 @@ run_rust() {
 }
 
 case "${1:-all}" in
+  grants) run_grants ;;
   assets) run_assets ;;
   scripts) run_scripts ;;
   web) run_web ;;
@@ -148,6 +155,7 @@ case "${1:-all}" in
   connector) run_connector ;;
   formal) run_formal ;;
   all)
+    run_grants
     run_assets
     run_scripts
     run_web
@@ -156,7 +164,7 @@ case "${1:-all}" in
     run_formal
     ;;
   *)
-    echo "usage: $0 [all|assets|scripts|web|rust|desktop|daemon|connector|formal]" >&2
+    echo "usage: $0 [all|grants|assets|scripts|web|rust|desktop|daemon|connector|formal]" >&2
     exit 2
     ;;
 esac
