@@ -1,0 +1,247 @@
+[
+  {
+    "input": "once",
+    "expected": {
+      "trigger": {
+        "kind": "once"
+      },
+      "repeats": false
+    }
+  },
+  {
+    "input": "daily",
+    "expected": {
+      "trigger": {
+        "kind": "calendar",
+        "repeat": "daily"
+      },
+      "repeats": true
+    }
+  },
+  {
+    "input": "weekdays",
+    "expected": {
+      "trigger": {
+        "kind": "calendar",
+        "repeat": "weekdays"
+      },
+      "repeats": true
+    }
+  },
+  {
+    "input": "weekly",
+    "expected": {
+      "trigger": {
+        "kind": "calendar",
+        "repeat": "weekly"
+      },
+      "repeats": true
+    }
+  },
+  {
+    "input": "monthly",
+    "expected": {
+      "trigger": {
+        "kind": "calendar",
+        "repeat": "monthly"
+      },
+      "repeats": true
+    }
+  },
+  {
+    "input": "  daily  ",
+    "expected": {
+      "trigger": {
+        "kind": "calendar",
+        "repeat": "daily"
+      },
+      "repeats": true
+    }
+  },
+  {
+    "input": "Daily",
+    "expected": null
+  },
+  {
+    "input": "every:3600",
+    "expected": {
+      "trigger": {
+        "kind": "gap",
+        "secs": 3600
+      },
+      "repeats": true
+    }
+  },
+  {
+    "input": "every:0",
+    "expected": {
+      "trigger": {
+        "kind": "gap",
+        "secs": 0
+      },
+      "repeats": true
+    }
+  },
+  {
+    "input": "every:+60",
+    "expected": {
+      "trigger": {
+        "kind": "gap",
+        "secs": 60
+      },
+      "repeats": true
+    }
+  },
+  {
+    "input": "every:4294967295",
+    "expected": {
+      "trigger": {
+        "kind": "gap",
+        "secs": 4294967295
+      },
+      "repeats": true
+    }
+  },
+  {
+    "input": "every:4294967296",
+    "expected": null
+  },
+  {
+    "input": "every: 60",
+    "expected": null
+  },
+  {
+    "input": "every:1.5",
+    "expected": null
+  },
+  {
+    "input": "every:1e3",
+    "expected": null
+  },
+  {
+    "input": "every:0x10",
+    "expected": null
+  },
+  {
+    "input": "every:-1",
+    "expected": null
+  },
+  {
+    "input": "every:",
+    "expected": null
+  },
+  {
+    "input": "every:nonsense",
+    "expected": null
+  },
+  {
+    "input": "event:stripe/invoice.paid",
+    "expected": {
+      "trigger": {
+        "kind": "event",
+        "service": "stripe",
+        "topic": "invoice.paid"
+      },
+      "repeats": true
+    }
+  },
+  {
+    "input": "event:Stripe/invoice.paid",
+    "expected": {
+      "trigger": {
+        "kind": "event",
+        "service": "stripe",
+        "topic": "invoice.paid"
+      },
+      "repeats": true
+    }
+  },
+  {
+    "input": "event: stripe / invoice.paid ",
+    "expected": {
+      "trigger": {
+        "kind": "event",
+        "service": "stripe",
+        "topic": "invoice.paid"
+      },
+      "repeats": true
+    }
+  },
+  {
+    "input": "event:github/pull_request/opened",
+    "expected": {
+      "trigger": {
+        "kind": "event",
+        "service": "github",
+        "topic": "pull_request/opened"
+      },
+      "repeats": true
+    }
+  },
+  {
+    "input": "event:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/x",
+    "expected": {
+      "trigger": {
+        "kind": "event",
+        "service": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "topic": "x"
+      },
+      "repeats": true
+    }
+  },
+  {
+    "input": "event:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/x",
+    "expected": null
+  },
+  {
+    "input": "event:s/tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt",
+    "expected": {
+      "trigger": {
+        "kind": "event",
+        "service": "s",
+        "topic": "tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt"
+      },
+      "repeats": true
+    }
+  },
+  {
+    "input": "event:s/ttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt",
+    "expected": null
+  },
+  {
+    "input": "event:my service/x",
+    "expected": null
+  },
+  {
+    "input": "event:stripe/invoice paid",
+    "expected": null
+  },
+  {
+    "input": "event:stripe",
+    "expected": null
+  },
+  {
+    "input": "event:/invoice.paid",
+    "expected": null
+  },
+  {
+    "input": "event:stripe/",
+    "expected": null
+  },
+  {
+    "input": "event:/",
+    "expected": null
+  },
+  {
+    "input": "Event:stripe/invoice.paid",
+    "expected": null
+  },
+  {
+    "input": "",
+    "expected": null
+  },
+  {
+    "input": "hourly",
+    "expected": null
+  }
+]

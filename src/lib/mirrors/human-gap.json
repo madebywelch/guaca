@@ -1,0 +1,50 @@
+[
+  {
+    "input": 0,
+    "expected": "0 seconds"
+  },
+  {
+    "input": 1,
+    "expected": "second"
+  },
+  {
+    "input": 59,
+    "expected": "59 seconds"
+  },
+  {
+    "input": 60,
+    "expected": "minute"
+  },
+  {
+    "input": 90,
+    "expected": "90 seconds"
+  },
+  {
+    "input": 120,
+    "expected": "2 minutes"
+  },
+  {
+    "input": 3600,
+    "expected": "hour"
+  },
+  {
+    "input": 5400,
+    "expected": "90 minutes"
+  },
+  {
+    "input": 7200,
+    "expected": "2 hours"
+  },
+  {
+    "input": 86400,
+    "expected": "day"
+  },
+  {
+    "input": 90000,
+    "expected": "25 hours"
+  },
+  {
+    "input": 172800,
+    "expected": "2 days"
+  }
+]

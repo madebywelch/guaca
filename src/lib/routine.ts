@@ -3,6 +3,9 @@ import type { Routine, TriggerSpec } from "./types";
 const HOUR_SECS = 3600;
 const GAP_PREFIX = "every:";
 const EVENT_PREFIX = "event:";
+const MAX_EVENT_SERVICE = 48;
+const MAX_EVENT_TOPIC = 120;
+const MAX_GAP_SECS = 4_294_967_295;
 
 export const EVENT_CHOICE: TriggerSpec = `${EVENT_PREFIX}/`;
 
@@ -44,19 +47,24 @@ export function parseTrigger(spec: TriggerSpec): Trigger {
     return { kind: "calendar", repeat: raw };
   }
   if (raw.startsWith(GAP_PREFIX)) {
-    const secs = Number(raw.slice(GAP_PREFIX.length));
-    return Number.isFinite(secs) && secs > 0
-      ? { kind: "gap", secs }
-      : { kind: "unknown", spec: raw };
+    const digits = raw.slice(GAP_PREFIX.length);
+    const secs = /^\+?\d+$/.test(digits) ? Number(digits) : Number.NaN;
+    return secs <= MAX_GAP_SECS ? { kind: "gap", secs } : { kind: "unknown", spec: raw };
   }
   if (raw.startsWith(EVENT_PREFIX)) {
-    const rest = raw.slice(EVENT_PREFIX.length);
+    const rest = raw.slice(EVENT_PREFIX.length).trim();
     const cut = rest.indexOf("/");
-    const service = cut > 0 ? rest.slice(0, cut) : "";
-    const topic = cut > 0 ? rest.slice(cut + 1) : "";
-    return service && topic ? { kind: "event", service, topic } : { kind: "unknown", spec: raw };
+    const service = cut < 0 ? "" : rest.slice(0, cut).trim().toLowerCase();
+    const topic = cut < 0 ? "" : rest.slice(cut + 1).trim();
+    return sound(service, MAX_EVENT_SERVICE) && sound(topic, MAX_EVENT_TOPIC)
+      ? { kind: "event", service, topic }
+      : { kind: "unknown", spec: raw };
   }
   return { kind: "unknown", spec: raw };
+}
+
+function sound(part: string, max: number): boolean {
+  return part.length > 0 && [...part].length <= max && !/\s/.test(part);
 }
 
 export type Anchor = "none" | "time" | "weekday" | "monthday" | "date";

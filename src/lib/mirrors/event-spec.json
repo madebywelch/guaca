@@ -1,0 +1,16 @@
+[
+  {
+    "input": {
+      "service": "stripe",
+      "topic": "invoice.paid"
+    },
+    "expected": "event:stripe/invoice.paid"
+  },
+  {
+    "input": {
+      "service": "github",
+      "topic": "pull_request/opened"
+    },
+    "expected": "event:github/pull_request/opened"
+  }
+]

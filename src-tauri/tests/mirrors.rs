@@ -8,13 +8,17 @@ use serde_json::{json, Value};
 
 use guac_lib::domain::ids::AgentId;
 use guac_lib::domain::plugin::PluginAccess;
+use guac_lib::domain::routine::{human_gap, Cadence, EventTrigger, Trigger};
 use guac_lib::runtime::guard::GuardLimits;
 
 type Check = fn(&Value);
 
 const CHECKS: &[(&str, Check)] = &[
+    ("event-spec", event_spec),
+    ("human-gap", gap),
     ("limits", limits),
     ("plugin-access", plugin_access),
+    ("trigger", trigger),
 ];
 
 fn mirrors() -> PathBuf {
@@ -101,4 +105,35 @@ fn limits(file: &Value) {
         .map(|case| (parsed(&case["input"]), case["expected"].clone()))
         .collect();
     assert_eq!(ours, theirs);
+}
+
+fn shape(trigger: &Trigger) -> Value {
+    match trigger {
+        Trigger::Clock(Cadence::Once) => json!({ "kind": "once" }),
+        Trigger::Clock(Cadence::Every(secs)) => json!({ "kind": "gap", "secs": secs }),
+        Trigger::Clock(calendar) => json!({ "kind": "calendar", "repeat": calendar.as_str() }),
+        Trigger::Event(event) => {
+            json!({ "kind": "event", "service": event.service, "topic": event.topic })
+        }
+    }
+}
+
+fn trigger(file: &Value) {
+    each(file, |spec: String| {
+        Trigger::parse(&spec)
+            .map(|trigger| json!({ "trigger": shape(&trigger), "repeats": trigger.repeats() }))
+    });
+}
+
+fn event_spec(file: &Value) {
+    #[derive(Deserialize)]
+    struct Spec {
+        service: String,
+        topic: String,
+    }
+    each(file, |spec: Spec| EventTrigger { service: spec.service, topic: spec.topic }.as_str());
+}
+
+fn gap(file: &Value) {
+    each(file, human_gap);
 }

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { LIMITS } from "./limits";
 import { allows } from "./plugins";
+import { eventSpec, humanGap, parseTrigger, repeats } from "./routine";
 import { type AgentId, type PluginAccess } from "./types";
 
 const MIRRORS = resolve(__dirname, "mirrors");
@@ -24,6 +25,10 @@ function each<I, E>(actual: (input: I) => E): Check {
 }
 
 const CHECKS: Record<string, Check> = {
+  "event-spec": each(({ service, topic }: { service: string; topic: string }) =>
+    eventSpec(service, topic),
+  ),
+  "human-gap": each(humanGap),
   limits: (file) => {
     expect(LIMITS.map(({ key, min, max }) => ({ input: key, expected: { min, max } }))).toEqual(
       file,
@@ -32,6 +37,10 @@ const CHECKS: Record<string, Check> = {
   "plugin-access": each(({ access, agent }: { access: PluginAccess; agent: AgentId }) =>
     allows(access, agent),
   ),
+  trigger: each((spec: string) => {
+    const trigger = parseTrigger(spec);
+    return trigger.kind === "unknown" ? null : { trigger, repeats: repeats(spec) };
+  }),
 };
 
 describe("vectors shared with the Rust suite", () => {
