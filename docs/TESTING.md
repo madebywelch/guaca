@@ -232,7 +232,9 @@ the target small enough to cache.
 **Reading a failure.** Open the red job, then the red step: its name is the
 `ci.sh` part, and each `==>` line inside it is one step of that part. A
 failing Rust test prints `test <path> ... FAILED` and its panic under
-`failures:`; a failing Vitest test prints `FAIL` and the file. Rerun the same
+`failures:`, and Cargo stops at the first test binary that fails, so the
+binaries after it have not run; a failing Vitest test prints `FAIL` and the
+file. Rerun the same
 part locally, `./scripts/ci.sh desktop` for example, before anything else. A
 job that is red only in CI is a finding about the test, not a reason to retry
 until it passes.
