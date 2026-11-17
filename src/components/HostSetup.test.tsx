@@ -49,6 +49,18 @@ vi.mock("../lib/transport", () => ({
   openExternal: vi.fn(),
 }));
 vi.mock("./GroupTransfer", () => ({ LegacyGroups: () => null }));
+const { sent } = vi.hoisted(() => ({ sent: [] as string[] }));
+vi.mock("../lib/ipc", () => ({
+  api: new Proxy(
+    {},
+    {
+      get: (_, command) => async () => {
+        sent.push(String(command));
+        return null;
+      },
+    },
+  ),
+}));
 
 import { HostChoice, HostSetup } from "./HostSetup";
 
@@ -500,5 +512,33 @@ describe("desktop host setup", () => {
     await waitFor(() => expect(restart).toHaveBeenCalled());
     expect(update).toHaveBeenCalledOnce();
     expect(start).not.toHaveBeenCalled();
+  });
+  it("switches host without asking either host to stop or move a group", async () => {
+    sent.length = 0;
+    start.mockResolvedValue({ origin: "http://127.0.0.1:54321", token: "private" });
+    const local = render(<HostChoice />);
+    fireEvent.click(await screen.findByRole("button", { name: "Use this Mac" }));
+    await waitFor(() => expect(restart).toHaveBeenCalledTimes(1));
+    local.unmount();
+
+    existing.mockResolvedValue([
+      { name: "existing-guacad-1", label: "My workspace", origin: "http://127.0.0.1:8788" },
+    ]);
+    connect.mockResolvedValue({ origin: "http://127.0.0.1:8788", token: "private" });
+    const found = render(<HostChoice />);
+    fireEvent.click(await screen.findByRole("button", { name: /Use My workspace/ }));
+    await waitFor(() => expect(restart).toHaveBeenCalledTimes(2));
+    found.unmount();
+
+    render(<HostChoice />);
+    fireEvent.click(screen.getByRole("button", { name: "Remote host" }));
+    fireEvent.change(screen.getByLabelText("Host address"), {
+      target: { value: "https://vps.example" },
+    });
+    fireEvent.change(screen.getByLabelText("Access key"), { target: { value: "private" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect to host" }));
+    await waitFor(() => expect(restart).toHaveBeenCalledTimes(3));
+
+    expect(sent).toEqual([]);
   });
 });
