@@ -531,7 +531,8 @@ export function check(repo, { base, head = null, ledgerOverride, proseByDiff = f
   }
   const baseText = readLedger(repo, base);
   let approval = null;
-  if (ledgerGate && ledger !== null && canonical(ledger) !== contentOf(baseText)) {
+  const content = contentOf(ledgerText);
+  if (ledgerGate && (ledgerText === null || content !== null) && content !== contentOf(baseText)) {
     approval = approvalFor(ledger);
     if (!approvals.includes(approval)) {
       problems.push({
@@ -776,7 +777,7 @@ function main() {
     return 0;
   }
   if (options.positional[0] === "hash") {
-    console.log(approvalFor(JSON.parse(readFileSync(join(repo, LEDGER), "utf8"))));
+    console.log(approvalFor(JSON.parse(readLedger(repo, null) ?? "null")));
     return 0;
   }
   if (options.positional[0] === "strip") {

@@ -198,7 +198,7 @@ identifiers, `# shellcheck source=` and the version beside a pinned action); a
 `SAFETY:` comment is a comment like any other. Everything else needs the
 owner, and only the owner, recorded in `grants.json` by path and a hash of the
 exact text, so an unrelated edit keeps a grant and a reworded comment loses it,
-and a grant that matches nothing fails. A change to the ledger fails the check
+and a grant that matches nothing fails. A change to the ledger, deleting it included, fails the check
 until the owner approves that exact ledger: the approval is the pull request
 label `grants-approved-` followed by the first 12 hex digits of the SHA-256 of
 what `grants.json` says (parsed, with every object's keys in sorted order and

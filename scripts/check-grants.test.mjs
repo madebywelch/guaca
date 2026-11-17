@@ -617,6 +617,18 @@ describe("a change", () => {
     }),
   );
   it(
+    "fails on a deleted ledger nobody approved, and passes it with the approval hash prints",
+    scenario({ "src/a.ts": SOURCE }, (repo) => {
+      rmSync(join(repo.dir, "grants.json"));
+      const refused = cli(repo, ["--base", repo.base]);
+      assert.equal(refused.status, 1, refused.stdout);
+      const label = cli(repo, ["hash"]).stdout.trim();
+      assert.match(label, /^grants-approved-[0-9a-f]{12}$/);
+      assert.match(refused.stdout, new RegExp("grants\\.json .*" + label));
+      assert.equal(cli(repo, ["--base", repo.base], { GRANTS_APPROVALS: label }).status, 0);
+    }),
+  );
+  it(
     "keeps an approval when only the ledger's formatting changes",
     scenario({ "src/a.ts": OLD }, (repo) => {
       setLedger(repo.dir, (ledger) => ledger.grants.push(grantOf("comment", "src/a.ts", "// an old comment")));
