@@ -72,6 +72,23 @@ describe("IPC contract", () => {
       /fn allow_artifact_sources\([\s\S]*?Update Guaca on this device to approve this page/,
     );
   });
+  it("reaches the desktop's own commands only through transport.ts", () => {
+    const sources = (dir: string): string[] =>
+      readdirSync(resolve(root, dir), { withFileTypes: true }).flatMap((entry) => {
+        const path = `${dir}/${entry.name}`;
+        if (entry.isDirectory()) return sources(path);
+        return /\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name) ? [path] : [];
+      });
+    const bridged = sources("src").filter(
+      (path) =>
+        path !== "src/lib/transport.ts" &&
+        /import\s*\{[^}]*\binvoke\b[^}]*\}\s*from\s*"@tauri-apps\/api\/core"|import\("@tauri-apps\/api\/core"\)/.test(
+          read(path),
+        ),
+    );
+    expect(bridged, "call the command through api in ipc.ts instead").toEqual([]);
+  });
+
   it("finds commands on every side", () => {
     expect(calledCommands().size).toBeGreaterThan(5);
     expect(registeredCommands().size).toBeGreaterThan(2);
