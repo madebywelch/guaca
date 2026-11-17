@@ -5,8 +5,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-  COMMIT="$(git rev-parse --short=7 HEAD)"
-  [ -z "$(git status --porcelain --untracked-files=no)" ] || COMMIT="$COMMIT-dirty"
+  COMMIT="$(node --experimental-strip-types --no-warnings --input-type=module \
+    -e 'import { builtOn } from "./build-stamp.ts"; console.log(builtOn())')"
   printf '==> Building this checkout'"'"'s host image on Docker context %s\n' "$(docker context show)"
   IID="$(mktemp)"
   trap 'rm -f "$IID"' EXIT

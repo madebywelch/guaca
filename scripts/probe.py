@@ -61,11 +61,20 @@ APP_NAME = "Guaca Probe"
 AGENTS = ["Manager", "Researcher", "Critic", "Scribe"]
 GROUP = "00000000-0000-4000-8000-000000000001"
 
-PANE = {
-    "allowed": "macOS allows Guaca to show notifications.",
-    "notAsked": "macOS has not asked you about Guaca yet.",
-    "denied": "macOS has notifications turned off for Guaca.",
-}
+DIALOG = ROOT / "src/components/SettingsDialog.tsx"
+
+
+def settings_copy() -> tuple[dict[str, str], str]:
+    source = DIALOG.read_text()
+    access = re.search(r"^const MAC_ACCESS: Record<NotificationAccess, string> = \{\n(.*?)^\};$", source, re.M | re.S)
+    banner = re.search(r'^const TEST_NOTIFICATION = "([^"]+)";$', source, re.M)
+    if access is None or banner is None:
+        raise SystemExit(f"{DIALOG.relative_to(ROOT)} has no MAC_ACCESS or TEST_NOTIFICATION, which are the words"
+                         " the probe expects the Notifications pane and the test banner to say")
+    return dict(re.findall(r'^\s*(\w+):\s*"([^"]+)",$', access.group(1), re.M)), banner.group(1)
+
+
+PANE, TEST_BODY = settings_copy()
 SENT = "Sent. It should be on your screen now."
 
 DELIVERY_TITLE = "Guaca probe: test notification"
@@ -1476,9 +1485,6 @@ def scenario_testclick(record: Record, scratch: Scratch) -> None:
         client.page("main", do="click", role="button", name="Send a test notification")
         record.check("the test banner is presented", it.log.reaches("macOS presents the test", banner(app.bundle), 2, 10), stop=True)
         click_banner(record, app, TEST_BODY, "clicking the test banner")
-
-
-TEST_BODY = "This is what a notification looks like."
 
 
 class Listener:
