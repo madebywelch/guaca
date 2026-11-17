@@ -392,7 +392,7 @@ export function check(repo, { base, head = null, ledgerOverride, proseByDiff = f
       if (!files.has(path)) problems.push({ path: LEDGER, message: "a document grant for " + path + " matches no file; remove it" });
     }
     for (const path of files) {
-      if (!PROSE.test(path) || existing.has(path) || documents.has(path)) continue;
+      if (!PROSE.test(path) || upstream(path) || existing.has(path) || documents.has(path)) continue;
       if (existing.has(renamedFrom.get(path))) continue;
       findings.push({ path, line: null, kind: "document", what: "new document" });
     }
@@ -405,7 +405,7 @@ export function check(repo, { base, head = null, ledgerOverride, proseByDiff = f
       .map((line) => line.split("\t")[1]);
     if (!head) added.push(...[...changes].filter(([, lines]) => lines === "all").map(([path]) => path));
     for (const path of new Set(added)) {
-      if (PROSE.test(path)) findings.push({ path, line: null, kind: "document", what: "new document" });
+      if (PROSE.test(path) && !upstream(path)) findings.push({ path, line: null, kind: "document", what: "new document" });
     }
   }
   return { findings, problems, filesRead: texts.length, ledgerChanges: ledger ? ledgerChanges(readLedger(repo, base), ledger, unitsByPath) : null };

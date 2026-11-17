@@ -475,7 +475,11 @@ describe("a change", () => {
   it(
     "passes upstream code the ledger names, and not the files it excepts",
     scenario({ "vendor/up/lib.rs": "fn a() {}\n", "vendor/up/ours.rs": "fn a() {}\n" }, (repo, run) => {
-      write(repo.dir, { "vendor/up/lib.rs": "// upstream\nfn a() {}\n", "vendor/up/ours.rs": "// ours\nfn a() {}\n" });
+      write(repo.dir, {
+        "vendor/up/lib.rs": "// upstream\nfn a() {}\n",
+        "vendor/up/CHANGELOG.md": "upstream notes\n",
+        "vendor/up/ours.rs": "// ours\nfn a() {}\n",
+      });
       assert.deepEqual(
         run().findings.map((f) => f.path),
         ["vendor/up/ours.rs"],
