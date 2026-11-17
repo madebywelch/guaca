@@ -510,6 +510,34 @@ const ENDED_BY_RESTART: &str = "The host restarted while this was waiting for th
 
 const SCHEDULE_TICK: Duration = Duration::from_secs(20);
 
+#[derive(Clone, Copy)]
+pub(super) enum CutShort {
+    Stopped,
+    Failed,
+    Spent,
+}
+
+impl CutShort {
+    fn notice(self, name: &str) -> String {
+        match self {
+            CutShort::Stopped => format!(
+                "You stopped another conversation while {name} was working on this one too, so \
+                 this was not finished. Review any actions already taken before retrying."
+            ),
+            CutShort::Failed => format!(
+                "{name} was working on this and another conversation together when a model call \
+                 failed, so this was not finished. Review any actions already taken before \
+                 retrying."
+            ),
+            CutShort::Spent => format!(
+                "{name} was working on this and another conversation together when the other \
+                 conversation hit its budget, so this was not finished. Review any actions \
+                 already taken before retrying."
+            ),
+        }
+    }
+}
+
 fn spent_notice(limits: GuardLimits, name: &str) -> Part {
     Part::Notice {
         kind: NoticeKind::GuardStop,
@@ -2694,7 +2722,8 @@ impl Runtime {
                 ),
             );
             let acted_on = carried.len();
-            let ended = self.hand_back(agent_id, run_id, carried, acted_on, intake);
+            let ended =
+                self.hand_back(agent_id, run_id, carried, acted_on, intake, CutShort::Stopped);
             self.finish_turn(agent_id, run_id, batch.len(), &ended);
             return;
         }
@@ -3188,6 +3217,15 @@ impl Runtime {
             tool_parts.push(stopped_notice(&card.name));
         }
 
+        let cut_short = if called_off {
+            Some(CutShort::Stopped)
+        } else if failure.is_some() {
+            Some(CutShort::Failed)
+        } else if budget_exhausted {
+            Some(CutShort::Spent)
+        } else {
+            None
+        };
         if let Some(err) = failure {
             let own_model = card.own_model(inference.provider).is_some();
             self.report_failure(
@@ -3217,10 +3255,9 @@ impl Runtime {
             );
         }
 
-        let taken_in = if called_off {
-            self.hand_back(agent_id, run_id, taken_in, acted_on, intake)
-        } else {
-            taken_in
+        let taken_in = match cut_short {
+            Some(why) => self.hand_back(agent_id, run_id, taken_in, acted_on, intake, why),
+            None => taken_in,
         };
         self.finish_turn(agent_id, run_id, batch.len(), &taken_in);
     }
@@ -3232,6 +3269,7 @@ impl Runtime {
         taken: Vec<Envelope>,
         acted_on: usize,
         intake: &mut Intake<'_>,
+        why: CutShort,
     ) -> Vec<Envelope> {
         let mut ended = Vec::new();
         let mut unread = Vec::new();
@@ -3259,7 +3297,7 @@ impl Runtime {
             }
         }
         for envelope in &cut {
-            self.cut_short_notice(agent, envelope);
+            self.cut_short_notice(agent, envelope, why);
         }
         for envelope in unread.into_iter().rev() {
             intake.depth.fetch_add(1, Ordering::SeqCst);
@@ -3268,17 +3306,13 @@ impl Runtime {
         ended
     }
 
-    pub(super) fn cut_short_notice(&self, agent: AgentId, envelope: &Envelope) {
+    pub(super) fn cut_short_notice(&self, agent: AgentId, envelope: &Envelope, why: CutShort) {
         self.notice(
             agent,
             envelope.run_id,
             Some(envelope.id),
             NoticeKind::Interrupted,
-            format!(
-                "You stopped another conversation while {} was working on this one too, so this \
-                 was not finished. Review any actions already taken before retrying.",
-                self.agent_name(agent)
-            ),
+            why.notice(&self.agent_name(agent)),
         );
     }
 
@@ -3290,7 +3324,8 @@ impl Runtime {
             .filter(|envelope| !envelope.is_routine())
             .collect();
         let acted_on = carried.len();
-        let ended = self.hand_back(agent, stopped.run_id, carried, acted_on, intake);
+        let ended =
+            self.hand_back(agent, stopped.run_id, carried, acted_on, intake, CutShort::Stopped);
         self.finish_turn(agent, stopped.run_id, 1, &ended);
     }
 
