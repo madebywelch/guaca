@@ -120,7 +120,9 @@ code.
   unread since the last tool call goes back to the queue, read before a call
   is reported interrupted at once and settles, and only the stopped ones end
   as stopped. A `cut_short` run settles through `finish_turn` like the others:
-  released early, it would settle twice.
+  released early, it would settle twice. A turn that ends on a failed model
+  call or an exhausted budget sorts them the same way; settled with the turn,
+  they ended silently and Try again could not reach them.
 - **A message a put-down turn acted on rides in that turn's row.** As a bare
   `put_down` row it is queued as a turn of its own, and once the carrier's
   conversation is stopped that turn runs with no record of the calls already

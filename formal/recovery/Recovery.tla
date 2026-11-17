@@ -10,7 +10,8 @@ CONSTANTS
     RecoverUntouched,
     RecoverClears,
     KeepLink,
-    SkipStartNote
+    SkipStartNote,
+    TurnsCanFail
 
 Msgs == <<"m1", "m2">>
 MsgSet == {"m1", "m2"}
@@ -257,6 +258,26 @@ HaltStopped ==
     /\ UNCHANGED <<up, ends, draining, stopped, pdMem, resuming,
                    accepted, put, whole, ghosts>>
 
+TurnEnds ==
+    /\ riders' = riders
+    /\ up /\ TurnsCanFail /\ turn.st \in {"round", "thinking"} /\ ~Halted(turn.run)
+    /\ extra' = [extra EXCEPT ![turn.run] = @ + 1]
+    /\ answered' = answered \cup turn.batch
+    /\ LET ended == {m \in turn.taken : Run(m) \in stopped}
+           unread == (turn.taken \ ended) \cap turn.fresh
+           owed == turn.taken \ (ended \cup unread)
+           left == [r \in Runs |-> outstanding[r] - Cardinality({m \in owed : Run(m) = r})]
+       IN /\ inbox' = InOrder(unread) \o inbox
+          /\ outstanding' = left
+          /\ pending' = [r \in Runs |-> IF r \in {Run(m) : m \in owed} /\ left[r] = 0
+                                           THEN "none" ELSE pending[r]]
+          /\ notices' = [r \in Runs |-> IF r \in {Run(m) : m \in owed} THEN notices[r] + 1 ELSE notices[r]]
+          /\ turn' = [turn EXCEPT !.st = "finishing",
+                                  !.owed = IF ended = {} THEN <<turn.run>>
+                                           ELSE <<Run(CHOOSE m \in ended : TRUE), turn.run>>]
+    /\ UNCHANGED <<up, ends, draining, stopped, pdMem, resuming,
+                   accepted, put, whole, read, acted, blind, marked, calledOff, resumedOff>>
+
 FinishOne ==
     /\ riders' = riders
     /\ up /\ turn.st = "finishing"
@@ -347,7 +368,7 @@ Recover ==
 Next ==
     \/ Send \/ AcceptLate \/ Dequeue \/ PutDownQueued \/ MarkBatch \/ MarkFails
     \/ Begin \/ TakeIn \/ Think \/ Call \/ Returned \/ CalledOff \/ Answer
-    \/ HaltStopped \/ FinishOne \/ PutTurnDown \/ PutTurnDownCommit
+    \/ HaltStopped \/ TurnEnds \/ FinishOne \/ PutTurnDown \/ PutTurnDownCommit
     \/ Stop \/ Drain \/ End \/ Recover
 
 Spec == Init /\ [][Next]_vars

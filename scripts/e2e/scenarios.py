@@ -493,6 +493,49 @@ def scenario_stop(w: World) -> None:
     no_unscripted(w)
 
 
+FAILED_TOGETHER = (f"{AGENT} was working on this and another conversation together when a model call failed, so "
+                   "this was not finished. Review any actions already taken before retrying.")
+
+
+def scenario_failed(w: World) -> None:
+    looking = threading.Event()
+
+    def script(c: Call) -> Reply | None:
+        if c.last_user == "ping":
+            return say("pong")
+        if c.speaker != AGENT:
+            return None
+        if c.last_user.endswith("Say hello."):
+            return say(HELLO)
+        after_tool = len(c.messages) > 1 and c.messages[-2].get("role") == "tool"
+        if c.last_user.endswith(HOURS) and not c.tool_results():
+            return held(looking, call("note_progress", note=LOOKING))
+        if c.last_user.endswith(NUMBER) and after_tool:
+            return call("note_progress", note=DIALING)
+        if c.last_user.endswith(NUMBER) and c.tool_results():
+            return refuse(500, "The model is overloaded.")
+        return None
+
+    w.model.script = script
+    w.start()
+    first_run(w)
+    settled(w, 1)
+
+    write(w, AGENT, HOURS)
+    w.wait("the first conversation's model call is in the air", lambda: asked(w, HOURS) == 1)
+    write(w, AGENT, NUMBER)
+    w.wait("the second conversation's message is written", lambda: w.host.scalar(
+        "SELECT count(*) FROM messages WHERE parts LIKE ?", f"%{NUMBER}%"))
+    looking.set()
+    w.wait("the second conversation says the turn could not finish it", lambda: FAILED_TOGETHER in conversation(w))
+    ended = settled(w, 3, "both conversations settle")
+    w.check("a failed model call tells the other conversation the turn acted on at once, with Try again on each",
+            sorted(o["status"] for o in ended[1:]) == ["failed", "interrupted"]
+            and len(w.ui.find("button", "Try again")) == 2,
+            observed={"outcomes": ended, "tryAgain": len(w.ui.find("button", "Try again"))}, shot=True)
+    no_unscripted(w)
+
+
 INSTRUCTION = "Check the failed invoice."
 
 
@@ -731,6 +774,13 @@ SCENARIOS: dict[str, Scenario] = {
         "the turn took the second conversation in and acted on it",
         "stopping one conversation tells the other at once that it was not finished, with Try again",
         "Try again sends the cut-short message once more and it is answered",
+        "every model call was one the scenario scripted",
+    )),
+    "failed": Scenario(scenario_failed, "A model call fails while a turn is also working on a second conversation; "
+                       "the second is told at once that it was not finished, with Try again, rather than ending "
+                       "silently with the turn.",
+    (
+        "a failed model call tells the other conversation the turn acted on at once, with Try again on each",
         "every model call was one the scenario scripted",
     )),
     "routine": Scenario(scenario_routine, "A person adds a routine on an event, one delivery fires it once and the "

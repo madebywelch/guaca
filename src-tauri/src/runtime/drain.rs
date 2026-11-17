@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, Notify};
 
-use super::{Intake, RunGuard, Runs, Runtime};
+use super::{CutShort, Intake, RunGuard, Runs, Runtime};
 use crate::db::Recovered;
 use crate::domain::agent::AgentCard;
 use crate::domain::envelope::{Envelope, Intent, NoticeKind, Part, Participant, Trust};
@@ -214,7 +214,7 @@ impl Runtime {
         drop(runs);
         for envelope in cut {
             if let Participant::Agent { id } = envelope.to {
-                self.cut_short_notice(id, envelope);
+                self.cut_short_notice(id, envelope, CutShort::Stopped);
             }
             ended.push(envelope.run_id);
         }
