@@ -1248,10 +1248,11 @@ impl Runtime {
         drop(inboxes);
 
         let runtime = self.clone();
+        let store = self.inner.store.clone();
         let live = self.inner.live_actors.clone();
         live.fetch_add(1, Ordering::SeqCst);
         self.inner.handle.spawn(async move {
-            actor_loop(runtime, id, rx, depth, resume).await;
+            actor_loop(runtime, id, rx, depth, resume, || store.get_agent(id).ok().flatten()).await;
             live.fetch_sub(1, Ordering::SeqCst);
         });
 
@@ -7238,6 +7239,7 @@ async fn actor_loop(
     mut rx: mpsc::UnboundedReceiver<Envelope>,
     depth: Arc<AtomicUsize>,
     resume: Arc<Notify>,
+    read_card: impl Fn() -> Option<AgentCard>,
 ) {
     let mut carry: VecDeque<Envelope> = VecDeque::new();
 
@@ -7261,7 +7263,16 @@ async fn actor_loop(
         let mut called_off = false;
         let mut put_down = false;
         loop {
-            match runtime.inner.store.get_agent(id).ok().flatten() {
+            let watch = Watch::arm(&resume, || {
+                (
+                    read_card(),
+                    runtime.draining() && !runtime.called_off(first.run_id),
+                    runtime.stopped(first.run_id),
+                    runtime.anything_stopped(),
+                )
+            });
+            let (card, for_next_host, stopped, anything_stopped) = watch.stop();
+            match card {
                 None => {
                     abandoned = true;
                     break;
@@ -7272,21 +7283,12 @@ async fn actor_loop(
                 }
                 Some(card) if card.lifecycle.accepts_work() => break,
                 Some(card) => {
-                    let watch = Watch::arm(&resume, || {
-                        (
-                            runtime.draining() && !runtime.called_off(first.run_id),
-                            runtime.stopped(first.run_id),
-                            runtime.anything_stopped(),
-                        )
-                    });
-                    let &(for_next_host, stopped, anything_stopped) = watch.stop();
-
-                    if for_next_host {
+                    if *for_next_host {
                         put_down = true;
                         break;
                     }
 
-                    if stopped {
+                    if *stopped {
                         runtime.notice(
                             id,
                             first.run_id,
@@ -7300,7 +7302,7 @@ async fn actor_loop(
                         called_off = true;
                         break;
                     }
-                    if anything_stopped {
+                    if *anything_stopped {
                         while let Ok(queued) = rx.try_recv() {
                             if runtime.called_off(queued.run_id) {
                                 depth.fetch_sub(1, Ordering::SeqCst);
@@ -7508,6 +7510,80 @@ fn claimed_sandboxes(cards: &[AgentCard]) -> std::collections::HashSet<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_resume_after_the_paused_read_still_runs_the_queued_message() {
+        struct Settled(Notify);
+        impl EventSink for Settled {
+            fn emit(&self, event: UiEvent) {
+                if matches!(event, UiEvent::RunSettled { .. }) {
+                    self.0.notify_one();
+                }
+            }
+        }
+        let sink = Arc::new(Settled(Notify::new()));
+        let (_dir, runtime) = test_runtime_with_sink(sink.clone());
+        let card = runtime
+            .inner
+            .store
+            .create_agent(&crate::domain::agent::CleanDraft {
+                group_id: None,
+                name: "Writer".into(),
+                avatar: "orb".into(),
+                color: "#7fb069".into(),
+                model: "test/model".into(),
+                subscription_model: None,
+                reasoning_effort: None,
+                system_prompt: String::new(),
+                skills: vec![],
+            })
+            .unwrap();
+        let id = card.id;
+        runtime.inner.store.set_lifecycle(id, Lifecycle::Paused).unwrap();
+        let mut config = runtime.config();
+        config.limits.max_steps_per_run = 1;
+        runtime.set_config(config);
+        let (tx, rx) = mpsc::unbounded_channel();
+        let depth = Arc::new(AtomicUsize::new(0));
+        let resume = Arc::new(Notify::new());
+        runtime
+            .inner
+            .inboxes
+            .lock()
+            .insert(id, Inbox { tx, depth: depth.clone(), resume: resume.clone() });
+        let run = runtime.send_from_human(id, "First thing to do.").unwrap();
+        assert!(runtime
+            .inner
+            .guard
+            .lock()
+            .run_within(run, runtime.limits_for(&card))
+            .reserve_step());
+        let read_card = || {
+            let card = runtime.inner.store.get_agent(id).unwrap().unwrap();
+            if card.lifecycle == Lifecycle::Paused {
+                runtime.inner.store.set_lifecycle(id, Lifecycle::Active).unwrap();
+                runtime.resume_agent(id);
+            }
+            Some(card)
+        };
+        let actor = actor_loop(runtime.clone(), id, rx, depth, resume, read_card);
+        tokio::pin!(actor);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            tokio::select! {
+                _ = &mut actor => panic!("the actor exited before answering its queued message"),
+                _ = sink.0.notified() => {}
+            }
+        })
+        .await
+        .expect("the resume was lost after reading the paused lifecycle");
+        assert!(runtime.inner.store.channel_messages(id, 20).unwrap().iter().any(|message| {
+            message.run_id == run
+                && message
+                    .parts
+                    .iter()
+                    .any(|part| matches!(part, Part::Notice { kind: NoticeKind::GuardStop, .. }))
+        }));
+    }
 
     fn test_runtime() -> (tempfile::TempDir, Runtime) {
         test_runtime_with_sink(crate::runtime::events::RecordingSink::new())
