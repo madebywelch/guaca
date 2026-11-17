@@ -37,6 +37,7 @@ const CHECKS: &[(&str, Check)] = &[
     ("plugin-access", plugin_access),
     ("plugin-call", plugin_call),
     ("tool-names", tool_names),
+    ("titled", titled),
     ("tool-surfaces", tool_surfaces),
     ("trigger", trigger),
 ];
@@ -153,6 +154,10 @@ fn event_spec(file: &Value) {
         topic: String,
     }
     each(file, |spec: Spec| EventTrigger { service: spec.service, topic: spec.topic }.as_str());
+}
+
+fn titled(file: &Value) {
+    each(file, |service: String| guac_lib::domain::routine::titled(&service));
 }
 
 fn gap(file: &Value) {

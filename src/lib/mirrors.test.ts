@@ -7,7 +7,7 @@ import { LIMITS } from "./limits";
 import { allows } from "./plugins";
 import { groupNamed } from "./presence";
 import { otherBuild } from "./releases";
-import { eventSpec, humanGap, parseTrigger, repeats } from "./routine";
+import { eventSpec, humanGap, parseTrigger, repeats, titled } from "./routine";
 import { attachedFiles, sendRecipients } from "./toolArgs";
 import { readSpent, splitPluginTool, surfaceOf } from "./trail";
 import {
@@ -102,6 +102,7 @@ const CHECKS: Record<string, Check> = {
     allows(access, agent),
   ),
   "plugin-call": each(splitPluginTool),
+  titled: each(titled),
   "tool-names": each(({ tool, args }: { tool: string; args: unknown }) =>
     tool === "attach_file" ? attachedFiles(args) : sendRecipients(args),
   ),
