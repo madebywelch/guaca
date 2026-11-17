@@ -23,6 +23,39 @@
 #                 one to adopt its workspace, e.g. a Compose host's.
 set -eu
 
+case "${1:-}" in
+  -h | --help)
+    cat <<'EOF'
+Installs Guaca on a Linux box with Docker, as a host its operator can update
+from the app.
+
+  curl -fsSL https://raw.githubusercontent.com/madebywelch/guaca/main/deploy/box/install.sh | sudo sh
+
+It makes two containers. guaca-updater holds the Docker socket and runs
+nothing else; guacad, the host, is made and replaced by it and never sees
+the socket. The host is published to 127.0.0.1 on GUACA_PORT only: put a
+tunnel in front of it (Tailscale Serve, or a TLS reverse proxy) and give
+people that address. Running this again reconfigures the box and keeps its
+workspace.
+
+Settings, read from the environment:
+
+  GUACA_ENV      settings handed to the host, one NAME=value per line
+                 (GUACA_TOKEN, GUACA_ORIGIN, ANTHROPIC_API_KEY; the full
+                 list is HOST_ENV in src-tauri/src/updater.rs).
+                 Default /etc/guaca/guaca.env, if it exists. Keep it 0600.
+  GUACA_CHANNEL  release, the default, or main. A box on main is offered
+                 every build of main a few minutes after it is pushed, and
+                 installs only builds signed with the key CI holds.
+  GUACA_IMAGE    the image to install. Default: the newest on the channel.
+  GUACA_PORT     the loopback port. Default 8787.
+  GUACA_VOLUME   the workspace volume. Default guacad-data. Name an existing
+                 one to adopt its workspace, such as a Compose host's.
+EOF
+    exit 0
+    ;;
+esac
+
 ENV_FILE="${GUACA_ENV:-/etc/guaca/guaca.env}"
 IMAGE="${GUACA_IMAGE:-}"
 PORT="${GUACA_PORT:-8787}"
