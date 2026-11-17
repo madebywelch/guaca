@@ -4,9 +4,12 @@ import { describe, expect, it } from "vitest";
 
 import { compact, money } from "../components/Spend";
 import { HIREABLE } from "./cafeteria";
+import { fieldDate } from "./calendar";
+import { readableSize } from "./files";
 import { LIMITS } from "./limits";
 import { allows } from "./plugins";
 import { groupNamed } from "./presence";
+import { inferenceOf } from "./providers";
 import { otherBuild } from "./releases";
 import { eventSpec, humanGap, parseTrigger, repeats, titled } from "./routine";
 import { attachedFiles, sendRecipients } from "./toolArgs";
@@ -19,6 +22,7 @@ import {
   type GroupId,
   type Part,
   type PluginAccess,
+  type Provider,
   plainText,
 } from "./types";
 
@@ -80,12 +84,40 @@ const CHECKS: Record<string, Check> = {
     expect(HIREABLE).toEqual(file);
   },
   "human-gap": each(humanGap),
+  inference: each(
+    ({
+      group,
+      workspace,
+    }: {
+      group: { provider: Provider | null; apiKeySet: boolean } | null;
+      workspace: { provider: Provider; apiKeySet: boolean };
+    }) =>
+      inferenceOf(
+        group === null
+          ? undefined
+          : { inference: { provider: group.provider }, apiKeySet: group.apiKeySet },
+        workspace,
+      ),
+  ),
   limits: (file) => {
     expect(LIMITS.map(({ key, min, max }) => ({ input: key, expected: { min, max } }))).toEqual(
       file,
     );
   },
   money: each(money),
+  "occasion-field": each(
+    ({ date: [year, month, day], time }: { date: number[]; time: number[] | null }) =>
+      fieldDate({
+        startsAt: new Date(
+          year ?? 0,
+          (month ?? 1) - 1,
+          day,
+          time?.[0] ?? 0,
+          time?.[1] ?? 0,
+        ).getTime(),
+        allDay: time === null,
+      }),
+  ),
   "plain-text": (file) => {
     for (const { input, expected, rust, web } of file as {
       input: Part[];
@@ -106,6 +138,7 @@ const CHECKS: Record<string, Check> = {
     allows(access, agent),
   ),
   "plugin-call": each(splitPluginTool),
+  sizes: each(readableSize),
   titled: each(titled),
   "tool-names": each(({ tool, args }: { tool: string; args: unknown }) =>
     tool === "attach_file" ? attachedFiles(args) : sendRecipients(args),

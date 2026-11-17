@@ -1548,4 +1548,56 @@ mod tests {
         assert!(refusal.contains(PROTOCOL_VERSION), "{refusal}");
         assert!(refusal.contains("update Guaca"), "{refusal}");
     }
+    #[tokio::test]
+    async fn every_header_this_client_writes_is_one_an_operator_cannot() {
+        let seen = std::sync::Arc::new(Mutex::new(std::collections::BTreeSet::<String>::new()));
+        let noted = seen.clone();
+        let app = axum::Router::new().fallback(move |request: axum::extract::Request| {
+            let noted = noted.clone();
+            async move {
+                noted
+                    .lock()
+                    .unwrap()
+                    .extend(request.headers().keys().map(|name| name.as_str().to_string()));
+                ([("content-type", "application/json")], r#"{"jsonrpc":"2.0","id":1,"result":{}}"#)
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let http = client().unwrap();
+        let extra = [("x-api-key".to_string(), crate::secrets::Secret::new("abc"))];
+        let wire = |modern| Wire {
+            endpoint: &endpoint,
+            token: Some("t"),
+            extra: &extra,
+            version: PROTOCOL_VERSION.to_string(),
+            modern,
+            session_id: Some("s"),
+            headers: vec![("region".to_string(), "eu".to_string())],
+        };
+        let timeout = Duration::from_secs(5);
+        post(&http, wire(true), "tools/call", Some("search"), serde_json::json!({}), timeout)
+            .await
+            .unwrap();
+        post(&http, wire(false), "tools/list", None, serde_json::json!({}), timeout).await.unwrap();
+        let dial = Dial { headers: &extra, ..Dial::to(&endpoint).with_token(Some("t")) };
+        post_message(&http, dial, &endpoint, &serde_json::json!({})).await.unwrap();
+
+        let seen = seen.lock().unwrap().clone();
+        assert!(seen.contains("mcp-method") && seen.contains("mcp-session-id"), "{seen:?}");
+        for name in
+            seen.iter().filter(|name| !["x-api-key", "authorization"].contains(&name.as_str()))
+        {
+            let pair = crate::domain::plugin::HeaderPair { name: name.clone(), value: "x".into() };
+            assert!(
+                matches!(
+                    crate::domain::plugin::Headers::parse(&[pair]),
+                    Err(crate::domain::plugin::HeaderError::Reserved(_))
+                ),
+                "an operator can write {name}, which this client also writes"
+            );
+        }
+    }
 }

@@ -342,7 +342,7 @@ pub async fn presence() -> Option<String> {
     answered.status.success().then(|| String::from_utf8_lossy(&answered.stdout).trim().to_string())
 }
 
-pub async fn stream<F>(
+pub(super) async fn stream<F>(
     cfg: &InferenceConfig,
     request: &ChatRequest,
     on_token: &mut F,

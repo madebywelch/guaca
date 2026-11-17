@@ -70,6 +70,16 @@ export function providerReady(provider: Provider, keySet: boolean): boolean {
   return provider.local === true || keySet;
 }
 
+export function inferenceOf(
+  group: { inference: { provider: ProviderKind | null }; apiKeySet: boolean } | undefined,
+  settings: Pick<Settings, "provider" | "apiKeySet">,
+): { provider: ProviderKind; keyed: boolean } {
+  return {
+    provider: group?.inference.provider ?? settings.provider,
+    keyed: (group?.apiKeySet ?? false) || settings.apiKeySet,
+  };
+}
+
 export function onOpenRouter(group: Group | undefined, settings: Settings | null): boolean {
   const provider = group?.inference?.provider ?? settings?.provider;
   if (provider !== "compatible") return false;

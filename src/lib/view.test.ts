@@ -11,6 +11,7 @@ vi.mock("./ipc", () => ({
   },
 }));
 
+import constants from "./mirrors/constants.json";
 import { PAGE_ID } from "./transport";
 import { HEARTBEAT_MS, useReportView } from "./view";
 
@@ -80,6 +81,10 @@ describe("whether anyone is at the window", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("beats twice inside the host's away window, so one late beat does not make the operator away", () => {
+    expect(HEARTBEAT_MS * 2).toBeLessThan(constants.awayAfterMs);
   });
 
   it("says so again at least once a minute while the window keeps focus", async () => {
