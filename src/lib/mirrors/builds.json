@@ -1,0 +1,93 @@
+[
+  {
+    "input": [
+      "abcdef1",
+      "abcdef1"
+    ],
+    "expected": false
+  },
+  {
+    "input": [
+      "abcdef1",
+      "abcdef1234567890"
+    ],
+    "expected": false
+  },
+  {
+    "input": [
+      "abcdef1234567890",
+      "abcdef1"
+    ],
+    "expected": false
+  },
+  {
+    "input": [
+      "abcdef1",
+      "abcdef2"
+    ],
+    "expected": true
+  },
+  {
+    "input": [
+      "abcdef1-dirty",
+      "abcdef1-dirty"
+    ],
+    "expected": false
+  },
+  {
+    "input": [
+      "abcdef1-dirty",
+      "abcdef1"
+    ],
+    "expected": true
+  },
+  {
+    "input": [
+      "abcdef1-dirty",
+      "abcdef1234-dirty"
+    ],
+    "expected": true
+  },
+  {
+    "input": [
+      "abcdef1",
+      "unknown"
+    ],
+    "expected": false
+  },
+  {
+    "input": [
+      "abcdef",
+      "abcdef1"
+    ],
+    "expected": false
+  },
+  {
+    "input": [
+      "ABCDEF1",
+      "abcdef2"
+    ],
+    "expected": false
+  },
+  {
+    "input": [
+      "",
+      ""
+    ],
+    "expected": false
+  },
+  {
+    "input": [
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ],
+    "expected": true
+  },
+  {
+    "input": [
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    ],
+    "expected": false
+  }
+]

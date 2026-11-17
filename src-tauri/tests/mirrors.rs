@@ -24,6 +24,7 @@ use guac_lib::runtime::{OnDisk, Runtime};
 type Check = fn(&Value);
 
 const CHECKS: &[(&str, Check)] = &[
+    ("builds", builds),
     ("event-spec", event_spec),
     ("human-gap", gap),
     ("limits", limits),
@@ -217,6 +218,10 @@ fn plain_text(file: &Value) {
         }));
         envelope.plain_text()
     });
+}
+
+fn builds(file: &Value) {
+    each(file, |(a, b): (String, String)| guac_lib::ipc::different_builds(&a, &b));
 }
 
 #[derive(Deserialize)]

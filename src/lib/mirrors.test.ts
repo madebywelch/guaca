@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { LIMITS } from "./limits";
 import { allows } from "./plugins";
+import { otherBuild } from "./releases";
 import { eventSpec, humanGap, parseTrigger, repeats } from "./routine";
 import { attachedFiles, sendRecipients } from "./toolArgs";
 import { readSpent, splitPluginTool, surfaceOf } from "./trail";
@@ -44,6 +45,7 @@ const ENVELOPE: Envelope = {
 };
 
 const CHECKS: Record<string, Check> = {
+  builds: each(([a, b]: [string, string]) => otherBuild(a, b)),
   credentials: (file) => {
     for (const { input, expected } of file as Case<
       { summary: string },
