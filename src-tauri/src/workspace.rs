@@ -66,16 +66,20 @@ impl Workspace {
         self.root.join(format!("{}-{}.md", slug(name), id.short()))
     }
 
-    fn existing_path(&self, id: AgentId) -> Option<PathBuf> {
+    fn existing_path(&self, id: AgentId) -> io::Result<Option<PathBuf>> {
         let suffix = format!("-{}.md", id.short());
-        let entries = fs::read_dir(&self.root).ok()?;
+        let entries = match fs::read_dir(&self.root) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err),
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(&suffix)) {
-                return Some(path);
+                return Ok(Some(path));
             }
         }
-        None
+        Ok(None)
     }
 
     pub fn read(&self, id: AgentId) -> String {
@@ -90,7 +94,11 @@ impl Workspace {
     }
 
     fn read_unlocked(&self, id: AgentId) -> String {
-        self.existing_path(id).and_then(|path| fs::read_to_string(path).ok()).unwrap_or_default()
+        self.existing_path(id)
+            .ok()
+            .flatten()
+            .and_then(|path| fs::read_to_string(path).ok())
+            .unwrap_or_default()
     }
 
     pub fn write(&self, id: AgentId, name: &str, content: &str) -> Result<Stored, WorkspaceError> {
@@ -140,7 +148,7 @@ impl Workspace {
         };
 
         let target = self.preferred_path(id, name);
-        let current = self.existing_path(id);
+        let current = self.existing_path(id).ok().flatten();
         if let Some(current) = current {
             if current != target {
                 let _ = fs::rename(&current, &target);
@@ -159,10 +167,19 @@ impl Workspace {
         }))
     }
 
-    pub fn remove(&self, id: AgentId) {
+    pub fn remove(&self, id: AgentId) -> Result<(), WorkspaceError> {
         let _guard = MEMORY_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(path) = self.existing_path(id) {
-            let _ = fs::remove_file(path);
+        let path = self
+            .existing_path(id)
+            .map_err(|source| WorkspaceError::Io { path: self.root.clone(), source })?;
+        let Some(path) = path else {
+            return Ok(());
+        };
+        match fs::remove_file(&path) {
+            Err(source) if source.kind() != io::ErrorKind::NotFound => {
+                Err(WorkspaceError::Io { path, source })
+            }
+            _ => Ok(()),
         }
     }
 }
@@ -365,8 +382,32 @@ mod tests {
         let (ws, _dir) = workspace();
         let id = AgentId::new();
         ws.write(id, "Manager", "gone soon").unwrap();
-        ws.remove(id);
+        ws.remove(id).unwrap();
         assert_eq!(ws.read(id), "");
+    }
+
+    #[test]
+    fn memory_that_cannot_be_removed_is_an_error_rather_than_a_success() {
+        let (ws, _dir) = workspace();
+        let id = AgentId::new();
+        ws.write(id, "Manager", "kept").unwrap();
+        let path = ws.preferred_path(id, "Manager");
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        fs::write(path.join("in-the-way"), "a folder where the memory was").unwrap();
+
+        assert!(ws.remove(id).is_err());
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn removing_memory_that_is_already_gone_succeeds_so_a_retry_converges() {
+        let (ws, _dir) = workspace();
+        let id = AgentId::new();
+        ws.remove(id).unwrap();
+        ws.write(id, "Manager", "gone soon").unwrap();
+        ws.remove(id).unwrap();
+        ws.remove(id).unwrap();
     }
 
     #[test]

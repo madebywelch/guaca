@@ -590,6 +590,10 @@ pub enum RuntimeError {
     NotAQuestion,
     #[error("an answer cannot be empty: the agent would resume having been told nothing")]
     EmptyAnswer,
+    #[error(transparent)]
+    Workspace(#[from] crate::workspace::WorkspaceError),
+    #[error(transparent)]
+    Notebook(#[from] crate::notebook::NotebookError),
 }
 
 struct Inbox {
@@ -1177,14 +1181,14 @@ impl Runtime {
 
         self.inner.store.set_lifecycle(id, Lifecycle::Terminated)?;
         self.stop_agent(id);
-        self.inner.workspace.remove(id);
-        self.inner.notebooks.remove_all(id);
-        let _ = self.inner.store.delete_agent_routines(id);
-        let _ = self.inner.store.clear_working_notes(id);
-        let _ = self.inner.store.delete_agent_signins(id);
-        let _ = self.inner.store.delete_agent_approvals(id);
-        let _ = self.inner.store.delete_agent_plugin_access(id);
-        let _ = self.inner.store.forget_discard(id);
+        self.inner.workspace.remove(id)?;
+        self.inner.notebooks.remove_all(id)?;
+        self.inner.store.delete_agent_routines(id)?;
+        self.inner.store.clear_working_notes(id)?;
+        self.inner.store.delete_agent_signins(id)?;
+        self.inner.store.delete_agent_approvals(id)?;
+        self.inner.store.delete_agent_plugin_access(id)?;
+        self.inner.store.forget_discard(id)?;
         Ok(())
     }
 

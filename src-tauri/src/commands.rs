@@ -200,6 +200,8 @@ impl From<crate::runtime::RuntimeError> for CommandError {
             RuntimeError::NotAVerdict | RuntimeError::NotAQuestion | RuntimeError::EmptyAnswer => {
                 CommandError::new("badRequest", err.to_string())
             }
+            RuntimeError::Workspace(_) => CommandError::new("storage", err.to_string()),
+            RuntimeError::Notebook(inner) => inner.into(),
         }
     }
 }
@@ -2076,9 +2078,11 @@ pub async fn clear_group(state: &AppState, group_id: GroupId) -> Reply<GroupRese
         calls: store.delete_group_usage(group_id)?,
         notes: agents
             .iter()
-            .filter(|id| !state.runtime.workspace().read(**id).trim().is_empty())
-            .inspect(|id| state.runtime.workspace().remove(**id))
-            .count(),
+            .try_fold(0, |removed, id| {
+                let held = !state.runtime.workspace().read(*id).trim().is_empty();
+                state.runtime.workspace().remove(*id).map(|()| removed + usize::from(held))
+            })
+            .map_err(crate::runtime::RuntimeError::from)?,
         working_notes: store.delete_group_working_notes(group_id)?,
     };
 
