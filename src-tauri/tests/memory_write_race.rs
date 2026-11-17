@@ -76,3 +76,15 @@ fn versioned_read_matches_the_save_for_unicode_content() {
         WriteResult::Stored(_)
     ));
 }
+
+#[test]
+fn a_save_without_an_expected_version_stores_over_any_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = Workspace::new(dir.path().to_path_buf());
+    let id = AgentId::new();
+    workspace.write(id, "Agent", "original").unwrap();
+    workspace.write(id, "Agent", "agent rewrite").unwrap();
+    let saved = workspace.write_versioned(id, "Agent", "older client", None).unwrap();
+    assert!(matches!(saved, WriteResult::Stored(_)));
+    assert_eq!(workspace.read(id), "older client");
+}

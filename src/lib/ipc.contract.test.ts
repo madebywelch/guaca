@@ -84,7 +84,10 @@ describe("IPC contract", () => {
       /setAgentMemory: \(id: AgentId, content: string, expected\?: string\)/,
     );
     expect(read("src-tauri/src/commands.rs")).toContain(
-      "Older clients do not send a version and retain unconditional saves.",
+      ".write_versioned(id, &card.name, &content, expected.as_deref())",
+    );
+    expect(read("src-tauri/tests/memory_write_race.rs")).toMatch(
+      /fn a_save_without_an_expected_version_stores_over_any_content\(\)/,
     );
   });
   it("requires the displayed artifact version and sources to approve reads", () => {
