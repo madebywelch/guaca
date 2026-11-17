@@ -411,8 +411,6 @@ figcaption {{ margin-bottom: 12px; font-size: 14px; line-height: 20px; color: {P
   <div class="rails">{lineup}</div>
 </div>
 <script>
-/* Eye contact: the pupils meet across the c until the pointer is on the page,
-   and then both follow it. Clamped to the room a pupil has inside its bowl. */
 const ROOM = 10;
 const pupils = [...document.querySelectorAll("#eye-contact .pupil, .rail .pupil")];
 const rest = pupils.map((p) => [Number(p.getAttribute("cx")), Number(p.getAttribute("cy")), Number(p.dataset.face)]);
