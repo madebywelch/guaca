@@ -112,7 +112,7 @@ function build(env: Env) {
 
     socialProviders: socialProviders(env),
 
-    disabledPaths: DISABLED_PATHS,
+    disabledPaths: [...DISABLED_PATHS, "/update-user"],
 
     plugins: [...authPlugins(env)],
   });
