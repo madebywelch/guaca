@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { compact, money } from "../components/Spend";
 import { LIMITS } from "./limits";
 import { allows } from "./plugins";
+import { groupNamed } from "./presence";
 import { otherBuild } from "./releases";
 import { eventSpec, humanGap, parseTrigger, repeats } from "./routine";
 import { attachedFiles, sendRecipients } from "./toolArgs";
@@ -13,6 +14,8 @@ import {
   type AgentId,
   CATALOG,
   type Envelope,
+  type Group,
+  type GroupId,
   type Part,
   type PluginAccess,
   plainText,
@@ -55,6 +58,9 @@ const ENVELOPE: Envelope = {
 const CHECKS: Record<string, Check> = {
   builds: each(([a, b]: [string, string]) => otherBuild(a, b)),
   compact: each(compact),
+  "crew-name": each(({ groups, group }: { groups: Pick<Group, "id" | "name">[]; group: GroupId }) =>
+    groupNamed(groups, group),
+  ),
   constants: (file) => {
     expect((file as { catalog: string[] }).catalog).toEqual([...CATALOG]);
   },

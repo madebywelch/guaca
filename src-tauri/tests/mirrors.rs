@@ -11,12 +11,13 @@ use guac_lib::db::Store;
 use guac_lib::domain::agent::{CleanDraft, MAX_NAME_LEN};
 use guac_lib::domain::connector::CleanConnector;
 use guac_lib::domain::envelope::Envelope;
-use guac_lib::domain::ids::AgentId;
+use guac_lib::domain::ids::{AgentId, GroupId};
 use guac_lib::domain::plugin::{PluginAccess, PluginKind, STDIO};
 use guac_lib::domain::routine::{human_gap, Cadence, EventTrigger, Trigger};
 use guac_lib::llm::modality::Modalities;
 use guac_lib::llm::openrouter::{LlmClient, ToolCall};
 use guac_lib::llm::tools::{self, Surfaces, ToolInvocation};
+use guac_lib::menubar::{crew_named, Crew};
 use guac_lib::runtime::events::RecordingSink;
 use guac_lib::runtime::guard::GuardLimits;
 use guac_lib::runtime::{OnDisk, Runtime};
@@ -27,6 +28,7 @@ const CHECKS: &[(&str, Check)] = &[
     ("builds", builds),
     ("compact", compact),
     ("constants", constants),
+    ("crew-name", crew_name),
     ("event-spec", event_spec),
     ("human-gap", gap),
     ("limits", limits),
@@ -232,6 +234,15 @@ fn plain_text(file: &Value) {
 
 fn builds(file: &Value) {
     each(file, |(a, b): (String, String)| guac_lib::ipc::different_builds(&a, &b));
+}
+
+fn crew_name(file: &Value) {
+    #[derive(Deserialize)]
+    struct Named {
+        groups: Vec<Crew>,
+        group: GroupId,
+    }
+    each(file, |case: Named| crew_named(&case.groups, case.group).map(|crew| crew.name.clone()));
 }
 
 fn compact(file: &Value) {

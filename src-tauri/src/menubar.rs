@@ -56,10 +56,7 @@ impl Presence {
     }
 
     fn crew_named(&self, group: GroupId) -> Option<&Crew> {
-        if self.crews.len() < 2 {
-            return None;
-        }
-        self.crews.iter().find(|crew| crew.id == group)
+        crew_named(&self.crews, group)
     }
 
     fn crew_of(&self, agent: AgentId) -> Option<&Crew> {
@@ -146,6 +143,13 @@ impl Presence {
         }
         Look { glyph, title, tooltip }
     }
+}
+
+pub fn crew_named(crews: &[Crew], group: GroupId) -> Option<&Crew> {
+    if crews.len() < 2 {
+        return None;
+    }
+    crews.iter().find(|crew| crew.id == group)
 }
 
 fn crews_working<'a>(busy: &[Option<&'a Crew>]) -> Vec<&'a Crew> {
