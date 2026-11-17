@@ -257,7 +257,8 @@ const UNBACKED_PROMISE: &str =
 
 const CALL_ATTEMPTS: usize = 3;
 
-const CALL_BACKOFF: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(3)];
+const CALL_BACKOFF: [Duration; CALL_ATTEMPTS - 1] =
+    [Duration::from_secs(1), Duration::from_secs(3)];
 
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(20);
 
@@ -3349,7 +3350,7 @@ impl Runtime {
                     LlmError::RateLimited { retry_after_secs: Some(secs), .. } => {
                         Duration::from_secs(*secs).min(MAX_RETRY_AFTER)
                     }
-                    _ => CALL_BACKOFF[(attempt - 1).min(CALL_BACKOFF.len() - 1)],
+                    _ => CALL_BACKOFF[attempt - 1],
                 };
                 tracing::warn!(
                     attempt,
