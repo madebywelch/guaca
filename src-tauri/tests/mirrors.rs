@@ -25,6 +25,7 @@ type Check = fn(&Value);
 
 const CHECKS: &[(&str, Check)] = &[
     ("builds", builds),
+    ("compact", compact),
     ("constants", constants),
     ("event-spec", event_spec),
     ("human-gap", gap),
@@ -231,6 +232,10 @@ fn plain_text(file: &Value) {
 
 fn builds(file: &Value) {
     each(file, |(a, b): (String, String)| guac_lib::ipc::different_builds(&a, &b));
+}
+
+fn compact(file: &Value) {
+    each(file, guac_lib::menubar::compact);
 }
 
 fn money(file: &Value) {

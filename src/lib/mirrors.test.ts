@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { money } from "../components/Spend";
+import { compact, money } from "../components/Spend";
 import { LIMITS } from "./limits";
 import { allows } from "./plugins";
 import { otherBuild } from "./releases";
@@ -54,6 +54,7 @@ const ENVELOPE: Envelope = {
 
 const CHECKS: Record<string, Check> = {
   builds: each(([a, b]: [string, string]) => otherBuild(a, b)),
+  compact: each(compact),
   constants: (file) => {
     expect((file as { catalog: string[] }).catalog).toEqual([...CATALOG]);
   },
