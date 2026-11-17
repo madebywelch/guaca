@@ -836,3 +836,20 @@ async fn the_real_service_still_publishes_where_to_sign_in() {
     );
     assert!(body.get("registration_endpoint").is_none(), "client registration should be off");
 }
+
+#[test]
+fn the_service_seeds_the_client_the_app_signs_in_as() {
+    let seed = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../connectors/google/migrations/0001_oauth_provider.sql"
+    ))
+    .unwrap();
+    let insert = seed.split("INSERT INTO oauthClient (").nth(1).unwrap();
+    let (columns, values) = insert.split_once(") VALUES (").unwrap();
+    let at = columns.split(',').position(|column| column.trim() == "clientId").unwrap();
+    assert_eq!(
+        values.split(',').nth(at).unwrap().trim(),
+        format!("'{CLIENT_ID}'"),
+        "the service's migration seeds the only client that can sign in, and it has to be the one the app asks as"
+    );
+}
