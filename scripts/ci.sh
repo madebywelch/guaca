@@ -30,6 +30,9 @@ run_grants() {
 run_assets() {
   step "Icons and tray glyphs"
   python3 scripts/check-icons.py
+
+  step "Wordmarks drawn in the theme's tokens"
+  python3 scripts/check-wordmarks.py
 }
 
 run_scripts() {

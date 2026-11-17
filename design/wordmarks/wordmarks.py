@@ -47,10 +47,25 @@ def display_face() -> Path:
 DISPLAY = display_face()
 SILHOUETTES = json.loads((ROOT / "node_modules" / ".cache" / "silhouettes.json").read_text())
 
-PAPER = {"ground": "#F5F3EE", "edge": "#E5E2DA", "raised": "#FFFFFF", "ink": "#0B0B0A",
-         "muted": "#54524D", "amber": "#B4530A"}
-DARK = {"ground": "#151513", "edge": "#2B2A27", "raised": "#1F1F1C", "ink": "#F7F5F0",
-        "muted": "#A8A49C", "amber": "#F0A63C"}
+SURFACE = {"ground": "rail-ground", "edge": "rail-edge", "raised": "rail-raised", "ink": "rail-text",
+           "muted": "rail-muted", "amber": "attention"}
+
+
+def surface(css: str, selector: str) -> dict[str, str]:
+    block = re.search(rf"^{re.escape(selector)} \{{\n(.*?)^\}}", css, re.M | re.S)
+    if block is None:
+        raise SystemExit(f"src/styles.css has no {selector} block to read the wordmarks' colors from")
+    tokens = dict(re.findall(r"^\s*--([a-z-]+): (#[0-9a-fA-F]{6});$", block.group(1), re.M))
+    missing = [f"--{name}" for name in SURFACE.values() if name not in tokens]
+    if missing:
+        raise SystemExit(f"src/styles.css has no {', '.join(missing)} in its {selector} block, "
+                         "and the wordmarks are drawn in it")
+    return {key: tokens[name] for key, name in SURFACE.items()}
+
+
+STYLES = (ROOT / "src" / "styles.css").read_text()
+PAPER = surface(STYLES, ":root")
+DARK = surface(STYLES, ':root[data-surface="dark"]')
 
 
 def num(v: float) -> str:
@@ -363,18 +378,18 @@ def page(marks) -> str:
 <style>
 {fonts}
 * {{ box-sizing: border-box; }}
-body {{ margin: 0; background: #fff; color: #0B0B0A; font-family: Inter, system-ui, sans-serif;
+body {{ margin: 0; background: #fff; color: {PAPER["ink"]}; font-family: Inter, system-ui, sans-serif;
   -webkit-font-smoothing: antialiased; }}
 section, .lineup {{ width: 1440px; padding: 48px; display: flex; flex-direction: column; gap: 32px; }}
-section + section, .lineup {{ border-top: 1px solid #E5E2DA; }}
-header {{ display: flex; justify-content: space-between; font-size: 14px; line-height: 20px; color: #54524D; }}
+section + section, .lineup {{ border-top: 1px solid {PAPER["edge"]}; }}
+header {{ display: flex; justify-content: space-between; font-size: 14px; line-height: 20px; color: {PAPER["muted"]}; }}
 header span:first-child {{ letter-spacing: .12em; }}
-.hero {{ height: 440px; background: #F5F3EE; display: flex; align-items: center; padding: 64px 96px; }}
+.hero {{ height: 440px; background: {PAPER["ground"]}; display: flex; align-items: center; padding: 64px 96px; }}
 .foot {{ display: flex; justify-content: space-between; gap: 64px; padding-top: 8px; }}
 .why {{ width: 560px; }}
 h2 {{ margin: 0 0 14px; font: 600 28px/34px "Literata"; }}
-p {{ margin: 0; font-size: 18px; line-height: 28px; color: #54524D; }}
-h3 {{ margin: 0 0 14px; font-weight: 400; font-size: 14px; line-height: 20px; letter-spacing: .08em; color: #54524D; }}
+p {{ margin: 0; font-size: 18px; line-height: 28px; color: {PAPER["muted"]}; }}
+h3 {{ margin: 0 0 14px; font-weight: 400; font-size: 14px; line-height: 20px; letter-spacing: .08em; color: {PAPER["muted"]}; }}
 .rails, .lineup .rails {{ display: flex; gap: 16px; }}
 .rail {{ width: 248px; background: var(--g); border: 1px solid var(--e); padding-bottom: 14px; color: var(--t); }}
 .brand {{ display: flex; align-items: center; justify-content: space-between; padding: 36px 16px 14px; }}
@@ -386,7 +401,7 @@ h3 {{ margin: 0 0 14px; font-weight: 400; font-size: 14px; line-height: 20px; le
 .current {{ font: 400 14px/20px "Literata"; letter-spacing: -0.02em; }}
 .lineup .rails {{ flex-wrap: wrap; gap: 40px 48px; }}
 figure {{ margin: 0; }}
-figcaption {{ margin-bottom: 12px; font-size: 14px; line-height: 20px; color: #54524D; }}
+figcaption {{ margin-bottom: 12px; font-size: 14px; line-height: 20px; color: {PAPER["muted"]}; }}
 </style>
 </head>
 <body>
@@ -426,14 +441,17 @@ document.addEventListener("pointerleave", () => look(null));
 
 
 def main():
+    root = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT
+    here = root / HERE.relative_to(ROOT)
+    here.mkdir(parents=True, exist_ok=True)
     for m in MARKS:
-        (HERE / f"{m['key']}.svg").write_text(m["paper"]() + "\n")
-        (HERE / f"{m['key']}.dark.svg").write_text(m["dark"]() + "\n")
+        (here / f"{m['key']}.svg").write_text(m["paper"]() + "\n")
+        (here / f"{m['key']}.dark.svg").write_text(m["dark"]() + "\n")
         if "small" in m:
-            (HERE / f"{m['key']}.small.svg").write_text(m["small"]() + "\n")
-            (HERE / f"{m['key']}.small.dark.svg").write_text(m["small_dark"]() + "\n")
-    (ROOT / "design" / "wordmarks.html").write_text(page(MARKS))
-    print(f"design/wordmarks.html and {len(list(HERE.glob('*.svg')))} SVGs in design/wordmarks/", file=sys.stderr)
+            (here / f"{m['key']}.small.svg").write_text(m["small"]() + "\n")
+            (here / f"{m['key']}.small.dark.svg").write_text(m["small_dark"]() + "\n")
+    (root / "design" / "wordmarks.html").write_text(page(MARKS))
+    print(f"design/wordmarks.html and {len(list(here.glob('*.svg')))} SVGs in design/wordmarks/", file=sys.stderr)
 
 
 if __name__ == "__main__":
