@@ -89,6 +89,19 @@ describe("IPC contract", () => {
     expect(bridged, "call the command through api in ipc.ts instead").toEqual([]);
   });
 
+  it("declares every wire field in camelCase", () => {
+    const fields = [
+      ...read("src/lib/types.ts").matchAll(
+        /(?:^|[{;,])\s*(?:readonly\s+)?["']?([A-Za-z_$][\w$]*)["']?\??:/gm,
+      ),
+    ].map((found) => found[1]!);
+    expect(fields.length).toBeGreaterThan(100);
+    expect(
+      fields.filter((name) => name.includes("_")),
+      "a field crossing IPC is camelCase; add rename_all on the Rust side",
+    ).toEqual([]);
+  });
+
   it("finds commands on every side", () => {
     expect(calledCommands().size).toBeGreaterThan(5);
     expect(registeredCommands().size).toBeGreaterThan(2);
