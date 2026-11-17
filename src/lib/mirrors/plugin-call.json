@@ -1,0 +1,46 @@
+[
+  {
+    "input": "google__gmail_search",
+    "expected": {
+      "server": "google",
+      "tool": "gmail_search"
+    }
+  },
+  {
+    "input": "home_assistant__turn_on",
+    "expected": {
+      "server": "home_assistant",
+      "tool": "turn_on"
+    }
+  },
+  {
+    "input": "a__b__c",
+    "expected": {
+      "server": "a",
+      "tool": "b__c"
+    }
+  },
+  {
+    "input": "a___b",
+    "expected": {
+      "server": "a",
+      "tool": "_b"
+    }
+  },
+  {
+    "input": "__turn_on",
+    "expected": null
+  },
+  {
+    "input": "google__",
+    "expected": null
+  },
+  {
+    "input": "google_gmail",
+    "expected": null
+  },
+  {
+    "input": "send_message",
+    "expected": null
+  }
+]

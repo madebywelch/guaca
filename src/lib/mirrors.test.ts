@@ -6,7 +6,7 @@ import { LIMITS } from "./limits";
 import { allows } from "./plugins";
 import { eventSpec, humanGap, parseTrigger, repeats } from "./routine";
 import { attachedFiles, sendRecipients } from "./toolArgs";
-import { readSpent, surfaceOf } from "./trail";
+import { readSpent, splitPluginTool, surfaceOf } from "./trail";
 import { type AgentId, type PluginAccess } from "./types";
 
 const MIRRORS = resolve(__dirname, "mirrors");
@@ -47,6 +47,7 @@ const CHECKS: Record<string, Check> = {
   "plugin-access": each(({ access, agent }: { access: PluginAccess; agent: AgentId }) =>
     allows(access, agent),
   ),
+  "plugin-call": each(splitPluginTool),
   "tool-names": each(({ tool, args }: { tool: string; args: unknown }) =>
     tool === "attach_file" ? attachedFiles(args) : sendRecipients(args),
   ),

@@ -11,7 +11,7 @@ use guac_lib::db::Store;
 use guac_lib::domain::agent::CleanDraft;
 use guac_lib::domain::connector::CleanConnector;
 use guac_lib::domain::ids::AgentId;
-use guac_lib::domain::plugin::PluginAccess;
+use guac_lib::domain::plugin::{PluginAccess, PluginKind};
 use guac_lib::domain::routine::{human_gap, Cadence, EventTrigger, Trigger};
 use guac_lib::llm::modality::Modalities;
 use guac_lib::llm::openrouter::{LlmClient, ToolCall};
@@ -27,6 +27,7 @@ const CHECKS: &[(&str, Check)] = &[
     ("human-gap", gap),
     ("limits", limits),
     ("plugin-access", plugin_access),
+    ("plugin-call", plugin_call),
     ("tool-names", tool_names),
     ("tool-surfaces", tool_surfaces),
     ("trigger", trigger),
@@ -178,6 +179,22 @@ fn tool_surfaces(file: &Value) {
         .filter(|name| !named.contains(name))
         .collect();
     assert_eq!(missing, Vec::<String>::new(), "tools with no surface vector");
+}
+
+fn plugin_call(file: &Value) {
+    each(file, |name: String| {
+        let connected: Vec<PluginKind> = name
+            .split_once(tools::PLUGIN_SEPARATOR)
+            .filter(|(slug, _)| !slug.is_empty())
+            .map(|(slug, _)| PluginKind::Custom {
+                slug: slug.to_string(),
+                endpoint: "https://mcp.example.com".into(),
+            })
+            .into_iter()
+            .collect();
+        tools::split_plugin_tool(&name, &connected)
+            .map(|(kind, tool)| json!({ "server": kind.slug(), "tool": tool }))
+    });
 }
 
 #[derive(Deserialize)]

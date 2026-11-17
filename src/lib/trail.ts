@@ -91,11 +91,18 @@ function clip(value: string, at = 60): string {
   return flat.length > at ? `${flat.slice(0, at - 1)}…` : flat;
 }
 
-export function pluginCall(name: string): { plugin: string; tool: string } | null {
-  const at = name.indexOf("__");
+const PLUGIN_SEPARATOR = "__";
+
+export function splitPluginTool(name: string): { server: string; tool: string } | null {
+  const at = name.indexOf(PLUGIN_SEPARATOR);
   if (at <= 0) return null;
-  const tool = name.slice(at + 2);
-  return tool.length > 0 ? { plugin: nameFor(name.slice(0, at)), tool } : null;
+  const tool = name.slice(at + PLUGIN_SEPARATOR.length);
+  return tool.length > 0 ? { server: name.slice(0, at), tool } : null;
+}
+
+export function pluginCall(name: string): { plugin: string; tool: string } | null {
+  const split = splitPluginTool(name);
+  return split ? { plugin: nameFor(split.server), tool: split.tool } : null;
 }
 
 interface Described {
