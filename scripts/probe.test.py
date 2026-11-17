@@ -1,4 +1,5 @@
 import json
+import re
 import socket
 import subprocess
 import tempfile
@@ -605,6 +606,19 @@ class SummaryTests(unittest.TestCase):
         record.deferred = True
         self.assertEqual(record.result()["outcome"], "not run")
         self.assertFalse(record.result()["pass"])
+
+
+class SettingsCopyTests(unittest.TestCase):
+    dialog = (probe.ROOT / "src/components/SettingsDialog.tsx").read_text()
+
+    def test_the_pane_lines_are_every_line_the_dialog_can_show(self):
+        block = self.dialog.split("const MAC_ACCESS", 1)[1].split("};", 1)[0]
+        self.assertEqual(set(probe.PANE), set(re.findall(r"^  (\w+):", block, re.M)))
+        for line in probe.PANE.values():
+            self.assertIn(f'"{line}"', block)
+
+    def test_the_test_banner_is_the_one_the_dialog_sends(self):
+        self.assertIn(f'"{probe.TEST_BODY}"', self.dialog)
 
 
 if __name__ == "__main__":
