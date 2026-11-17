@@ -114,6 +114,11 @@ code.
   trajectory suite and double-counts its spend. Marking is the whole mechanism:
   each of the three boundaries releases through `finish_turn`, exactly as an
   ordinary turn does.
+- **A stopped turn settles only what was stopped.** `finish_turn` releases
+  what a turn took in, and for a turn the operator stopped that used to settle
+  every conversation it had read, answered or not. `hand_back` sorts them first:
+  unread since the last tool call goes back to the queue, read before a call
+  stays owed for the next host to report, and only the stopped ones end here.
 - **The stop check sits before `reserve_step`, not after it.** One line later and
   a run reports a model call that a stop prevented, for the rest of its life.
 - **The checks inside the round loop do not cover the way out of it.** A turn

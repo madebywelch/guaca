@@ -4186,6 +4186,7 @@ impl Runtime {
         // with the batch. Apart from `absorbed`, which a turn on the last host
         // took in and released, so nothing here counts them.
         let mut taken_in: Vec<Envelope> = Vec::new();
+        let mut acted_on = 0;
         let mut failure: Option<LlmError> = None;
         let mut hit_tool_ceiling = false;
         let mut budget_exhausted = false;
@@ -4402,6 +4403,7 @@ impl Runtime {
                     strayed = true;
                     break;
                 }
+                acted_on = taken_in.len();
 
                 // Errands run here rather than through the dispatch every other
                 // tool takes, because only the turn holds what one needs: the
@@ -4603,7 +4605,48 @@ impl Runtime {
             );
         }
 
+        let taken_in =
+            if called_off { self.hand_back(run_id, taken_in, acted_on, intake) } else { taken_in };
         self.finish_turn(agent_id, run_id, batch.len(), &taken_in);
+    }
+
+    fn hand_back(
+        &self,
+        run: RunId,
+        taken: Vec<Envelope>,
+        acted_on: usize,
+        intake: &mut Intake<'_>,
+    ) -> Vec<Envelope> {
+        let routine = |envelope: &Envelope| {
+            envelope.parts.iter().any(|part| matches!(part, Part::Routine { .. }))
+        };
+        let mut ended = Vec::new();
+        let mut unread = Vec::new();
+        {
+            let mut runs = self.inner.runs.lock();
+            let acted: HashSet<RunId> =
+                taken[..acted_on].iter().map(|envelope| envelope.run_id).collect();
+            for envelope in taken {
+                if envelope.run_id == run
+                    || runs.stopped.contains(&envelope.run_id)
+                    || routine(&envelope)
+                {
+                    ended.push(envelope);
+                    continue;
+                }
+                runs.absorbed.remove(&envelope.run_id);
+                if !acted.contains(&envelope.run_id) {
+                    unread.push(envelope);
+                } else if Self::release_bookings(&mut runs, envelope.run_id, 1) {
+                    self.inner.guard.lock().unpin(envelope.run_id);
+                }
+            }
+        }
+        for envelope in unread.into_iter().rev() {
+            intake.depth.fetch_add(1, Ordering::SeqCst);
+            intake.carry.push_front(envelope);
+        }
+        ended
     }
 
     /// One model call, attempted more than once when the failure is the kind

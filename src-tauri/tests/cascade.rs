@@ -8857,3 +8857,90 @@ async fn a_restart_the_same_night_does_not_tidy_again() {
     let asked = stub.transcript.lock().iter().filter(|body| a_tidy(body)).count();
     assert_eq!(asked, 1);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stopping_a_turn_hands_back_a_message_it_took_in_and_never_acted_on() {
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let stub = {
+        let (gate, calls) = (gate.clone(), calls.clone());
+        serve(move |_| match calls.fetch_add(1, Ordering::SeqCst) {
+            0 => {
+                let deadline = Instant::now() + Duration::from_secs(20);
+                while !gate.load(Ordering::SeqCst) && Instant::now() < deadline {
+                    std::thread::yield_now();
+                }
+                Script::Progress("Looking up the vendor.".into())
+            }
+            1 => Script::Hang,
+            _ => Script::Say("Their number is 555-0100.".into()),
+        })
+        .await
+    };
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let (first, second) = taken_in_mid_turn(&h, &stub, &gate, &calls).await;
+
+    assert!(h.runtime.stop_run(first));
+    h.settle(first).await;
+    h.settle(second).await;
+
+    let answered =
+        h.runtime.store().channel_messages(h.id("Researcher"), 200).unwrap().into_iter().any(|m| {
+            m.run_id == second && m.to == Participant::Human && m.plain_text().contains("555-0100")
+        });
+    assert!(answered, "the second conversation was never answered:\n{}", h.transcript());
+    let outcome =
+        h.runtime.store().outcome(second).unwrap().expect("the second run has an outcome");
+    assert_eq!(outcome.status, OutcomeStatus::Done, "{}", h.transcript());
+    assert_eq!(h.runtime.store().outcome(first).unwrap().unwrap().status, OutcomeStatus::Stopped);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stopping_a_turn_keeps_a_message_it_acted_on_owed_for_the_next_host() {
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let stub = {
+        let (gate, calls) = (gate.clone(), calls.clone());
+        serve(move |_| match calls.fetch_add(1, Ordering::SeqCst) {
+            0 => {
+                let deadline = Instant::now() + Duration::from_secs(20);
+                while !gate.load(Ordering::SeqCst) && Instant::now() < deadline {
+                    std::thread::yield_now();
+                }
+                Script::Progress("Looking up the vendor.".into())
+            }
+            1 => Script::Progress("Looking up the number.".into()),
+            _ => Script::Hang,
+        })
+        .await
+    };
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let researcher = h.id("Researcher");
+    let (first, second) = taken_in_mid_turn(&h, &stub, &gate, &calls).await;
+    h.wait_until("the call after the second was taken in", |_| calls.load(Ordering::SeqCst) == 3)
+        .await;
+
+    assert!(h.runtime.stop_run(first));
+    h.settle(first).await;
+    h.wait_until("the turn to end", |h| h.runtime.live_runs() == 0).await;
+
+    assert_eq!(calls.load(Ordering::SeqCst), 3, "the message a call acted on was carried on blind");
+    assert!(!settled_on(&h.sink, second), "a message the turn acted on was settled unanswered");
+    assert!(h.runtime.store().outcome(second).unwrap().is_none());
+
+    h.runtime.stop_agent(researcher);
+    let store = Store::open(&h._dir.path().join("guac.db")).unwrap();
+    let recovered = guac_lib::boot::recover(&store).unwrap();
+    assert!(recovered.resumed.is_empty(), "a message a turn acted on was delivered again");
+    assert_eq!(recovered.interrupted, 1);
+    let reported: Vec<RunId> = store
+        .channel_messages(researcher, 50)
+        .unwrap()
+        .into_iter()
+        .filter(|m| {
+            matches!(m.parts.first(), Some(Part::Notice { kind: NoticeKind::Interrupted, .. }))
+        })
+        .map(|m| m.run_id)
+        .collect();
+    assert_eq!(reported, vec![second]);
+}

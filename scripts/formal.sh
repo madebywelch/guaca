@@ -18,7 +18,7 @@ readonly ALL="NoBlindRepeat NothingLost OnlyStartedReported ReportedOnce Stopped
 CHECKS=(
   "holds|code, no stops, no failed commit|$CODE $CALM|$ALL"
   "holds|code, operator stops and a failed start mark|$CODE OperatorStops=TRUE StartCanFail=TRUE|OnlyStartedReported ReportedOnce"
-  "finding|a stop of the conversation a turn took a message from settles that message unanswered|$CODE $STOPS|NothingLost"
+  "holds|code, operator stops|$CODE $STOPS|NothingLost"
   "finding|a stop during a drain, or of a message taken into a turn, is undone by the next host|$CODE $STOPS|StoppedStaysStopped"
   "finding|a stopped conversation handed on is later delivered blind|$CODE $STOPS|NoBlindRepeat"
   "finding|a failed start mark settles the conversation unanswered and unreported|$CODE $FAILS|NothingLost"

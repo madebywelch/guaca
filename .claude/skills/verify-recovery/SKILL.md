@@ -57,7 +57,7 @@ Each action is one SQLite commit, or one section the code runs under `Runtime.in
 | `up`, `ends` | a host process, and how many have ended (crash, kill, or exit after a drain) |
 | `draining`, `stopped`, `pdMem`, `outstanding` | `Runs.draining`, `Runs.stopped`, `Runs.put_down`, `Runs.outstanding` in `runtime/mod.rs` |
 | `inbox` | the agent's mpsc receiver, with `carry` in front (`actor_loop`) |
-| `turn` | the actor inside `Runtime::run_turn`. `carries` is whether `Runtime::resumed` returned records, `did` is whether the turn made a call, and `owed` is the `track_inflight` calls `finish_turn` makes |
+| `turn` | the actor inside `Runtime::run_turn`. `carries` is whether `Runtime::resumed` returned records, `did` is whether the turn made a call, `fresh` is what it took in since its last call (`acted_on` in `run_turn`), and `owed` is the `track_inflight` calls `finish_turn` makes |
 | `resuming` | `Inner.resuming`, filled by `Runtime::pick_up` |
 | `accepted` | `messages` rows addressed to the agent |
 | `pending` | the `pending_runs` row: `none`, `unstarted` (`started_at IS NULL`), `started` |
@@ -72,7 +72,7 @@ Each action is one SQLite commit, or one section the code runs under `Runtime.in
 | `TakeIn`, `Think` | `Runtime::take_in` (greedy, one `start_deliveries` per message) and the model call of a round |
 | `Call`, `Returned` | a tool call from the completion, and its return |
 | `CalledOff` | the round loop's `self.stopped(run_id)` checks, and the stop select in `stream_with_retries` |
-| `Answer`, `HaltStopped`, `FinishOne` | the end of `run_turn`: the reply or the GuardStop notice, then `finish_turn`, where each `track_inflight` is either `Store::settle_run_as` or `Runtime::mark_whole` |
+| `Answer`, `HaltStopped`, `FinishOne` | the end of `run_turn`: the reply or the GuardStop notice, then for a stopped turn `Runtime::hand_back`, then `finish_turn`, where each `track_inflight` is either `Store::settle_run_as` or `Runtime::mark_whole` |
 | `PutTurnDown`, `PutTurnDownCommit` | `Runtime::put_turn_down`: the record `deliver`, then `Runtime::put_down` and `Store::put_down_with_absorbed` |
 | `Stop` | `Runtime::stop_run` and `Store::stop_routine_run` |
 | `Drain` | `Runtime::drain` setting `draining` |
@@ -112,11 +112,10 @@ When a row fails, replay the trace against the real code before believing either
 
 ## Coverage record
 
-Last confirmed against commit `79ae97296e7c83b4737c38a7abba9bf308de232b` (`main`). Files covered: `db/put_down.rs`, `runtime/drain.rs`, `boot.rs` (`recover`), `db/store.rs` (`append_delivery`, `claim_send`, `start_deliveries`, `settle_run_as`, `stop_routine_run`) and `runtime/mod.rs` (`deliver_with_expectation`, `run_turn`, `take_in`, `finish_turn`, `track_inflight`, `abandon`, `stop_run`, `actor_loop`).
+Last confirmed against commit `79ae97296e7c83b4737c38a7abba9bf308de232b` (`main`). Files covered: `db/put_down.rs`, `runtime/drain.rs`, `boot.rs` (`recover`), `db/store.rs` (`append_delivery`, `claim_send`, `start_deliveries`, `settle_run_as`, `stop_routine_run`) and `runtime/mod.rs` (`deliver_with_expectation`, `run_turn`, `take_in`, `hand_back`, `finish_turn`, `track_inflight`, `stop_run`, `actor_loop`).
 
 Open findings, held as finding rows in `scripts/formal.sh` and each replayed in the real runtime:
 
-1. **NothingLost (stops).** Stopping conversation A while A's turn has taken in B settles B through `finish_turn(.., &taken_in)`. B gets no answer and no notice, and a restart finds nothing.
-2. **StoppedStaysStopped (stops).** `Runtime::put_down` does not skip stopped runs. A message taken into a turn, then stopped by the operator, is put down whole by a drain, and the next host answers it. The same happens to a stop that lands between `put_turn_down`'s check and its commit.
-3. **NoBlindRepeat (stops).** This follows from 2. If a second restart comes before the handed-on message is taken in again, it is delivered as a fresh conversation, without the record of the turn that acted on it.
-4. **NothingLost (failed start mark).** When `start_deliveries` fails, `abandon` settles the run as finished: no model call, no notice, and an outcome of "Finished without a note."
+1. **StoppedStaysStopped (stops).** `Runtime::put_down` does not skip stopped runs. A message taken into a turn, then stopped by the operator, is put down whole by a drain, and the next host answers it. The same happens to a stop that lands between `put_turn_down`'s check and its commit.
+2. **NoBlindRepeat (stops).** This follows from 1. If a second restart comes before the handed-on message is taken in again, it is delivered as a fresh conversation, without the record of the turn that acted on it.
+3. **NothingLost (failed start mark).** When `start_deliveries` fails, `abandon` settles the run as finished: no model call, no notice, and an outcome of "Finished without a note."

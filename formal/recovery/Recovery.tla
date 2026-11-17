@@ -20,7 +20,7 @@ InOrder(S) == IF S = {"m1", "m2"} THEN <<"m1", "m2">>
               ELSE IF S = {} THEN <<>> ELSE <<CHOOSE m \in S : TRUE>>
 
 NoTurn == [st |-> "none", run |-> "none", batch |-> {}, taken |-> {}, seen |-> {},
-           carries |-> FALSE, did |-> FALSE, owed |-> <<>>]
+           carries |-> FALSE, did |-> FALSE, owed |-> <<>>, fresh |-> {}]
 
 VARIABLES
     up,
@@ -173,7 +173,7 @@ TakeIn ==
        /\ pending' = MarkStarted({Run(m)})
        /\ marked' = marked \cup {Run(m)}
        /\ inbox' = Tail(inbox)
-       /\ turn' = [turn EXCEPT !.taken = @ \cup {m}]
+       /\ turn' = [turn EXCEPT !.taken = @ \cup {m}, !.fresh = @ \cup {m}]
     /\ UNCHANGED <<up, ends, draining, stopped, pdMem, outstanding, resuming,
                    accepted, put, whole, extra, notices,
                    read, acted, answered, blind, calledOff, resumedOff>>
@@ -188,7 +188,7 @@ Think ==
 Call ==
     /\ up /\ turn.st = "thinking"
     /\ acted' = [m \in MsgSet |-> IF m \in turn.seen THEN turn.run ELSE acted[m]]
-    /\ turn' = [turn EXCEPT !.st = "acting", !.did = TRUE]
+    /\ turn' = [turn EXCEPT !.st = "acting", !.did = TRUE, !.fresh = {}]
     /\ UNCHANGED <<up, ends, draining, stopped, pdMem, outstanding, inbox, resuming,
                    disk, read, answered, blind, marked, calledOff, resumedOff>>
 
@@ -221,10 +221,15 @@ Answer ==
 HaltStopped ==
     /\ up /\ turn.st = "halted" /\ turn.run \in stopped
     /\ extra' = [extra EXCEPT ![turn.run] = @ + 1]
-    /\ turn' = [turn EXCEPT !.st = "finishing",
-                            !.owed = IF turn.taken = {} THEN <<turn.run>>
-                                     ELSE <<Run(CHOOSE m \in turn.taken : TRUE), turn.run>>]
-    /\ UNCHANGED <<up, ends, draining, stopped, pdMem, outstanding, inbox, resuming,
+    /\ LET ended == {m \in turn.taken : Run(m) \in stopped}
+           unread == (turn.taken \ ended) \cap turn.fresh
+           owed == turn.taken \ (ended \cup unread)
+       IN /\ inbox' = InOrder(unread) \o inbox
+          /\ outstanding' = [r \in Runs |-> outstanding[r] - Cardinality({m \in owed : Run(m) = r})]
+          /\ turn' = [turn EXCEPT !.st = "finishing",
+                                  !.owed = IF ended = {} THEN <<turn.run>>
+                                           ELSE <<Run(CHOOSE m \in ended : TRUE), turn.run>>]
+    /\ UNCHANGED <<up, ends, draining, stopped, pdMem, resuming,
                    accepted, pending, put, whole, notices, ghosts>>
 
 FinishOne ==
