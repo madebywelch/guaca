@@ -28,7 +28,7 @@ export function Timeline({ onOpenAgent, onOpenGroups, openAgentId }: Props) {
   const [upcoming, setUpcoming] = useState<UpcomingRun[]>([]);
   const [occasions, setOccasions] = useState<Occasion[]>([]);
   const [width, setWidth] = useState(0);
-  const [today, setToday] = useState<Outcome[]>([]);
+  const [today, setToday] = useState<Outcome[] | null>(null);
   const hour = Math.floor(now / 3_600_000);
   const day = midnight(now);
 
@@ -41,6 +41,7 @@ export function Timeline({ onOpenAgent, onOpenGroups, openAgentId }: Props) {
       })
       .catch((error: unknown) => {
         console.warn(`Today's finished runs could not be read: ${errorMessage(error)}`);
+        if (current) setToday((read) => read ?? []);
       });
     return () => {
       current = false;
@@ -49,7 +50,7 @@ export function Timeline({ onOpenAgent, onOpenGroups, openAgentId }: Props) {
 
   const runs = useMemo(() => {
     const unseen = new Set(outcomes.map((one) => one.runId));
-    return [...outcomes, ...today.filter((one) => !unseen.has(one.runId))];
+    return [...outcomes, ...(today ?? []).filter((one) => !unseen.has(one.runId))];
   }, [outcomes, today]);
 
   useEffect(() => {
@@ -94,6 +95,7 @@ export function Timeline({ onOpenAgent, onOpenGroups, openAgentId }: Props) {
       onOpenGroups={onOpenGroups}
       openAgentId={openAgentId}
       onTrackWidth={setWidth}
+      pending={today === null}
     />
   );
 }
