@@ -162,14 +162,14 @@ describe("the control family", () => {
 });
 
 describe("the timeline's faces", () => {
-  it.each([
-    ["--ribbon-face", "md"],
-    ["--ribbon-pile-face", "sm"],
-  ] as const)("sizes %s for the %s avatar drawn in it", (token, size) => {
-    const rem = css.match(new RegExp(`^\\s*${token}: ([\\d.]+)rem;$`, "m"))?.[1];
-    expect(rem, token).toBeDefined();
-    expect(Number(rem) * ROOT_PX).toBe(AVATAR_PX[size]);
-  });
+  it.each([["--ribbon-face", "md"]] as const)(
+    "sizes %s for the %s avatar drawn in it",
+    (token, size) => {
+      const rem = css.match(new RegExp(`^\\s*${token}: ([\\d.]+)rem;$`, "m"))?.[1];
+      expect(rem, token).toBeDefined();
+      expect(Number(rem) * ROOT_PX).toBe(AVATAR_PX[size]);
+    },
+  );
 });
 
 describe("avatar hit targets", () => {
@@ -833,16 +833,27 @@ describe("the new window's surfaces", () => {
       .join("\n");
   }
 
-  it("lifts the asleep pile on a dark ground, where a faded gray all but vanished", () => {
+  it("lifts an idle face on a dark ground, where a faded gray all but vanished", () => {
     const value = (selector: string, token: string) =>
       Number(ruleOf(css, selector).match(new RegExp(`${token}: ([0-9.]+);`))?.[1]);
     const paper = ":root";
     const ink = ':root[data-surface="dark"]';
-    expect(value(ink, "--ribbon-asleep-lift")).toBeGreaterThan(
-      value(paper, "--ribbon-asleep-lift"),
+    expect(value(ink, "--ribbon-idle-lift")).toBeGreaterThan(value(paper, "--ribbon-idle-lift"));
+    expect(value(ink, "--ribbon-idle")).toBeGreaterThan(value(paper, "--ribbon-idle"));
+    expect(ruleOf(css, '.ribbon__face[data-state="idle"] .ribbon__portrait')).toMatch(
+      /brightness\(var\(--ribbon-idle-lift\)\)/,
     );
-    expect(value(ink, "--ribbon-asleep")).toBeGreaterThan(value(paper, "--ribbon-asleep"));
-    expect(ruleOf(css, ".ribbon__pile-faces")).toMatch(/brightness\(var\(--ribbon-asleep-lift\)\)/);
+  });
+
+  it("steps a timeline face back by its drawing, never by its name", () => {
+    const bare = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    const fading = [...bare.matchAll(/(^|\n)([^{}@\n][^{}]*)\{([^{}]*)\}/g)]
+      .filter((match) => /(^|[;{\s])(opacity|filter)\s*:/.test(match[3] ?? ""))
+      .flatMap((match) => (match[2] ?? "").split(",").map((one) => one.trim()))
+      .filter((selector) => /ribbon__(face|name)/.test(selector));
+    expect(fading).toContain('.ribbon__face[data-state="idle"] .ribbon__portrait');
+    expect(fading).toContain(".ribbon[data-open] .ribbon__face:not([data-open]) .ribbon__portrait");
+    for (const selector of fading) expect(selector).toMatch(/ \.ribbon__portrait$/);
   });
 
   it("brings the Groups sheet in on the one arrival, with no keyframe of its own", () => {

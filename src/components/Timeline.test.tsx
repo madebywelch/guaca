@@ -34,8 +34,8 @@ beforeEach(() => {
 describe("an agent that has finished today", () => {
   it("rests on the timeline once its run is seen, though the clock has not ticked since", async () => {
     const finished = Date.now() + 30_000;
-    render(<Timeline onOpenAgent={vi.fn()} onOpenPile={vi.fn()} />);
-    expect(await screen.findByRole("button", { name: "1 asleep" })).toBeTruthy();
+    render(<Timeline onOpenAgent={vi.fn()} onOpenGroups={vi.fn()} />);
+    expect(await screen.findByRole("button", { name: "Dara, idle" })).toBeTruthy();
 
     listOutcomes.mockResolvedValue([
       anOutcome({
@@ -48,7 +48,7 @@ describe("an agent that has finished today", () => {
     act(() => useStore.setState({ outcomes: [] }));
 
     expect(await screen.findByRole("button", { name: /^Dara, last active / })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "1 asleep" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Dara, idle" })).toBeNull();
   });
 });
 
@@ -57,7 +57,7 @@ describe("where a parked request stops waiting", () => {
     useStore.setState({
       pending: [anApproval({ agentId: "dara", createdAt: NOW - 60_000, lapsesAt: NOW + 540_000 })],
     });
-    render(<Timeline onOpenAgent={vi.fn()} onOpenPile={vi.fn()} />);
+    render(<Timeline onOpenAgent={vi.fn()} onOpenGroups={vi.fn()} />);
     expect(screen.getByText(/^Dara stops waiting/)).toBeTruthy();
 
     act(() => useStore.setState({ pending: [] }));

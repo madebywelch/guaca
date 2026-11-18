@@ -378,7 +378,8 @@ def scenario_permission(w: World) -> None:
 
 
 LOOK_SURFACES = ("light", "dark")
-LOOK_SCREENS = ("Today", "a conversation", "Settings", "New agent", "the Groups sheet", "Search")
+LOOK_SCREENS = ("Today", "a conversation", "Settings", "New agent", "the Groups sheet", "Search",
+                "the command menu")
 AGENT_TABS = ("Now", "Memory", "Notebook", "Routines", "Profile")
 SETTINGS_TABS = ("Host", "Provider", "Limits", "Permissions", "Machines", "Account", "Appearance",
                  "Notifications", "Shortcuts", "Skills", "Compost", "About")
@@ -407,6 +408,9 @@ def show(w: World, screen: str) -> None:
     elif screen == "Search":
         ui.click("button", "Search")
         w.wait("Search opens", lambda: ui.find("dialog", "Search", exact=False))
+    elif screen == "the command menu":
+        ui.key("k", mod=True)
+        w.wait("the command menu opens", lambda: ui.find("dialog", "Command menu"))
 
 
 def dismiss(w: World) -> None:
@@ -1282,11 +1286,10 @@ def scenario_answer(w: World) -> None:
 
     write(w, AGENT, BOOK_FLIGHT)
     w.wait("the question is shown in the conversation", lambda: ui.find("button", "Early"))
-    ui.evaluate("document.activeElement && document.activeElement.blur()")
-    ui.key("k", mod=True)
-    w.wait("Command K focuses the composer", lambda: ui.focused() == ("combobox", f"Write to {AGENT}"))
+    w.wait("the composer keeps the focus after sending", lambda: ui.focused() == ("combobox", f"Write to {AGENT}"))
+    w.wait("the composer offers Tab to answer", lambda: f"to answer {AGENT}" in ui.text())
     ui.key("Tab")
-    w.check("with a question waiting, Command K then Tab reaches its first answer",
+    w.check("with a question waiting, Tab from the composer reaches its first answer",
             ui.focused() == ("button", "Early"), observed=ui.focused(), shot=True)
     ui.key("Enter")
     settled(w, 2, "the answered turn finishes")
@@ -1294,9 +1297,8 @@ def scenario_answer(w: World) -> None:
             [a["state"] for a in approvals(w)] == ["answered"] and "Early" in said(w, AGENT)[-1],
             observed={"approvals": [a["state"] for a in approvals(w)], "said": said(w, AGENT)[-1]})
 
-    ui.evaluate("document.activeElement && document.activeElement.blur()")
-    ui.key("k", mod=True)
-    w.wait("Command K focuses the composer again", lambda: ui.focused() == ("combobox", f"Write to {AGENT}"))
+    ui.click("combobox", f"Write to {AGENT}")
+    w.wait("the composer has the focus again", lambda: ui.focused() == ("combobox", f"Write to {AGENT}"))
     ui.key("Tab")
     w.check("with nothing waiting, Tab leaves the composer for its own next control",
             ui.focused() == ("button", "Attach a file"), observed=ui.focused())
@@ -1360,6 +1362,104 @@ def scenario_tabs(w: World) -> None:
     w.check("the tab list is one Tab stop",
             back == ("tab", "Appearance") and ui.focused()[0] != "tab",
             observed={"back": back, "before": ui.focused()})
+    no_unscripted(w)
+
+
+IDLE = ("Researcher", "Critic", "Archivist")
+NAMES_APART = ("(() => { const r = [...document.querySelectorAll('.ribbon__name')]"
+               ".map(e => e.getBoundingClientRect()); for (let i = 0; i < r.length; i++)"
+               " for (let j = i + 1; j < r.length; j++) { const a = r[i], b = r[j];"
+               " if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom)"
+               " return false; } return r.length > 0; })()")
+SEEN = ("((name) => { const face = [...document.querySelectorAll('.ribbon__face')]"
+        ".find(f => f.querySelector('.ribbon__name').textContent === name);"
+        " const through = (e) => { let o = 1; for (; e; e = e.parentElement)"
+        " o *= Number(getComputedStyle(e).opacity); return o; };"
+        " return { name: through(face.querySelector('.ribbon__name')),"
+        " portrait: through(face.querySelector('.ribbon__portrait')) }; })(%s)")
+
+
+def timeline(w: World) -> list[str]:
+    return w.ui.names_within("list", "Today's timeline", "button")
+
+
+def scenario_ribbon(w: World) -> None:
+    w.model.script = hello
+    w.start()
+    w.ui.viewport(*WINDOW)
+    first_run(w)
+    settled(w, 1)
+    ui = w.ui
+    for name in IDLE:
+        new_agent(w, name, "Wait to be asked.")
+    w.wait("every new agent has a face on today's timeline",
+           lambda: all(any(n.startswith(f"{name}, ") for n in timeline(w)) for name in IDLE))
+    idle = [n for n in timeline(w) if n.split(", ")[0] in IDLE]
+    w.check("an agent that has done nothing today has a face of its own, named and called idle",
+            sorted(idle) == sorted(f"{name}, idle" for name in IDLE), observed=sorted(idle), shot=True)
+    w.check("no face on the timeline is called asleep, and there is no pile",
+            not [n for n in timeline(w) if "asleep" in n] and not ui.evaluate(
+                "document.querySelector('.ribbon__pile') !== null"),
+            observed=[n for n in timeline(w) if "asleep" in n], detail=timeline(w))
+    w.check("at 1280 wide no two names on the timeline overlap", bool(ui.evaluate(NAMES_APART)),
+            observed=bool(ui.evaluate(NAMES_APART)))
+
+    open_agent(w, AGENT)
+    seen = ui.evaluate(SEEN % json.dumps(IDLE[0]))
+    w.check("with another agent's page open, an idle face fades its drawing and not its name",
+            seen["name"] == 1 and seen["portrait"] < 1, observed=seen, shot=True)
+    no_unscripted(w)
+
+
+def scenario_grouptabs(w: World) -> None:
+    w.model.script = hello
+    w.start()
+    first_run(w)
+    settled(w, 1)
+    ui = w.ui
+
+    group = w.host.scalar("SELECT name FROM groups ORDER BY rowid LIMIT 1")
+    show(w, "the Groups sheet")
+    ui.click("button", f"{group} settings")
+    w.wait("the group's settings open", lambda: ui.find("dialog", "Group settings"))
+    ui.click("heading", group)
+    stops = []
+    for _ in range(6):
+        ui.key("Tab")
+        stops.append(ui.focused())
+        if stops[-1][0] == "tab":
+            break
+    w.check("the first Tab stop in a group's settings is the open tab", stops[-1] == ("tab", "General"),
+            observed=stops)
+
+    ui.key("ArrowDown")
+    moved = ui.focused()
+    w.check("an arrow key moves to the next section and opens it",
+            moved == ("tab", "Provider") and selected_tab(w) == ["Provider"],
+            observed={"focused": moved, "selected": selected_tab(w)}, shot=True)
+    ui.key("ArrowUp")
+    back = ui.focused()
+    w.check("the opposite arrow key moves back and opens that section",
+            back == ("tab", "General") and selected_tab(w) == ["General"],
+            observed={"focused": back, "selected": selected_tab(w)})
+    ui.key("End")
+    last = ui.focused()
+    ui.key("Home")
+    w.check("Home and End reach the first and the last section",
+            last[0] == "tab" and last[1] != "General" and ui.focused() == ("tab", "General")
+            and selected_tab(w) == ["General"],
+            observed={"end": last, "home": ui.focused()})
+
+    ui.key("Tab")
+    inside = ui.focused()
+    w.check("Tab goes from the section list into the open panel",
+            inside[0] not in ("tab", "") and selected_tab(w) == ["General"], observed=inside)
+    ui.key("Tab", shift=True)
+    returned = ui.focused()
+    ui.key("Tab", shift=True)
+    w.check("the section list is one Tab stop",
+            returned == ("tab", "General") and ui.focused()[0] != "tab",
+            observed={"back": returned, "before": ui.focused()})
     no_unscripted(w)
 
 
@@ -1436,6 +1536,158 @@ def scenario_connect(w: World) -> None:
     w.check("an endpoint that needs no key passes the test with none, and is kept",
             kept["baseUrl"] == w.model.base and not kept["apiKeySet"],
             observed={"endpointSaved": kept["baseUrl"] == w.model.base, "keySaved": kept["apiKeySet"]})
+    no_unscripted(w)
+
+
+QUIET_PLEASE = "Please keep the notes short."
+NOTED = "Short notes it is."
+RESEARCHER = "Researcher"
+
+
+def menu_choice(w: World) -> str:
+    return w.ui.evaluate(
+        "(document.querySelector('[data-selected=\"true\"] .palette__title') || {}).textContent || ''") or ""
+
+
+def scenario_menu(w: World) -> None:
+
+    def script(c: Call) -> Reply | None:
+        if c.speaker == AGENT and c.last_user.endswith(QUIET_PLEASE):
+            return say(NOTED)
+        return hello(c)
+
+    w.model.script = script
+    w.start()
+    first_run(w)
+    settled(w, 1)
+    ui = w.ui
+
+    ui.click("button", "Today")
+    w.wait("Today is shown", lambda: ui.find("region", "Today"))
+    w.check("the focus is in the field on Today",
+            w.wait("the field takes the focus", lambda: ui.focused() == ("textbox", "What do you need?")),
+            observed=ui.focused())
+
+    ui.key("k", mod=True)
+    w.wait("Command K opens the command menu", lambda: ui.find("dialog", "Command menu"))
+    sections = ui.evaluate("Array.from(document.querySelectorAll('.palette__section')).map(e => e.textContent)")
+    ui.type("textbox", "Command menu", "dark")
+    w.wait("dark selects a setting", lambda: menu_choice(w) == "Reading surface: Dark")
+    w.capture("the command menu after typing dark")
+    ui.key("Enter")
+    w.check("one word, dark, and Return switch the reading surface to dark",
+            w.wait("the page turns dark", lambda: ui.evaluate("document.documentElement.dataset.surface") == "dark")
+            and not ui.find("dialog", "Command menu"),
+            observed={"sections": sections, "surface": ui.evaluate("document.documentElement.dataset.surface")},
+            shot=True)
+
+    ui.key("k", mod=True)
+    w.wait("the command menu opens again", lambda: ui.find("dialog", "Command menu"))
+    before = len(said(w, AGENT))
+    ui.type("textbox", "Command menu", QUIET_PLEASE)
+    ui.key("Escape")
+    w.check("Escape closes the menu with a sentence in it, sends nothing and gives the field back",
+            w.wait("the menu closes", lambda: not ui.find("dialog", "Command menu"))
+            and w.wait("the field takes the focus back", lambda: ui.focused() == ("textbox", "What do you need?"))
+            and len(said(w, AGENT)) == before and not w.host.scalar(
+                "SELECT count(*) FROM messages WHERE parts LIKE ?", f"%{QUIET_PLEASE}%"),
+            observed={"focused": ui.focused(), "said": len(said(w, AGENT)) - before})
+
+    ui.key("k", mod=True)
+    w.wait("the command menu opens a third time", lambda: ui.find("dialog", "Command menu"))
+    ui.type("textbox", "Command menu", QUIET_PLEASE)
+    w.wait("three words or more select writing them", lambda: menu_choice(w) == f"Write to {AGENT}")
+    ui.key("Enter")
+    w.wait("the reply arrives", lambda: NOTED in said(w, AGENT))
+    w.check("three words or more and Return write to the agent, and its reply arrives",
+            said(w, AGENT)[-1] == NOTED and not ui.find("dialog", "Command menu"),
+            observed={"said": said(w, AGENT)[-2:]})
+
+    ui.key("1", mod=True)
+    w.wait("Command 1 opens the first agent", lambda: ui.find("log", f"Conversation with {AGENT}"))
+    w.check("Command 1 opens the first agent with the focus in its composer",
+            w.wait("the composer takes the focus", lambda: ui.focused() == ("combobox", f"Write to {AGENT}")),
+            observed=ui.focused(), shot=True)
+    no_unscripted(w)
+
+
+def selected_card(w: World) -> str:
+    return w.ui.evaluate(
+        "(document.querySelector('.desk__card[data-selected]') || {}).innerText || ''") or ""
+
+
+def scenario_queue(w: World) -> None:
+
+    def script(c: Call) -> Reply | None:
+        if c.speaker == AGENT and c.last_user.endswith(CALL_ME):
+            return ask_name(c, "Robin")
+        if c.speaker == RESEARCHER and c.last_user.endswith(BOOK_FLIGHT):
+            results = c.tool_results()
+            if not results:
+                return call("ask_operator", question=WHICH, options=["Early", "Late"])
+            return say(f"Booked: {results[-1][:80]}")
+        return hello(c)
+
+    w.model.script = script
+    w.start()
+    first_run(w)
+    settled(w, 1)
+    ui = w.ui
+    new_agent(w, RESEARCHER, "Find sources and say where each came from.")
+    write(w, AGENT, CALL_ME)
+    w.wait("the permission request is pending", lambda: approvals(w) == [{"action": "changeSettings", "state": "pending"}])
+    ui.key("k", mod=True)
+    w.wait("the command menu opens", lambda: ui.find("dialog", "Command menu"))
+    ui.type("textbox", "Command menu", RESEARCHER)
+    w.wait("the name selects the agent", lambda: menu_choice(w) == RESEARCHER)
+    ui.key("Enter")
+    w.wait(f"{RESEARCHER}'s conversation opens", lambda: ui.find("log", f"Conversation with {RESEARCHER}"))
+    write(w, RESEARCHER, BOOK_FLIGHT)
+    w.wait("the question is pending too", lambda: len(approvals(w)) == 2)
+
+    ui.click("button", "Today")
+    w.wait("Today shows both requests", lambda: ui.find("button", "Allow") and ui.find("button", "Early"))
+    w.wait("the field takes the focus", lambda: ui.focused() == ("textbox", "What do you need?"))
+    ui.key("Escape")
+    first = w.wait("Escape selects the first card", lambda: selected_card(w))
+    w.check("Escape leaves the field and selects the first request, with its keys on its buttons",
+            ui.focused()[0] == "article" and ui.focused()[1].startswith(AGENT) and "Allow" in first
+            and ("⌘↩" in first or "Ctrl+↩" in first),
+            observed={"focused": ui.focused(), "card": first}, shot=True)
+
+    ui.key("j")
+    second = w.wait("J selects the next card", lambda: RESEARCHER in ui.focused()[1] and selected_card(w))
+    ui.key("k")
+    w.check("J and K move the selection, and an option shows its number only while selected",
+            "Early1" in re.sub(r"\s+", "", second)
+            and w.wait("K goes back", lambda: ui.focused()[1].startswith(AGENT)),
+            observed={"second": second, "focused": ui.focused()})
+
+    ui.key("Enter", mod=True)
+    w.wait("the Allow is held with an Undo", lambda: ui.find("button", "Undo", exact=False))
+    w.check("Command Return holds the Allow with an Undo, sends nothing yet and selects the next request",
+            [a["state"] for a in approvals(w)] == ["pending", "pending"] and RESEARCHER in ui.focused()[1],
+            observed={"approvals": approvals(w), "focused": ui.focused()}, shot=True)
+    ui.key("z", mod=True)
+    w.check("Command Z takes the Allow back: the card returns and nothing was sent",
+            w.wait("the card returns", lambda: len(ui.find("button", "Allow")) == 1
+                   and not ui.find("button", "Undo", exact=False))
+            and [a["state"] for a in approvals(w)] == ["pending", "pending"] and operator_name(w) == "",
+            observed={"approvals": approvals(w), "operatorName": operator_name(w)})
+
+    ui.key("k")
+    w.wait("the first card is selected again", lambda: ui.focused()[1].startswith(AGENT))
+    ui.key("Enter", mod=True)
+    w.wait("the selection moves to the question", lambda: RESEARCHER in ui.focused()[1])
+    ui.key("1")
+    w.wait("both answers are sent after the Undo has passed", lambda: sorted(
+        a["state"] for a in approvals(w)) == ["allow", "answered"] and operator_name(w) == "Robin")
+    w.check("the held answers are each sent once, and the agents are told",
+            operator_name(w) == "Robin" and "Early" in " ".join(said(w, RESEARCHER)),
+            observed={"approvals": approvals(w), "said": said(w, RESEARCHER)[-1:]})
+    w.check("after the last answer the focus is back in the field",
+            w.wait("the field takes the focus back", lambda: ui.focused() == ("textbox", "What do you need?")),
+            observed=ui.focused(), shot=True)
     no_unscripted(w)
 
 
@@ -1598,13 +1850,35 @@ SCENARIOS: dict[str, Scenario] = {
         "a keyboard press on Create agent creates the agent and closes the dialog",
         "every model call was one the scenario scripted",
     )),
-    "answer": Scenario(scenario_answer, "An agent asks a question while its conversation is open, and Command K "
-                       "then Tab reaches the first answer and Return sends it; with nothing waiting, Tab from the "
-                       "composer goes where it always went.",
+    "answer": Scenario(scenario_answer, "An agent asks a question while its conversation is open, and Tab from "
+                       "the composer, which still has the focus, reaches the first answer and Return sends it; with "
+                       "nothing waiting, Tab from the composer goes where it always went.",
     (
-        "with a question waiting, Command K then Tab reaches its first answer",
+        "with a question waiting, Tab from the composer reaches its first answer",
         "Return answers the question, and the agent is told the answer",
         "with nothing waiting, Tab leaves the composer for its own next control",
+        "every model call was one the scenario scripted",
+    )),
+    "ribbon": Scenario(scenario_ribbon, "Three agents that have done nothing today each get a face of their own "
+                       "on the timeline, named and called idle, with no pile and no name over another at 1280 "
+                       "wide; while another agent's page is open their drawings fade and their names do not.",
+    (
+        "an agent that has done nothing today has a face of its own, named and called idle",
+        "no face on the timeline is called asleep, and there is no pile",
+        "at 1280 wide no two names on the timeline overlap",
+        "with another agent's page open, an idle face fades its drawing and not its name",
+        "every model call was one the scenario scripted",
+    )),
+    "grouptabs": Scenario(scenario_grouptabs, "A person opens a group's settings from the Groups sheet, reaches "
+                          "its section list in one Tab, moves between sections with the arrow keys, Home and End "
+                          "and Tabs into the open panel; the list is a single Tab stop in both directions.",
+    (
+        "the first Tab stop in a group's settings is the open tab",
+        "an arrow key moves to the next section and opens it",
+        "the opposite arrow key moves back and opens that section",
+        "Home and End reach the first and the last section",
+        "Tab goes from the section list into the open panel",
+        "the section list is one Tab stop",
         "every model call was one the scenario scripted",
     )),
     "tabs": Scenario(scenario_tabs, "A person opens Settings from the keyboard, reaches the tab list in one Tab, "
@@ -1629,6 +1903,30 @@ SCENARIOS: dict[str, Scenario] = {
         "a refusal is shown beside the buttons, not under them",
         "with no key, the refusal is about this endpoint and names no other provider or place",
         "an endpoint that needs no key passes the test with none, and is kept",
+        "every model call was one the scenario scripted",
+    )),
+    "menu": Scenario(scenario_menu, "A person on Today finds the focus in the field, opens the command menu on "
+                     "Command K, switches to dark with one word and Return, writes to an agent with a sentence and "
+                     "Return, and opens the first agent on Command 1 with the focus in its composer; a sentence "
+                     "left in the menu by Escape is not sent.",
+    (
+        "the focus is in the field on Today",
+        "one word, dark, and Return switch the reading surface to dark",
+        "Escape closes the menu with a sentence in it, sends nothing and gives the field back",
+        "three words or more and Return write to the agent, and its reply arrives",
+        "Command 1 opens the first agent with the focus in its composer",
+        "every model call was one the scenario scripted",
+    )),
+    "queue": Scenario(scenario_queue, "Two agents wait on a person, who answers both from Today by keyboard: "
+                      "Escape selects the first card, J and K move, Command Return allows, a number picks an answer, "
+                      "and the focus returns to the field; an Allow taken back with Command Z is never sent.",
+    (
+        "Escape leaves the field and selects the first request, with its keys on its buttons",
+        "J and K move the selection, and an option shows its number only while selected",
+        "Command Return holds the Allow with an Undo, sends nothing yet and selects the next request",
+        "Command Z takes the Allow back: the card returns and nothing was sent",
+        "the held answers are each sent once, and the agents are told",
+        "after the last answer the focus is back in the field",
         "every model call was one the scenario scripted",
     )),
 }

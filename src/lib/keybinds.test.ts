@@ -99,11 +99,11 @@ describe("which binding a keystroke is", () => {
   });
 
   it("answers with the four that work wherever the operator is", () => {
-    expect(bindingFor(press("k", { metaKey: true }))?.id).toBe("field");
+    expect(bindingFor(press("k", { metaKey: true }))?.id).toBe("menu");
     expect(bindingFor(press("f", { metaKey: true }))?.id).toBe("search");
     expect(bindingFor(press(",", { metaKey: true }))?.id).toBe("settings");
     expect(bindingFor(press("/", { metaKey: true }))?.id).toBe("shortcuts");
-    expect(bindingFor(press("k", { ctrlKey: true }))?.id).toBe("field");
+    expect(bindingFor(press("k", { ctrlKey: true }))?.id).toBe("menu");
     expect(bindingFor(press("f", { ctrlKey: true }))?.id).toBe("search");
     expect(bindingFor(press(",", { ctrlKey: true }))?.id).toBe("settings");
     expect(bindingFor(press("/", { ctrlKey: true }))?.id).toBe("shortcuts");
@@ -111,7 +111,7 @@ describe("which binding a keystroke is", () => {
 });
 
 const SHORTCUTS: { what: string; key: string; id: string }[] = [
-  { what: "field", key: "k", id: "field" },
+  { what: "menu", key: "k", id: "menu" },
   { what: "search", key: "f", id: "search" },
   { what: "settings", key: ",", id: "settings" },
   { what: "shortcuts", key: "/", id: "shortcuts" },
@@ -196,11 +196,11 @@ describe("a global shortcut with the modifiers it wants", () => {
   });
 
   it("reads an uppercase letter as the letter it is, with either modifier", () => {
-    expect(bindingFor(press("K", { ctrlKey: true }))?.id).toBe("field");
-    expect(bindingFor(press("K", { ctrlKey: true, shiftKey: true }))?.id).toBe("field");
-    expect(bindingFor(press("K", { metaKey: true, ctrlKey: true }))?.id).toBe("field");
+    expect(bindingFor(press("K", { ctrlKey: true }))?.id).toBe("menu");
+    expect(bindingFor(press("K", { ctrlKey: true, shiftKey: true }))?.id).toBe("menu");
+    expect(bindingFor(press("K", { metaKey: true, ctrlKey: true }))?.id).toBe("menu");
     expect(bindingFor(press("K", { metaKey: true, ctrlKey: true, shiftKey: true }))?.id).toBe(
-      "field",
+      "menu",
     );
     expect(bindingFor(press("K", { shiftKey: true }))).toBeUndefined();
     expect(bindingFor(press("F", { ctrlKey: true }))?.id).toBe("search");
@@ -237,11 +237,43 @@ describe("the table", () => {
     }
   });
 
-  it("offers the one global handler exactly the four ids it dispatches", () => {
-    expect(GLOBAL).toEqual(["field", "search", "settings", "shortcuts"]);
+  it("offers the one global handler exactly the ids it dispatches", () => {
+    expect(GLOBAL).toEqual(["menu", "agent", "search", "settings", "shortcuts", "undo"]);
     for (const id of GLOBAL) {
       expect(row(BINDINGS, id).where).toBe("Anywhere");
     }
+  });
+});
+
+describe("the keys that name an agent and take an answer back", () => {
+  it("hears Command 1 through Command 9 as one binding, and nothing either side of it", () => {
+    for (const key of ["1", "5", "9"]) {
+      expect(bindingFor(press(key, { metaKey: true }))?.id).toBe("agent");
+      expect(bindingFor(press(key, { ctrlKey: true }))?.id).toBe("agent");
+    }
+    expect(bindingFor(press("0", { metaKey: true }))).toBeUndefined();
+    expect(bindingFor(press("1"))).toBeUndefined();
+    expect(bindingFor(press("1", { metaKey: true, altKey: true }))).toBeUndefined();
+  });
+
+  it("takes Command Z as Undo, and leaves Command Shift Z to redo", () => {
+    expect(bindingFor(press("z", { metaKey: true }))?.id).toBe("undo");
+    expect(bindingFor(press("z", { metaKey: true, shiftKey: true }))).toBeUndefined();
+  });
+
+  it("lists every key the menu and the queue answer to", () => {
+    const listed = (where: string) =>
+      BINDINGS.filter((binding) => binding.where === where).map((binding) => comboLabel(binding));
+    expect(listed("The command menu")).toEqual(
+      expect.arrayContaining([
+        formatCombo({ key: "Enter" }),
+        formatCombo({ key: "Enter", mod: true }),
+        formatCombo({ key: "Backspace", mod: true }),
+      ]),
+    );
+    expect(listed("Needs you")).toEqual(
+      expect.arrayContaining(["Esc", "J / K", "1 to 9", formatCombo({ key: "Enter", mod: true })]),
+    );
   });
 });
 
@@ -267,18 +299,21 @@ describe("how a shortcut is written down", () => {
     expect(mac.formatCombo({ key: ",", mod: true })).toBe("⌘,");
     expect(mac.formatCombo({ key: "Enter", shift: true })).toBe("⇧↩");
     expect(mac.comboLabel(row(mac.BINDINGS, "scope"))).toBe("Tab / ⇧Tab");
+    expect(mac.comboLabel(row(mac.BINDINGS, "agent"))).toBe("⌘1 to ⌘9");
+    expect(mac.formatCombo({ key: "Backspace", mod: true })).toBe("⌘⌫");
 
     const pc = await loadedOn("Win32");
     expect(pc.formatCombo({ key: "k", mod: true })).toBe("Ctrl+K");
     expect(pc.formatCombo({ key: ",", mod: true })).toBe("Ctrl+,");
     expect(pc.formatCombo({ key: "Enter", shift: true })).toBe("Shift+↩");
     expect(pc.comboLabel(row(pc.BINDINGS, "scope"))).toBe("Tab / Shift+Tab");
+    expect(pc.comboLabel(row(pc.BINDINGS, "agent"))).toBe("Ctrl+1 to Ctrl+9");
   });
 
   it("matches the same keystroke on the platform whose glyphs it does not use", async () => {
     const mac = await loadedOn("MacIntel");
-    expect(mac.bindingFor(press("k", { ctrlKey: true }))?.id).toBe("field");
-    expect(mac.bindingFor(press("k", { metaKey: true }))?.id).toBe("field");
+    expect(mac.bindingFor(press("k", { ctrlKey: true }))?.id).toBe("menu");
+    expect(mac.bindingFor(press("k", { metaKey: true }))?.id).toBe("menu");
     expect(mac.bindingFor(press("f", { ctrlKey: true }))?.id).toBe("search");
     expect(mac.bindingFor(press("f", { metaKey: true }))?.id).toBe("search");
   });

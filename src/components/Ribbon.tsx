@@ -15,13 +15,10 @@ import { Icon } from "./Icon";
 interface Props {
   ribbon: Layout;
   onOpenAgent: (agentId: AgentId) => void;
-  onOpenPile: () => void;
+  onOpenGroups: () => void;
   openAgentId?: AgentId | null;
   onTrackWidth?: (px: number) => void;
 }
-
-const PILE_SHOWN = 5;
-const PILE_KEY = "pile";
 
 const at = (x: number) => ({ "--ribbon-x": x }) as CSSProperties;
 
@@ -37,20 +34,17 @@ const CALENDAR = (
   </span>
 );
 
-export function Ribbon({ ribbon, onOpenAgent, onOpenPile, openAgentId, onTrackWidth }: Props) {
+export function Ribbon({ ribbon, onOpenAgent, onOpenGroups, openAgentId, onTrackWidth }: Props) {
   const agents = useStore((s) => s.agents);
   const activity = useStore((s) => s.activity);
   const byId = new Map(agents.map((agent) => [agent.id, agent]));
 
   const stops = [
-    ...(ribbon.pile.length ? [PILE_KEY] : []),
-    ...[
-      ...ribbon.faces.map((face) => ({ x: face.x, key: face.agentId as string })),
-      ...ribbon.counts.map((count) => ({ x: count.x, key: count.key })),
-    ]
-      .sort((a, b) => a.x - b.x)
-      .map((one) => one.key),
-  ];
+    ...ribbon.faces.map((face) => ({ x: face.x, key: face.agentId as string })),
+    ...ribbon.counts.map((count) => ({ x: count.x, key: count.key })),
+  ]
+    .sort((a, b) => a.x - b.x)
+    .map((one) => one.key);
   const [current, setCurrent] = useState<string | null>(null);
   const active = current !== null && stops.includes(current) ? current : (stops[0] ?? null);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
@@ -155,7 +149,11 @@ export function Ribbon({ ribbon, onOpenAgent, onOpenPile, openAgentId, onTrackWi
           <li
             key={face.agentId}
             className="ribbon__face"
-            style={at(face.x)}
+            style={
+              face.room === null
+                ? at(face.x)
+                : ({ ...at(face.x), "--ribbon-room": face.room } as CSSProperties)
+            }
             data-state={face.state}
             data-align={face.align}
             data-open={face.agentId === openAgentId ? "" : undefined}
@@ -210,7 +208,7 @@ export function Ribbon({ ribbon, onOpenAgent, onOpenPile, openAgentId, onTrackWi
             aria-label={count.label}
             tabIndex={active === count.key ? 0 : -1}
             onFocus={() => setCurrent(count.key)}
-            onClick={onOpenPile}
+            onClick={onOpenGroups}
           >
             {count.text}
           </button>
@@ -219,17 +217,10 @@ export function Ribbon({ ribbon, onOpenAgent, onOpenPile, openAgentId, onTrackWi
     })),
   ].sort((a, b) => a.x - b.x);
 
-  const pileShown = ribbon.pile.slice(0, PILE_SHOWN);
   const marked = ribbon.faces.some((face) => face.agentId === openAgentId);
 
   return (
-    <nav
-      className="ribbon"
-      aria-label="Agents"
-      data-pile={ribbon.pile.length ? "some" : "none"}
-      data-open={marked ? "some" : undefined}
-      style={{ "--ribbon-pile": pileShown.length } as CSSProperties}
-    >
+    <nav className="ribbon" aria-label="Agents" data-open={marked ? "some" : undefined}>
       <div className="ribbon__inner">
         <div className="ribbon__line" aria-hidden="true" />
         <div className="ribbon__track" ref={track} aria-hidden="true">
@@ -257,39 +248,6 @@ export function Ribbon({ ribbon, onOpenAgent, onOpenPile, openAgentId, onTrackWi
         </div>
 
         <ul className="ribbon__list" aria-label="Today's timeline" onKeyDown={move}>
-          {ribbon.pile.length > 0 && (
-            <li className="ribbon__pile">
-              <button
-                type="button"
-                ref={keep(PILE_KEY)}
-                className="ribbon__pile-button"
-                tabIndex={active === PILE_KEY ? 0 : -1}
-                onFocus={() => setCurrent(PILE_KEY)}
-                onClick={onOpenPile}
-              >
-                <span className="ribbon__pile-faces" aria-hidden="true">
-                  {pileShown.map((id) => {
-                    const agent = byId.get(id);
-                    return agent ? (
-                      <AgentAvatar
-                        key={id}
-                        avatar={agent.avatar}
-                        color={agent.color}
-                        lifecycle={agent.lifecycle}
-                        seed={id}
-                        size="sm"
-                        title=""
-                      />
-                    ) : null;
-                  })}
-                </span>
-                <span className="ribbon__pile-label">
-                  {ribbon.pile.length} {ribbon.crowded ? "more" : "asleep"}
-                </span>
-              </button>
-            </li>
-          )}
-
           {drawn.map((one) => one.node)}
         </ul>
       </div>

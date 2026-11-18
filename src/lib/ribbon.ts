@@ -1,3 +1,4 @@
+import { numbered } from "./rail";
 import { clockLabel, midnight, whenLabel } from "./time";
 import type {
   Activity,
@@ -5,6 +6,7 @@ import type {
   AgentId,
   Approval,
   ApprovalId,
+  GroupId,
   Occasion,
   Outcome,
   UpcomingRun,
@@ -13,6 +15,7 @@ import type {
 export interface RibbonInput {
   now: number;
   agents: AgentCard[];
+  groups: GroupId[];
   activity: Record<AgentId, Activity | undefined>;
   outcomes: Outcome[];
   approvals: Approval[];
@@ -24,7 +27,7 @@ export interface RibbonInput {
 
 export type Align = "center" | "start" | "end";
 
-export type FaceState = "needsYou" | "working" | "finished" | "failed" | "rest";
+export type FaceState = "needsYou" | "working" | "finished" | "failed" | "rest" | "idle";
 
 export interface RibbonFace {
   agentId: AgentId;
@@ -33,6 +36,7 @@ export interface RibbonFace {
   x: number;
   label: string;
   align: Align;
+  room: number | null;
 }
 
 export type CountKind = "working" | "needsYou";
@@ -88,8 +92,6 @@ export interface Knot {
 export interface Ribbon {
   now: { at: number; x: number; label: string };
   band: { from: number; x: number; label: string | null } | null;
-  pile: AgentId[];
-  crowded: number;
   counts: RibbonCount[];
   faces: RibbonFace[];
   scheduled: RibbonScheduled[];
@@ -177,6 +179,13 @@ function buildScale(start: number, now: number, days: number): Knot[] {
 
 export function spread(xs: number[], widths: number | number[], lo = 0, hi = 1): number[] {
   const w = (i: number) => (typeof widths === "number" ? widths : (widths[i] as number));
+  const tail = xs.length - 1;
+  const total = xs.reduce((sum, _, i) => sum + w(i), 0);
+  if (tail > 0 && total > hi - lo + 1e-9) {
+    const from = lo + w(0) / 2;
+    const to = Math.max(from, hi - w(tail) / 2);
+    return xs.map((_, i) => from + ((to - from) * i) / tail);
+  }
   const offset = new Array<number>(xs.length);
   xs.forEach((_, i) => {
     offset[i] = i === 0 ? w(0) / 2 : (offset[i - 1] as number) + (w(i - 1) + w(i)) / 2;
@@ -251,7 +260,7 @@ function placeFace(
   agent: AgentCard,
   input: RibbonInput,
   today: number,
-): Omit<RibbonFace, "x" | "label" | "align"> | null {
+): Omit<RibbonFace, "x" | "label" | "align" | "room"> | null {
   const asked = input.approvals
     .filter((one) => one.agentId === agent.id)
     .sort((a, b) => a.createdAt - b.createdAt)[0];
@@ -278,7 +287,13 @@ function placeFace(
   return last === undefined ? null : { agentId: agent.id, state: "rest", at: last };
 }
 
-function faceLabel(name: string, state: FaceState, at: number, now: number): string {
+function faceLabel(
+  name: string,
+  state: FaceState,
+  at: number,
+  now: number,
+  paused: boolean,
+): string {
   switch (state) {
     case "needsYou":
       return `${name}, needs you, asked ${stamp(at, now)}`;
@@ -290,6 +305,8 @@ function faceLabel(name: string, state: FaceState, at: number, now: number): str
       return `${name}, failed ${stamp(at, now)}`;
     case "rest":
       return `${name}, last active ${stamp(at, now)}`;
+    case "idle":
+      return `${name}, ${paused ? "paused" : "idle"}`;
   }
 }
 
@@ -344,7 +361,10 @@ export function layoutRibbon(given: RibbonInput): Ribbon {
   const names = new Map(input.agents.map((agent) => [agent.id, agent.name]));
 
   const placed = input.agents.map((agent) => ({ agent, face: placeFace(agent, input, today) }));
-  const drowsy = placed.filter(({ face }) => !face).map(({ agent }) => agent.id);
+  const idle = numbered(
+    placed.flatMap(({ agent, face }) => (face ? [] : [agent])),
+    input.groups.map((id) => ({ id })),
+  );
   const wanted = placed.flatMap(({ face }) => (face ? [face] : []));
 
   const band = bandFrom(input.outcomes);
@@ -399,29 +419,61 @@ export function layoutRibbon(given: RibbonInput): Ribbon {
   const halfOf = (text: string) => Math.max(input.faceSpan, text.length * charSpan) / 2;
   type Count = { kind: CountKind; agentIds: AgentId[] };
   type Row = {
-    face: Omit<RibbonFace, "x" | "label" | "align"> | null;
+    face: Omit<RibbonFace, "x" | "label" | "align" | "room"> | null;
     item: (typeof runs)[number] | null;
     count: Count | null;
     at: number;
     x: number;
     text: string;
+    half: number;
     width: number;
+    tight: boolean;
   };
   const takes = (text: string) => 2 * halfOf(text) + charSpan;
-  const faceRows: Row[] = wanted.map((face) => {
+  const faceRow = (face: Omit<RibbonFace, "x" | "label" | "align" | "room">, x: number): Row => {
     const text = names.get(face.agentId) ?? "";
-    const x = xAt(scale, face.at);
-    return { face, item: null, count: null, at: face.at, x, text, width: takes(text) };
+    return {
+      face,
+      item: null,
+      count: null,
+      at: face.at,
+      x,
+      text,
+      half: halfOf(text),
+      width: takes(text),
+      tight: false,
+    };
+  };
+  const idleRows: Row[] = idle.map((agent) =>
+    faceRow({ agentId: agent.id, state: "idle", at: start }, 0),
+  );
+  const faceRows: Row[] = [
+    ...idleRows,
+    ...wanted.map((face) => faceRow(face, xAt(scale, face.at))),
+  ];
+  const itemRows: Row[] = [...runs, ...occasions].map((item) => {
+    const text = longest(item.what, item.when);
+    return {
+      face: null,
+      item,
+      count: null,
+      at: item.at,
+      x: xAt(scale, item.at),
+      text,
+      half: halfOf(text),
+      width: input.faceSpan,
+      tight: false,
+    };
   });
-  const itemRows: Row[] = [...runs, ...occasions].map((item) => ({
-    face: null,
-    item,
-    count: null,
-    at: item.at,
-    x: xAt(scale, item.at),
-    text: longest(item.what, item.when),
-    width: input.faceSpan,
-  }));
+  const tighten = (one: Row): Row =>
+    one.face && one.face.state !== "needsYou"
+      ? {
+          ...one,
+          half: input.faceSpan / 2,
+          width: input.faceSpan + charSpan,
+          tight: true,
+        }
+      : one;
   const byX = (a: Row, b: Row) => a.x - b.x || a.at - b.at;
   const total = (rows: Row[]) => rows.reduce((sum, one) => sum + one.width, 0);
 
@@ -429,11 +481,11 @@ export function layoutRibbon(given: RibbonInput): Ribbon {
   const after = (one: Row) => (one.face ? one.face.state === "working" : one.at > now);
   const beforeHi = (rows: Row[]) => {
     const last = rows[rows.length - 1] as Row;
-    return nowX - halfOf(last.text) - charSpan + last.width / 2;
+    return nowX - last.half - charSpan + last.width / 2;
   };
   const laterLo = (rows: Row[]) => {
     const first = rows[0] as Row;
-    return nowX + halfOf(first.text) + charSpan - first.width / 2;
+    return nowX + first.half + charSpan - first.width / 2;
   };
   const fitsBefore = (rows: Row[]) => rows.length === 0 || total(rows) <= beforeHi(rows) + 1e-9;
   const fitsLater = (rows: Row[]) => rows.length === 0 || total(rows) <= 1 - laterLo(rows) + 1e-9;
@@ -452,7 +504,9 @@ export function layoutRibbon(given: RibbonInput): Ribbon {
         at,
         x: Math.max(...folded.map((one) => one.x)),
         text,
+        half: halfOf(text),
         width: takes(text),
+        tight: false,
       };
       const next = [...rows.filter((one) => !folded.includes(one)), count].sort(byX);
       if (fits(next) || keep === 0) return next;
@@ -460,23 +514,8 @@ export function layoutRibbon(given: RibbonInput): Ribbon {
     return rows;
   };
 
-  let before = faceRows.filter((one) => !after(one)).sort(byX);
-  const piled = new Set<AgentId>();
-  while (!fitsBefore(before)) {
-    const movable = before.filter((one) => one.face && one.face.state !== "needsYou");
-    const resting = movable.filter((one) => one.face?.state === "rest");
-    const victim = (resting.length ? resting : movable).reduce<Row | null>(
-      (a, b) => (a === null || b.at < a.at ? b : a),
-      null,
-    );
-    if (!victim?.face) break;
-    piled.add(victim.face.agentId);
-    before = before.filter((one) => one !== victim);
-  }
-  before = fold(before, "needsYou", fitsBefore);
-  const pile = input.agents
-    .map((agent) => agent.id)
-    .filter((id) => drowsy.includes(id) || piled.has(id));
+  const pending = faceRows.filter((one) => !after(one)).sort(byX);
+  const before = fold(fitsBefore(pending) ? pending : pending.map(tighten), "needsYou", fitsBefore);
 
   const liveFaces = faceRows.filter(after);
   const withItems = [...liveFaces, ...itemRows].sort(byX);
@@ -501,13 +540,17 @@ export function layoutRibbon(given: RibbonInput): Ribbon {
       : []),
   ];
 
-  const align = (x: number, text: string): Align =>
-    x - halfOf(text) < 0 ? "start" : x + halfOf(text) > 1 ? "end" : "center";
+  const align = (x: number, half: number): Align =>
+    x - half < 0 ? "start" : x + half > 1 ? "end" : "center";
   const faces: RibbonFace[] = [];
   const scheduled: RibbonScheduled[] = [];
   const counts: RibbonCount[] = [];
   ordered.forEach((one, i) => {
     const x = xs[i] as number;
+    const gap = Math.min(
+      i > 0 ? x - (xs[i - 1] as number) : 1,
+      i < xs.length - 1 ? (xs[i + 1] as number) - x : 1,
+    );
     if (one.count) {
       const who = one.count.agentIds.map((id) => names.get(id) ?? "").join(", ");
       counts.push({
@@ -517,22 +560,22 @@ export function layoutRibbon(given: RibbonInput): Ribbon {
         x,
         text: one.text,
         label: `${one.text}: ${who}`,
-        align: align(x, one.text),
+        align: align(x, one.half),
       });
       return;
     }
     if (one.face) {
-      const label = faceLabel(names.get(one.face.agentId) ?? "", one.face.state, one.face.at, now);
-      faces.push({ ...one.face, x, label, align: align(x, one.text) });
+      const paused = input.activity[one.face.agentId]?.state === "paused";
+      const name = names.get(one.face.agentId) ?? "";
+      const label = faceLabel(name, one.face.state, one.face.at, now, paused);
+      const room = one.tight ? Math.max(0, Math.min(2 * one.half, gap - charSpan)) : null;
+      faces.push({ ...one.face, x, label, align: align(x, one.half), room });
       return;
     }
     if (!one.item) return;
-    const left = i > 0 ? x - (xs[i - 1] as number) : 1;
-    const right = i < xs.length - 1 ? (xs[i + 1] as number) - x : 1;
-    const room = Math.min(left, right);
-    const words = room >= WORDS_SPANS * input.faceSpan;
+    const words = gap >= WORDS_SPANS * input.faceSpan;
     const shown = words ? one.text : one.item.when;
-    scheduled.push({ ...one.item, x, room, words, align: align(x, shown) });
+    scheduled.push({ ...one.item, x, room: gap, words, align: align(x, halfOf(shown)) });
   });
 
   const lapses = input.approvals.flatMap((one) => {
@@ -582,8 +625,6 @@ export function layoutRibbon(given: RibbonInput): Ribbon {
   return {
     now: { at: now, x: xAt(scale, now), label: nowLabel },
     band: bandAt === null ? null : { from: bandAt, x: bandX, label: bandLabel },
-    pile,
-    crowded: piled.size,
     faces,
     counts,
     scheduled,

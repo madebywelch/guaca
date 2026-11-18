@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
+import { HOLD_MS, useHeld } from "../lib/held";
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import { clockLabel } from "../lib/time";
@@ -344,5 +344,120 @@ describe("a request whose time has passed", () => {
       ],
     });
     expect(screen.queryByText(/waits until/)).toBeNull();
+  });
+});
+
+describe("Needs you as a keyboard queue", () => {
+  const noor = anAgent("agent-2", { name: "Noor" });
+  const permission = anApproval({ agentId: "agent-1", summary: "Change your name to Robin?" });
+  const question = anApproval({
+    id: "req-noor",
+    agentId: "agent-2",
+    summary: "Which story leads Friday?",
+    request: { kind: "question", options: ["Notebooks", "The renewal"] },
+  });
+  const decide = vi.fn(async () => {});
+  const answer = vi.fn(async () => {});
+
+  function drawQueue(pending = [permission, question]) {
+    act(() => {
+      useHeld.setState({ held: null, notice: null });
+      useStore.setState({
+        agents: [dara, noor],
+        groups: [],
+        pending,
+        stuck: [],
+        decisions: [],
+        outcomes: [],
+        activity: {},
+        lastActive: {},
+        railGroup: null,
+        refreshOutcomes: async () => {},
+        decideApproval: decide,
+        answerQuestion: answer,
+      });
+    });
+    render(<Home onSearch={vi.fn()} onManageGroups={vi.fn()} />);
+    return screen.getByRole("textbox", { name: "What do you need?" });
+  }
+
+  const card = (name: RegExp) => screen.getByRole("article", { name });
+
+  beforeEach(() => {
+    vi.useFakeTimers({
+      now: NOW,
+      toFake: ["Date", "setTimeout", "clearTimeout", "requestAnimationFrame"],
+    });
+    decide.mockClear();
+    answer.mockClear();
+  });
+
+  it("selects the first card on Escape from the field, and J and K move the selection", () => {
+    const field = drawQueue();
+    fireEvent.keyDown(field, { key: "Escape" });
+    expect(document.activeElement).toBe(card(/^Dara asks/));
+    expect(card(/^Dara asks/).hasAttribute("data-selected")).toBe(true);
+    fireEvent.keyDown(document.activeElement as Element, { key: "j" });
+    expect(document.activeElement).toBe(card(/^Noor asks/));
+    expect(card(/^Dara asks/).hasAttribute("data-selected")).toBe(false);
+    fireEvent.keyDown(document.activeElement as Element, { key: "k" });
+    expect(document.activeElement).toBe(card(/^Dara asks/));
+  });
+
+  it("draws the keys on the selected card's buttons and on no other card", () => {
+    const field = drawQueue();
+    fireEvent.keyDown(field, { key: "Escape" });
+    const selected = card(/^Dara asks/);
+    expect(within(selected).getByRole("button", { name: "Allow" }).textContent).toMatch(/↩|Enter/);
+    expect(within(card(/^Noor asks/)).getByRole("button", { name: "Notebooks" }).textContent).toBe(
+      "Notebooks",
+    );
+    fireEvent.keyDown(selected, { key: "j" });
+    expect(within(card(/^Noor asks/)).getByRole("button", { name: "Notebooks" }).textContent).toBe(
+      "Notebooks1",
+    );
+  });
+
+  it("holds an Allow for the Undo's few seconds, moves on, and only then sends it", () => {
+    const field = drawQueue();
+    fireEvent.keyDown(field, { key: "Escape" });
+    fireEvent.keyDown(document.activeElement as Element, { key: "Enter", metaKey: true });
+    expect(decide).not.toHaveBeenCalled();
+    expect(screen.queryByRole("article", { name: /^Dara asks/ })).toBeNull();
+    expect(document.activeElement).toBe(card(/^Noor asks/));
+    expect(useHeld.getState().notice?.text).toBe("Allowed Dara's request.");
+    act(() => vi.advanceTimersByTime(HOLD_MS));
+    expect(decide).toHaveBeenCalledExactlyOnceWith(permission.id, "allow");
+  });
+
+  it("sends nothing at all when the answer is undone in time, and puts the card back", () => {
+    const field = drawQueue();
+    fireEvent.keyDown(field, { key: "Escape" });
+    fireEvent.keyDown(document.activeElement as Element, { key: "Backspace", ctrlKey: true });
+    act(() => {
+      useHeld.getState().undo();
+    });
+    act(() => vi.advanceTimersByTime(HOLD_MS * 2));
+    expect(decide).not.toHaveBeenCalled();
+    expect(card(/^Dara asks/)).toBeTruthy();
+  });
+
+  it("answers a question with its number, and gives the field back after the last card", () => {
+    const field = drawQueue([question]);
+    fireEvent.keyDown(field, { key: "Escape" });
+    fireEvent.keyDown(document.activeElement as Element, { key: "2" });
+    act(() => vi.advanceTimersByTime(HOLD_MS));
+    expect(answer).toHaveBeenCalledExactlyOnceWith("req-noor", "The renewal");
+    act(() => vi.advanceTimersByTime(16));
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "What do you need?" }));
+  });
+
+  it("sends a held answer at once when the next one is given, so two answers never wait on one Undo", () => {
+    const field = drawQueue();
+    fireEvent.keyDown(field, { key: "Escape" });
+    fireEvent.keyDown(document.activeElement as Element, { key: "Enter", metaKey: true });
+    fireEvent.keyDown(document.activeElement as Element, { key: "1" });
+    expect(decide).toHaveBeenCalledExactlyOnceWith(permission.id, "allow");
+    expect(answer).not.toHaveBeenCalled();
   });
 });

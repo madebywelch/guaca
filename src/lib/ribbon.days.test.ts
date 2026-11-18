@@ -9,6 +9,7 @@ function strip(now: number): RibbonInput {
   return {
     now,
     agents: [anAgent("dara")],
+    groups: [],
     activity: {},
     outcomes: [],
     approvals: [],

@@ -16,6 +16,7 @@ import {
   saveDraftState,
 } from "../lib/draft";
 import { fileUrl, previewKind, readableSize } from "../lib/files";
+import { focusWriting } from "../lib/focus";
 import { api, onFileDrop } from "../lib/ipc";
 import { FIND_KEY } from "../lib/keybinds";
 import { applyMention, matchMentions, mentionAt, splitMentions } from "../lib/mentions";
@@ -128,6 +129,10 @@ export function Composer({
       files: typeof value === "function" ? value(owner.get().draft.files) : value,
     });
   const [caret, setCaret] = useState(0);
+  const writingTo = recipient?.id ?? draftKey;
+  useEffect(() => {
+    if (writingTo !== undefined) focusWriting();
+  }, [writingTo]);
   const [highlighted, setHighlighted] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [refused, setRefused] = useState<string[]>([]);

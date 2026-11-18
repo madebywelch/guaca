@@ -58,7 +58,7 @@ it("draws a request from a 0.4.0 host with no lapse, on the timeline or its card
 
   const { container } = render(
     <>
-      <Timeline onOpenAgent={vi.fn()} onOpenPile={vi.fn()} />
+      <Timeline onOpenAgent={vi.fn()} onOpenGroups={vi.fn()} />
       <Desk onOpenChannel={vi.fn()} />
     </>,
   );
@@ -71,7 +71,7 @@ it("draws a request from a 0.4.0 host with no lapse, on the timeline or its card
 });
 
 it("shows no schedule when the host has no upcoming_runs, and tells nobody but the console", async () => {
-  render(<Timeline onOpenAgent={vi.fn()} onOpenPile={vi.fn()} />);
+  render(<Timeline onOpenAgent={vi.fn()} onOpenGroups={vi.fn()} />);
   await waitFor(() =>
     expect(console.warn).toHaveBeenCalledWith(
       expect.stringMatching(/^Upcoming runs could not be read/),

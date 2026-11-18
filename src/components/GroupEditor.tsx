@@ -6,6 +6,7 @@ import { LIMITS } from "../lib/limits";
 import { type Provider as Preset, planLabel, providerFor } from "../lib/providers";
 import { clockTime } from "../lib/routine";
 import { useStore } from "../lib/store";
+import { moveAlongTabs } from "../lib/tablist";
 import {
   errorMessage,
   type Group,
@@ -285,14 +286,18 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
             role="tablist"
             aria-orientation="vertical"
             aria-label="Group sections"
+            onKeyDown={moveAlongTabs}
           >
             {SECTIONS.map((key) => (
               <button
                 key={key}
                 type="button"
                 role="tab"
+                id={`group-tab-${key}`}
                 className="settings__tab"
                 aria-selected={section === key}
+                aria-controls="group-pane"
+                tabIndex={section === key ? 0 : -1}
                 disabled={NEEDS_GROUP.includes(key) && !group}
                 onClick={() => setSection(key)}
               >
@@ -305,6 +310,9 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
             className={
               section === "activity" ? "settings__pane settings__pane--board" : "settings__pane"
             }
+            id="group-pane"
+            role="tabpanel"
+            aria-labelledby={`group-tab-${section}`}
           >
             {section === "transfer" && <GroupTransfer group={group} />}
             {section === "general" && (

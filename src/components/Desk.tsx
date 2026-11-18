@@ -1,35 +1,161 @@
-import { type FormEvent, type ReactNode, useEffect, useReducer, useState } from "react";
+import {
+  type FormEvent,
+  type KeyboardEvent,
+  type ReactNode,
+  useEffect,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { ABSENT_ACCENT } from "../avatars/catalog";
+import { useHeld } from "../lib/held";
+import { formatCombo, IS_MAC } from "../lib/keybinds";
 import { useStore } from "../lib/store";
 import { clockLabel, relativeTime } from "../lib/time";
 import type { AgentCard, AgentId, Approval, Decision, Escalation } from "../lib/types";
 
+export interface Queue {
+  selected: string | null;
+  onSelect: (id: string) => void;
+  onLeave: () => void;
+}
+
+const ALLOW = formatCombo({ key: "Enter", mod: true });
+const DENY = formatCombo({ key: "Backspace", mod: true });
+const MOD = IS_MAC ? "Meta" : "Control";
+
 export function Desk({
   onOpenChannel,
   title,
+  queue,
 }: {
   onOpenChannel: (agent: AgentId) => void;
   title?: ReactNode;
+  queue?: Queue;
 }) {
-  const pending = useStore((s) => s.pending);
-  const stuck = useStore((s) => s.stuck);
+  const allPending = useStore((s) => s.pending);
+  const allStuck = useStore((s) => s.stuck);
   const agents = useStore((s) => s.agents);
   const decide = useStore((s) => s.decideApproval);
   const answer = useStore((s) => s.answerQuestion);
   const clear = useStore((s) => s.clearEscalation);
-  if (pending.length + stuck.length === 0) return null;
+  const heldId = useHeld((s) => s.held?.id);
+  const hold = useHeld((s) => s.hold);
+  const pending = queue ? allPending.filter((request) => request.id !== heldId) : allPending;
+  const stuck = queue ? allStuck.filter((one) => one.id !== heldId) : allStuck;
+  const order = [...pending.map((request) => request.id), ...stuck.map((one) => one.id)];
+  const selected = queue && order.includes(queue.selected ?? "") ? queue.selected : null;
+
+  if (order.length === 0) return null;
+
+  const nameOf = (agentId: AgentId) =>
+    agents.find((agent) => agent.id === agentId)?.name ?? "A deleted agent";
+
+  const advance = (id: string) => {
+    if (!queue) return;
+    const at = order.indexOf(id);
+    const next = order[at + 1] ?? order[at - 1];
+    if (next === undefined) queue.onLeave();
+    else queue.onSelect(next);
+  };
+
+  const held = (id: string, text: string, send: () => Promise<void>) => {
+    if (!queue) return send();
+    const wasSelected = selected === id;
+    hold(id, text, send);
+    if (wasSelected || selected === null) advance(id);
+    return Promise.resolve();
+  };
+
+  const decideHeld = (request: Approval, decision: Decision) =>
+    held(
+      request.id,
+      `${decision === "deny" ? "Denied" : "Allowed"} ${nameOf(request.agentId)}'s request.`,
+      () => decide(request.id, decision),
+    );
+
+  const answerHeld = (request: Approval, text: string) =>
+    held(request.id, `Answered ${nameOf(request.agentId)}: ${text}`, () =>
+      answer(request.id, text),
+    );
+
+  const clearHeld = (one: Escalation) =>
+    held(one.id, `Cleared ${nameOf(one.agentId)}'s request for help.`, () => clear(one.id));
+
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    if (!queue || event.nativeEvent.isComposing || event.altKey) return;
+    const target = event.target;
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+    const mod = event.metaKey || event.ctrlKey;
+    const at = selected === null ? -1 : order.indexOf(selected);
+    const step = (to: number) => {
+      const id = order[Math.max(0, Math.min(order.length - 1, to))];
+      if (id !== undefined) queue.onSelect(id);
+    };
+    const key = event.key.toLowerCase();
+    if (!mod && (key === "j" || event.key === "ArrowDown")) {
+      event.preventDefault();
+      step(at + 1);
+      return;
+    }
+    if (!mod && (key === "k" || event.key === "ArrowUp")) {
+      event.preventDefault();
+      step(at <= 0 ? 0 : at - 1);
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      queue.onLeave();
+      return;
+    }
+    const request = pending.find((one) => one.id === selected);
+    const escalation = stuck.find((one) => one.id === selected);
+    if (mod && event.key === "Enter") {
+      if (request?.request.kind === "permission") {
+        event.preventDefault();
+        void decideHeld(request, "allow");
+      } else if (escalation) {
+        event.preventDefault();
+        onOpenChannel(escalation.agentId);
+      }
+      return;
+    }
+    if (mod && event.key === "Backspace") {
+      if (request?.request.kind === "permission") {
+        event.preventDefault();
+        void decideHeld(request, "deny");
+      } else if (escalation) {
+        event.preventDefault();
+        void clearHeld(escalation);
+      }
+      return;
+    }
+    if (!mod && !event.shiftKey && /^[1-9]$/.test(event.key)) {
+      const option =
+        request?.request.kind === "question"
+          ? request.request.options[Number(event.key) - 1]
+          : undefined;
+      if (request && option !== undefined) {
+        event.preventDefault();
+        void answerHeld(request, option);
+      }
+    }
+  };
+
   return (
-    <section className="for-you__requests" aria-label="Waiting on you">
+    <section className="for-you__requests" aria-label="Waiting on you" onKeyDown={onKeyDown}>
       <h3>{title ?? deskSummary(pending.length, stuck.length)}</h3>
       {pending.map((request) => (
         <DeskCard
           key={request.id}
           request={request}
           agent={agents.find((a) => a.id === request.agentId)}
-          onDecide={(decision) => decide(request.id, decision)}
-          onAnswer={(text) => answer(request.id, text)}
+          selected={selected === request.id}
+          onSelect={queue ? () => queue.onSelect(request.id) : undefined}
+          onDecide={(decision) => decideHeld(request, decision)}
+          onAnswer={(text) => answerHeld(request, text)}
           onOpenChannel={() => onOpenChannel(request.agentId)}
         />
       ))}
@@ -38,7 +164,9 @@ export function Desk({
           key={one.id}
           escalation={one}
           agent={agents.find((a) => a.id === one.agentId)}
-          onClear={() => void clear(one.id)}
+          selected={selected === one.id}
+          onSelect={queue ? () => queue.onSelect(one.id) : undefined}
+          onClear={() => void clearHeld(one)}
           onOpenChannel={() => onOpenChannel(one.agentId)}
         />
       ))}
@@ -53,20 +181,57 @@ export function deskSummary(waiting: number, stuck: number): string {
   return `${waiting + stuck} things are waiting on you`;
 }
 
-interface StuckProps {
+function Key({ shown, label }: { shown: boolean; label: string }) {
+  if (!shown) return null;
+  return (
+    <span className="desk__key" aria-hidden="true">
+      {label}
+    </span>
+  );
+}
+
+function useSelectedFocus(selected: boolean) {
+  const card = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!selected) return;
+    const node = card.current;
+    if (!node) return;
+    if (!node.contains(document.activeElement)) node.focus({ preventScroll: true });
+    node.scrollIntoView?.({ block: "nearest" });
+  }, [selected]);
+  return card;
+}
+
+interface Selectable {
+  selected: boolean;
+  onSelect?: () => void;
+}
+
+interface StuckProps extends Selectable {
   escalation: Escalation;
   agent: AgentCard | undefined;
   onClear: () => void;
   onOpenChannel: () => void;
 }
 
-function StuckCard({ escalation, agent, onClear, onOpenChannel }: StuckProps) {
+function StuckCard({ escalation, agent, selected, onSelect, onClear, onOpenChannel }: StuckProps) {
+  const card = useSelectedFocus(selected);
   const asker = agent?.name ?? "A deleted agent";
   const age = relativeTime(escalation.raisedAt, Date.now());
   const turns = escalation.times === 1 ? "1 turn has" : `${escalation.times} turns have`;
 
   return (
-    <article className="desk__card" data-kind="stuck">
+    <article
+      ref={card}
+      className="desk__card"
+      data-kind="stuck"
+      data-selected={selected ? "" : undefined}
+      tabIndex={onSelect ? -1 : undefined}
+      aria-label={onSelect ? `${asker} is stuck: ${escalation.summary}` : undefined}
+      onFocus={(event) => {
+        if (event.target === event.currentTarget) onSelect?.();
+      }}
+    >
       <header className="desk__who">
         <AgentAvatar
           avatar={agent?.avatar ?? "blank"}
@@ -83,11 +248,23 @@ function StuckCard({ escalation, agent, onClear, onOpenChannel }: StuckProps) {
       </header>
 
       <div className="desk__actions">
-        <button type="button" className="btn btn--primary btn--compact" onClick={onOpenChannel}>
+        <button
+          type="button"
+          className="btn btn--primary btn--compact"
+          aria-keyshortcuts={onSelect ? `${MOD}+Enter` : undefined}
+          onClick={onOpenChannel}
+        >
           Open channel
+          <Key shown={selected} label={ALLOW} />
         </button>
-        <button type="button" className="btn btn--quiet btn--compact" onClick={onClear}>
+        <button
+          type="button"
+          className="btn btn--quiet btn--compact"
+          aria-keyshortcuts={onSelect ? `${MOD}+Backspace` : undefined}
+          onClick={onClear}
+        >
           Clear
+          <Key shown={selected} label={DENY} />
         </button>
         <span className="desk__aside">{turns} run into this</span>
       </div>
@@ -95,7 +272,7 @@ function StuckCard({ escalation, agent, onClear, onOpenChannel }: StuckProps) {
   );
 }
 
-interface CardProps {
+interface CardProps extends Selectable {
   request: Approval;
   agent: AgentCard | undefined;
   onDecide: (decision: Decision) => Promise<void>;
@@ -103,7 +280,16 @@ interface CardProps {
   onOpenChannel: () => void;
 }
 
-function DeskCard({ request, agent, onDecide, onAnswer, onOpenChannel }: CardProps) {
+function DeskCard({
+  request,
+  agent,
+  selected,
+  onSelect,
+  onDecide,
+  onAnswer,
+  onOpenChannel,
+}: CardProps) {
+  const card = useSelectedFocus(selected);
   const [answering, setAnswering] = useState<string | null>(null);
   const [, lapsed] = useReducer((n: number) => n + 1, 0);
   useEffect(() => {
@@ -121,7 +307,16 @@ function DeskCard({ request, agent, onDecide, onAnswer, onOpenChannel }: CardPro
   };
 
   return (
-    <article className="desk__card">
+    <article
+      ref={card}
+      className="desk__card"
+      data-selected={selected ? "" : undefined}
+      tabIndex={onSelect ? -1 : undefined}
+      aria-label={onSelect ? `${asker} asks: ${request.summary}` : undefined}
+      onFocus={(event) => {
+        if (event.target === event.currentTarget) onSelect?.();
+      }}
+    >
       <header className="desk__who">
         <AgentAvatar
           avatar={agent?.avatar ?? "blank"}
@@ -159,9 +354,11 @@ function DeskCard({ request, agent, onDecide, onAnswer, onOpenChannel }: CardPro
               className="btn btn--primary"
               disabled={answering !== null}
               aria-busy={answering === "allow"}
+              aria-keyshortcuts={onSelect ? `${MOD}+Enter` : undefined}
               onClick={() => answer("allow")}
             >
               Allow
+              <Key shown={selected} label={ALLOW} />
             </button>
             {request.request.action === "createAgent" && (
               <button
@@ -180,15 +377,18 @@ function DeskCard({ request, agent, onDecide, onAnswer, onOpenChannel }: CardPro
               className="btn btn--quiet"
               disabled={answering !== null}
               aria-busy={answering === "deny"}
+              aria-keyshortcuts={onSelect ? `${MOD}+Backspace` : undefined}
               onClick={() => answer("deny")}
             >
               Deny
+              <Key shown={selected} label={DENY} />
             </button>
           </>
         ) : (
           <Answers
             options={request.request.options}
             pending={answering}
+            keyed={selected}
             onAnswer={(text) => {
               setAnswering(text);
               void onAnswer(text).finally(() => setAnswering(null));
@@ -208,10 +408,12 @@ function DeskCard({ request, agent, onDecide, onAnswer, onOpenChannel }: CardPro
 function Answers({
   options,
   pending,
+  keyed,
   onAnswer,
 }: {
   options: string[];
   pending: string | null;
+  keyed: boolean;
   onAnswer: (answer: string) => void;
 }) {
   const [written, setWritten] = useState("");
@@ -220,16 +422,18 @@ function Answers({
   if (options.length > 0) {
     return (
       <>
-        {options.map((option) => (
+        {options.map((option, index) => (
           <button
             key={option}
             type="button"
             className="btn"
             disabled={disabled}
             aria-busy={pending === option}
+            aria-keyshortcuts={keyed && index < 9 ? String(index + 1) : undefined}
             onClick={() => onAnswer(option)}
           >
             {option}
+            <Key shown={keyed && index < 9} label={String(index + 1)} />
           </button>
         ))}
       </>
