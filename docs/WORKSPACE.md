@@ -41,8 +41,10 @@ The log fades its top edge over `--space-6`, the length its first turn starts
 below the tabs, so a turn scrolled under the tabs fades out instead of being
 cut by their rule.
 
-**The person's turn is upright in a sunken bubble.** `.msg__bubble` on
-`--sunken` with the card corner, its words on the same edge as an agent's body.
+**The person's turn is upright in a tinted bubble.** `.msg__bubble` is on
+`--wash`, a tint of the text color, with the card corner. The page itself is
+`--sunken`, so a bubble of that fill would vanish into it. Its words start on
+the same edge as an agent's body.
 It has no head: the bubble is the one shape on the page that is yours, and its
 article is named "You" with the time for a screen reader.
 

@@ -2053,7 +2053,7 @@ input[type="file"]::file-selector-button {
   margin-left: var(--column-bubble);
   padding: var(--space-4) var(--space-5);
   border-radius: var(--radius-card);
-  background: var(--sunken);
+  background: var(--wash);
 }
 
 .msg__bubble .msg__at {

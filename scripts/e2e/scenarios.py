@@ -839,6 +839,15 @@ def scenario_handoff(w: World) -> None:
             observed=re.sub(r"\d+s", "Ns", working_line(w)))
     edges = ui.evaluate(TWO_EDGES)
     w.check("text in the transcript starts on two left edges", len(edges) <= 2, observed=len(edges), detail=edges)
+    fills = ui.evaluate("""(() => {
+  const bubble = document.querySelector('.msg__bubble');
+  let under = bubble.parentElement;
+  while (under && ['rgba(0, 0, 0, 0)', 'transparent'].includes(getComputedStyle(under).backgroundColor))
+    under = under.parentElement;
+  return {bubble: getComputedStyle(bubble).backgroundColor, page: under && getComputedStyle(under).backgroundColor};
+})()""")
+    w.check("the person's turn sits in a bubble that stands apart from the page",
+            fills["bubble"] not in ("rgba(0, 0, 0, 0)", fills["page"]), observed=fills)
     mask = ui.evaluate("getComputedStyle(document.querySelector('[role=log]')).maskImage")
     w.check("a turn scrolled under the tabs fades out instead of being cut by them",
             mask.startswith("linear-gradient(rgba(0, 0, 0, 0)"), observed=mask)
@@ -1795,6 +1804,7 @@ SCENARIOS: dict[str, Scenario] = {
         "a live card shows each colleague's face, the question, a status word with time, and the answer at reading size",
         "under the running turn a status line says what it is doing, for how long, with Stop",
         "text in the transcript starts on two left edges",
+        "the person's turn sits in a bubble that stands apart from the page",
         "a turn scrolled under the tabs fades out instead of being cut by them",
         "the hand-off keeps to the six type roles, the control family and the radii in light and dark",
         "after the reply the hand-off folds to one line that says both answered",

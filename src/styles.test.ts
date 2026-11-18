@@ -418,7 +418,8 @@ describe("a turn on the page", () => {
     expect(css).toMatch(/--column-bubble: calc\(var\(--column-face\) - var\(--space-5\)\);/);
     expect(rule(".msg__bubble")).toMatch(/margin-left: var\(--column-bubble\)/);
     expect(rule(".msg__bubble")).toMatch(/padding: var\(--space-4\) var\(--space-5\)/);
-    expect(rule(".msg__bubble")).toMatch(/background: var\(--sunken\)/);
+    expect(rule(".msg__bubble")).toMatch(/background: var\(--wash\)/);
+    expect(css).toMatch(/--page: var\(--sunken\);/);
   });
 
   it("fades a turn scrolled under the tabs over the same length the first turn starts below them", () => {
