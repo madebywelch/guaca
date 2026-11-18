@@ -18,6 +18,7 @@ interface Props {
   onOpenGroups: () => void;
   openAgentId?: AgentId | null;
   onTrackWidth?: (px: number) => void;
+  pending?: boolean;
 }
 
 const at = (x: number) => ({ "--ribbon-x": x }) as CSSProperties;
@@ -34,7 +35,14 @@ const CALENDAR = (
   </span>
 );
 
-export function Ribbon({ ribbon, onOpenAgent, onOpenGroups, openAgentId, onTrackWidth }: Props) {
+export function Ribbon({
+  ribbon,
+  onOpenAgent,
+  onOpenGroups,
+  openAgentId,
+  onTrackWidth,
+  pending = false,
+}: Props) {
   const agents = useStore((s) => s.agents);
   const activity = useStore((s) => s.activity);
   const byId = new Map(agents.map((agent) => [agent.id, agent]));
@@ -220,11 +228,16 @@ export function Ribbon({ ribbon, onOpenAgent, onOpenGroups, openAgentId, onTrack
   const marked = ribbon.faces.some((face) => face.agentId === openAgentId);
 
   return (
-    <nav className="ribbon" aria-label="Agents" data-open={marked ? "some" : undefined}>
+    <nav
+      className="ribbon"
+      aria-label="Agents"
+      aria-busy={pending || undefined}
+      data-open={marked ? "some" : undefined}
+    >
       <div className="ribbon__inner">
         <div className="ribbon__line" aria-hidden="true" />
         <div className="ribbon__track" ref={track} aria-hidden="true">
-          {ribbon.band && (
+          {!pending && ribbon.band && (
             <div
               className="ribbon__band"
               style={{ "--ribbon-x": ribbon.band.x, "--ribbon-to": ribbon.now.x } as CSSProperties}
@@ -232,23 +245,27 @@ export function Ribbon({ ribbon, onOpenAgent, onOpenGroups, openAgentId, onTrack
               {ribbon.band.label && <span className="ribbon__band-label">{ribbon.band.label}</span>}
             </div>
           )}
-          {ribbon.ticks.map((tick) => (
-            <span
-              key={`${tick.kind}:${tick.at}`}
-              className={`ribbon__tick ribbon__tick--${tick.kind}`}
-              style={at(tick.x)}
-            >
-              {tick.label}
-            </span>
-          ))}
-          <div className="ribbon__now" style={at(ribbon.now.x)} />
-          <span className="ribbon__pill" style={at(ribbon.now.x)}>
-            {ribbon.now.label}
-          </span>
+          {!pending && (
+            <>
+              {ribbon.ticks.map((tick) => (
+                <span
+                  key={`${tick.kind}:${tick.at}`}
+                  className={`ribbon__tick ribbon__tick--${tick.kind}`}
+                  style={at(tick.x)}
+                >
+                  {tick.label}
+                </span>
+              ))}
+              <div className="ribbon__now" style={at(ribbon.now.x)} />
+              <span className="ribbon__pill" style={at(ribbon.now.x)}>
+                {ribbon.now.label}
+              </span>
+            </>
+          )}
         </div>
 
         <ul className="ribbon__list" aria-label="Today's timeline" onKeyDown={move}>
-          {drawn.map((one) => one.node)}
+          {pending ? null : drawn.map((one) => one.node)}
         </ul>
       </div>
     </nav>
