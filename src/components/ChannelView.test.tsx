@@ -324,9 +324,10 @@ describe("who said what", () => {
     ]);
 
     expect(screen.getByText("all clear")).toBeTruthy();
-    expect(screen.getAllByText("Manager", { selector: "h1, .msg__head" })).toHaveLength(2);
+    expect(screen.getAllByText("Manager", { selector: "h1, .msg__name" })).toHaveLength(2);
     expect(document.querySelectorAll(".msg--continued")).toHaveLength(1);
-    expect(document.querySelectorAll(".msg__head")).toHaveLength(2);
+    expect(document.querySelectorAll(".msg__head")).toHaveLength(1);
+    expect(document.querySelectorAll(".msg__bubble")).toHaveLength(1);
   });
 
   it("says when the conversation picked up again, where it did", () => {
