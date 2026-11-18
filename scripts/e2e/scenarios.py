@@ -873,6 +873,58 @@ def scenario_update(w: World) -> None:
                       "asked": asked()}, shot=True)
 
 
+WINDOW = (1280, 820)
+TRAVEL = "Travel Planner"
+
+
+def hello(c: Call) -> Reply | None:
+    if c.last_user == "ping":
+        return say("pong")
+    if c.speaker == AGENT and c.last_user.endswith("Say hello."):
+        return say(HELLO)
+    return None
+
+
+def scenario_newagent(w: World) -> None:
+    w.model.script = hello
+    w.start()
+    w.ui.viewport(*WINDOW)
+    first_run(w)
+    settled(w, 1)
+    ui = w.ui
+
+    ui.click("button", "Make something new")
+    ui.click("menuitem", "New agent", exact=False)
+    w.wait("the New agent dialog", lambda: ui.find("dialog", "New agent"))
+    w.check("Create agent is one button, on screen without scrolling",
+            len(ui.find("button", "Create agent")) == 1 and ui.on_screen("button", "Create agent"),
+            observed={"buttons": len(ui.find("button", "Create agent")),
+                      "onScreen": bool(ui.find("button", "Create agent")) and ui.on_screen("button", "Create agent")},
+            shot=True)
+
+    ui.click("button", "Create agent")
+    w.check("with no name, a press on Create agent creates nothing and keeps the dialog",
+            ui.property("button", "Create agent", "disabled") and bool(ui.find("dialog", "New agent"))
+            and w.host.scalar("SELECT count(*) FROM agents") == 1,
+            observed={"disabled": ui.property("button", "Create agent", "disabled"),
+                      "dialog": bool(ui.find("dialog", "New agent")),
+                      "agents": w.host.scalar("SELECT count(*) FROM agents")})
+
+    ui.fill("textbox", "Name", TRAVEL)
+    ui.send("DOM.focus", {"backendNodeId": ui.one("button", "Create agent")["backendDOMNodeId"]})
+    ui.key("Enter")
+    w.wait(f"{TRAVEL} exists", lambda: w.host.scalar(
+        "SELECT count(*) FROM agents WHERE name = ? AND lifecycle != 'terminated'", TRAVEL))
+    w.wait("the dialog closes", lambda: not ui.find("dialog", "New agent"))
+    w.check("a keyboard press on Create agent creates the agent and closes the dialog",
+            not ui.find("dialog", "New agent")
+            and w.host.scalar("SELECT count(*) FROM agents WHERE name = ?", TRAVEL) == 1,
+            observed={"dialog": bool(ui.find("dialog", "New agent")),
+                      "created": w.host.scalar("SELECT count(*) FROM agents WHERE name = ?", TRAVEL)},
+            shot=True)
+    no_unscripted(w)
+
+
 @dataclass(frozen=True)
 class Scenario:
     run: Callable[[World], None]
@@ -989,4 +1041,13 @@ SCENARIOS: dict[str, Scenario] = {
         "when the other update ends, the panel offers main's new build and claims nothing as its own",
         "an updater that does not answer leaves the outcome unknown, and nothing is sent twice",
     ), updater=True),
+    "newagent": Scenario(scenario_newagent, "A person opens New agent in a 1280 by 820 window and creates an agent "
+                         "with a keyboard press on its one Create agent button, which is on screen without "
+                         "scrolling; a press with no name creates nothing.",
+    (
+        "Create agent is one button, on screen without scrolling",
+        "with no name, a press on Create agent creates nothing and keeps the dialog",
+        "a keyboard press on Create agent creates the agent and closes the dialog",
+        "every model call was one the scenario scripted",
+    )),
 }
