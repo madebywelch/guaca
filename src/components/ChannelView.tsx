@@ -349,7 +349,15 @@ function TurnFooter({
   const [showing, setShowing] = useState<Showing | null>(null);
   const panel = useId();
 
-  const working = state?.state === "thinking" || state?.state === "queued";
+  const behind = useStore((s) => {
+    const owned = s.running.find((one) => one.agentId === agent.id);
+    return (
+      state?.state === "queued" &&
+      owned !== undefined &&
+      Object.entries(s.activeRun).some(([id, run]) => id !== agent.id && run === owned.runId)
+    );
+  });
+  const working = state?.state === "thinking" || (state?.state === "queued" && !behind);
 
   useEffect(() => {
     if (!working) setShowing(null);
