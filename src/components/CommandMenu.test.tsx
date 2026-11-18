@@ -128,14 +128,51 @@ describe("the command menu", () => {
     expect(decide).toHaveBeenCalledExactlyOnceWith(request.id, "deny");
   });
 
-  it("names the asker once on an answer row, and adds the name when the request leaves it out", () => {
+  it("heads each request once with its asker, and lists its answers under it without repeating it", () => {
+    draw([
+      request,
+      anApproval({
+        id: "req-2",
+        agentId: "agent-2",
+        summary: "Which story leads Friday?",
+        request: { kind: "question", options: ["Notebooks", "The renewal"] },
+      }),
+    ]);
+    const headings = [...document.querySelectorAll(".palette__asking")].map((h) => h.textContent);
+    expect(headings).toEqual([
+      "Dara: Change your name to Robin?",
+      "Noor: Which story leads Friday?",
+    ]);
+    expect(document.querySelector(".palette__asking .palette__who")?.textContent).toBe("Dara:");
+    expect(document.body.textContent?.split("Change your name to Robin?").length).toBe(2);
+    for (const name of ["Allow", "Deny", "Notebooks", "The renewal"]) {
+      const row = screen.getByRole("button", { name: new RegExp(`^${name}`) });
+      expect(row.querySelector(".palette__detail")).toBeNull();
+      expect(row.querySelector(".palette__face")?.childElementCount).toBe(0);
+    }
+  });
+
+  it("names the asker once when the request already starts with the name", () => {
     draw([
       anApproval({ agentId: "agent-1", summary: "Dara wants to change the workspace's settings" }),
-      anApproval({ id: "req-2", agentId: "agent-2", summary: "Send an email as you" }),
     ]);
-    const details = [...document.querySelectorAll(".palette__detail")].map((d) => d.textContent);
-    expect(details).toContain("Dara wants to change the workspace's settings");
-    expect(details).toContain("Noor: Send an email as you");
+    const heading = document.querySelector(".palette__asking");
+    expect(heading?.textContent).toBe("Dara wants to change the workspace's settings");
+    expect(heading?.querySelector(".palette__who")?.textContent).toBe("Dara");
+  });
+
+  it("draws the Return key on the row Return acts on, and on no other", () => {
+    const { type, chosen } = draw();
+    const returns = () =>
+      [...document.querySelectorAll(".palette__key")]
+        .filter((key) => key.textContent === "↩")
+        .map((key) => key.closest(".palette__row")?.querySelector(".palette__title")?.textContent);
+    expect(returns()).toEqual([chosen()]);
+    type("dark");
+    expect(chosen()).toBe("Reading surface: Dark");
+    expect(returns()).toEqual(["Reading surface: Dark"]);
+    type("draft the renewal note");
+    expect(returns()).toEqual(["Write to Noor"]);
   });
 
   it("numbers the agents with the keys that open them", () => {

@@ -1233,6 +1233,11 @@ the numbers on the Agents rows, which are the order of the Groups sheet with
 pinned agents first and nobody lifted for being busy: an agent's number does
 not change because it started working.
 
+Each request is drawn once, as its asker's face, name and question, with its
+answers as rows under it. Rows are set in the regular weight with their state
+on the same line, so the only bold in the menu is an asker's name, and the
+Return key is drawn on the row Return acts on and on no other.
+
 A row answering a request shows Command Return or Command Backspace when that is
 the key that answers it from the menu. Those keys act on the request the
 selected row belongs to, or the first one waiting, and only its rows show them.

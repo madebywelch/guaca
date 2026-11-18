@@ -686,6 +686,14 @@ describe("what the attention color is spent on", () => {
     expect(bad.map((d) => `${d.selector} { ${d.property}: ${d.value} }`)).toEqual([]);
   });
 
+  it("sets the command menu's rows in the regular weight, with their state on the same line", () => {
+    const rule = (selector: string, property: string) =>
+      declarations().find((d) => d.selector === selector && d.property === property)?.value;
+    expect(rule(".palette--menu .palette__title", "font-weight")).toBe("var(--weight-regular)");
+    expect(rule(".palette--menu .palette__text", "flex-direction")).toBe("row");
+    expect(rule(".palette__who", "font-weight")).toBe("var(--weight-strong)");
+  });
+
   it("spends the system color on focus and drop targets only, never on a fill or an edge", () => {
     const bad = declarations()
       .filter((d) => /^(background|border|outline|box-shadow)/.test(d.property))

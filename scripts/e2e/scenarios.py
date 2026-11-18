@@ -1355,6 +1355,7 @@ def scenario_menu(w: World) -> None:
     sections = ui.evaluate("Array.from(document.querySelectorAll('.palette__section')).map(e => e.textContent)")
     ui.type("textbox", "Command menu", "dark")
     w.wait("dark selects a setting", lambda: menu_choice(w) == "Reading surface: Dark")
+    w.wait("the menu has finished moving", lambda: ui.evaluate(look.SETTLED))
     w.capture("the command menu after typing dark")
     ui.key("Enter")
     w.check("one word, dark, and Return switch the reading surface to dark",
