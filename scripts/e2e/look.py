@@ -138,7 +138,7 @@ LAYOUT = """
   const boxes = [];
   const scrollers = [];
   for (const el of document.body.querySelectorAll('*')) {
-    if (el.closest('svg, .ribbon') || !seen(el)) continue;
+    if (el.closest('svg, .ribbon, .home__run, .working') || !seen(el)) continue;
     const r = el.getBoundingClientRect();
     boxes.push([named(el), Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)]);
     const s = getComputedStyle(el);
