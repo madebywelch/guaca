@@ -14,7 +14,7 @@ STYLE_BUDGET = 8
 CONTROL_HEIGHTS = (28, 32)
 RADII = (0, 6, 10)
 FRAME = (1280, 820)
-CODE = ".md code, .md pre, .diff, .file__text, .connector-failure__detail > pre, .textarea--code, .webhook, .devicecode__code, .skill__body"
+CODE = "code, pre, .diff, .file__text, .connector-failure__detail > pre, .textarea--code, .webhook, .devicecode__code, .skill__body"
 
 SETTLED = ("document.getAnimations().every(a => a.playState !== 'running' "
            "|| a.effect.getComputedTiming().iterations === Infinity)")

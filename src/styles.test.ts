@@ -113,7 +113,7 @@ describe("the type roles", () => {
   it("set code, and only code, in the mono face", () => {
     const mono = declarations().filter((d) => d.value.includes("var(--font-mono)"));
     expect(mono.map((d) => d.selector)).toEqual([
-      ":is(.md code, .md pre, .diff, .file__text, .connector-failure__detail > pre, .textarea--code, .webhook, .devicecode__code, .skill__body)",
+      ":is(code, pre, .diff, .file__text, .connector-failure__detail > pre, .textarea--code, .webhook, .devicecode__code, .skill__body)",
     ]);
   });
 
@@ -127,6 +127,37 @@ describe("the type roles", () => {
         ),
       );
     expect(code).toEqual([]);
+  });
+});
+
+describe("the control family", () => {
+  const px = (pattern: RegExp) =>
+    Object.fromEntries(
+      [...css.matchAll(pattern)].map(([, name, rem]) => [name, Number(rem) * ROOT_PX]),
+    );
+
+  it("has two heights, 32px and 28px compact", () => {
+    expect(px(/^\s*--(control-h(?:-sm)?): ([\d.]+)rem;$/gm)).toEqual({
+      "control-h": 32,
+      "control-h-sm": 28,
+    });
+  });
+
+  it("has a 6px corner for controls and a 10px corner for cards", () => {
+    expect(px(/^\s*--(radius-[a-z]+): ([\d.]+)rem;$/gm)).toEqual({
+      "radius-control": 6,
+      "radius-card": 10,
+    });
+  });
+
+  it("gives a button a pressed, a disabled and a pending state as well as a hover", () => {
+    const selectors = declarations().map((d) => d.selector);
+    for (const state of [":hover", ":active", ":disabled", '[aria-busy="true"]']) {
+      expect(
+        selectors.some((selector) => selector.startsWith(".btn") && selector.includes(state)),
+        state,
+      ).toBe(true);
+    }
   });
 });
 
@@ -567,7 +598,7 @@ describe("every length is named, not spelled", () => {
     ["font-size", /^--type-/, /--ui-scale/, /^$/],
     ["letter-spacing", /^--track-/, /^inherit$/, /^$/],
     ["line-height", /^--(lead-|badge)/, /^0$/, /^$/],
-    ["border-radius", /^--radius/, /^$/, /^(50%|1px)$/],
+    ["border-radius", /^--radius-(control|card|pill)$/, /^$/, /^50%$/],
   ])("%s", (property, family, exempt, also) => {
     const bad = declarations()
       .filter((d) => d.property === property)

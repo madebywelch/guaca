@@ -62,7 +62,7 @@ and *Every length is named* in `docs/INVARIANTS.md` is the rule they all sit und
   read a third way: not a column color declared for paper and forgotten in the
   ink block, but ink spelled from a name that was never ink, which both blocks
   then move faithfully and neither shows. The pairs are
-  `--attention`/`--attention-wash` and `--system`/`--system-wash`, and the wash
+  `--attention`/`--attention-wash`, and the wash
   exists to fill a box behind something else. `styles.test.ts` reads the mark's
   token out of the rule, resolves it in both `:root` blocks and holds it to the
   3:1 WCAG asks of a mark that is not text.
@@ -90,9 +90,9 @@ and *Every length is named* in `docs/INVARIANTS.md` is the rule they all sit und
   paper. `appearance.test.ts` fails if any theme token reaches the root's style
   attribute, and asserts the `<style>` is last in the head, since equal
   specificity means order is all that makes it win.
-- **Reading size is `--type-read`, not `--type-body`.** The body step is also
-  the size of titles in the rail, the palette and a dialog. Pointing the reading
-  preference at it moved all of them, which is the interface scale again.
+- **Reading size is `--type-read`, and only reading spends it.** A title in the
+  rail, the palette or a dialog is UI or title. Pointing the reading preference
+  at a size those shared moved all of them, which is the interface scale again.
 - **A control's border is `--edge-control`, not `--edge`.** `--edge` is a
   divider at 1.3 to 1, and a divider is decoration. The boundary of something
   typed into or pressed is how it is found, and is held to 3 to 1. A hover

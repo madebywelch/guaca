@@ -28,11 +28,11 @@ def covers(face: str, text: str) -> bool:
     return all(any(low <= ord(ch) <= high for low, high in spans) for ch in text)
 
 
-def display_face() -> Path:
+def reading_face() -> Path:
     tokens = re.search(r"^:root \{\n(.*?)^\}$", (ROOT / "src" / "styles.css").read_text(), re.M | re.S)
-    family = tokens and re.search(r'^  --font-display: "([^"]+)"', tokens.group(1), re.M)
+    family = tokens and re.search(r'^  --font-read: "([^"]+)"', tokens.group(1), re.M)
     if not family:
-        raise SystemExit("src/styles.css has no --font-display naming a family in its first :root block")
+        raise SystemExit("src/styles.css has no --font-read naming a family in its first :root block")
     page = (ROOT / "src" / "page.ts").read_text()
     for sheet in re.findall(r'^import "(@fontsource-variable/[^"]+)";$', page, re.M):
         css = ROOT / "node_modules" / (sheet if sheet.endswith(".css") else f"{sheet}/index.css")
@@ -41,10 +41,10 @@ def display_face() -> Path:
                     and covers(face, "Guaca guaca")):
                 return css.parent / re.search(r"src: url\(\./([^)]+)\)", face).group(1)
     raise SystemExit(f"src/page.ts loads no upright Latin face of {family.group(1)}, "
-                     "the --font-display family in src/styles.css")
+                     "the --font-read family in src/styles.css")
 
 
-DISPLAY = display_face()
+READING = reading_face()
 SILHOUETTES = json.loads((ROOT / "node_modules" / ".cache" / "silhouettes.json").read_text())
 
 SURFACE = {"ground": "rail-ground", "edge": "rail-edge", "raised": "rail-raised", "ink": "rail-text",
@@ -73,7 +73,7 @@ def num(v: float) -> str:
 
 
 def bold():
-    return instancer.instantiateVariableFont(TTFont(DISPLAY), {"wght": 700, "opsz": 14})
+    return instancer.instantiateVariableFont(TTFont(READING), {"wght": 700, "opsz": 14})
 
 
 B700 = bold()
@@ -367,7 +367,7 @@ def page(marks) -> str:
     lineup = "".join(f"<figure><figcaption>{name}</figcaption>{rail(markup, PAPER, name)}</figure>"
                      for name, markup in cast)
     fonts = "\n".join([
-        font_face("Literata", DISPLAY, "200 900"),
+        font_face("Literata", READING, "200 900"),
         font_face("Inter", FONTS / "inter" / "files" / "inter-latin-wght-normal.woff2"),
     ])
     return f"""<!doctype html>

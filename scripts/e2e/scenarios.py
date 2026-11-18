@@ -379,10 +379,10 @@ def scenario_permission(w: World) -> None:
 
 LOOK_SURFACES = ("light", "dark")
 LOOK_SCREENS = ("Today", "a conversation", "Settings", "New agent", "the Groups sheet", "Search")
-
-
-def look_claim(screen: str, surface: str) -> str:
-    return f"{screen} in {surface} keeps to the six type roles, the control family and the radii"
+AGENT_TABS = ("Now", "Memory", "Notebook", "Routines", "Profile")
+SETTINGS_TABS = ("Host", "Provider", "Limits", "Permissions", "Machines", "Account", "Appearance",
+                 "Notifications", "Shortcuts", "Skills", "Compost", "About")
+PLACES = ("Artifacts", "Calendar", "For you, 1 waiting")
 
 
 def show(w: World, screen: str) -> None:
@@ -417,6 +417,34 @@ def dismiss(w: World) -> None:
     w.wait("the page has finished moving", lambda: ui.evaluate(look.SETTLED))
 
 
+def measure(w: World, screen: str, surface: str, seen: dict[str, look.Verdict]) -> None:
+    ui = w.ui
+    w.wait(f"{screen} has finished moving", lambda: ui.evaluate(look.SETTLED))
+    seen[screen] = look.judge(f"{screen} ({surface})", ui.evaluate(look.MEASURE))
+    w.capture(f"{screen} in {surface}")
+
+
+def sweep(w: World, seen: dict[str, look.Verdict]) -> None:
+    ui = w.ui
+    open_agent(w, AGENT)
+    for tab in AGENT_TABS:
+        ui.click("button", tab)
+        measure(w, f"the agent's {tab} tab", "light", seen)
+    ui.click("button", "Conversation")
+    ui.click("button", "App settings")
+    w.wait("Settings opens", lambda: ui.find("dialog", "Settings", exact=False))
+    for tab in SETTINGS_TABS:
+        ui.click("tab", tab)
+        w.wait(f"the {tab} pane is shown", lambda: ui.find("tab", tab)[0].get("properties") is not None)
+        measure(w, f"Settings, {tab}", "light", seen)
+    dismiss(w)
+    for place in PLACES:
+        ui.click("button", place)
+        measure(w, f"{place.split(',')[0]} from the status bar", "light", seen)
+        ui.key("Escape")
+        dismiss(w)
+
+
 def scenario_look(w: World) -> None:
 
     def script(c: Call) -> Reply | None:
@@ -445,13 +473,22 @@ def scenario_look(w: World) -> None:
         w.wait(f"the page comes back {surface}", lambda: ui.evaluate(
             "document.documentElement.dataset.surface") == surface and ui.find("button", "App settings"))
         ui.viewport(*look.FRAME)
+        seen: dict[str, look.Verdict] = {}
         for screen in LOOK_SCREENS:
             show(w, screen)
-            w.wait(f"{screen} has finished moving", lambda: ui.evaluate(look.SETTLED))
-            verdict = look.judge(f"{screen} ({surface})", ui.evaluate(look.MEASURE))
-            w.check(look_claim(screen, surface), not verdict.faults, observed={"styles": verdict.styles},
-                    detail=verdict.faults or None, shot=True, stop=False)
+            measure(w, screen, surface, seen)
             dismiss(w)
+        faults = [fault for verdict in seen.values() for fault in verdict.faults]
+        styles = {screen: verdict.styles for screen, verdict in seen.items()}
+        if surface == "light":
+            sweep(w, seen)
+            faults = [fault for verdict in seen.values() for fault in verdict.faults]
+            styles = {screen: verdict.styles for screen, verdict in seen.items()}
+            w.check("every screen in light keeps to the six type roles, the control family and the radii",
+                    not faults, observed=styles, detail=faults or None, stop=False)
+        else:
+            w.check("every screen in dark keeps to the six type roles, the control family and the radii",
+                    not faults, observed=styles, detail=faults or None, stop=False)
     no_unscripted(w)
 
 
@@ -1293,8 +1330,11 @@ SCENARIOS: dict[str, Scenario] = {
                      "light and dark, each keep to the six type roles, eight styles at most, the control heights "
                      "and the radii; a screen with a size, weight, corner or control outside them fails, naming "
                      "the element and the token to use.",
-    tuple(look_claim(screen, surface) for surface in LOOK_SURFACES for screen in LOOK_SCREENS)
-    + ("every model call was one the scenario scripted",)),
+    (
+        "every screen in light keeps to the six type roles, the control family and the radii",
+        "every screen in dark keeps to the six type roles, the control family and the radii",
+        "every model call was one the scenario scripted",
+    )),
     "update": Scenario(scenario_update, "A person updates a box that follows main while another client's update is "
                        "running; this click is refused because main moved, and the panel says why under the "
                        "running update's step, then offers main's new build; an updater that does not answer "
