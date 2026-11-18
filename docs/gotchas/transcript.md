@@ -51,10 +51,12 @@ the operator. `docs/WORKSPACE.md`, then `src/lib/reasoning.ts`,
   `google__gmail_search`. `tellsMore` treats it as an echo, exactly as it
   treats `browse` answering `read in the browser`. If that summary ever carries
   something the title cannot, this is the rule that has to move with it.
-- **A footnote's number is the page's, not the row's.** A row knows what it
-  did and nothing about what came before it, so a row that counted its own note
-  would number every footnote 1. `ChannelView` walks the rows once and passes
-  each note its position; the row itself never counts.
+- **A hand-off card is live from the host's list, not from the transcript.**
+  A burst cannot tell from its own messages whether the conversation it
+  belongs to is still running, so a card that waited for every answer stayed
+  open, ticking, after a stop or a failure ended the run. `HandoffRow` reads
+  `running` for its run: an answer still owed in a run the host no longer
+  lists folds to "no answer".
 - **A note that opens must not say what it opens onto.** A call with detail
   behind it draws its filename in the panel underneath, so printing it on the
   line as well said the same filename twice a line apart, and the two copies
