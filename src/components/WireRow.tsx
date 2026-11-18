@@ -1,8 +1,11 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { useDismiss } from "../lib/dismiss";
+import { foldLine, peerState, settled, spanOf, statusWord } from "../lib/handoff";
+import { useStore } from "../lib/store";
+import { elapsed, useNow } from "../lib/time";
 import { type PeerSummary, summaryLabel, type WirePeer } from "../lib/transcript";
-import type { AgentId } from "../lib/types";
+import type { AgentId, RunId } from "../lib/types";
 import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
 
@@ -16,78 +19,43 @@ function clockTime(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function PeerChip({ summary, onOpen }: { summary: PeerSummary; onOpen: (peer: AgentId) => void }) {
-  const { peer, agentId } = summary;
-  const label = summaryLabel(summary);
-
-  return agentId ? (
-    <button
-      type="button"
-      className="footnote__send"
-      title={`Read the conversation with ${peer.name}`}
-      onClick={() => onOpen(agentId)}
-    >
-      {label}
-    </button>
-  ) : (
-    <span className="footnote__send">{label}</span>
-  );
-}
-
-export function FootnoteRow({
-  at,
-  number,
-  children,
-  failed,
-}: {
-  at?: number;
-  number: number;
-  children: React.ReactNode;
-  failed?: boolean;
-}) {
+export function FootnoteRow({ children, failed }: { children: React.ReactNode; failed?: boolean }) {
   return (
     <div className="footnote" data-failed={failed || undefined}>
-      <div className="footnote__margin">
-        {at !== undefined && (
-          <time className="footnote__at" dateTime={new Date(at).toISOString()}>
-            {clockTime(at)}
-          </time>
-        )}
-      </div>
-      <div className="footnote__body">
-        {number > 0 && (
-          <span className="footnote__number" aria-hidden="true">
-            {number}
-          </span>
-        )}
-        {children}
-      </div>
+      {children}
     </div>
   );
 }
 
-export function PeerBurstRow({
+function PeerLine({
   peers,
-  number,
-  at,
+  channel,
+  rowKey,
   onOpen,
 }: {
   peers: PeerSummary[];
-  number: number;
-  at: number;
+  channel: string;
+  rowKey: string;
   onOpen: (peer: AgentId) => void;
 }) {
   return (
-    <FootnoteRow number={number} at={at}>
+    <FootnoteRow>
       <span className="footnote__line">
-        {peers.map((summary, at) => (
+        {peers.map((summary) => (
           <span className="footnote__item" key={summary.peer.id}>
-            {at > 0 && (
-              <span className="footnote__dot" aria-hidden="true">
-                ·
-              </span>
+            {summary.agentId ? (
+              <button
+                type="button"
+                className="footnote__send"
+                data-dismiss-id={JSON.stringify([channel, rowKey, summary.agentId])}
+                title={`Read the conversation with ${summary.peer.name}`}
+                onClick={() => summary.agentId && onOpen(summary.agentId)}
+              >
+                {summaryLabel(summary)}
+              </button>
+            ) : (
+              <span className="footnote__send">{summaryLabel(summary)}</span>
             )}
-            <PeerChip summary={summary} onOpen={onOpen} />
             {summary.gist && <span className="footnote__gist">{summary.gist}</span>}
           </span>
         ))}
@@ -96,16 +64,181 @@ export function PeerBurstRow({
   );
 }
 
+export function HandoffRow({
+  peers,
+  runId,
+  channel,
+  rowKey,
+  open,
+  onToggle,
+  onOpen,
+}: {
+  peers: PeerSummary[];
+  runId: RunId;
+  channel: string;
+  rowKey: string;
+  open: boolean;
+  onToggle: () => void;
+  onOpen: (peer: AgentId) => void;
+}) {
+  const live = useStore((state) => state.running.some((one) => one.runId === runId));
+  const region = useId();
+
+  if (peers.every((summary) => summary.sent === 0)) {
+    return <PeerLine peers={peers} channel={channel} rowKey={rowKey} onOpen={onOpen} />;
+  }
+
+  if (live && !settled(peers)) {
+    return (
+      <div className="handoff">
+        <HandoffCard
+          peers={peers}
+          runId={runId}
+          channel={channel}
+          rowKey={rowKey}
+          live
+          onOpen={onOpen}
+        />
+      </div>
+    );
+  }
+
+  const span = spanOf(peers);
+  return (
+    <div className="handoff">
+      <button
+        type="button"
+        className="handoff__fold"
+        aria-expanded={open}
+        aria-controls={open ? region : undefined}
+        onClick={onToggle}
+      >
+        <span className="handoff__faces" aria-hidden="true">
+          {peers.map(({ peer }) => (
+            <AgentAvatar
+              key={peer.id}
+              avatar={peer.avatar}
+              color={peer.color}
+              size="xs"
+              seed={peer.id}
+            />
+          ))}
+        </span>
+        <span className="handoff__line">{foldLine(peers)}</span>
+        <Icon name={open ? "chevron-down" : "chevron-right"} size={16} />
+        {span !== null && <span className="handoff__took">{elapsed(span, 0)}</span>}
+      </button>
+      {open && (
+        <div id={region}>
+          <HandoffCard
+            peers={peers}
+            runId={runId}
+            channel={channel}
+            rowKey={rowKey}
+            live={false}
+            onOpen={onOpen}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HandoffCard({
+  peers,
+  runId,
+  channel,
+  rowKey,
+  live,
+  onOpen,
+}: {
+  peers: PeerSummary[];
+  runId: RunId;
+  channel: string;
+  rowKey: string;
+  live: boolean;
+  onOpen: (peer: AgentId) => void;
+}) {
+  const activity = useStore((state) => state.activity);
+  const activeRun = useStore((state) => state.activeRun);
+  const writingIds = useStore((state) =>
+    Object.values(state.streams)
+      .flatMap((buffer) => (buffer?.channelId === channel ? [buffer.agentId] : []))
+      .join(" "),
+  );
+  const now = useNow(live ? 1000 : 60_000);
+  const writing = new Set(writingIds.split(" "));
+  const asked = peers.filter((summary) => summary.sent > 0).length;
+
+  return (
+    <section
+      className="handoff__card"
+      aria-label={
+        asked > 0
+          ? `Asked ${asked === 1 ? "1 colleague" : `${asked} colleagues`}`
+          : "Heard from colleagues"
+      }
+    >
+      <p className="handoff__title">
+        {asked > 0 ? `Asked ${asked === 1 ? "1 colleague" : `${asked} colleagues`}` : "Heard from"}
+      </p>
+      <ul className="handoff__list">
+        {peers.map((summary) => {
+          const { peer, agentId } = summary;
+          const state = peerState(summary, runId, { activity, activeRun, writing });
+          return (
+            <li key={peer.id} className="handoff__peer" data-state={state.kind}>
+              <AgentAvatar
+                avatar={peer.avatar}
+                color={peer.color}
+                size="sm"
+                seed={peer.id}
+                activity={
+                  state.kind === "working" || state.kind === "writing"
+                    ? { state: "thinking" }
+                    : undefined
+                }
+              />
+              <div className="handoff__text">
+                <p className="handoff__who">
+                  {agentId ? (
+                    <button
+                      type="button"
+                      className="handoff__name"
+                      data-dismiss-id={JSON.stringify([channel, rowKey, agentId])}
+                      title={`Read the conversation with ${peer.name}`}
+                      onClick={() => onOpen(agentId)}
+                    >
+                      {peer.name}
+                    </button>
+                  ) : (
+                    <span className="handoff__name">{peer.name}</span>
+                  )}
+                  <span className="handoff__status">{statusWord(state, now)}</span>
+                </p>
+                {summary.asked && <p className="handoff__question">{summary.asked}</p>}
+                {summary.answer && (
+                  <div className="handoff__answer">
+                    <Markdown>{summary.answer}</Markdown>
+                  </div>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 export function RefusedRow({
   peer,
   at,
-  number,
   body,
   reason,
 }: {
   peer: WirePeer;
   at: number;
-  number: number;
   body: string;
   reason: string;
 }) {
@@ -114,7 +247,7 @@ export function RefusedRow({
 
   return (
     <>
-      <FootnoteRow number={number} at={at} failed>
+      <FootnoteRow failed>
         <button
           type="button"
           className="footnote__send footnote__send--failed"
@@ -216,12 +349,9 @@ export function MessageModal({
 export function WritingRow({ peer }: { peer: WirePeer }) {
   return (
     <div className="footnote" data-writing="true">
-      <div className="footnote__margin" />
-      <div className="footnote__body">
+      <div>
         <span className="footnote__line">
-          <span className="footnote__send">
-            {summaryLabel({ peer, agentId: null, sent: 0, received: 1, gist: null })}
-          </span>
+          <span className="footnote__send">{summaryLabel({ peer, sent: 0, received: 1 })}</span>
           <span className="footnote__dots" aria-hidden="true">
             <i />
             <i />

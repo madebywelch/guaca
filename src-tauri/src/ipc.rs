@@ -295,6 +295,7 @@ surface! {
     approval_answers() -> HashMap<ApprovalId, String>,
     list_decisions() -> Vec<WorkDecision>,
     list_outcomes(since: Option<i64>, group_id: Option<GroupId>, unseen_only: Option<bool>, limit: u32) -> Vec<crate::domain::outcome::Outcome>,
+    running_runs() -> Vec<crate::domain::outcome::Running>,
     mark_outcomes_seen(run_ids: Option<Vec<RunId>>, before: Option<i64>) -> Vec<RunId>,
     pending_deliveries(client: Option<String>) -> Vec<crate::domain::outbox::Delivery>,
     claim_delivery(id: String, client: Option<String>) -> bool,

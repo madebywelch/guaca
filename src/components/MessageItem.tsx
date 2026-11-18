@@ -30,7 +30,6 @@ interface Props {
   message: Envelope;
   lookups: Lookups;
   continued: boolean;
-  footnote?: number;
 }
 
 const HUMAN = { id: "human", name: "You", color: "var(--muted)", avatar: "plain" };
@@ -71,12 +70,7 @@ function onRetry(agentId: AgentId, messageId: MessageId) {
   });
 }
 
-export const MessageItem = memo(function MessageItem({
-  message,
-  lookups,
-  continued,
-  footnote,
-}: Props) {
+export const MessageItem = memo(function MessageItem({ message, lookups, continued }: Props) {
   const { from, to } = message;
 
   const asking = message.parts.find((part) => part.type === "approval");
@@ -114,18 +108,29 @@ export const MessageItem = memo(function MessageItem({
   }
 
   if (from.kind === "agent" && to.kind === "system") {
-    return (
-      <ActivityRecord
-        message={message}
-        byId={lookups.byId}
-        continued={continued}
-        footnote={footnote}
-      />
-    );
+    return <ActivityRecord message={message} byId={lookups.byId} continued={continued} />;
   }
 
   return <ChatBubble message={message} byId={lookups.byId} continued={continued} />;
 });
+
+function TurnHead({
+  author,
+  at,
+}: {
+  author: { id: string; name: string; color: string; avatar: string };
+  at: number;
+}) {
+  return (
+    <div className="msg__head">
+      <AgentAvatar avatar={author.avatar} color={author.color} size="xs" seed={author.id} />
+      <span className="msg__name">{author.name}</span>
+      <time className="msg__at" dateTime={new Date(at).toISOString()}>
+        {clockTime(at)}
+      </time>
+    </div>
+  );
+}
 
 function TidyRow({ at }: { at: number }) {
   return (
@@ -143,12 +148,10 @@ function ActivityRecord({
   message,
   byId,
   continued,
-  footnote,
 }: {
   message: Envelope;
   byId: Lookups["byId"];
   continued: boolean;
-  footnote?: number;
 }) {
   const blocks: React.ReactNode[] = [];
   let run: { steps: Step[]; key: string } | null = null;
@@ -156,16 +159,7 @@ function ActivityRecord({
 
   const close = () => {
     if (run) {
-      blocks.push(
-        <TrailFootnote
-          key={run.key}
-          steps={run.steps}
-          number={footnote ?? 0}
-          at={
-            message.parts.every((part) => part.type === "toolCall") ? message.createdAt : undefined
-          }
-        />,
-      );
+      blocks.push(<TrailFootnote key={run.key} steps={run.steps} />);
     }
     run = null;
   };
@@ -200,22 +194,7 @@ function ActivityRecord({
   const author = identity(message.from, byId);
   return (
     <article className={continued ? "msg msg--continued" : "msg"}>
-      <div className="msg__margin">
-        {!continued && (
-          <time className="msg__at" dateTime={new Date(message.createdAt).toISOString()}>
-            {clockTime(message.createdAt)}
-          </time>
-        )}
-        {!continued && (
-          <AgentAvatar
-            avatar={author.avatar}
-            color={author.color}
-            size="sm"
-            seed={author.id}
-            title={author.name}
-          />
-        )}
-      </div>
+      {!continued && <TurnHead author={author} at={message.createdAt} />}
       <div className="msg__body">{blocks}</div>
     </article>
   );
@@ -233,7 +212,7 @@ function DecisionReply({ part, at }: { part: Extract<Part, { type: "decision" }>
 
   return (
     <article className="msg" data-operator="true">
-      <div className="msg__body">
+      <div className="msg__bubble">
         <p className="decision__label">
           {part.resumed ? "Resumed in For you" : "Answered in For you"}
         </p>
@@ -253,10 +232,10 @@ function DecisionReply({ part, at }: { part: Extract<Part, { type: "decision" }>
           <p className="decision__asked">{request.question}</p>
         )}
         <p className="decision__answer">{part.answer}</p>
+        <time className="msg__at" dateTime={new Date(at).toISOString()}>
+          {clockTime(at)}
+        </time>
       </div>
-      <time className="msg__at" dateTime={new Date(at).toISOString()}>
-        {clockTime(at)}
-      </time>
     </article>
   );
 }
@@ -288,27 +267,11 @@ function ChatBubble({
     <article
       className={continued ? "msg msg--continued" : "msg"}
       data-operator={isOperator ? "true" : undefined}
+      aria-label={isOperator ? `You, ${clockTime(message.createdAt)}` : undefined}
     >
-      <div className="msg__margin">
-        {!continued && (
-          <time className="msg__at" dateTime={new Date(message.createdAt).toISOString()}>
-            {clockTime(message.createdAt)}
-          </time>
-        )}
-        {!isOperator && !continued && (
-          <AgentAvatar
-            avatar={author.avatar}
-            color={author.color}
-            size="sm"
-            seed={author.id}
-            title={author.name}
-          />
-        )}
-      </div>
+      {!isOperator && !continued && <TurnHead author={author} at={message.createdAt} />}
 
-      <div className="msg__body">
-        {!continued && <div className="msg__head">{author.name}</div>}
-
+      <div className={isOperator ? "msg__bubble" : "msg__body"}>
         {notices.map(({ part, key }) => (
           <NoticeRow
             key={key}
@@ -337,15 +300,15 @@ function ChatBubble({
 export function StreamingMessage({ agent, text }: { agent: AgentCard | undefined; text: string }) {
   return (
     <article className="msg">
-      <div className="msg__gutter">
+      <div className="msg__head">
         <AgentAvatar
           avatar={agent?.avatar ?? "orb"}
-          color={agent?.color ?? "#5a7d99"}
-          size="sm"
+          color={agent?.color ?? ABSENT_ACCENT}
+          size="xs"
           seed={agent?.id}
           activity={{ state: "thinking" }}
-          title={agent?.name}
         />
+        <span className="msg__name">{agent?.name ?? "Deleted agent"}</span>
       </div>
       <div className="msg__body md--streaming">
         <Markdown live>{text}</Markdown>

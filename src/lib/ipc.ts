@@ -87,6 +87,7 @@ import type {
   RoutineId,
   RoutineRun,
   RunId,
+  Running,
   RunUsage,
   SearchHits,
   ServerReport,
@@ -242,6 +243,7 @@ export const api = {
       unseenOnly: query.unseenOnly ?? null,
       limit: query.limit,
     }),
+  runningRuns: () => invoke<Running[]>("running_runs"),
   markOutcomesSeen: (target: { runIds?: RunId[]; before?: number }) =>
     invoke<RunId[]>("mark_outcomes_seen", {
       runIds: target.runIds ?? null,
