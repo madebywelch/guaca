@@ -9361,3 +9361,85 @@ button.artifacts__version[aria-pressed="true"] {
   }
 }
 
+
+.palette__to {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: none;
+  max-width: 14rem;
+  min-height: var(--control-h-sm);
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-control);
+  background: var(--sunken);
+  font-size: var(--type-support);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.palette__section {
+  margin: 0;
+  padding: var(--space-4) var(--space-4) var(--space-2);
+  font-size: var(--type-meta);
+  font-weight: var(--weight-regular);
+  color: var(--muted);
+}
+
+.palette__key,
+.desk__key,
+.toast__key {
+  font-size: var(--type-meta);
+  font-weight: var(--weight-regular);
+  color: var(--muted);
+  background: var(--sunken);
+  border-radius: var(--radius-control);
+  padding: var(--space-1) var(--space-3);
+}
+
+.desk__key {
+  margin-left: var(--space-3);
+}
+
+.btn--primary .desk__key {
+  color: var(--on-action-fill);
+  background: color-mix(in oklab, var(--action-fill) 80%, var(--on-action-fill));
+}
+
+.home .desk__card[data-selected]:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: var(--space-8);
+  transform: translateX(-50%);
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  max-width: min(36rem, calc(100vw - 2 * var(--space-7)));
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-6);
+  border-radius: var(--radius-card);
+  background: var(--popover);
+  box-shadow: var(--lift-3);
+  color: var(--text);
+  font-size: var(--type-support);
+  animation: fade var(--tempo-enter) var(--ease) both;
+}
+
+.toast__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toast .btn {
+  flex: none;
+  gap: var(--space-3);
+}
+
