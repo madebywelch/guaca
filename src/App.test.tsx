@@ -569,7 +569,7 @@ describe("App", () => {
       expect(screen.queryByRole("navigation", { name: `${first}'s page` })).toBeNull();
     });
 
-    it("does not lend a reveal's Conversation intent to another selected agent", async () => {
+    it("opens another agent selected after a reveal on its conversation too", async () => {
       const reveal = await workingWindow();
 
       await act(async () => {
@@ -577,12 +577,12 @@ describe("App", () => {
         await useStore.getState().select("id-Chef");
       });
 
-      expect(currentTab("Chef")).toBe("Now");
+      expect(currentTab("Chef")).toBe("Conversation");
       fireEvent.click(railRow("Manager"));
-      expect(currentTab("Manager")).toBe("Now");
+      expect(currentTab("Manager")).toBe("Conversation");
     });
 
-    it("drops a reveal that Today cancels before it renders, so a later click opens Now", async () => {
+    it("drops a reveal that Today cancels before it renders, and a later click opens the conversation", async () => {
       const reveal = await workingWindow();
 
       act(() => {
@@ -593,21 +593,22 @@ describe("App", () => {
       expect(screen.queryByRole("navigation", { name: "Manager's page" })).toBeNull();
 
       fireEvent.click(railRow("Manager"));
-      expect(currentTab("Manager")).toBe("Now");
+      expect(currentTab("Manager")).toBe("Conversation");
     });
 
-    it("opens a working agent on Now after leaving a revealed conversation for Today", async () => {
-      const reveal = await workingWindow();
+    it("keeps Now a tab the person chooses, and opens the conversation again after Today", async () => {
+      await workingWindow();
       fireEvent.click(railRow("Manager"));
-      expect(currentTab("Manager")).toBe("Now");
-
-      act(() => reveal({ kind: "agent", id: "id-Manager" }));
       expect(currentTab("Manager")).toBe("Conversation");
+
+      const page = screen.getByRole("navigation", { name: "Manager's page" });
+      fireEvent.click(within(page).getByRole("button", { name: "Now" }));
+      expect(currentTab("Manager")).toBe("Now");
       fireEvent.click(screen.getByRole("button", { name: "Today" }));
       expect(screen.queryByRole("navigation", { name: "Manager's page" })).toBeNull();
 
       fireEvent.click(railRow("Manager"));
-      expect(currentTab("Manager")).toBe("Now");
+      expect(currentTab("Manager")).toBe("Conversation");
     });
   });
 
@@ -1083,14 +1084,46 @@ describe("where an agent's page lands", () => {
     expect(within(page).getByRole("button", { current: "page" }).textContent).toBe("Conversation");
   });
 
-  it("still opens a working agent on Now", async () => {
+  it.each([
+    [
+      "its face on the timeline",
+      () => fireEvent.click(screen.getByRole("button", { name: /^Manager, / })),
+    ],
+    ["the Groups sheet", () => fireEvent.click(railRow("Manager"))],
+    ["Command 1", () => fireEvent.keyDown(window, { key: "1", metaKey: true })],
+    [
+      "a select from the command menu, search or Start task",
+      () => act(() => useStore.getState().select("id-Manager")),
+    ],
+  ])("opens a working agent on its conversation from %s", async (_route, open) => {
     listAgents.mockResolvedValue([agent("Manager")]);
     agentActivity.mockResolvedValue({ "id-Manager": { state: "thinking" } });
     render(<App />);
     await waitFor(() => expect(useStore.getState().activity["id-Manager"]?.state).toBe("thinking"));
-    fireEvent.click(railRow("Manager"));
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Manager, / })).toBeTruthy());
+    useStore.setState({
+      running: [
+        {
+          runId: "run-1",
+          agentId: "id-Manager",
+          groupId: "00000000-0000-4000-8000-000000000001",
+          startedAt: Date.now(),
+          note: "Reading the brief",
+        },
+      ],
+      activeRun: { "id-Manager": "run-1" },
+    });
+
+    await open();
+
     const page = await screen.findByRole("navigation", { name: "Manager's page" });
-    expect(within(page).getByRole("button", { current: "page" }).textContent).toBe("Now");
+    expect(within(page).getByRole("button", { current: "page" }).textContent).toBe("Conversation");
+    expect(screen.getByRole("log", { name: "Conversation with Manager" })).toBeTruthy();
+    const line = screen
+      .getAllByRole("status")
+      .find((one) => one.textContent?.includes("Reading the brief"));
+    expect(line).toBeTruthy();
+    expect(line?.closest("[hidden]")).toBeNull();
   });
 });
 

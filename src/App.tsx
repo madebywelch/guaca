@@ -39,7 +39,6 @@ import { type Banner, useLiveAgents, useStore } from "./lib/store";
 import { attached, desktop } from "./lib/transport";
 import {
   type AgentCard,
-  type AgentId,
   errorMessage,
   type Group,
   type Overlay,
@@ -84,17 +83,14 @@ export default function App() {
   const prefs = useStore((s) => s.prefs);
 
   const [agentView, setAgentView] = useState<AgentView>("conversation");
-  const revealing = useRef<AgentId | null>(null);
 
   const reveal = useCallback((target: Reveal) => {
     if (target.kind === "agent") diagnostic("reveal.agent", target.id);
     const state = useStore.getState();
     if (target.kind === "forYou") {
-      revealing.current = null;
       state.showForYou(true);
       return;
     }
-    revealing.current = target.id;
     setAgentView("conversation");
     void state.select(target.id);
   }, []);
@@ -126,26 +122,8 @@ export default function App() {
   const leaveChannel = useStore((state) => state.leaveChannel);
   const focused = useStore((state) => state.focused);
 
-  useEffect(
-    () =>
-      useStore.subscribe((state) => {
-        if (revealing.current !== null && state.selected !== revealing.current)
-          revealing.current = null;
-      }),
-    [],
-  );
-
   useEffect(() => {
-    const revealed = revealing.current;
-    revealing.current = null;
-    if (!selected) return;
-    if (revealed === selected) {
-      setAgentView("conversation");
-      return;
-    }
-    const state = useStore.getState();
-    const busy = state.activity[selected]?.state === "thinking";
-    setAgentView(busy && !state.focused ? "now" : "conversation");
+    if (selected) setAgentView("conversation");
   }, [selected]);
 
   useEffect(() => {
