@@ -276,48 +276,44 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
     }
   };
 
-  const notices = (
-    <>
-      {error && (
-        <p className="onboarding-notice" role="alert">
-          {error}
-        </p>
-      )}
-      {busy && !pendingCode && (
-        <p className="onboarding-notice" role="status">
-          {busy === "signin"
-            ? "Starting sign-in…"
-            : busy === "testing"
-              ? "Testing the connection…"
-              : "Saving your provider…"}
-        </p>
-      )}
-      {pendingCode && (
-        <div className="onboarding-notice" role="status">
-          <p>
-            Enter this code in your browser: <strong>{pendingCode.userCode}</strong>
-          </p>
-          <p>{pendingCode.verificationUrl}</p>
-          <button
-            type="button"
-            className="btn"
-            onClick={() => {
-              const current = attempt.current;
-              void openExternal(pendingCode.verificationUrl).catch(() => {
-                if (attempt.current === current)
-                  setError("The browser could not open. Copy the address above into your browser.");
-              });
-            }}
-          >
-            Open sign-in page
-          </button>
-          <p>
-            Only enter this code if you started this sign-in here. If you cancel, do not finish it
-            in the browser.
-          </p>
-        </div>
-      )}
-    </>
+  const saying = error ? (
+    <p className="onboarding-notice" role="alert">
+      {error}
+    </p>
+  ) : busy && !pendingCode ? (
+    <p className="onboarding-notice" role="status">
+      {busy === "signin"
+        ? "Starting sign-in…"
+        : busy === "testing"
+          ? "Testing the connection…"
+          : "Saving your provider…"}
+    </p>
+  ) : null;
+
+  const code = pendingCode && (
+    <div className="onboarding-notice" role="status">
+      <p>
+        Enter this code in your browser: <strong>{pendingCode.userCode}</strong>
+      </p>
+      <p>{pendingCode.verificationUrl}</p>
+      <button
+        type="button"
+        className="btn"
+        onClick={() => {
+          const current = attempt.current;
+          void openExternal(pendingCode.verificationUrl).catch(() => {
+            if (attempt.current === current)
+              setError("The browser could not open. Copy the address above into your browser.");
+          });
+        }}
+      >
+        Open sign-in page
+      </button>
+      <p>
+        Only enter this code if you started this sign-in here. If you cancel, do not finish it in
+        the browser.
+      </p>
+    </div>
   );
 
   if (offer)
@@ -364,7 +360,8 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
             </li>
           ))}
         </ul>
-        {notices}
+        {saying}
+        {code}
         <div className="onboarding-actions">
           <button
             type="button"
@@ -399,10 +396,6 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
   return (
     <section className="onboarding-provider" aria-label="Connect a provider">
       <h2>Choose how your agents are paid for</h2>
-      <p>
-        Guaca uses your provider account. A subscription uses its included quota; an API key is
-        billed separately by the provider.
-      </p>
       <div className="onboarding-options onboarding-options--three">
         <button
           type="button"
@@ -437,7 +430,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
       </div>
 
       {provider === "compatible" && (
-        <>
+        <div className="onboarding-endpoint">
           <label className="field">
             <span className="field__label">API provider</span>
             <select
@@ -446,7 +439,6 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
               disabled={Boolean(busy)}
               onChange={(event) => {
                 if (event.target.value === "custom") {
-                  setAdvanced(true);
                   changeEndpoint("");
                   return;
                 }
@@ -472,17 +464,35 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
               placeholder={savedKey ? "Saved key will be used" : "Paste your provider's API key"}
               onChange={(event) => setApiKey(event.target.value)}
             />
-            <span className="field__hint">
-              {savedKey
-                ? "Leave blank to keep the saved key for this endpoint."
-                : "Stored only on your Guaca host. A saved key from another endpoint is never reused."}
-            </span>
           </label>
-          <p className="onboarding-notice">
-            API usage is separate from a ChatGPT or Claude subscription. Testing makes a small model
-            request that may be billed.
+          <label className="field">
+            <span className="field__label">Inference endpoint</span>
+            <input
+              className="input input--mono"
+              value={baseUrl}
+              disabled={Boolean(busy)}
+              onChange={(event) => changeEndpoint(event.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span className="field__label">Default model</span>
+            <input
+              className="input input--mono"
+              value={model}
+              disabled={Boolean(busy)}
+              onChange={(event) => setModel(event.target.value)}
+            />
+          </label>
+          <p className="field__hint">
+            {savedKey
+              ? "Leave the key blank to keep the one saved for this endpoint."
+              : preset
+                ? `Your ${preset.name} key is stored only on your Guaca host.`
+                : "Any OpenAI-compatible endpoint works, and one on your own machine may not need a key."}
+            {!capabilities.loopbackEndpoints &&
+              " This host cannot reach model endpoints on your own computer."}
           </p>
-        </>
+        </div>
       )}
 
       {provider === "chatgpt" && (
@@ -512,53 +522,29 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
         </div>
       )}
 
-      <details
-        className="onboarding-advanced"
-        open={advanced}
-        onToggle={(event) => setAdvanced(event.currentTarget.open)}
-      >
-        <summary>Advanced options</summary>
-        <fieldset disabled={Boolean(busy)}>
-          {provider === "compatible" && (
-            <>
-              <label className="field">
-                <span className="field__label">Inference endpoint</span>
-                <input
-                  className="input input--mono"
-                  value={baseUrl}
-                  onChange={(event) => changeEndpoint(event.target.value)}
-                />
-              </label>
-              <label className="field">
-                <span className="field__label">Default model</span>
-                <input
-                  className="input input--mono"
-                  value={model}
-                  onChange={(event) => setModel(event.target.value)}
-                />
-              </label>
-              <p className="field__hint">
-                Use an OpenAI-compatible endpoint and a model it supports. A local endpoint may not
-                need a key.
-                {!capabilities.loopbackEndpoints &&
-                  " This host cannot reach model endpoints on your own computer."}
-              </p>
-            </>
-          )}
-          {advanced && provider === "chatgpt" && subscription?.signedIn && (
-            <SubscriptionModel
-              value={subscriptionModel}
-              models={settings?.subscriptionModels ?? []}
-              onChange={setSubscriptionModel}
-              effort={effort}
-              onEffortChange={(value) => setEffort(value ?? "auto")}
-            />
-          )}
-        </fieldset>
-      </details>
+      {provider === "chatgpt" && (
+        <details
+          className="onboarding-advanced"
+          open={advanced}
+          onToggle={(event) => setAdvanced(event.currentTarget.open)}
+        >
+          <summary>Advanced options</summary>
+          <fieldset disabled={Boolean(busy)}>
+            {advanced && subscription?.signedIn && (
+              <SubscriptionModel
+                value={subscriptionModel}
+                models={settings?.subscriptionModels ?? []}
+                onChange={setSubscriptionModel}
+                effort={effort}
+                onEffortChange={(value) => setEffort(value ?? "auto")}
+              />
+            )}
+          </fieldset>
+        </details>
+      )}
 
-      {notices}
       <div className="onboarding-actions">
+        {code}
         <button
           type="button"
           className="btn"
@@ -593,7 +579,14 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
               : "Test and continue"}
           </button>
         )}
-        {blockedReason && !busy && <span id={blockedHint}>{blockedReason}</span>}
+        {saying ??
+          (blockedReason ? (
+            <span id={blockedHint}>{blockedReason}</span>
+          ) : (
+            provider === "compatible" && (
+              <span>Testing makes a small model request that may be billed.</span>
+            )
+          ))}
       </div>
     </section>
   );

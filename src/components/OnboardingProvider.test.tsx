@@ -277,6 +277,29 @@ it("reuses a saved key only for its own endpoint", async () => {
   });
 });
 
+it("shows the endpoint and the model beside the key, with nothing to open first", async () => {
+  await draw();
+  expect((screen.getByLabelText("Inference endpoint") as HTMLInputElement).value).toBe(
+    "https://openrouter.ai/api/v1",
+  );
+  expect((screen.getByLabelText("Default model") as HTMLInputElement).value).toBe(
+    "anthropic/claude-sonnet-4.5",
+  );
+  expect(screen.queryByText("Advanced options")).toBeNull();
+});
+
+it("says why a test failed in the bar with the buttons, so it is never scrolled under them", async () => {
+  mocks.testConnection.mockRejectedValue(new Error("the endpoint said no"));
+  await draw();
+  key();
+  submit();
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain("the endpoint said no");
+  expect(alert.closest(".onboarding-actions")).toBe(
+    screen.getByRole("button", { name: "Test and continue" }).closest(".onboarding-actions"),
+  );
+});
+
 it("clears typed keys on endpoint changes and excludes stored keys from custom probes", async () => {
   useStore.setState({ settings: stored({ apiKeySet: true }) });
   await draw();

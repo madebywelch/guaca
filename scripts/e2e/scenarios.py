@@ -1028,6 +1028,67 @@ def scenario_tabs(w: World) -> None:
     no_unscripted(w)
 
 
+NEEDS_KEY = "verify/needs-key"
+
+
+def to_connect(w: World) -> None:
+    ui = w.ui
+    w.wait("the first visit offers a first task", lambda: ui.find("button", FIRST_TASK))
+    ui.click("button", FIRST_TASK)
+    ui.fill("textbox", "Your first brief", "Say hello.")
+    ui.click("button", "Continue")
+    w.wait("the Connect your AI step", lambda: ui.find("button", "Test and continue"))
+    ui.click("button", API_KEY)
+    ui.choose("combobox", "API provider", "Custom endpoint")
+    w.wait("the endpoint fields", lambda: ui.find("textbox", "Inference endpoint"))
+    ui.evaluate("document.activeElement && document.activeElement.blur()")
+    ui.evaluate("document.querySelector('.onboarding').scrollTop = 0")
+
+
+def refusal(w: World, why: str) -> tuple[str, bool]:
+    ui = w.ui
+    ui.click("button", "Test and continue")
+    alert = w.wait(why, lambda: [
+        t for t in (ui.evaluate("Array.from(document.querySelectorAll('[role=alert]')).map(e=>e.innerText)") or [])
+        if t.strip()])
+    shown = ui.evaluate("(() => { const a = document.querySelector('[role=alert]'); const r = a.getBoundingClientRect();"
+                        " const hit = document.elementFromPoint(r.left + 4, r.bottom - 4);"
+                        " return r.bottom <= innerHeight && hit !== null && a.contains(hit); })()")
+    return alert[0], bool(shown)
+
+
+def scenario_connect(w: World) -> None:
+
+    def script(c: Call) -> Reply | None:
+        if c.body.get("model") == NEEDS_KEY and c.key != STAND_IN_KEY:
+            return refuse(401, "Missing or wrong API key.")
+        return hello(c)
+
+    w.model.script = script
+    w.start()
+    ui = w.ui
+    ui.viewport(*WINDOW)
+    to_connect(w)
+    fields = {name: bool(ui.find("textbox", name, exact=False)) and ui.on_screen("textbox", name, exact=False)
+              for name in ("API key", "Inference endpoint", "Default model")}
+    w.check("the key, endpoint and model fields are on screen without scrolling", all(fields.values()),
+            observed=fields, shot=True, stop=False)
+
+    ui.fill("textbox", "Inference endpoint", w.model.base)
+    ui.fill("textbox", "Default model", NEEDS_KEY)
+    ui.fill("textbox", "API key", WRONG_KEY, exact=False)
+    said_, shown = refusal(w, "the endpoint refuses the wrong key, and the form says so")
+    w.check("a refusal is shown beside the buttons, not under them", shown,
+            observed={"onScreen": shown}, detail=said_, shot=True)
+
+    ui.fill("textbox", "API key", STAND_IN_KEY, exact=False)
+    ui.click("button", "Test and continue")
+    w.wait("the endpoint test passes", lambda: ui.find("button", "Start task"))
+    w.check("the right key passes the test and is kept",
+            w.host.call("get_settings")["apiKeySet"], observed=w.host.call("get_settings")["apiKeySet"])
+    no_unscripted(w)
+
+
 @dataclass(frozen=True)
 class Scenario:
     run: Callable[[World], None]
@@ -1172,6 +1233,15 @@ SCENARIOS: dict[str, Scenario] = {
         "Appearance is reached and opened with arrow keys",
         "Tab goes from the tab list into the open panel",
         "the tab list is one Tab stop",
+        "every model call was one the scenario scripted",
+    )),
+    "connect": Scenario(scenario_connect, "A person connects a Custom endpoint in a 1280 by 820 window with the "
+                        "key, endpoint and model fields on screen; a key the endpoint refuses is reported beside "
+                        "the buttons rather than under them.",
+    (
+        "the key, endpoint and model fields are on screen without scrolling",
+        "a refusal is shown beside the buttons, not under them",
+        "the right key passes the test and is kept",
         "every model call was one the scenario scripted",
     )),
 }
