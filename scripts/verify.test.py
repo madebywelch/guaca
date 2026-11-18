@@ -7,6 +7,7 @@ import socket
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 import urllib.error
@@ -35,8 +36,10 @@ def conversation(*messages: tuple[str, str]) -> dict:
 
 
 class Rendering(Browser):
-    def __init__(self, appears_after: int | None) -> None:
+    def __init__(self, appears_after: int | None, attached: bool = True, lands: bool = True) -> None:
         self.appears_after = appears_after
+        self.attached = attached
+        self.lands = lands
         self.looks = 0
         self.sent: list[tuple[str, str]] = []
 
@@ -47,6 +50,12 @@ class Rendering(Browser):
 
     def _center(self, node: dict) -> tuple[float, float]:
         return 1.0, 1.0
+
+    def _arm(self, node: dict, x: float, y: float) -> str:
+        return "armed" if self.attached else "gone"
+
+    def _landed(self, token: str) -> bool:
+        return self.lands
 
     def send(self, method: str, params: dict | None = None, session: bool = True, timeout: float = 30) -> dict:
         self.sent.append((method, (params or {}).get("type", "")))
@@ -83,6 +92,39 @@ class Pipe(unittest.TestCase):
             with self.assertRaisesRegex(BrowserError, "no button named 'Deny'"):
                 page.click("button", "Deny")
         self.assertEqual(page.sent, [])
+
+    def test_a_button_gone_by_the_time_it_is_clicked_fails_at_once_naming_it(self) -> None:
+        page = Rendering(appears_after=0, attached=False)
+        face = page.find("button", "Deny")[0]
+        started = time.monotonic()
+        with mock.patch("e2e.browser.ACTIONABLE_SECONDS", 60):
+            with self.assertRaisesRegex(BrowserError, "button 'Deny' was gone from the page"):
+                page.press(face)
+        self.assertLess(time.monotonic() - started, 1)
+        self.assertEqual(page.sent, [])
+
+    def test_a_click_that_misses_a_button_that_moved_fails_naming_it(self) -> None:
+        page = Rendering(appears_after=0, lands=False)
+        with self.assertRaisesRegex(BrowserError, "never reached the button 'Deny'; it moved"):
+            page.click("button", "Deny")
+        self.assertEqual([kind for _, kind in page.sent], ["mouseMoved", "mousePressed", "mouseReleased"])
+
+    def test_a_click_waits_for_a_button_still_moving_into_place(self) -> None:
+        class Rising(Rendering):
+            boxes = [[0, 20, 10, 20, 10, 30, 0, 30], [0, 12, 10, 12, 10, 22, 0, 22]]
+            boxes += [[0, 0, 10, 0, 10, 10, 0, 10]] * 2
+
+            def send(self, method: str, params: dict | None = None, session: bool = True,
+                     timeout: float = 30) -> dict:
+                if method == "DOM.getContentQuads":
+                    return {"quads": [self.boxes.pop(0) if len(self.boxes) > 1 else self.boxes[0]]}
+                self.sent.append((method, (params or {}).get("y", "")))
+                return {}
+
+        page = Rising(appears_after=0)
+        page._center = lambda node: Browser._center(page, node)
+        page.click("button", "Deny")
+        self.assertEqual({y for method, y in page.sent if method == "Input.dispatchMouseEvent"}, {5.0})
 
     def test_a_browser_that_dies_at_launch_says_why_and_never_breaks_the_pipe(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

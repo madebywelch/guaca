@@ -1152,7 +1152,10 @@ keeps no clock, so `ribbon.test.ts` can stand at 9:12 on a Monday. The clock it 
 handed ticks once a minute, so the layout moves `now` up to the latest run or
 request it is given: what has happened is placed at once, never after the tick.
 `Timeline.tsx` reads today's runs, seen ones included, beside the unseen ones the
-store keeps, because a face rests on the last thing its agent did today.
+store keeps, because a face rests on the last thing its agent did today. Until
+that read lands the timeline is busy and draws no face, tick or now line, so
+after a reload each face is first drawn where it belongs and never jumps there
+from the left edge under the pointer.
 
 **Each face is a button named with the agent, its state and its time:** "Dara,
 needs you, asked 9:05 AM", "Dara, working now", "Dara, finished 2:56 AM", "Dara,
@@ -1160,7 +1163,7 @@ last active 11:40 AM", "Dara, idle". The faces are one stop on the Tab key, and
 the arrow keys, Home and End move along the list, so a dozen agents are not a
 dozen stops on the way to the field. Pressing a face opens that agent's page.
 
-A read of upcoming runs or of the calendar that fails leaves the timeline
+A read of today's runs, of upcoming runs or of the calendar that fails leaves the timeline
 drawing what it has, with a warning in the console. It is a picture of the day,
 and a picture with one row missing is better than a banner over it.
 

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from . import look
+from .browser import label
 from .world import STAND_IN_KEY, STAND_IN_MODEL, Call, Reply, World, call, held, refuse, say, text_of
 
 AGENT = "Executive Assistant"
@@ -72,8 +73,8 @@ def open_agent(w: World, name: str) -> None:
     if w.ui.find("log", f"Conversation with {name}"):
         return
     face = w.wait(f"{name} has a face on today's timeline", lambda: [
-        n for n in w.ui.names_within("list", "Today's timeline", "button") if n.startswith(f"{name}, ")])
-    w.ui.click("button", face[0])
+        n for n in w.ui.within("list", "Today's timeline", "button") if label(n).startswith(f"{name}, ")])
+    w.ui.press(face[0])
     w.wait(f"{name}'s conversation opens", lambda: w.ui.find("log", f"Conversation with {name}"))
 
 
@@ -1464,7 +1465,8 @@ def scenario_queue(w: World) -> None:
     w.wait("both answers are sent after the Undo has passed", lambda: sorted(
         a["state"] for a in approvals(w)) == ["allow", "answered"] and operator_name(w) == "Robin")
     w.check("the held answers are each sent once, and the agents are told",
-            operator_name(w) == "Robin" and "Early" in " ".join(said(w, RESEARCHER)),
+            operator_name(w) == "Robin"
+            and w.wait(f"{RESEARCHER} replies with the answer", lambda: "Early" in " ".join(said(w, RESEARCHER))),
             observed={"approvals": approvals(w), "said": said(w, RESEARCHER)[-1:]})
     w.check("after the last answer the focus is back in the field",
             w.wait("the field takes the focus back", lambda: ui.focused() == ("textbox", "What do you need?")),
