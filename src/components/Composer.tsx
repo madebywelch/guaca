@@ -541,6 +541,7 @@ export function Composer({
               if (mirror.current) mirror.current.scrollTop = event.currentTarget.scrollTop;
             }}
             role="combobox"
+            aria-label={recipient ? `Write to ${recipient.name}` : placeholder}
             aria-expanded={showing}
             aria-controls={showing ? "mention-list" : undefined}
             aria-activedescendant={showing ? `mention-${selected}` : undefined}

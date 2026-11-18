@@ -50,7 +50,7 @@ def write(w: World, to: str, text: str) -> None:
     ui = w.ui
     if ui.find("combobox", "Recipient") and ui.value("combobox", "Recipient") != to:
         ui.choose("combobox", "Recipient", to)
-    ui.fill("combobox", f"Write to {to}\u2026", text)
+    ui.fill("combobox", f"Write to {to}", text)
     ui.click("button", "Send")
 
 
@@ -949,7 +949,7 @@ def scenario_answer(w: World) -> None:
     w.wait("the question is shown in the conversation", lambda: ui.find("button", "Early"))
     ui.evaluate("document.activeElement && document.activeElement.blur()")
     ui.key("k", mod=True)
-    w.wait("Command K focuses the composer", lambda: ui.focused()[0] == "combobox")
+    w.wait("Command K focuses the composer", lambda: ui.focused() == ("combobox", f"Write to {AGENT}"))
     ui.key("Tab")
     w.check("with a question waiting, Command K then Tab reaches its first answer",
             ui.focused() == ("button", "Early"), observed=ui.focused(), shot=True)
@@ -961,7 +961,7 @@ def scenario_answer(w: World) -> None:
 
     ui.evaluate("document.activeElement && document.activeElement.blur()")
     ui.key("k", mod=True)
-    w.wait("Command K focuses the composer again", lambda: ui.focused()[0] == "combobox")
+    w.wait("Command K focuses the composer again", lambda: ui.focused() == ("combobox", f"Write to {AGENT}"))
     ui.key("Tab")
     w.check("with nothing waiting, Tab leaves the composer for its own next control",
             ui.focused() == ("button", "Attach a file"), observed=ui.focused())

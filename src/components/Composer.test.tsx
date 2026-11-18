@@ -182,6 +182,20 @@ describe("Composer", () => {
     expect(answer).toHaveBeenCalledTimes(1);
   });
 
+  it("is named for whom it writes to", () => {
+    const ines = anAgent("Ines");
+    roster = [ines];
+    render(
+      <Composer
+        placeholder="Write to Ines…"
+        group={CREW}
+        recipient={{ id: ines.id, name: ines.name }}
+        onSend={async () => undefined}
+      />,
+    );
+    expect(screen.getByRole("combobox", { name: "Write to Ines" })).toBeTruthy();
+  });
+
   it("leaves Tab alone when nothing is waiting", () => {
     render(<Composer placeholder="Write to Ines…" group={CREW} onSend={async () => undefined} />);
     expect(fireEvent.keyDown(screen.getByRole("combobox"), { key: "Tab" })).toBe(true);
