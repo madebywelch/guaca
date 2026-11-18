@@ -35,6 +35,10 @@ class BrowserGone(BrowserError):
     pass
 
 
+class Moving(BrowserError):
+    pass
+
+
 def find_chromium() -> str | None:
     override = os.environ.get("GUACA_VERIFY_CHROMIUM")
     if override:
@@ -329,10 +333,14 @@ class Browser:
         self.send("Runtime.evaluate", {"awaitPromise": True, "expression":
                   "new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))"})
         settled = self.send("DOM.getContentQuads", {"backendNodeId": backend}).get("quads") or []
-        if settled[:1] != quads[:1]:
-            raise BrowserError("the element is still moving on the page")
-        quad = quads[0]
-        return sum(quad[0::2]) / 4, sum(quad[1::2]) / 4
+        if not settled:
+            raise BrowserError("the element lost its box on the page between two frames")
+        before = sum(quads[0][0::2]) / 4, sum(quads[0][1::2]) / 4
+        after = sum(settled[0][0::2]) / 4, sum(settled[0][1::2]) / 4
+        if settled[0] != quads[0]:
+            raise Moving(f"the element is still moving on the page: from ({before[0]:.0f}, {before[1]:.0f}) "
+                         f"to ({after[0]:.0f}, {after[1]:.0f}) between two frames")
+        return after
 
     def _arm(self, node: dict, x: float, y: float) -> str:
         try:
@@ -363,13 +371,19 @@ class Browser:
     def press(self, node: dict, point: tuple[float, float] | None = None) -> None:
         what = f"{(node.get('role') or {}).get('value')} {label(node)!r}"
         gone = BrowserError(f"the {what} was gone from the page by the time it was clicked")
-        if point is None:
+        deadline = time.monotonic() + ACTIONABLE_SECONDS
+        while point is None:
             try:
                 point = self._center(node)
             except BrowserGone:
                 raise
-            except BrowserError:
-                raise gone from None
+            except Moving as moving:
+                if time.monotonic() >= deadline:
+                    raise BrowserError(f"the {what} was still moving {ACTIONABLE_SECONDS:g}s after it was found, "
+                                       f"so it was never clicked; {moving}") from None
+                time.sleep(0.1)
+            except BrowserError as error:
+                raise BrowserError(f"{gone}: {error}") from None
         x, y = point
         moved = BrowserError(f"the click at ({x:.0f}, {y:.0f}) never reached the {what}; "
                              "it moved or left the page between being found and being clicked")

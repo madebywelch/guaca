@@ -36,6 +36,8 @@ def first_run(w: World, brief: str = "Say hello.", reply_to_brief: str = HELLO) 
     ui.click("button", "Test and continue")
     w.wait("the endpoint test passes", lambda: ui.find("button", "Start task"))
     ui.click("button", "Start task")
+    w.wait("Start task opens the first agent's conversation",
+           lambda: ui.find("log", "Conversation with", exact=False))
     w.wait("the first agent answers its brief", lambda: reply_to_brief in conversation(w))
 
 
@@ -115,6 +117,7 @@ def no_unscripted(w: World) -> None:
 
 
 def scenario_reply(w: World) -> None:
+    answering = threading.Event()
 
     def script(c: Call) -> Reply | None:
         if c.key != STAND_IN_KEY:
@@ -124,7 +127,7 @@ def scenario_reply(w: World) -> None:
         if c.speaker != AGENT:
             return None
         if c.last_user.endswith("Say hello."):
-            return say(HELLO)
+            return held(answering, say(HELLO))
         if c.last_user.endswith("What is two and two?"):
             return say("Four.")
         return None
@@ -165,6 +168,14 @@ def scenario_reply(w: World) -> None:
             kept["baseUrl"] == w.model.base and kept["apiKeySet"],
             observed={"endpointSaved": kept["baseUrl"] == w.model.base, "keySaved": kept["apiKeySet"]})
     ui.click("button", "Start task")
+    w.wait("the brief's model call is in the air", lambda: asked(w, "Say hello.") == 1)
+    opened = w.wait("Start task opens the agent's page", lambda: ui.find("navigation", f"{AGENT}'s page"))
+    w.check("Start task opens the conversation while the agent is still answering",
+            bool(ui.find("log", f"Conversation with {AGENT}")) and HELLO not in conversation(w),
+            observed={"conversationShown": bool(ui.find("log", f"Conversation with {AGENT}")),
+                      "answered": HELLO in conversation(w)},
+            detail={"page": label(opened[0])}, shot=True)
+    answering.set()
     w.wait("the agent's reply is shown", lambda: HELLO in conversation(w))
     first = settled(w, 1, "the first conversation settles")
     w.check("the brief reached the agent and its reply is in the conversation",
@@ -1740,6 +1751,7 @@ SCENARIOS: dict[str, Scenario] = {
         "a rejected key is reported in the form",
         "a rejected key saves nothing and starts no agent",
         "the right key passes the test and is kept on the Host",
+        "Start task opens the conversation while the agent is still answering",
         "the brief reached the agent and its reply is in the conversation",
         "a message written in the field is answered in the same conversation",
         "the page was told about each reply as it happened",
