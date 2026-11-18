@@ -1074,6 +1074,11 @@ def scenario_connect(w: World) -> None:
     w.check("the key, endpoint and model fields are on screen without scrolling", all(fields.values()),
             observed=fields, shot=True, stop=False)
 
+    model = {"value": ui.property("textbox", "Default model", "value"),
+             "placeholder": ui.property("textbox", "Default model", "placeholder")}
+    w.check("a Custom endpoint suggests no other provider's model",
+            not model["value"] and "anthropic/" not in model["placeholder"], observed=model, shot=True, stop=False)
+
     ui.fill("textbox", "Inference endpoint", w.model.base)
     ui.fill("textbox", "Default model", NEEDS_KEY)
     ui.fill("textbox", "API key", WRONG_KEY, exact=False)
@@ -1081,11 +1086,21 @@ def scenario_connect(w: World) -> None:
     w.check("a refusal is shown beside the buttons, not under them", shown,
             observed={"onScreen": shown}, detail=said_, shot=True)
 
-    ui.fill("textbox", "API key", STAND_IN_KEY, exact=False)
+    ui.fill("textbox", "API key", "", exact=False)
+    said_, shown = refusal(w, "the endpoint refuses a request with no key, and the form says so")
+    w.check("with no key, the refusal is about this endpoint and names no other provider or place",
+            shown and "127.0.0.1" in said_ and "OpenRouter" not in said_ and "Settings" not in said_,
+            observed={"onScreen": shown, "namesEndpoint": "127.0.0.1" in said_,
+                      "namesOpenRouter": "OpenRouter" in said_, "namesSettings": "Settings" in said_},
+            detail=said_, shot=True)
+
+    ui.fill("textbox", "Default model", STAND_IN_MODEL)
     ui.click("button", "Test and continue")
     w.wait("the endpoint test passes", lambda: ui.find("button", "Start task"))
-    w.check("the right key passes the test and is kept",
-            w.host.call("get_settings")["apiKeySet"], observed=w.host.call("get_settings")["apiKeySet"])
+    kept = w.host.call("get_settings")
+    w.check("an endpoint that needs no key passes the test with none, and is kept",
+            kept["baseUrl"] == w.model.base and not kept["apiKeySet"],
+            observed={"endpointSaved": kept["baseUrl"] == w.model.base, "keySaved": kept["apiKeySet"]})
     no_unscripted(w)
 
 
@@ -1236,12 +1251,15 @@ SCENARIOS: dict[str, Scenario] = {
         "every model call was one the scenario scripted",
     )),
     "connect": Scenario(scenario_connect, "A person connects a Custom endpoint in a 1280 by 820 window with the "
-                        "key, endpoint and model fields on screen; a key the endpoint refuses is reported beside "
-                        "the buttons rather than under them.",
+                        "key, endpoint and model fields on screen and no other provider's model suggested, and an "
+                        "endpoint that needs no key passes with none; a refusal is reported beside the buttons, and "
+                        "one for a missing key is about that endpoint rather than another provider or place.",
     (
         "the key, endpoint and model fields are on screen without scrolling",
+        "a Custom endpoint suggests no other provider's model",
         "a refusal is shown beside the buttons, not under them",
-        "the right key passes the test and is kept",
+        "with no key, the refusal is about this endpoint and names no other provider or place",
+        "an endpoint that needs no key passes the test with none, and is kept",
         "every model call was one the scenario scripted",
     )),
 }

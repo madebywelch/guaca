@@ -820,6 +820,14 @@ describe("moving between sections", () => {
     expect(screen.getByRole("tabpanel", { name: "General" })).toBeTruthy();
   });
 
+  it("suggests the model of the endpoint chosen, and none for a custom one", () => {
+    open(stored(), DEFAULT_PREFS, "provider");
+    const model = field(/^Default model/);
+    expect(model.placeholder).toBe("anthropic/claude-sonnet-4.5");
+    fireEvent.change(field(/^Inference endpoint/), { target: { value: "http://127.0.0.1:9/v1" } });
+    expect(field(/^Default model/).placeholder).not.toContain("anthropic/");
+  });
+
   it("opens on the section it was pointed at", () => {
     open(stored(), DEFAULT_PREFS, "shortcuts");
     expect(screen.getByRole("tab", { name: "Shortcuts" }).getAttribute("aria-selected")).toBe(

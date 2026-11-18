@@ -373,10 +373,12 @@ impl Completion {
 
 #[derive(Debug, thiserror::Error)]
 pub enum LlmError {
-    #[error("no API key is configured. Open Settings and paste an OpenRouter key.")]
+    #[error("no inference endpoint is configured.")]
     NotConfigured,
     #[error("the inference endpoint rejected the API key (HTTP {status}): {message}")]
     Auth { status: u16, message: String },
+    #[error("{endpoint} asked for an API key, and none is set for it: {message}")]
+    KeyMissing { endpoint: String, message: String },
     #[error(
         "the ChatGPT subscription could not be used: {message}. Open Settings and sign in again."
     )]
@@ -426,8 +428,9 @@ impl LlmError {
 
     pub fn headline(&self) -> String {
         match self {
-            LlmError::NotConfigured => "no API key configured".into(),
+            LlmError::NotConfigured => "no endpoint configured".into(),
             LlmError::Auth { .. } => "API key rejected".into(),
+            LlmError::KeyMissing { .. } => "API key needed".into(),
             LlmError::SubscriptionRejected { .. } => "sign in to ChatGPT again".into(),
             LlmError::ProgramMissing { program } => format!("{program} could not be found"),
             LlmError::ProgramFailed { program, .. } => format!("{program} could not answer"),
@@ -637,10 +640,10 @@ impl LlmClient {
 
         let body = wire(cfg, request);
 
-        let response = self
-            .http
-            .post(&url)
-            .bearer_auth(cfg.api_key.expose().trim())
+        let key = cfg.api_key.expose().trim();
+        let post = self.http.post(&url);
+        let post = if key.is_empty() { post } else { post.bearer_auth(key) };
+        let response = post
             .header("HTTP-Referer", &cfg.referer)
             .header("X-Title", &cfg.title)
             .header("Accept", "text/event-stream")
@@ -664,7 +667,14 @@ impl LlmClient {
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.parse::<u64>().ok());
             let text = response.text().await.unwrap_or_default();
-            return Err(classify_status(status.as_u16(), &text, &request.model, retry_after));
+            return Err(
+                match classify_status(status.as_u16(), &text, &request.model, retry_after) {
+                    LlmError::Auth { message, .. } if key.is_empty() => {
+                        LlmError::KeyMissing { endpoint: cfg.base_url.clone(), message }
+                    }
+                    other => other,
+                },
+            );
         }
 
         self.consume_stream(response, &url, timeout, &mut on_token).await
@@ -1241,14 +1251,88 @@ mod tests {
         assert_eq!(messages[3]["tool_call_id"], "call_1");
     }
 
+    async fn wants_a_key() -> (String, Arc<Mutex<Vec<Option<String>>>>) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let recorder = seen.clone();
+        let app = Router::new().route(
+            "/v1/chat/completions",
+            post(move |headers: axum::http::HeaderMap| {
+                let recorder = recorder.clone();
+                async move {
+                    let auth = headers
+                        .get("authorization")
+                        .and_then(|value| value.to_str().ok())
+                        .map(str::to_string);
+                    recorder.lock().unwrap().push(auth.clone());
+                    match auth {
+                        Some(_) => sse(&[&text_frame("ok"), "[DONE]"]),
+                        None => (
+                            axum::http::StatusCode::UNAUTHORIZED,
+                            axum::Json(
+                                serde_json::json!({"error": {"message": "Missing API key."}}),
+                            ),
+                        )
+                            .into_response(),
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}/v1"), seen)
+    }
+
     #[tokio::test]
-    async fn a_missing_key_fails_before_any_network_call() {
+    async fn an_endpoint_is_asked_without_a_key_when_none_is_set() {
+        let (base, _) = stub(|_| sse(&[&text_frame("ok"), "[DONE]"])).await;
         let client = LlmClient::new().unwrap();
-        let mut config = cfg("http://127.0.0.1:1/v1".into());
+        let mut config = cfg(base);
         config.api_key = "   ".into();
+        let completion = client.stream_chat(&config, &request(), |_| {}).await.unwrap();
+        assert_eq!(completion.content, "ok", "a local endpoint may need no key");
+    }
+
+    #[tokio::test]
+    async fn an_endpoint_that_wants_a_key_is_named_when_none_is_set() {
+        let (base, seen) = wants_a_key().await;
+        let client = LlmClient::new().unwrap();
+        let mut config = cfg(base.clone());
+        config.api_key = "".into();
+        let err = client.stream_chat(&config, &request(), |_| {}).await.unwrap_err();
+        assert_eq!(seen.lock().unwrap().as_slice(), &[None], "no Authorization header is sent");
+        match &err {
+            LlmError::KeyMissing { endpoint, message } => {
+                assert_eq!(endpoint, &base);
+                assert!(message.contains("Missing API key"));
+            }
+            other => panic!("expected KeyMissing, got {other:?}"),
+        }
+        let said = err.to_string();
+        assert!(said.starts_with(&base), "the endpoint the operator chose is named: {said}");
+        assert!(!said.contains("OpenRouter") && !said.contains("Settings"), "{said}");
+        assert!(!err.is_transient(), "a missing key will not fix itself on retry");
+    }
+
+    #[tokio::test]
+    async fn a_set_key_is_sent_as_a_bearer_token() {
+        let (base, seen) = wants_a_key().await;
+        let client = LlmClient::new().unwrap();
+        let completion = client.stream_chat(&cfg(base), &request(), |_| {}).await.unwrap();
+        assert_eq!(completion.content, "ok");
+        assert_eq!(seen.lock().unwrap().as_slice(), &[Some("Bearer sk-test".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn a_missing_endpoint_fails_before_any_network_call() {
+        let client = LlmClient::new().unwrap();
+        let mut config = cfg("  ".into());
+        config.api_key = "".into();
         let err = client.stream_chat(&config, &request(), |_| {}).await.unwrap_err();
         assert!(matches!(err, LlmError::NotConfigured));
-        assert!(!err.is_transient(), "a missing key will not fix itself on retry");
+        assert!(!err.is_transient());
     }
 
     #[tokio::test]

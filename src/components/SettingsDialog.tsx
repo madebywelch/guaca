@@ -26,7 +26,7 @@ import {
   type Typeface,
   UI_SCALES,
 } from "../lib/prefs";
-import { type Provider as Preset, planLabel } from "../lib/providers";
+import { type Provider as Preset, planLabel, providerFor } from "../lib/providers";
 import { SECTION_LABELS, SECTIONS, type Section } from "../lib/sections";
 import { useStore } from "../lib/store";
 import {
@@ -1074,7 +1074,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       <input
                         className="input input--mono"
                         value={model}
-                        placeholder="anthropic/claude-sonnet-4.5"
+                        placeholder={providerFor(baseUrl)?.model || "A model your endpoint serves"}
                         title="The default for any group or agent that does not name one."
                         onChange={(event) => setModel(event.target.value)}
                       />

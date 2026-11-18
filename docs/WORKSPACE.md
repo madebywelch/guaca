@@ -2371,6 +2371,13 @@ somebody else's server. A local endpoint is marked as local because that changes
 what the key field means: an empty key beside a warning about a missing key is a
 state an operator will try to fix forever.
 
+So an empty key is not refused before the endpoint is asked. The runtime sends
+no Authorization header, and the endpoint decides: a local server answers, and
+one that wants a key refuses, which is reported as that endpoint asking for a
+key rather than as a missing OpenRouter key. The banner asking for a key is
+shown only for a preset that needs one, and a custom endpoint suggests no
+preset's model.
+
 About says the version this build ships as, and the commit behind it. It said
 only the commit for as long as `package.json` and `tauri.conf.json` were
 placeholders that never moved, and that stopped being true when releases started

@@ -300,6 +300,32 @@ it("says why a test failed in the bar with the buttons, so it is never scrolled 
   );
 });
 
+it("suggests no other provider's model for a custom endpoint, and tests one with no key", async () => {
+  await draw();
+  fireEvent.change(screen.getByLabelText("API provider"), { target: { value: "custom" } });
+  const model = screen.getByLabelText("Default model") as HTMLInputElement;
+  expect(model.value).toBe("");
+  expect(model.placeholder).not.toContain("anthropic/");
+  expect(screen.getByText(/may not need a key/)).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("Inference endpoint"), {
+    target: { value: "http://127.0.0.1:8080/v1" },
+  });
+  fireEvent.change(model, { target: { value: "local-model" } });
+  mocks.testConnection.mockRejectedValueOnce(
+    new Error("http://127.0.0.1:8080/v1 asked for an API key, and none is set for it: Missing."),
+  );
+  submit();
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain("http://127.0.0.1:8080/v1");
+  expect(alert.textContent).not.toMatch(/OpenRouter|Settings/);
+  expect(mocks.testConnection).toHaveBeenCalledWith({
+    provider: "compatible",
+    baseUrl: "http://127.0.0.1:8080/v1",
+    defaultModel: "local-model",
+    apiKey: "",
+  });
+});
+
 it("clears typed keys on endpoint changes and excludes stored keys from custom probes", async () => {
   useStore.setState({ settings: stored({ apiKeySet: true }) });
   await draw();

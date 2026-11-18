@@ -27,7 +27,7 @@ import { bindingFor } from "./lib/keybinds";
 import { FEED_COALESCE_MS, presenceOf, presenceReporter, samePresence } from "./lib/menubar";
 import { catchUp, deliver, land } from "./lib/notify";
 import { readFirstTask } from "./lib/onboarding";
-import { inferenceOf } from "./lib/providers";
+import { inferenceOf, providerFor } from "./lib/providers";
 import { useRuntime } from "./lib/runtime";
 import { asSection, type Section } from "./lib/sections";
 import { type Banner, useLiveAgents, useStore } from "./lib/store";
@@ -310,7 +310,8 @@ export default function App() {
   const unpaid = (group: Group | undefined) => {
     if (settings === null) return false;
     const { provider, keyed } = inferenceOf(group, settings);
-    return provider === "compatible" && !keyed;
+    const preset = providerFor(group?.inference.baseUrl || settings.baseUrl);
+    return provider === "compatible" && !keyed && preset !== undefined && !preset.local;
   };
   const peopled = groups.filter((group) => agents.some((agent) => agent.groupId === group.id));
   const needsKey =

@@ -265,7 +265,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
     } catch (failure) {
       if (live())
         setError(
-          `${errorMessage(failure)} Check your connection or provider settings, then try again.`,
+          `${errorMessage(failure)} Check the endpoint, the key and the model above, then try again.`,
         );
     } finally {
       if (live()) {
@@ -440,6 +440,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
               onChange={(event) => {
                 if (event.target.value === "custom") {
                   changeEndpoint("");
+                  setModel("");
                   return;
                 }
                 const selected = PROVIDERS.find((entry) => entry.id === event.target.value)!;
@@ -479,6 +480,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
             <input
               className="input input--mono"
               value={model}
+              placeholder={preset?.model || "A model your endpoint serves"}
               disabled={Boolean(busy)}
               onChange={(event) => setModel(event.target.value)}
             />
