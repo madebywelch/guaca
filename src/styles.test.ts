@@ -655,6 +655,28 @@ describe("what the attention color is spent on", () => {
     expect(bad.map((d) => `${d.selector} { ${d.property}: ${d.value} }`)).toEqual([]);
   });
 
+  it("spends the system color on focus and drop targets only, never on a fill or an edge", () => {
+    const bad = declarations()
+      .filter((d) => /^(background|border|outline|box-shadow)/.test(d.property))
+      .filter((d) => /var\(--(system|focus)\b/.test(d.value))
+      .filter((d) => !/:focus|data-over|data-dragging|data-lands/.test(d.selector));
+    expect(bad.map((d) => `${d.selector} { ${d.property}: ${d.value} }`)).toEqual([]);
+  });
+
+  it("fills a primary control in ink, at rest and under the pointer", () => {
+    const fills = declarations()
+      .filter((d) => /\.btn--primary(?![\w-])/.test(d.selector) && d.property === "background")
+      .map((d) => d.value);
+    expect(fills.length).toBeGreaterThan(0);
+    for (const fill of fills)
+      expect(fill).toMatch(/^(var|color-mix\(in oklab, var)\(--(text|action-fill)\)/);
+    const signal = declarations().filter(
+      (d) => d.selector === ".btn--primary:hover:not(:disabled)" && d.property === "background",
+    );
+    expect(new Set(signal.map((d) => d.value)).size).toBe(signal.length);
+    expect(signal.at(-1)?.value).not.toBe("var(--action-fill)");
+  });
+
   it("sets text on a fill in that fill's own text color", () => {
     const rules = new Map<string, Map<string, string>>();
     for (const d of declarations()) {

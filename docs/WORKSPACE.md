@@ -2605,10 +2605,20 @@ new default once on load (`LOOK` in `lib/prefs.ts`); every save writes the
 mark, so a Signal chosen afterward stays. A preset chooses the palette and
 reading face; it does not change the layout. Each has a light and a dark surface, and Match system is the default.
 The choice stays in local preferences and never reaches the runtime.
-Signal uses cool blue-gray and blue actions, Field uses mineral greens and teal,
-Violet uses neutral grounds and violet actions, and Paper retains the warmer
-paper palette. The send control is filled in the action color even before a
-draft is entered, so its position is visible while it is disabled.
+Signal uses cool blue-gray grounds, Field uses mineral greens, Violet uses
+neutral grounds, and Paper retains the warmer paper palette. Each gives the
+system's own words a hue of its own: blue, teal, violet or slate. The action
+color is ink under every preset: a primary or send control is filled in the
+text color with the ground written on it, so the one thing to press reads as
+the darkest thing on paper and the brightest in a dark room. The send control
+is filled in the action color even before a draft is entered, so its position
+is visible while it is disabled.
+
+A dark surface has four layers, each a step lighter than the one under it:
+sunken (the page behind the columns), ground, raised (a card or a field) and
+popover (a menu, the palette, a dialog), and the rail has the same ladder. Each step is at least 1.08 to 1 and raised clears sunken by 1.2 to 1,
+whatever the grays, temperature or contrast, which `theme.test.ts` measures. On
+paper a popover is drawn as raised and its lift's shadow carries it.
 
 A palette is expressed through the four theme choices: gray hue, attention hue,
 contrast and temperature. `lib/theme.ts` solves the semantic colors against
@@ -2630,12 +2640,13 @@ lightness, which is the axis red-green colorblindness keeps.
 And it is spent only on attention. It had become the focus ring, the primary
 button, the send button, every toggle that was on, every link, a running job
 and the streaming caret, so "you tabbed here" and "answer me" were one ring. A
-focus ring and a drop target use the system color. Primary and send buttons use
-the preset's action fill and its paired text color. Something running uses the
-system color. `styles.test.ts`
-fails a focus rule or an on-state spelled from the attention color, and a
-fill whose text is not its own on-color. The groups' waiting count is still red,
-and that is on purpose: it is drawn to match the menu bar's attention glyph,
+focus ring and a drop target use the system color, and nothing else is filled
+or edged in it: something running is drawn in ink, and the system's chips and
+banners sit on a neutral wash. Primary and send buttons use the action fill
+and its paired text color. `styles.test.ts` fails a focus rule or an on-state
+spelled from the attention color, a fill or an edge in the system color outside
+a focus rule or a drop target, and a fill whose text is not its own on-color.
+The groups' waiting count is still red, and that is on purpose: it is drawn to match the menu bar's attention glyph,
 which is the macOS convention for "needs you" and not this app's to repaint.
 
 The theme reaches the document as a second pair of token blocks, `:root` and

@@ -58,13 +58,10 @@ export function matchesPreset(
   );
 }
 
-export const TEMPERATURES: Record<
-  Temperature,
-  { label: string; lift: Record<Surface, number>; tint: number }
-> = {
-  cool: { label: "Cool", lift: { light: 0.018, dark: -0.009 }, tint: 0.12 },
-  plain: { label: "Plain", lift: { light: 0.014, dark: -0.006 }, tint: 0.4 },
-  warm: { label: "Warm", lift: { light: 0, dark: 0 }, tint: 1 },
+export const TEMPERATURES: Record<Temperature, { label: string; lift: number; tint: number }> = {
+  cool: { label: "Cool", lift: 0.018, tint: 0.12 },
+  plain: { label: "Plain", lift: 0.014, tint: 0.4 },
+  warm: { label: "Warm", lift: 0, tint: 1 },
 };
 
 export const TEMPERATURE_KEYS = Object.keys(TEMPERATURES) as Temperature[];
@@ -104,10 +101,12 @@ const GROUNDS: Record<Surface, Record<ContrastLevel, Record<string, number>>> = 
       ground: 0.982,
       raised: 0.982,
       sunken: 0.9515,
+      popover: 0.982,
       rule: 0.889,
       "rule-hard": 0.833,
       "rail-ground": 0.9577,
       "rail-raised": 0.982,
+      "rail-popover": 0.982,
       "rail-edge": 0.889,
       "rail-wire": 0.856,
       "rail-sunken": 0.938,
@@ -117,10 +116,12 @@ const GROUNDS: Record<Surface, Record<ContrastLevel, Record<string, number>>> = 
       ground: 0.982,
       raised: 0.982,
       sunken: 0.9515,
+      popover: 0.982,
       rule: 0.86,
       "rule-hard": 0.79,
       "rail-ground": 0.9577,
       "rail-raised": 0.982,
+      "rail-popover": 0.982,
       "rail-edge": 0.86,
       "rail-wire": 0.83,
       "rail-sunken": 0.938,
@@ -129,30 +130,34 @@ const GROUNDS: Record<Surface, Record<ContrastLevel, Record<string, number>>> = 
   },
   dark: {
     standard: {
-      ground: 0.177,
-      raised: 0.2,
-      sunken: 0.156,
-      rule: 0.274,
-      "rule-hard": 0.331,
-      "rail-ground": 0.202,
-      "rail-raised": 0.228,
-      "rail-edge": 0.281,
-      "rail-wire": 0.3,
-      "rail-sunken": 0.168,
-      "grail-ground": 0.155,
+      sunken: 0.182,
+      ground: 0.222,
+      raised: 0.269,
+      popover: 0.313,
+      rule: 0.36,
+      "rule-hard": 0.42,
+      "rail-sunken": 0.182,
+      "rail-ground": 0.222,
+      "rail-raised": 0.269,
+      "rail-popover": 0.313,
+      "rail-edge": 0.36,
+      "rail-wire": 0.39,
+      "grail-ground": 0.182,
     },
     more: {
-      ground: 0.14,
-      raised: 0.165,
-      sunken: 0.12,
-      rule: 0.33,
-      "rule-hard": 0.4,
-      "rail-ground": 0.16,
-      "rail-raised": 0.19,
-      "rail-edge": 0.33,
-      "rail-wire": 0.36,
-      "rail-sunken": 0.13,
-      "grail-ground": 0.115,
+      sunken: 0.05,
+      ground: 0.165,
+      raised: 0.219,
+      popover: 0.255,
+      rule: 0.36,
+      "rule-hard": 0.44,
+      "rail-sunken": 0.05,
+      "rail-ground": 0.165,
+      "rail-raised": 0.219,
+      "rail-popover": 0.255,
+      "rail-edge": 0.36,
+      "rail-wire": 0.4,
+      "grail-ground": 0.05,
     },
   },
 };
@@ -161,10 +166,12 @@ const TINT_DEFAULT: Record<string, number> = {
   ground: 0.91,
   raised: 0.91,
   sunken: 1.38,
+  popover: 0.91,
   rule: 2.35,
   "rule-hard": 2.86,
   "rail-ground": 1.51,
   "rail-raised": 0.91,
+  "rail-popover": 0.91,
   "rail-edge": 2.35,
   "rail-wire": 2.6,
   "rail-sunken": 1.5,
@@ -191,6 +198,7 @@ function onFill(fill: string): string {
 export const THEME_TOKENS = [
   "--rail-ground",
   "--rail-raised",
+  "--rail-popover",
   "--rail-edge",
   "--rail-text",
   "--rail-muted",
@@ -200,6 +208,7 @@ export const THEME_TOKENS = [
   "--ground",
   "--raised",
   "--sunken",
+  "--popover",
   "--rule",
   "--rule-hard",
   "--edge-control",
@@ -211,7 +220,6 @@ export const THEME_TOKENS = [
   "--attention-fill",
   "--on-attention-fill",
   "--system",
-  "--system-wash",
   "--action-fill",
   "--on-action-fill",
   "--ok",
@@ -227,19 +235,31 @@ export function themeTokens(theme: Theme, surface: Surface): Tokens {
   const dark = surface === "dark";
   const base = GROUNDS[surface][theme.contrast];
   const ladder =
-    theme.grays === "slate" && theme.contrast === "standard"
-      ? dark
-        ? { ...base, ground: 0.229, raised: 0.269, "rail-ground": 0.199, "rail-raised": 0.249 }
-        : { ...base, ground: 0.958, raised: 0.982, "rail-ground": 0.912, "rail-raised": 0.942 }
-      : theme.grays === "avocado" && theme.contrast === "standard"
-        ? dark
-          ? { ...base, ground: 0.229, raised: 0.269, "rail-ground": 0.205, "rail-raised": 0.249 }
-          : { ...base, ground: 0.944, raised: 0.982, "rail-ground": 0.905, "rail-raised": 0.942 }
-        : base;
+    dark || theme.contrast !== "standard"
+      ? base
+      : theme.grays === "slate"
+        ? {
+            ...base,
+            ground: 0.958,
+            raised: 0.982,
+            "rail-ground": 0.912,
+            "rail-raised": 0.942,
+            "rail-popover": 0.942,
+          }
+        : theme.grays === "avocado"
+          ? {
+              ...base,
+              ground: 0.944,
+              raised: 0.982,
+              "rail-ground": 0.905,
+              "rail-raised": 0.942,
+              "rail-popover": 0.942,
+            }
+          : base;
   const ratio = RATIOS[theme.contrast];
   const { h, c } = GRAYS[theme.grays];
   const climate = TEMPERATURES[theme.temperature];
-  const lift = climate.lift[surface];
+  const lift = dark ? 0 : climate.lift;
   const ground = (name: string) =>
     hex(
       Math.min(1, Math.max(dark ? 0.03 : 0, (ladder[name] as number) + lift)),
@@ -252,6 +272,7 @@ export function themeTokens(theme: Theme, surface: Surface): Tokens {
   const rail = {
     "--rail-ground": ground("rail-ground"),
     "--rail-raised": ground("rail-raised"),
+    "--rail-popover": ground("rail-popover"),
     "--rail-edge": ground("rail-edge"),
     "--rail-wire": ground("rail-wire"),
     "--rail-sunken": ground("rail-sunken"),
@@ -261,6 +282,7 @@ export function themeTokens(theme: Theme, surface: Surface): Tokens {
     "--ground": ground("ground"),
     "--raised": ground("raised"),
     "--sunken": ground("sunken"),
+    "--popover": ground("popover"),
     "--rule": ground("rule"),
     "--rule-hard": ground("rule-hard"),
   };
@@ -297,7 +319,6 @@ export function themeTokens(theme: Theme, surface: Surface): Tokens {
           : 237;
   const systemChroma = theme.grays === "warm" ? 0.045 : 0.16;
   const system = solve(systemChroma, systemHue, worst, ratio.system, dark ? 0.75 : 0.39, dark);
-  const actionFill = theme.grays === "warm" ? text : system;
 
   return {
     ...rail,
@@ -313,9 +334,8 @@ export function themeTokens(theme: Theme, surface: Surface): Tokens {
     "--attention-fill": attentionFill,
     "--on-attention-fill": onFill(attentionFill),
     "--system": system,
-    "--system-wash": hex(dark ? 0.25 : 0.965, dark ? 0.02 : 0.012, systemHue),
-    "--action-fill": actionFill,
-    "--on-action-fill": onFill(actionFill),
+    "--action-fill": text,
+    "--on-action-fill": page["--ground"],
     "--ok": solve(0.13, 160, worst, ratio.signal, dark ? 0.75 : 0.55, dark),
     "--danger": solve(0.19, 25, worst, ratio.signal, dark ? 0.7 : 0.55, dark),
     "--danger-fill": dangerFill,

@@ -14,19 +14,22 @@
 }
 
 .agent-row[aria-current="true"] {
-  border-left-color: var(--system);
-  background: color-mix(in srgb, var(--system) 16%, var(--rail-ground));
+  border-left-color: var(--rail-text);
+  background: color-mix(in srgb, var(--rail-text) 8%, var(--rail-ground));
 }
 
 .agent-row:not([aria-current="true"]) .avatar {
   filter: none;
 }
 
-.btn--primary,
-.btn--primary:hover:not(:disabled) {
+.btn--primary {
   background: var(--action-fill);
   border-color: var(--action-fill);
   color: var(--on-action-fill);
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--action-fill) 84%, var(--on-action-fill));
 }
 
 .agent-row__name,

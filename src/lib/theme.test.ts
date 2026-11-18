@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { contrast, distance, linear, oklab } from "./color";
+import { contrast, distance, linear, luminance, oklab } from "./color";
 
 import {
   ATTENTIONS,
@@ -66,12 +66,11 @@ describe("the gates", () => {
       const violet = themeTokens(THEME_PRESETS.Violet!, surface);
       const blue = themeTokens({ ...THEME_PRESETS.Violet!, grays: "slate" }, surface);
       expect(violet["--system"]).not.toBe(blue["--system"]);
-      expect(violet["--system-wash"]).not.toBe(blue["--system-wash"]);
       expect(violet["--attention-fill"]).toBe(blue["--attention-fill"]);
     }
   });
 
-  it("keeps the preset surfaces and action accents distinct", () => {
+  it("keeps the preset surfaces and system voices distinct", () => {
     for (const surface of ["light", "dark"] as const) {
       const presets = Object.values(THEME_PRESETS).map((theme) => themeTokens(theme, surface));
       for (let i = 0; i < presets.length; i++) {
@@ -79,9 +78,6 @@ describe("the gates", () => {
           expect(
             distance(presets[i]!["--rail-ground"], presets[j]!["--rail-ground"]),
           ).toBeGreaterThan(1);
-          expect(
-            distance(presets[i]!["--action-fill"], presets[j]!["--action-fill"]),
-          ).toBeGreaterThan(4);
         }
       }
       const field = presets[1]!;
@@ -95,7 +91,7 @@ describe("the gates", () => {
     }
   });
 
-  it("keeps selected rail text readable over the translucent system color", () => {
+  it("keeps selected rail text readable over the selected row's ink wash", () => {
     for (const theme of Object.values(THEME_PRESETS)) {
       for (const surface of ["light", "dark"] as const) {
         const tokens = themeTokens(theme, surface);
@@ -103,15 +99,15 @@ describe("the gates", () => {
           `#${[1, 3, 5]
             .map((i) =>
               Math.round(
-                Number.parseInt(a.slice(i, i + 2), 16) * 0.16 +
-                  Number.parseInt(b.slice(i, i + 2), 16) * 0.84,
+                Number.parseInt(a.slice(i, i + 2), 16) * 0.08 +
+                  Number.parseInt(b.slice(i, i + 2), 16) * 0.92,
               )
                 .toString(16)
                 .padStart(2, "0"),
             )
             .join("")}`;
         expect(
-          contrast(tokens["--rail-text"], mix(tokens["--system"], tokens["--rail-ground"])),
+          contrast(tokens["--rail-text"], mix(tokens["--rail-text"], tokens["--rail-ground"])),
         ).toBeGreaterThanOrEqual(4.5);
         expect(contrast(tokens["--action-fill"], tokens["--raised"])).toBeGreaterThanOrEqual(3);
       }
@@ -120,6 +116,7 @@ describe("the gates", () => {
   const SHIPPED: Tokens = {
     "--rail-ground": "#f5f3ee",
     "--rail-raised": "#ffffff",
+    "--rail-popover": "#ffffff",
     "--rail-edge": "#e5e2da",
     "--rail-text": "#0b0b0a",
     "--rail-muted": "#54524d",
@@ -129,6 +126,7 @@ describe("the gates", () => {
     "--ground": "#ffffff",
     "--raised": "#ffffff",
     "--sunken": "#f4f3f0",
+    "--popover": "#ffffff",
     "--rule": "#e2e0da",
     "--rule-hard": "#d5d2ca",
     "--edge-control": "#e2e0da",
@@ -140,7 +138,6 @@ describe("the gates", () => {
     "--attention-fill": "#b4530a",
     "--on-attention-fill": "#ffffff",
     "--system": "#2f4858",
-    "--system-wash": "#e9eff3",
     "--action-fill": "#2f4858",
     "--on-action-fill": "#ffffff",
     "--ok": "#14713f",
@@ -236,6 +233,64 @@ describe("what a theme can and cannot move", () => {
     for (const selector of [PAPER, INK]) {
       expect([...declared(written, selector).keys()]).toEqual([...THEME_TOKENS]);
     }
+  });
+});
+
+describe("the primary action", () => {
+  it.each(
+    [...THEMES, ...Object.values(THEME_PRESETS)].flatMap((theme) =>
+      (["light", "dark"] as const).map((surface) => [theme, surface] as const),
+    ),
+  )("is filled in ink with the ground on it, %o on %s", (theme, surface) => {
+    const tokens = themeTokens(theme, surface);
+    expect(tokens["--action-fill"]).toBe(tokens["--text"]);
+    expect(tokens["--on-action-fill"]).toBe(tokens["--ground"]);
+    expect(tokens["--action-fill"]).not.toBe(tokens["--system"]);
+  });
+});
+
+describe("the layers", () => {
+  const LADDERS = [
+    ["--sunken", "--ground", "--raised", "--popover"],
+    ["--rail-sunken", "--rail-ground", "--rail-raised", "--rail-popover"],
+  ] as const;
+
+  it.each(THEMES)("steps sunken, ground, raised and popover apart in dark, %o", (theme) => {
+    const tokens = themeTokens(theme, "dark");
+    for (const [sunken, ground, raised, popover] of LADDERS) {
+      for (const [below, above] of [
+        [sunken, ground],
+        [ground, raised],
+        [raised, popover],
+      ] as const) {
+        expect(luminance(tokens[above]), `${above} is not above ${below}`).toBeGreaterThan(
+          luminance(tokens[below]),
+        );
+        expect(
+          contrast(tokens[below], tokens[above]),
+          `${below} to ${above}`,
+        ).toBeGreaterThanOrEqual(1.08);
+      }
+      expect(
+        contrast(tokens[sunken], tokens[raised]),
+        `${sunken} to ${raised}`,
+      ).toBeGreaterThanOrEqual(1.2);
+    }
+  });
+
+  it.each(THEMES)("keeps light flat, with a popover drawn as raised, %o", (theme) => {
+    const tokens = themeTokens(theme, "light");
+    expect(tokens["--popover"]).toBe(tokens["--raised"]);
+    expect(tokens["--rail-popover"]).toBe(tokens["--rail-raised"]);
+  });
+
+  it("keeps the default light grounds where they were", () => {
+    const tokens = themeTokens(DEFAULT_THEME, "light");
+    expect([tokens["--sunken"], tokens["--ground"], tokens["--raised"]]).toEqual([
+      "#f2efe6",
+      "#fbf9f3",
+      "#fbf9f3",
+    ]);
   });
 });
 
