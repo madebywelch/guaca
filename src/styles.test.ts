@@ -622,7 +622,12 @@ describe("every length is named, not spelled", () => {
       const bad = declarations()
         .filter((d) => d.property === base || d.property.startsWith(`${base}-`))
         .filter(
-          (d) => !named(d.value, /^--(space-|column-|dot|flow-|scrollbar-size$)/, /^(-?1px|12vh)$/),
+          (d) =>
+            !named(
+              d.value,
+              /^--(space-|column-|dot|flow-|scrollbar-size$|settings-(inline-end|gutter)$)/,
+              /^(0px|-?1px|12vh)$/,
+            ),
         );
       expect(bad.map((d) => `${d.selector} { ${d.property}: ${d.value} }`)).toEqual([]);
     },
@@ -722,6 +727,15 @@ describe("scroll bars", () => {
 });
 
 describe("the menu bar panel", () => {
+  it("keeps the agent row's keyboard ring inside the scrolling edge", () => {
+    const offset = declarations().find(
+      (d) =>
+        d.selector === ".menubar__agents .agent-row:focus-visible" &&
+        d.property === "outline-offset",
+    );
+    expect(offset?.value).toBe("calc(var(--focus-outline) * -1)");
+  });
+
   it("draws no focus ring until a key is pressed", () => {
     const rule = declarations().find(
       (d) =>

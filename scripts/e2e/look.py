@@ -152,7 +152,25 @@ LAYOUT = """
     tops.set(top, (tops.get(top) || 0) + 1);
   }
   const rows = [...tops.entries()].sort((a, b) => a[0] - b[0]).map(([, count]) => count);
-  return { boxes, scrollers, rows };
+  const dialog = document.querySelector('.dialog--form, .dialog--settings')?.getBoundingClientRect();
+  const centerOffset = dialog ? Math.round(dialog.left + dialog.width / 2 - innerWidth / 2) : 0;
+  return { boxes, scrollers, rows, centerOffset };
+})()
+"""
+
+SETTINGS_CONTROLS = """
+(() => {
+  const width = (selector) => Math.round(document.querySelector(selector).getBoundingClientRect().width);
+  const gutter = (selector) => {
+    const node = document.querySelector(selector);
+    return node.offsetWidth - node.clientWidth - node.clientLeft -
+      parseFloat(getComputedStyle(node).borderRightWidth);
+  };
+  return {
+    general: width('#settings-tab-general'),
+    yourName: width('#settings-pane input[placeholder="Unnamed"]'),
+    gutters: [gutter('.settings__nav'), gutter('.settings__pane')],
+  };
 })()
 """
 

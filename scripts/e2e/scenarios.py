@@ -546,10 +546,12 @@ def bars_hold(w: World, surface: str) -> tuple[list[str], dict[str, dict]]:
     faults: list[str] = []
     for screen, modes in laid.items():
         faults += [f"{screen} ({surface}): {fault}" for fault in look.moved(modes["overlay"], modes["classic"])]
+        faults += [f"{screen} ({surface}, {mode}): dialog center is {layout['centerOffset']}px from viewport center"
+                   for mode, layout in modes.items() if abs(layout["centerOffset"]) > 1]
     for mode, layout in laid["New agent"].items():
-        if len(layout["rows"]) != 2:
+        if layout["rows"] != [11, 10]:
             faults.append(f"New agent ({surface}, {mode} scroll bars) lays its Character grid out in rows of "
-                          f"{layout['rows']}; at {look.FRAME[0]}x{look.FRAME[1]} it is two rows")
+                          f"{layout['rows']}; at {look.FRAME[0]}x{look.FRAME[1]} it is [11, 10]")
     observed = {screen: {"rows": modes["classic"]["rows"], "scrolls": modes["classic"]["scrollers"]}
                 for screen, modes in laid.items()}
     return faults, observed
@@ -565,6 +567,25 @@ def scenario_scrollbars(w: World) -> None:
     faults, observed = bars_hold(w, "dark")
     w.check("every screen in dark lays out the same with classic scroll bars as with overlay ones",
             not faults, observed=observed, detail=faults or None, shot=False, stop=False)
+    ui = w.ui
+    ui.scrollbars(True)
+    show(w, "Settings")
+    ui.evaluate("""{
+      const style = document.createElement('style');
+      style.textContent = '.settings__nav::-webkit-scrollbar, .settings__pane::-webkit-scrollbar { width: 17px; }';
+      document.head.append(style);
+    }""")
+    measured = []
+    for width in ("none", "auto"):
+        ui.evaluate(f"""document.querySelectorAll('.settings__nav, .settings__pane')
+          .forEach(node => node.style.scrollbarWidth = '{width}')""")
+        laid_out(w, "the Settings controls")
+        measured.append(ui.evaluate(look.SETTINGS_CONTROLS))
+    overlay, classic = measured
+    w.check("Settings keeps the General tab and Your name field the same width with a native gutter",
+            overlay["gutters"] == [0, 0] and classic["gutters"] == [17, 17]
+            and all(abs(overlay[key] - classic[key]) <= 1 for key in ("general", "yourName")),
+            observed=measured)
     no_unscripted(w)
 
 
@@ -1935,6 +1956,7 @@ SCENARIOS: dict[str, Scenario] = {
     (
         "every screen in light lays out the same with classic scroll bars as with overlay ones",
         "every screen in dark lays out the same with classic scroll bars as with overlay ones",
+        "Settings keeps the General tab and Your name field the same width with a native gutter",
         "every model call was one the scenario scripted",
     )),
     "update": Scenario(scenario_update, "A person updates a box that follows main while another client's update is "
