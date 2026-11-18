@@ -147,6 +147,23 @@ describe("peer traffic in a channel", () => {
     expect(rows.map((row) => row.kind)).toEqual(["peers", "message", "peers"]);
   });
 
+  it("files an answer under its question when the asker spoke in between", () => {
+    const rows = transcriptRows(
+      [
+        record(send(["Chef", "Scribe"], ok)),
+        envelope({ from: { kind: "agent", id: "manager" }, to: { kind: "human" } }),
+        inbound("chef", "Dinner is at eight."),
+      ],
+      lookups,
+    );
+
+    expect(rows.map((row) => row.kind)).toEqual(["peers", "message"]);
+    expect(bursts(rows)[0]?.peers.map((p) => [p.peer.name, p.answer])).toEqual([
+      ["Chef", "Dinner is at eight."],
+      ["Scribe", null],
+    ]);
+  });
+
   it("does not swallow the operator's own conversation", () => {
     const rows = transcriptRows(
       [

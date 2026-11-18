@@ -100,7 +100,21 @@ export function transcriptRows(messages: Envelope[], lookups: Lookups): Row[] {
     folded: MessageId | undefined,
     said: string | null,
   ) => {
-    let open = burst;
+    const question =
+      direction === "received"
+        ? [...rows]
+            .reverse()
+            .find(
+              (row): row is Extract<Row, { kind: "peers" }> =>
+                row.kind === "peers" &&
+                row.runId === runId &&
+                row.peers.some(
+                  (entry) =>
+                    entry.peer.id === peer.id && entry.asked !== null && entry.answer === null,
+                ),
+            )
+        : undefined;
+    let open = question ?? burst;
     if (!open || open.runId !== runId) {
       mark();
       open = { kind: "peers", key: `peers:${key}`, runId, peers: [], folded: [], at };
