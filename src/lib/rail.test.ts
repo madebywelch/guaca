@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { landsBefore, railOrder } from "./rail";
+import { landsBefore, numbered, railOrder } from "./rail";
 import type { Activity, AgentCard, AgentId } from "./types";
 
 function agent(name: string, over: Partial<AgentCard> = {}): AgentCard {
@@ -165,5 +165,32 @@ describe("where a dropped row lands", () => {
     expect(landsBefore(column, "Everyone", "Research")).toBe("Kitchen");
     expect(landsBefore(column, "Everyone", "Kitchen")).toBeNull();
     expect(landsBefore(column, "Kitchen", "Everyone")).toBe("Everyone");
+  });
+});
+
+describe("the numbers Command 1 to 9 open", () => {
+  it("count group by group in the groups' order, pinned first, and ignore who is working", () => {
+    const rows = [
+      agent("Cook", { railOrder: 1 }),
+      agent("Manager", { railOrder: 0 }),
+      agent("Scribe", { railOrder: 2, pinned: true }),
+      agent("Clerk", { groupId: "g2" }),
+      agent("Gone", { lifecycle: "terminated" }),
+    ];
+    expect(names(numbered(rows, [{ id: "g2" }, { id: "g1" }]))).toEqual([
+      "Clerk",
+      "Scribe",
+      "Manager",
+      "Cook",
+    ]);
+  });
+
+  it("keep an agent whose group is not listed, at the end", () => {
+    expect(names(numbered([agent("Lost", { groupId: "g9" }), ...crew()], [{ id: "g1" }]))).toEqual([
+      "Manager",
+      "Cook",
+      "Scribe",
+      "Lost",
+    ]);
   });
 });
