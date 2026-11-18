@@ -42,6 +42,16 @@ describe("panel boot", () => {
     expect(render).not.toHaveBeenCalled();
   });
 
+  it("marks the panel as driven by the keyboard only once a key is pressed", async () => {
+    host.mockResolvedValue(null);
+    await import("./menubar");
+    window.dispatchEvent(new FocusEvent("focus"));
+    expect(document.documentElement.dataset.keyboard).toBeUndefined();
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab" }));
+    expect(document.documentElement.dataset.keyboard).toBe("");
+    window.dispatchEvent(new FocusEvent("blur"));
+  });
+
   it("checks the adopted generation again before panel commands", async () => {
     const assignment = { origin: "http://localhost", token: "token", generation: 3 };
     host.mockResolvedValue(assignment);

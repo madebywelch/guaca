@@ -93,3 +93,8 @@ window shut* in `docs/WORKSPACE.md`, then `menubar.rs`, `tray.rs`, `app.rs` and
   `use_screen` call clears the mark with the future it drops. Written as an
   insert before the call and a remove after it, a stop would leave the agent
   reported on its computer for the rest of the session.
+- **The panel draws a focus ring only after a key is pressed.** Its window
+  takes the keyboard when it opens, and the Mac's web view then ringed Open
+  Guaca under a click, as if it had been tabbed to. `lib/keyboard.ts` marks
+  the root on a key and clears the mark on the pointer and whenever the window
+  comes or goes, and the stylesheet draws no ring in the panel without it.

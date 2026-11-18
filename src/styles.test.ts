@@ -711,6 +711,17 @@ describe("scroll bars", () => {
   });
 });
 
+describe("the menu bar panel", () => {
+  it("draws no focus ring until a key is pressed", () => {
+    const rule = declarations().find(
+      (d) =>
+        d.selector === ":root:not([data-keyboard]) .menubar :focus-visible" &&
+        d.property === "outline",
+    );
+    expect(rule?.value).toBe("none");
+  });
+});
+
 describe("every token a rule spends exists", () => {
   it("names a property this file declares or a component sets", () => {
     const rules = `${css}\n${signalCss}\n${composerCss}`.replace(/\/\*[\s\S]*?\*\//g, "");

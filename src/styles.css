@@ -9477,3 +9477,7 @@ button.artifacts__version[aria-pressed="true"] {
 .settings__nav {
   width: calc(11rem + var(--scrollbar-size));
 }
+
+:root:not([data-keyboard]) .menubar :focus-visible {
+  outline: none;
+}
