@@ -443,9 +443,9 @@ where
             let call_counter = call_counter.clone();
             let recorder = recorder.clone();
             async move {
-                call_counter.fetch_add(1, Ordering::SeqCst);
                 recorder.lock().push(body.0.clone());
                 let script = decide(&body.0);
+                call_counter.fetch_add(1, Ordering::SeqCst);
                 if matches!(script, Script::Unavailable) {
                     return (
                         axum::http::StatusCode::SERVICE_UNAVAILABLE,
