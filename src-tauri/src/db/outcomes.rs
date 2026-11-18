@@ -5,7 +5,7 @@ use super::{Store, StoreError};
 use crate::domain::envelope::{Envelope, NoticeKind, Part, Participant};
 use crate::domain::ids::{AgentId, GroupId, MessageId, RunId};
 use crate::domain::outcome::{
-    first_sentence, headline_of, Need, Outcome, Settled, Status, Trigger, NO_NOTE, STOPPED,
+    first_sentence, headline_of, Need, Outcome, Running, Settled, Status, Trigger, NO_NOTE, STOPPED,
 };
 
 const ENVELOPE: &str = "m.id,m.run_id,m.channel_id,m.from_kind,m.from_agent,m.to_kind,m.to_agent,\
@@ -379,6 +379,38 @@ impl Store {
             outcomes.push(row??);
         }
         Ok(outcomes)
+    }
+
+    pub fn running(&self) -> Result<Vec<Running>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT run_id,started_at FROM pending_runs
+              WHERE started_at IS NOT NULL ORDER BY started_at,run_id",
+        )?;
+        let started = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut running = Vec::new();
+        for (run, started_at) in started {
+            let Some(start) = first(&conn, "1=1", "ASC", params![run])? else { continue };
+            let Some(owner) = owned(&conn, &start)? else { continue };
+            let note = conn
+                .query_row(
+                    "SELECT body FROM working_notes WHERE agent_id=?1 AND at>=?2
+                      ORDER BY id DESC LIMIT 1",
+                    params![owner.agent.to_string(), started_at],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            running.push(Running {
+                run_id: start.run_id,
+                agent_id: owner.agent,
+                group_id: owner.group,
+                started_at,
+                note,
+            });
+        }
+        Ok(running)
     }
 
     pub fn reported(

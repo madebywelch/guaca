@@ -328,3 +328,52 @@ async fn a_channel_on_screen_marks_what_its_runs_ended_in_seen() {
     assert!(store.outcomes(None, None, true, 100).unwrap().is_empty());
     assert_eq!(seen(&h).last(), Some(&vec![ben]));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_conversation_carried_over_a_restart_keeps_the_moment_it_started() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let manager = calls.clone();
+    let stub = serve(move |body| {
+        if speaker(body) != "Manager" {
+            return Script::Say("Lunch is ready.".into());
+        }
+        match manager.fetch_add(1, Ordering::SeqCst) {
+            0 => Script::Progress("Asking Chef about lunch".into()),
+            1 => {
+                Script::Instruct { recipients: vec!["Chef".into()], text: "Prepare lunch.".into() }
+            }
+            2 => Script::Hang,
+            _ => Script::Say("Lunch is on its way.".into()),
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    assert!(h.runtime.store().running().unwrap().is_empty(), "nothing has started yet");
+    h.pause("Chef");
+    let run = h.runtime.send_from_human(h.id("Manager"), "Ask Chef to prepare lunch.").unwrap();
+    h.wait_until("Manager's turn to hang after asking Chef", |_| calls.load(Ordering::SeqCst) >= 3)
+        .await;
+
+    let before = h.runtime.store().running().unwrap();
+    assert_eq!(before.len(), 1, "{before:#?}");
+    assert_eq!(before[0].run_id, run);
+    assert_eq!(before[0].agent_id, h.id("Manager"), "a delegation is the coordinator's");
+    assert_eq!(before[0].note.as_deref(), Some("Asking Chef about lunch"));
+    assert!(before[0].started_at <= now_ms());
+
+    let (h, drained) = h.restart(Duration::from_secs(5)).await;
+    assert!(drained.is_complete(), "{drained:?}");
+    let after = h.runtime.store().running().unwrap();
+    assert_eq!(after.len(), 1, "the next host still owes the conversation: {after:#?}");
+    assert_eq!(
+        after[0].started_at, before[0].started_at,
+        "a restart mid-turn must not restart the clock"
+    );
+
+    h.resume("Chef");
+    h.settle(run).await;
+    assert!(
+        h.runtime.store().running().unwrap().is_empty(),
+        "a settled conversation is finished, not running"
+    );
+}
