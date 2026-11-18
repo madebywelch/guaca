@@ -6,11 +6,11 @@ import {
   useRef,
   useState,
 } from "react";
-
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import type { Ribbon as Layout } from "../lib/ribbon";
 import { useStore } from "../lib/store";
 import type { AgentId } from "../lib/types";
+import { Icon } from "./Icon";
 
 interface Props {
   ribbon: Layout;
@@ -32,10 +32,9 @@ const CHECK = (
 );
 
 const CALENDAR = (
-  <svg className="ribbon__glyph" viewBox="0 0 12 12" aria-hidden="true">
-    <rect x="1.5" y="2.5" width="9" height="8" rx="1" />
-    <path d="M1.5 5h9M4 1.5v2M8 1.5v2" />
-  </svg>
+  <span className="ribbon__glyph">
+    <Icon name="calendar" size={16} />
+  </span>
 );
 
 export function Ribbon({ ribbon, onOpenAgent, onOpenPile, openAgentId, onTrackWidth }: Props) {

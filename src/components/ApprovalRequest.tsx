@@ -76,6 +76,7 @@ export function ApprovalRequest({ part, agent }: Props) {
             type="button"
             className="btn btn--primary"
             disabled={deciding !== null}
+            aria-busy={deciding === "allow"}
             onClick={() => answer("allow")}
           >
             Allow
@@ -85,6 +86,7 @@ export function ApprovalRequest({ part, agent }: Props) {
               type="button"
               className="btn"
               disabled={deciding !== null}
+              aria-busy={deciding === "alwaysAllow"}
               title={`Stop asking when ${asker} does this`}
               onClick={() => answer("alwaysAllow")}
             >
@@ -95,6 +97,7 @@ export function ApprovalRequest({ part, agent }: Props) {
             type="button"
             className="btn btn--quiet"
             disabled={deciding !== null}
+            aria-busy={deciding === "deny"}
             onClick={() => answer("deny")}
           >
             Deny

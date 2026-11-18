@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-
 import { useDismiss } from "../lib/dismiss";
 import {
   fileUrl,
@@ -15,6 +14,7 @@ import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import { desktop } from "../lib/transport";
 import { type Attachment, errorMessage } from "../lib/types";
+import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
 
 export function FileCard({ file }: { file: Attachment }) {
@@ -222,7 +222,7 @@ export function FilePreview({ file, onClose }: { file: Attachment; onClose: () =
               title="Close"
               onClick={onClose}
             >
-              ×
+              <Icon name="close" />
             </button>
           </div>
         </div>

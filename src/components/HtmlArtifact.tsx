@@ -1,9 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-
 import { useDismiss } from "../lib/dismiss";
 import { artifactUrl } from "../lib/files";
 import { api } from "../lib/ipc";
 import { type AgentId, errorMessage } from "../lib/types";
+import { Icon } from "./Icon";
 
 export const Answering = createContext<{ id: AgentId; name: string } | null>(null);
 
@@ -172,7 +172,7 @@ export function HtmlArtifact({
                 title="Close"
                 onClick={() => setFull(false)}
               >
-                ×
+                <Icon name="close" />
               </button>
             </div>
           </div>

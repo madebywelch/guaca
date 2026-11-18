@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-
 import { prefersDark, resolveSurface, watchSystemSurface } from "../lib/appearance";
 import { pageData } from "../lib/artifacts";
 import { COMMIT, VERSION } from "../lib/build";
@@ -22,6 +21,7 @@ import {
 } from "../lib/types";
 import { type BarFace, type BarLook, barFace, barLook, dressed } from "../lib/widget";
 import { useHostState } from "./HostUpdates";
+import { Icon } from "./Icon";
 
 interface Props {
   onOpen: (place: QuickPlace) => void;
@@ -141,7 +141,7 @@ export function StatusBar({ onOpen, onMessage }: Props) {
                 aria-label={`Remove ${action.label}`}
                 onClick={() => void remove(action)}
               >
-                ×
+                <Icon name="close" size={16} />
               </button>
             )}
           </span>
@@ -386,7 +386,7 @@ function PinnedPage({
           aria-label={`Unpin ${title}`}
           onClick={onUnpin}
         >
-          ×
+          <Icon name="close" size={16} />
         </button>
       )}
     </span>

@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { useDismiss } from "../lib/dismiss";
 import { api, openExternal } from "../lib/ipc";
@@ -15,6 +14,7 @@ import {
 import { useStore } from "../lib/store";
 import { useNow } from "../lib/time";
 import type { AgentCard, Group, SearchHits } from "../lib/types";
+import { Icon, type IconName } from "./Icon";
 
 interface Props {
   initial?: string;
@@ -216,7 +216,7 @@ export function Search({
       <div className="palette" role="dialog" aria-modal="true" aria-label="Search">
         <div className="palette__query">
           <span aria-hidden="true" className="palette__glass">
-            ⌕
+            <Icon name="search" />
           </span>
           <input
             ref={inputRef}
@@ -309,7 +309,7 @@ function Row({
           />
         ) : (
           <span aria-hidden="true" className="palette__glyph">
-            {GLYPH[result.kind]}
+            <Icon name={GLYPH[result.kind]} size={16} />
           </span>
         )}
       </span>
@@ -322,13 +322,13 @@ function Row({
   );
 }
 
-const GLYPH: Record<SearchResult["kind"], string> = {
-  messages: "❝",
-  agents: "◍",
-  groups: "▤",
-  files: "◫",
-  links: "↗",
-  routines: "◷",
-  artifacts: "❏",
-  actions: "⌘",
+const GLYPH: Record<SearchResult["kind"], IconName> = {
+  messages: "message",
+  agents: "agent",
+  groups: "group",
+  files: "file",
+  links: "external",
+  routines: "clock",
+  artifacts: "artifact",
+  actions: "command",
 };

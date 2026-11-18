@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-
 import { useDismiss } from "../lib/dismiss";
+import { Icon } from "./Icon";
 
 interface Props {
   onNewAgent: () => void;
@@ -73,7 +73,7 @@ export function NewMenu({ onNewAgent, onNewGroup, onOpenCafeteria }: Props) {
         aria-expanded={open}
         onClick={() => setOpen((was) => !was)}
       >
-        +
+        <Icon name="plus" />
       </button>
 
       {open && (

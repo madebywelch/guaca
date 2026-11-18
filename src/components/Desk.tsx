@@ -104,7 +104,7 @@ interface CardProps {
 }
 
 function DeskCard({ request, agent, onDecide, onAnswer, onOpenChannel }: CardProps) {
-  const [answering, setAnswering] = useState(false);
+  const [answering, setAnswering] = useState<string | null>(null);
   const [, lapsed] = useReducer((n: number) => n + 1, 0);
   useEffect(() => {
     if (request.lapsesAt === null) return;
@@ -116,8 +116,8 @@ function DeskCard({ request, agent, onDecide, onAnswer, onOpenChannel }: CardPro
   const asker = agent?.name ?? "A deleted agent";
 
   const answer = (decision: Decision) => {
-    setAnswering(true);
-    void onDecide(decision).finally(() => setAnswering(false));
+    setAnswering(decision);
+    void onDecide(decision).finally(() => setAnswering(null));
   };
 
   return (
@@ -156,8 +156,9 @@ function DeskCard({ request, agent, onDecide, onAnswer, onOpenChannel }: CardPro
           <>
             <button
               type="button"
-              className="btn btn--primary btn--compact"
-              disabled={answering}
+              className="btn btn--primary"
+              disabled={answering !== null}
+              aria-busy={answering === "allow"}
               onClick={() => answer("allow")}
             >
               Allow
@@ -165,8 +166,9 @@ function DeskCard({ request, agent, onDecide, onAnswer, onOpenChannel }: CardPro
             {request.request.action === "createAgent" && (
               <button
                 type="button"
-                className="btn btn--compact"
-                disabled={answering}
+                className="btn"
+                disabled={answering !== null}
+                aria-busy={answering === "alwaysAllow"}
                 title={`Stop asking when ${asker} does this`}
                 onClick={() => answer("alwaysAllow")}
               >
@@ -175,8 +177,9 @@ function DeskCard({ request, agent, onDecide, onAnswer, onOpenChannel }: CardPro
             )}
             <button
               type="button"
-              className="btn btn--quiet btn--compact"
-              disabled={answering}
+              className="btn btn--quiet"
+              disabled={answering !== null}
+              aria-busy={answering === "deny"}
               onClick={() => answer("deny")}
             >
               Deny
@@ -185,10 +188,10 @@ function DeskCard({ request, agent, onDecide, onAnswer, onOpenChannel }: CardPro
         ) : (
           <Answers
             options={request.request.options}
-            disabled={answering}
+            pending={answering}
             onAnswer={(text) => {
-              setAnswering(true);
-              void onAnswer(text).finally(() => setAnswering(false));
+              setAnswering(text);
+              void onAnswer(text).finally(() => setAnswering(null));
             }}
           />
         )}
@@ -204,24 +207,26 @@ function DeskCard({ request, agent, onDecide, onAnswer, onOpenChannel }: CardPro
 
 function Answers({
   options,
-  disabled,
+  pending,
   onAnswer,
 }: {
   options: string[];
-  disabled: boolean;
+  pending: string | null;
   onAnswer: (answer: string) => void;
 }) {
   const [written, setWritten] = useState("");
+  const disabled = pending !== null;
 
   if (options.length > 0) {
     return (
       <>
-        {options.map((option, index) => (
+        {options.map((option) => (
           <button
             key={option}
             type="button"
-            className={index === 0 ? "btn btn--primary btn--compact" : "btn btn--quiet btn--compact"}
+            className="btn"
             disabled={disabled}
+            aria-busy={pending === option}
             onClick={() => onAnswer(option)}
           >
             {option}
@@ -250,8 +255,9 @@ function Answers({
       />
       <button
         type="submit"
-        className="btn btn--primary btn--compact"
+        className="btn btn--primary"
         disabled={disabled || written.trim() === ""}
+        aria-busy={disabled}
       >
         Send
       </button>

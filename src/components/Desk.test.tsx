@@ -250,6 +250,24 @@ describe("the desk", () => {
     expect(answerQuestion).not.toHaveBeenCalled();
   });
 
+  it("marks the pressed answer pending while it is in flight, and only that one", () => {
+    decideApproval.mockReturnValue(new Promise(() => {}));
+    draw([request()]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    expect(screen.getByRole("button", { name: "Allow" }).getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByRole("button", { name: "Deny" }).getAttribute("aria-busy")).toBe("false");
+  });
+
+  it("draws a question's choices as equals, with none filled as if recommended", () => {
+    draw([asks(["Northwind", "Contoso"])]);
+
+    const classes = ["Northwind", "Contoso"].map(
+      (name) => screen.getByRole("button", { name }).className,
+    );
+    expect(classes).toEqual(["btn", "btn"]);
+  });
+
   it("lets the buttons go again after a refusal, so it can be answered", async () => {
     decideApproval.mockRejectedValue(new Error("already settled"));
     pendingApprovals.mockResolvedValue([request()]);

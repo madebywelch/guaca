@@ -1,5 +1,4 @@
 import { useEffect, useLayoutEffect, useState } from "react";
-
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { useDismiss } from "../lib/dismiss";
 import { useFollowBottom } from "../lib/follow";
@@ -7,6 +6,7 @@ import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import { continues, type Lookups, toPeer } from "../lib/transcript";
 import type { AgentId, Envelope } from "../lib/types";
+import { Icon } from "./Icon";
 import { MessageItem } from "./MessageItem";
 
 export function PairThread({
@@ -55,7 +55,7 @@ export function PairThread({
           <AgentAvatar avatar={here.avatar} color={here.color} size="sm" seed={here.id} />
           {here.name}
           <span className="pane__between" aria-hidden="true">
-            ⇄
+            <Icon name="swap" size={16} />
           </span>
           <AgentAvatar avatar={there.avatar} color={there.color} size="sm" seed={there.id} />
           {there.name}
@@ -87,15 +87,9 @@ export function PairThread({
 
       <div className="viewonly">
         <span className="viewonly__note">
-          <svg viewBox="0 0 24 24" className="viewonly__lock" aria-hidden="true">
-            <path
-              d="M7 10V7a5 5 0 0 1 10 0v3M5.5 10h13v10h-13z"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.6"
-              strokeLinejoin="round"
-            />
-          </svg>
+          <span className="viewonly__lock">
+            <Icon name="lock" size={16} />
+          </span>
           This chat is view-only
         </span>
         <button type="button" className="btn" onClick={onClose}>

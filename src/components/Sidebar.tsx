@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-
 import { AgentAvatar, type Look } from "../avatars/AgentAvatar";
 import { FLIGHT_MS, roleOf, usePulseChoreography } from "../lib/choreography";
 import { useDismiss } from "../lib/dismiss";
@@ -14,6 +13,7 @@ import { desktop } from "../lib/transport";
 import type { AgentCard, AgentId, Group, GroupId } from "../lib/types";
 import { Brand } from "./Brand";
 import { GroupRail } from "./GroupRail";
+import { Icon } from "./Icon";
 import { NewMenu } from "./NewMenu";
 import { SpendTag, useSpendTag } from "./Spend";
 
@@ -298,12 +298,9 @@ export function Sidebar({
         <span className="agent-row__title">
           <span className="agent-row__name">{agent.name}</span>
           {agent.pinned && (
-            <svg className="agent-row__pin" viewBox="0 0 12 12" role="img" aria-label="pinned">
-              <path
-                d="M6 1.4a2.6 2.6 0 0 1 .9 5.04L6 10.6l-.9-4.16A2.6 2.6 0 0 1 6 1.4z"
-                fill="currentColor"
-              />
-            </svg>
+            <span className="agent-row__pin" role="img" aria-label="pinned">
+              <Icon name="pin" size={16} />
+            </span>
           )}
         </span>
         <span className="agent-row__meta" data-state={label.kind}>
@@ -321,7 +318,7 @@ export function Sidebar({
       title={`${group.name} settings`}
       aria-label={`${group.name} settings`}
     >
-      ⚙
+      <Icon name="gear" size={16} />
     </button>
   );
 
@@ -378,7 +375,7 @@ export function Sidebar({
 
         <button type="button" className="rail__search" onClick={onOpenSearch}>
           <span aria-hidden="true" className="rail__glass">
-            ⌕
+            <Icon name="search" size={16} />
           </span>
           <span className="rail__search-label">Search</span>
           <kbd className="rail__key">{FIND_KEY}</kbd>

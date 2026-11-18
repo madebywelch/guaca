@@ -312,13 +312,13 @@ describe("one artifact", () => {
       const history = await screen.findByRole("button", { name: "History" });
       history.focus();
       fireEvent.click(history);
-      const back = screen.getByRole("button", { name: "‹ Back to the page" });
+      const back = screen.getByRole("button", { name: "Back to the page" });
       expect(document.activeElement).toBe(back);
       if (way === "Escape") fireEvent.keyDown(window, { key: "Escape" });
       else fireEvent.click(back);
       expect(document.activeElement).toBe(screen.getByRole("button", { name: "History" }));
       if (way === "Escape") fireEvent.keyDown(window, { key: "Escape" });
-      else fireEvent.click(screen.getByRole("button", { name: "‹ All artifacts" }));
+      else fireEvent.click(screen.getByRole("button", { name: "All artifacts" }));
       expect(document.activeElement).toBe(
         screen.getByRole("button", { name: /Pipeline by stage/ }),
       );
@@ -435,7 +435,7 @@ describe("a page that reads live data", () => {
       expect(
         screen.getByRole("button", { name: "Allow these reads" }).hasAttribute("disabled"),
       ).toBe(true);
-      fireEvent.click(screen.getByRole("button", { name: "‹ All artifacts" }));
+      fireEvent.click(screen.getByRole("button", { name: "All artifacts" }));
       await act(async () => {
         if (outcome === "success") resolveApproval({ ...board, sourcesAllowed: true });
         else rejectApproval(new Error("Old approval failed"));

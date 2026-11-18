@@ -225,7 +225,11 @@ function MemoryPage({ agentId }: Props) {
         <div className="banner banner--error" style={{ margin: "0.5rem 0 0" }}>
           <span>{error}</span>
           {state.phase === "failed" && (
-            <button type="button" className="btn btn--compact btn--quiet" onClick={() => void load()}>
+            <button
+              type="button"
+              className="btn btn--compact btn--quiet"
+              onClick={() => void load()}
+            >
               Retry
             </button>
           )}

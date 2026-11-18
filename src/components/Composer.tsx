@@ -7,7 +7,6 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import {
   type DraftAction,
@@ -23,6 +22,7 @@ import { applyMention, matchMentions, mentionAt, splitMentions } from "../lib/me
 import { useLiveAgents, useStore } from "../lib/store";
 import { BEFORE_RELOAD, workspaceOrigin } from "../lib/transport";
 import { type Attachment, errorMessage, type GroupId, type Staged } from "../lib/types";
+import { Icon } from "./Icon";
 import "./Composer.css";
 
 const owners = new Map<string, ReturnType<typeof createOwner>>();
@@ -390,7 +390,7 @@ export function Composer({
                   setFiles((held) => held.filter((have) => have.digest !== file.digest))
                 }
               >
-                ×
+                <Icon name="close" size={16} />
               </button>
             </li>
           ))}
@@ -465,7 +465,7 @@ export function Composer({
                 aria-label={`Dismiss: ${why}`}
                 onClick={() => setRefused((held) => held.filter((line) => line !== why))}
               >
-                ×
+                <Icon name="close" size={16} />
               </button>
             </li>
           ))}
@@ -569,7 +569,7 @@ export function Composer({
               disabled={disabled || sending}
               onClick={() => picker.current?.click()}
             >
-              <span aria-hidden="true">+</span>
+              <Icon name="attach" />
             </button>
           </>
         )}
@@ -577,6 +577,7 @@ export function Composer({
           type="button"
           className="composer__send"
           aria-label="Send"
+          aria-busy={sending}
           title="Send"
           onClick={() => void submit()}
           disabled={
@@ -587,7 +588,7 @@ export function Composer({
           }
         >
           <span>Send</span>
-          <span aria-hidden="true">↑</span>
+          <Icon name="arrow-up" size={16} />
         </button>
       </div>
 

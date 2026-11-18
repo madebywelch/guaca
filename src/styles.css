@@ -77,6 +77,10 @@
   --space-7: 1.5rem;
   --space-8: 2.25rem;
 
+  --icon-sm: 1rem;
+  --icon: 1.125rem;
+  --icon-stroke: 1.5px;
+
   --column-inset: 1.5rem;
   --column-face: 1.7rem;
   --column-indent: calc(var(--column-inset) + var(--column-face));
@@ -109,7 +113,6 @@
   --ribbon-ring: 0.125rem;
   --ribbon-now-w: 0.09375rem;
   --ribbon-lapse: 0.375rem;
-  --ribbon-glyph: 0.875rem;
   --ribbon-asleep: 0.55;
   --ribbon-asleep-lift: 1;
   --ribbon-aside: 0.42;
@@ -1396,9 +1399,8 @@ input[type="file"]::file-selector-button {
 }
 
 .agent-row__pin {
+  display: flex;
   flex: none;
-  width: 0.68rem;
-  height: 0.68rem;
   color: var(--rail-muted);
 }
 
@@ -2891,9 +2893,7 @@ input[type="file"]::file-selector-button {
 }
 
 .run__caret {
-  font-size: var(--type-meta);
   color: var(--faint);
-  width: 0.7rem;
   flex: none;
 }
 
@@ -3588,8 +3588,7 @@ input[type="file"]::file-selector-button {
 }
 
 .viewonly__lock {
-  width: 0.9rem;
-  height: 0.9rem;
+  display: flex;
   flex: none;
   opacity: 0.75;
 }
@@ -4382,7 +4381,9 @@ input[type="file"]:disabled {
   cursor: not-allowed;
 }
 
-.btn[aria-busy="true"] {
+.btn[aria-busy="true"],
+.composer__send[aria-busy="true"],
+.intake__send[aria-busy="true"] {
   opacity: 1;
   cursor: progress;
   animation: pending var(--tempo-pending) var(--ease-loop) var(--tempo-wait) infinite alternate both;
@@ -5404,17 +5405,28 @@ input[type="file"]:disabled {
 
 
 .icon {
-  width: 1.125rem;
-  height: 1.125rem;
+  display: inline-block;
+  vertical-align: middle;
+  width: var(--icon);
+  height: var(--icon);
   flex: none;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.75;
+  stroke-width: var(--icon-stroke);
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
-.icon__dot {
+.icon path {
+  vector-effect: non-scaling-stroke;
+}
+
+.icon[data-size="16"] {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
+
+.icon[data-icon="more"] {
   fill: currentColor;
   stroke: none;
 }
@@ -7017,16 +7029,6 @@ button.artifacts__version[aria-pressed="true"] {
   color: var(--muted);
 }
 
-.artifact-card svg {
-  width: 1.25rem;
-  height: 1.25rem;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 .artifact-card__text {
   flex: 1;
   min-width: 0;
@@ -8412,13 +8414,8 @@ button.artifacts__version[aria-pressed="true"] {
 }
 
 .ribbon__glyph {
-  width: var(--ribbon-glyph);
-  height: var(--ribbon-glyph);
-  fill: none;
-  stroke: var(--faint);
-  stroke-width: 1.3;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  display: flex;
+  color: var(--faint);
 }
 
 .ribbon__item-what {
@@ -8632,10 +8629,6 @@ button.artifacts__version[aria-pressed="true"] {
   background: var(--attention-wash);
 }
 
-.intake__target .icon {
-  transform: rotate(90deg);
-}
-
 .intake__menu {
   position: absolute;
   top: calc(100% + var(--space-3));
@@ -8702,6 +8695,14 @@ button.artifacts__version[aria-pressed="true"] {
   background: var(--action-fill);
   color: var(--on-action-fill);
   transition: opacity var(--tempo-tap) var(--ease);
+}
+
+.intake__send:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--action-fill) 86%, var(--ground));
+}
+
+.intake__send:active:not(:disabled) {
+  background: color-mix(in oklab, var(--action-fill) 72%, var(--ground));
 }
 
 .intake__send:disabled {

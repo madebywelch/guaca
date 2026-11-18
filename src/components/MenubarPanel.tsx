@@ -157,7 +157,11 @@ export function MenubarPanel({ ready }: { ready: boolean }) {
             {running === 1 ? "Stop" : "Stop all"}
           </button>
         )}
-        <button type="button" className="btn btn--compact" onClick={() => void api.openWindow(null)}>
+        <button
+          type="button"
+          className="btn btn--compact"
+          onClick={() => void api.openWindow(null)}
+        >
           Open Guaca
         </button>
       </footer>

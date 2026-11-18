@@ -1,9 +1,9 @@
 import type { CSSProperties, FocusEvent } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-
 import { useDismiss } from "../lib/dismiss";
 import { ownModel } from "../lib/providers";
 import type { AgentCard, Group, Provider } from "../lib/types";
+import { Icon } from "./Icon";
 
 export interface MenuTarget {
   agent: AgentCard;
@@ -184,7 +184,7 @@ function MoveToGroup({ groups, onPick }: { groups: Group[]; onPick: (group: Grou
       >
         Move to another group
         <span className="menu__more" aria-hidden="true">
-          ▸
+          <Icon name="chevron-right" size={16} />
         </span>
       </button>
       {open && (

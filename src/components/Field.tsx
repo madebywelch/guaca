@@ -166,6 +166,7 @@ export function Field({ onSearch, onManageGroups }: Props) {
           type="submit"
           className="intake__send"
           aria-label={asking ? "Send answer" : "Send"}
+          aria-busy={busy}
           disabled={busy || text.trim() === ""}
         >
           <Icon name="arrow-up" />
@@ -292,7 +293,7 @@ function TargetPicker({
           <AgentAvatar avatar={target.avatar} color={target.color} size="xs" seed={target.id} />
         )}
         <span>{target?.name ?? "Nobody yet"}</span>
-        <Icon name="chevron-right" />
+        <Icon name="chevron-down" />
       </button>
       {open && (
         <fieldset

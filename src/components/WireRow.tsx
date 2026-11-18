@@ -1,10 +1,9 @@
 import { useState } from "react";
-
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { useDismiss } from "../lib/dismiss";
-
 import { type PeerSummary, summaryLabel, type WirePeer } from "../lib/transcript";
 import type { AgentId } from "../lib/types";
+import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
 
 export function why(reason: string): string {
@@ -122,7 +121,7 @@ export function RefusedRow({
           onClick={() => setOpen(true)}
         >
           <span className="footnote__mark" aria-hidden="true">
-            ⊘
+            <Icon name="blocked" size={16} />
           </span>
           {label}
           <span className="footnote__gist">{why(reason)}</span>
@@ -175,7 +174,7 @@ export function MessageModal({
           {counterpart && (
             <>
               <span className="wire__arrow" aria-hidden="true">
-                →
+                <Icon name="arrow-right" size={16} />
               </span>
               <AgentAvatar
                 avatar={counterpart.avatar}
@@ -290,7 +289,7 @@ export function NoticeRow({
   return (
     <div className="wire wire--notice">
       <span className={kind === "upstreamError" ? "chip chip--error" : "chip chip--guard"}>
-        <span aria-hidden="true">{kind === "upstreamError" ? "!" : "◆"}</span>
+        <Icon name={kind === "upstreamError" ? "alert" : "shield"} size={16} />
         <span style={{ whiteSpace: "pre-line" }}>{text}</span>
         {onRetry && (
           <button

@@ -350,6 +350,7 @@ export function AgentEditor({ agent, onClose }: Props) {
                 type="button"
                 className="btn btn--primary"
                 disabled={busy || draft.name.trim().length === 0}
+                aria-busy={busy}
                 onClick={() => void save()}
               >
                 {agent ? "Save changes" : "Create agent"}

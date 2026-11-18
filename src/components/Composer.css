@@ -13,11 +13,13 @@
 
 .composer__send {
   width: auto;
+  height: var(--control-h);
   display: flex;
   align-items: center;
   gap: var(--space-2);
   padding: 0 var(--space-5);
-  border-radius: var(--radius-card);
+  border-radius: var(--radius-control);
+  font-weight: var(--weight-strong);
 }
 
 .composer__send,
@@ -25,6 +27,18 @@
 .composer__send:hover:not(:disabled) {
   background: var(--action-fill);
   color: var(--on-action-fill);
+}
+
+.composer__send:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--action-fill) 86%, var(--ground));
+}
+
+.composer__send:active:not(:disabled) {
+  background: color-mix(in oklab, var(--action-fill) 72%, var(--ground));
+}
+
+.composer__send:disabled {
+  opacity: 0.45;
 }
 
 .composer__recipient {

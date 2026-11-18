@@ -820,7 +820,7 @@ describe("groups as places", () => {
     fireEvent.click(screen.getByLabelText("StopTheScam, 0 agents"));
 
     const head = document.querySelector(".rail__open-head");
-    expect(head?.textContent).toBe("StopTheScam⚙");
+    expect(head?.textContent).toBe("StopTheScam");
     expect(document.querySelector(".spend")).toBeNull();
   });
 
