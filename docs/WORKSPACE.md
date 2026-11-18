@@ -2283,6 +2283,11 @@ twelfth free to add; the cost is paid when one is not a subject, which is why a
 new pane has to argue it is one rather than a field that belongs in an existing
 one.
 
+The nav is a tab list and is reached the way one is: it is a single Tab stop on
+the open section, the arrow keys, Home and End move through it and open what
+they land on, and Tab goes on into the open pane. When every section was its own
+stop, reaching Appearance from the keyboard took eight Tabs.
+
 Two of those panes are defaults rather than orders. Whatever Provider and Limits
 say is what a group falls back to, and a group that answers for itself is not
 affected by either. What stays app-wide is what is genuinely one of: the

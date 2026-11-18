@@ -968,6 +968,66 @@ def scenario_answer(w: World) -> None:
     no_unscripted(w)
 
 
+def selected_tab(w: World) -> list[str]:
+    return [str((n.get("name") or {}).get("value") or "") for n in w.ui.ax_nodes()
+            if (n.get("role") or {}).get("value") == "tab" and any(
+                p.get("name") == "selected" and (p.get("value") or {}).get("value")
+                for p in n.get("properties", []))]
+
+
+def scenario_tabs(w: World) -> None:
+    w.model.script = hello
+    w.start()
+    first_run(w)
+    settled(w, 1)
+    ui = w.ui
+
+    ui.evaluate("document.activeElement && document.activeElement.blur()")
+    ui.key(",", mod=True)
+    w.wait("Settings opens", lambda: ui.find("dialog", "Settings"))
+    stops = []
+    for _ in range(4):
+        ui.key("Tab")
+        stops.append(ui.focused())
+        if stops[-1][0] == "tab":
+            break
+    w.check("the first Tab stop in Settings is the open tab", stops[-1] == ("tab", "General"),
+            observed=stops)
+
+    ui.key("ArrowDown")
+    moved = ui.focused()
+    w.check("an arrow key moves to the next tab and opens it",
+            moved[0] == "tab" and moved[1] != "General" and selected_tab(w) == [moved[1]],
+            observed={"focused": moved, "selected": selected_tab(w)})
+    ui.key("End")
+    last = ui.focused()
+    ui.key("Home")
+    w.check("Home and End reach the first and the last tab",
+            last[0] == "tab" and last[1] != "General" and ui.focused() == ("tab", "General")
+            and selected_tab(w) == ["General"],
+            observed={"end": last, "home": ui.focused()})
+
+    presses = 0
+    while ui.focused() != ("tab", "Appearance") and presses < 16:
+        ui.key("ArrowDown")
+        presses += 1
+    w.check("Appearance is reached and opened with arrow keys",
+            selected_tab(w) == ["Appearance"] and ui.find("heading", "Appearance"),
+            observed={"selected": selected_tab(w)}, detail={"presses": presses}, shot=True)
+
+    ui.key("Tab")
+    inside = ui.focused()
+    w.check("Tab goes from the tab list into the open panel",
+            inside[0] not in ("tab", "") and selected_tab(w) == ["Appearance"], observed=inside)
+    ui.key("Tab", shift=True)
+    back = ui.focused()
+    ui.key("Tab", shift=True)
+    w.check("the tab list is one Tab stop",
+            back == ("tab", "Appearance") and ui.focused()[0] != "tab",
+            observed={"back": back, "before": ui.focused()})
+    no_unscripted(w)
+
+
 @dataclass(frozen=True)
 class Scenario:
     run: Callable[[World], None]
@@ -1100,6 +1160,18 @@ SCENARIOS: dict[str, Scenario] = {
         "with a question waiting, Command K then Tab reaches its first answer",
         "Return answers the question, and the agent is told the answer",
         "with nothing waiting, Tab leaves the composer for its own next control",
+        "every model call was one the scenario scripted",
+    )),
+    "tabs": Scenario(scenario_tabs, "A person opens Settings from the keyboard, reaches the tab list in one Tab, "
+                     "moves between tabs with the arrow keys and Tabs into the open panel; the list is a single "
+                     "Tab stop in both directions.",
+    (
+        "the first Tab stop in Settings is the open tab",
+        "an arrow key moves to the next tab and opens it",
+        "Home and End reach the first and the last tab",
+        "Appearance is reached and opened with arrow keys",
+        "Tab goes from the tab list into the open panel",
+        "the tab list is one Tab stop",
         "every model call was one the scenario scripted",
     )),
 }

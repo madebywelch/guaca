@@ -791,6 +791,35 @@ describe("moving between sections", () => {
     expect(chosen()).toEqual(["Notifications"]);
   });
 
+  it("is one Tab stop, moved through with the arrow keys", () => {
+    open();
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs.filter((tab) => tab.tabIndex === 0).map((tab) => tab.textContent)).toEqual([
+      "General",
+    ]);
+
+    fireEvent.keyDown(tabs[0]!, { key: "ArrowDown" });
+    const second = screen.getAllByRole("tab")[1]!;
+    expect(second.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(second);
+    expect(screen.getAllByRole("tab").filter((tab) => tab.tabIndex === 0)).toEqual([second]);
+
+    fireEvent.keyDown(second, { key: "End" });
+    const last = screen.getAllByRole("tab").at(-1)!;
+    expect(document.activeElement).toBe(last);
+    expect(last.getAttribute("aria-selected")).toBe("true");
+
+    fireEvent.keyDown(last, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(screen.getAllByRole("tab")[0]);
+
+    fireEvent.keyDown(document.activeElement!, { key: "ArrowUp" });
+    expect(document.activeElement).toBe(last);
+
+    fireEvent.keyDown(last, { key: "Home" });
+    expect(document.activeElement).toBe(screen.getAllByRole("tab")[0]);
+    expect(screen.getByRole("tabpanel", { name: "General" })).toBeTruthy();
+  });
+
   it("opens on the section it was pointed at", () => {
     open(stored(), DEFAULT_PREFS, "shortcuts");
     expect(screen.getByRole("tab", { name: "Shortcuts" }).getAttribute("aria-selected")).toBe(
