@@ -866,6 +866,13 @@ def scenario_handoff(w: World) -> None:
     faults = [fault for verdict in seen.values() for fault in verdict.faults]
     w.check("the hand-off keeps to the six type roles, the control family and the radii in light and dark",
             not faults, observed={s: v.styles for s, v in seen.items()}, detail=faults or None)
+    placed = ui.evaluate("""(() => {
+  const line = document.querySelector('.working');
+  const box = line.getBoundingClientRect();
+  return {inLog: Boolean(line.closest('[role=log]')), onScreen: box.top >= 0 && box.bottom <= innerHeight};
+})()""")
+    w.check("an agent opened mid-turn shows its status line without scrolling",
+            placed == {"inLog": False, "onScreen": True}, observed=placed)
 
     analyst.set()
     w.wait("the card folds once both have answered", lambda: ui.find(
@@ -1809,6 +1816,7 @@ SCENARIOS: dict[str, Scenario] = {
         "the person's turn sits in a bubble that stands apart from the page",
         "a turn scrolled under the tabs fades out instead of being cut by them",
         "the hand-off keeps to the six type roles, the control family and the radii in light and dark",
+        "an agent opened mid-turn shows its status line without scrolling",
         "after the reply the hand-off folds to one line that says both answered",
         "the folded line opens onto both answers",
         "a hand-off cut short by Stop folds and says who answered, instead of ticking on",
