@@ -115,7 +115,7 @@ export function MenubarPanel({ ready }: { ready: boolean }) {
               <span>{banner.text}</span>
               <button
                 type="button"
-                className="btn btn--ghost btn--small"
+                className="btn btn--quiet btn--compact"
                 onClick={() => setBanner(null)}
               >
                 Dismiss
@@ -146,7 +146,7 @@ export function MenubarPanel({ ready }: { ready: boolean }) {
         {running > 0 && (
           <button
             type="button"
-            className="btn btn--ghost btn--small"
+            className="btn btn--quiet btn--compact"
             title={
               running === 1
                 ? "Stop the conversation that is running"
@@ -157,7 +157,7 @@ export function MenubarPanel({ ready }: { ready: boolean }) {
             {running === 1 ? "Stop" : "Stop all"}
           </button>
         )}
-        <button type="button" className="btn btn--small" onClick={() => void api.openWindow(null)}>
+        <button type="button" className="btn btn--compact" onClick={() => void api.openWindow(null)}>
           Open Guaca
         </button>
       </footer>
@@ -371,7 +371,7 @@ function Conversation({
         className="menubar__talk-head"
         style={{ "--accent": agent.color } as React.CSSProperties}
       >
-        <button type="button" className="btn btn--ghost btn--small" onClick={onBack}>
+        <button type="button" className="btn btn--quiet btn--compact" onClick={onBack}>
           Back
         </button>
         <AgentAvatar
@@ -394,7 +394,7 @@ function Conversation({
         {run && (
           <button
             type="button"
-            className="btn btn--ghost btn--small"
+            className="btn btn--quiet btn--compact"
             onClick={() => void api.stopRun(run).catch((cause) => setError(errorMessage(cause)))}
           >
             Stop
@@ -402,7 +402,7 @@ function Conversation({
         )}
         <button
           type="button"
-          className="btn btn--small"
+          className="btn btn--compact"
           onClick={() => void api.openWindow({ kind: "agent", id: agent.id })}
         >
           Open
@@ -447,7 +447,7 @@ function Conversation({
         />
         <button
           type="submit"
-          className="btn btn--primary btn--small"
+          className="btn btn--primary btn--compact"
           disabled={sending || draft.trim() === ""}
         >
           Send

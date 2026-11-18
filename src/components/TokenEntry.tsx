@@ -152,7 +152,7 @@ export function TokenEntry({ children }: { children: ReactNode }) {
         <label className="field">
           <span className="field__label">Host token</span>
           <input
-            className="input input--mono"
+            className="input"
             type="password"
             autoComplete="off"
             spellCheck={false}

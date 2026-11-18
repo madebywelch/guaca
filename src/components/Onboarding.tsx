@@ -254,10 +254,10 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
             </div>
             <div className="onboarding-alternatives">
               <span>Prefer to set things up yourself?</span>
-              <button type="button" className="btn btn--ghost" onClick={onBrowse}>
+              <button type="button" className="btn btn--quiet" onClick={onBrowse}>
                 Open the cafeteria
               </button>
-              <button type="button" className="btn btn--ghost" onClick={onCreate}>
+              <button type="button" className="btn btn--quiet" onClick={onCreate}>
                 Create one agent
               </button>
             </div>

@@ -253,7 +253,7 @@ export function Permissions({ groupId }: { groupId: string | null }) {
               <h4>{effect === "allow" ? "Acts without asking" : "Never"}</h4>
               <button
                 type="button"
-                className="btn btn--ghost btn--small"
+                className="btn btn--quiet btn--compact"
                 disabled={busy || draft !== null}
                 onClick={() => {
                   setEditing(null);
@@ -288,7 +288,7 @@ export function Permissions({ groupId }: { groupId: string | null }) {
                     <div className="permissions__actions">
                       <button
                         type="button"
-                        className="btn btn--ghost btn--small"
+                        className="btn btn--quiet btn--compact"
                         disabled={busy || draft !== null}
                         onClick={() => {
                           const {
@@ -307,7 +307,7 @@ export function Permissions({ groupId }: { groupId: string | null }) {
                       </button>
                       <button
                         type="button"
-                        className="btn btn--ghost btn--small"
+                        className="btn btn--quiet btn--compact"
                         disabled={busy || draft !== null}
                         onClick={() => void remove(rule)}
                       >
@@ -426,7 +426,7 @@ export function Permissions({ groupId }: { groupId: string | null }) {
             <span className="field__label">When</span>
             <button
               type="button"
-              className="btn btn--ghost btn--small"
+              className="btn btn--quiet btn--compact"
               disabled={draft.conditions.length >= 20}
               onClick={() => {
                 const field = FIELDS[draft.class][0]!;
@@ -529,7 +529,7 @@ export function Permissions({ groupId }: { groupId: string | null }) {
               )}
               <button
                 type="button"
-                className="btn btn--ghost btn--small"
+                className="btn btn--quiet btn--compact"
                 onClick={() => {
                   setConditionIds(conditionIds.filter((_, i) => i !== index));
                   setDraft({
@@ -581,7 +581,7 @@ export function Permissions({ groupId }: { groupId: string | null }) {
             </button>
             <button
               type="button"
-              className="btn btn--ghost"
+              className="btn btn--quiet"
               disabled={busy}
               onClick={() => {
                 setDraft(null);

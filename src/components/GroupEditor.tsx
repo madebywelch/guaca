@@ -315,7 +315,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                 <label className="field">
                   <span className="field__label">Name</span>
                   <input
-                    className="input input--mono"
+                    className="input"
                     ref={nameRef}
                     value={name}
                     maxLength={48}
@@ -417,7 +417,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                     ) : (
                       <button
                         type="button"
-                        className="btn btn--small"
+                        className="btn btn--compact"
                         aria-label="Use the ChatGPT subscription"
                         disabled={busy}
                         onClick={() => setProvider("chatgpt")}
@@ -467,7 +467,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                   ) : (
                     <button
                       type="button"
-                      className="btn btn--small"
+                      className="btn btn--compact"
                       aria-label="Use the Claude subscription"
                       disabled={busy}
                       onClick={() => setProvider("claude")}
@@ -498,7 +498,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                 <label className="field" style={{ marginTop: "1.1rem" }}>
                   <span className="field__label">Inference endpoint</span>
                   <input
-                    className="input input--mono"
+                    className="input"
                     value={baseUrl}
                     placeholder={settings?.baseUrl || "inherit"}
                     title="Used when a key is paying. Blank follows the app."
@@ -509,7 +509,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                 <label className="field">
                   <span className="field__label">API key</span>
                   <input
-                    className="input input--mono"
+                    className="input"
                     type="password"
                     value={apiKey ?? ""}
                     placeholder={group?.apiKeySet ? `set · ${group.apiKeyHint}` : "inherit"}
@@ -522,7 +522,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                 <label className="field">
                   <span className="field__label">Default model</span>
                   <input
-                    className="input input--mono"
+                    className="input"
                     value={model}
                     placeholder={settings?.defaultModel || "inherit"}
                     title="Every agent in this group that does not name its own, when a key is paying."
@@ -533,7 +533,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                 <label className="field">
                   <span className="field__label">Give up on a call after</span>
                   <input
-                    className="input input--mono"
+                    className="input"
                     inputMode="numeric"
                     value={timeout}
                     placeholder={`${settings?.requestTimeoutSecs ?? 120} seconds`}
@@ -566,7 +566,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                       {field.label}
                     </span>
                     <input
-                      className="input input--mono input--number"
+                      className="input input--number"
                       type="number"
                       min={field.min}
                       max={field.max}
@@ -696,7 +696,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                 </button>
                 <button
                   type="button"
-                  className="btn btn--ghost"
+                  className="btn btn--quiet"
                   onClick={() => setConfirmDelete(false)}
                 >
                   Keep
@@ -730,7 +730,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
                 </button>
                 <button
                   type="button"
-                  className="btn btn--ghost"
+                  className="btn btn--quiet"
                   onClick={() => setConfirmClear(false)}
                 >
                   Keep them
@@ -739,7 +739,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
             ) : (
               <button
                 type="button"
-                className="btn btn--ghost"
+                className="btn btn--quiet"
                 disabled={busy}
                 onClick={() => setConfirmClear(true)}
                 title="Resets every agent in this group: transcripts, routines, memories, working notes and the spend counter. The agents and their computers stay."

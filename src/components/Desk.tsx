@@ -83,10 +83,10 @@ function StuckCard({ escalation, agent, onClear, onOpenChannel }: StuckProps) {
       </header>
 
       <div className="desk__actions">
-        <button type="button" className="btn btn--primary btn--small" onClick={onOpenChannel}>
+        <button type="button" className="btn btn--primary btn--compact" onClick={onOpenChannel}>
           Open channel
         </button>
-        <button type="button" className="btn btn--ghost btn--small" onClick={onClear}>
+        <button type="button" className="btn btn--quiet btn--compact" onClick={onClear}>
           Clear
         </button>
         <span className="desk__aside">{turns} run into this</span>
@@ -156,7 +156,7 @@ function DeskCard({ request, agent, onDecide, onAnswer, onOpenChannel }: CardPro
           <>
             <button
               type="button"
-              className="btn btn--primary btn--small"
+              className="btn btn--primary btn--compact"
               disabled={answering}
               onClick={() => answer("allow")}
             >
@@ -165,7 +165,7 @@ function DeskCard({ request, agent, onDecide, onAnswer, onOpenChannel }: CardPro
             {request.request.action === "createAgent" && (
               <button
                 type="button"
-                className="btn btn--small"
+                className="btn btn--compact"
                 disabled={answering}
                 title={`Stop asking when ${asker} does this`}
                 onClick={() => answer("alwaysAllow")}
@@ -175,7 +175,7 @@ function DeskCard({ request, agent, onDecide, onAnswer, onOpenChannel }: CardPro
             )}
             <button
               type="button"
-              className="btn btn--ghost btn--small"
+              className="btn btn--quiet btn--compact"
               disabled={answering}
               onClick={() => answer("deny")}
             >
@@ -220,7 +220,7 @@ function Answers({
           <button
             key={option}
             type="button"
-            className={index === 0 ? "btn btn--primary btn--small" : "btn btn--ghost btn--small"}
+            className={index === 0 ? "btn btn--primary btn--compact" : "btn btn--quiet btn--compact"}
             disabled={disabled}
             onClick={() => onAnswer(option)}
           >
@@ -250,7 +250,7 @@ function Answers({
       />
       <button
         type="submit"
-        className="btn btn--primary btn--small"
+        className="btn btn--primary btn--compact"
         disabled={disabled || written.trim() === ""}
       >
         Send

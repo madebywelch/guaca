@@ -124,7 +124,7 @@ export function SubscriptionModel({
           Model
         </span>
         <select
-          className="input input--mono"
+          className="input"
           value={value}
           onChange={(event) => onChange(event.target.value)}
         >

@@ -414,7 +414,7 @@ export function Composer({
           )}
           <button
             type="button"
-            className="btn btn--small"
+            className="btn btn--compact"
             disabled={disabled || stagingCount > 0}
             onClick={() => {
               const delivery = owner.get().delivery;
@@ -444,7 +444,7 @@ export function Composer({
             </p>
             <button
               type="button"
-              className="btn btn--small"
+              className="btn btn--compact"
               aria-label={`Switch to saved draft ${index + 1}`}
               disabled={state.delivery.kind !== "idle" || stagingCount > 0}
               onClick={() => owner.dispatch({ type: "switch", index })}

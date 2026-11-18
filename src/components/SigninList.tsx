@@ -63,7 +63,7 @@ export function SigninList({ agent }: Props) {
         <span className="field__label">Signed in</span>
         <button
           type="button"
-          className="btn btn--ghost btn--small"
+          className="btn btn--quiet btn--compact"
           disabled={busy}
           onClick={() => void rescan()}
         >

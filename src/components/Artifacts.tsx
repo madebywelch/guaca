@@ -290,7 +290,7 @@ function ArtifactView({
     return (
       <>
         <div className="artifacts__head">
-          <button type="button" className="btn btn--ghost" onClick={onBack}>
+          <button type="button" className="btn btn--quiet" onClick={onBack}>
             ‹ All artifacts
           </button>
         </div>
@@ -342,7 +342,7 @@ function ArtifactView({
     <>
       <div className="artifacts__head">
         <div className="artifacts__title-row">
-          <button type="button" className="btn btn--ghost" onClick={back} ref={backRef}>
+          <button type="button" className="btn btn--quiet" onClick={back} ref={backRef}>
             {history ? "‹ Back to the page" : "‹ All artifacts"}
           </button>
           <h2 className="dialog__title artifacts__title">{artifact.title}</h2>
@@ -421,7 +421,7 @@ function ArtifactView({
               </ul>
               <button
                 type="button"
-                className="btn btn--primary btn--small"
+                className="btn btn--primary btn--compact"
                 disabled={busy}
                 onClick={() =>
                   void act(async () => {
@@ -456,7 +456,7 @@ function ArtifactView({
                 <div className="artifact__answer-acts">
                   <button
                     type="button"
-                    className="btn btn--small"
+                    className="btn btn--compact"
                     disabled={sending}
                     onClick={() => {
                       const owner = artifact.owner;
@@ -493,7 +493,7 @@ function ArtifactView({
                   </button>
                   <button
                     type="button"
-                    className="btn btn--ghost btn--small"
+                    className="btn btn--quiet btn--compact"
                     disabled={sending}
                     onClick={() => {
                       proposalRef.current = false;
@@ -512,7 +512,7 @@ function ArtifactView({
               </span>
               <button
                 type="button"
-                className="btn btn--small"
+                className="btn btn--compact"
                 disabled={busy}
                 onClick={() =>
                   void act(async () => {
@@ -526,7 +526,7 @@ function ArtifactView({
               </button>
               <button
                 type="button"
-                className="btn btn--ghost btn--small"
+                className="btn btn--quiet btn--compact"
                 onClick={() => setViewing(null)}
               >
                 Show the current one
@@ -558,7 +558,7 @@ function ArtifactView({
         {!history && (
           <button
             type="button"
-            className="btn btn--ghost"
+            className="btn btn--quiet"
             onClick={(event) => {
               event.currentTarget.focus();
               setHistory(true);
@@ -571,7 +571,7 @@ function ArtifactView({
         {!history && artifact.sourcesAllowed && (
           <button
             type="button"
-            className="btn btn--ghost"
+            className="btn btn--quiet"
             onClick={() => setFresh((count) => count + 1)}
           >
             Refresh
@@ -625,12 +625,12 @@ function ArtifactView({
             >
               Delete it and its history
             </button>
-            <button type="button" className="btn btn--ghost" onClick={() => setConfirming(false)}>
+            <button type="button" className="btn btn--quiet" onClick={() => setConfirming(false)}>
               Keep
             </button>
           </>
         ) : (
-          <button type="button" className="btn btn--ghost" onClick={() => setConfirming(true)}>
+          <button type="button" className="btn btn--quiet" onClick={() => setConfirming(true)}>
             Delete
           </button>
         )}

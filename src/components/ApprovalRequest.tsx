@@ -93,7 +93,7 @@ export function ApprovalRequest({ part, agent }: Props) {
           )}
           <button
             type="button"
-            className="btn btn--ghost"
+            className="btn btn--quiet"
             disabled={deciding !== null}
             onClick={() => answer("deny")}
           >

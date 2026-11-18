@@ -231,7 +231,7 @@ export function Search({
               setCursor(0);
             }}
           />
-          <button type="button" className="mobile-only btn btn--ghost" onClick={onClose}>
+          <button type="button" className="mobile-only btn btn--quiet" onClick={onClose}>
             Cancel
           </button>
         </div>

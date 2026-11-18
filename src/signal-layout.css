@@ -1,7 +1,7 @@
 .rail__group-head {
   font-family: var(--font-ui);
-  font-size: var(--type-aside);
-  font-weight: 600;
+  font-size: var(--type-ui);
+  font-weight: var(--weight-strong);
   letter-spacing: 0;
   text-transform: none;
   color: var(--rail-text);
@@ -10,7 +10,7 @@
 .agent-row {
   width: calc(100% - var(--space-4));
   margin-left: var(--space-4);
-  border-radius: var(--radius-signal) 0 0 var(--radius-signal);
+  border-radius: var(--radius-card) 0 0 var(--radius-card);
 }
 
 .agent-row[aria-current="true"] {
@@ -47,7 +47,7 @@
 .host-setup {
   padding: var(--space-8);
   border: 1px solid var(--rule);
-  border-radius: var(--radius-signal);
+  border-radius: var(--radius-card);
   background: var(--raised);
 }
 
@@ -57,7 +57,7 @@
 
 .host-setup .choice--place,
 .host-setup .host-status {
-  border-radius: var(--radius-signal);
+  border-radius: var(--radius-card);
 }
 
 @media (max-width: 36rem) {

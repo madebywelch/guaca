@@ -140,7 +140,7 @@ function Unreadable({
       <div className="file__failed-actions">
         <button
           type="button"
-          className="btn btn--ghost btn--small"
+          className="btn btn--quiet btn--compact"
           onClick={(event) => {
             event.stopPropagation();
             onRetry();
@@ -264,7 +264,7 @@ function SaveButton({ file }: { file: Attachment }) {
   if (!desktop) {
     return (
       <a
-        className="btn btn--ghost btn--small"
+        className="btn btn--quiet btn--compact"
         href={`${fileUrl(file)}&download=true`}
         download={file.name}
         target="_blank"
@@ -279,7 +279,7 @@ function SaveButton({ file }: { file: Attachment }) {
   return (
     <button
       type="button"
-      className="btn btn--ghost btn--small"
+      className="btn btn--quiet btn--compact"
       title={`Copy ${file.name} to your downloads folder`}
       disabled={saving}
       onClick={() => {

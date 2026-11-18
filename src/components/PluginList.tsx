@@ -105,7 +105,7 @@ function HeaderFields({
           />
           <button
             type="button"
-            className="btn btn--small btn--ghost"
+            className="btn btn--compact btn--quiet"
             aria-label={`Remove ${noun.toLowerCase()} ${at + 1}`}
             disabled={disabled}
             onClick={() => onChange(rows.filter((was) => was.id !== row.id))}
@@ -340,7 +340,7 @@ function GroupPluginList({ groupId, crew }: Props) {
               {held ? (
                 <button
                   type="button"
-                  className="btn btn--small btn--ghost"
+                  className="btn btn--compact btn--quiet"
                   disabled={busy !== null}
                   onClick={() =>
                     void run(
@@ -356,7 +356,7 @@ function GroupPluginList({ groupId, crew }: Props) {
                 offer && (
                   <button
                     type="button"
-                    className="btn btn--small btn--primary"
+                    className="btn btn--compact btn--primary"
                     disabled={busy !== null}
                     onClick={() =>
                       void run(
@@ -382,7 +382,7 @@ function GroupPluginList({ groupId, crew }: Props) {
                   </p>
                   <button
                     type="button"
-                    className="btn btn--ghost btn--small"
+                    className="btn btn--quiet btn--compact"
                     onClick={() => {
                       void api
                         .accountStatus()
@@ -518,7 +518,7 @@ function GroupPluginList({ groupId, crew }: Props) {
                   <div className="choices">
                     <button
                       type="button"
-                      className="btn btn--small btn--primary"
+                      className="btn btn--compact btn--primary"
                       disabled={busy !== null || !moving[held.id]?.url.trim()}
                       onClick={() =>
                         void run(
@@ -545,7 +545,7 @@ function GroupPluginList({ groupId, crew }: Props) {
                     </button>
                     <button
                       type="button"
-                      className="btn btn--small btn--ghost"
+                      className="btn btn--compact btn--quiet"
                       disabled={busy !== null || !moving[held.id]?.url.trim()}
                       onClick={() =>
                         void test(
@@ -567,7 +567,7 @@ function GroupPluginList({ groupId, crew }: Props) {
                     </button>
                     <button
                       type="button"
-                      className="btn btn--small btn--ghost"
+                      className="btn btn--compact btn--quiet"
                       disabled={busy !== null}
                       onClick={() => setMoving(({ [held.id]: _gone, ...rest }) => rest)}
                     >
@@ -853,7 +853,7 @@ function GroupPluginList({ groupId, crew }: Props) {
               <label className="field">
                 <span className="field__label">Command</span>
                 <input
-                  className="input input--mono"
+                  className="input"
                   value={draft.command}
                   placeholder="npx -y @modelcontextprotocol/server-github"
                   disabled={busy !== null}
@@ -916,7 +916,7 @@ function GroupPluginList({ groupId, crew }: Props) {
             <div className="choices">
               <button
                 type="button"
-                className="btn btn--small btn--primary"
+                className="btn btn--compact btn--primary"
                 disabled={busy !== null || !draft.name.trim() || !addressed}
                 onClick={() =>
                   void run(
@@ -949,7 +949,7 @@ function GroupPluginList({ groupId, crew }: Props) {
               </button>
               <button
                 type="button"
-                className="btn btn--small btn--ghost"
+                className="btn btn--compact btn--quiet"
                 disabled={busy !== null || !addressed}
                 onClick={() =>
                   void test(
@@ -964,7 +964,7 @@ function GroupPluginList({ groupId, crew }: Props) {
               </button>
               <button
                 type="button"
-                className="btn btn--small btn--ghost"
+                className="btn btn--compact btn--quiet"
                 disabled={busy !== null}
                 onClick={() => setAdding(false)}
               >
@@ -977,7 +977,7 @@ function GroupPluginList({ groupId, crew }: Props) {
           <>
             <button
               type="button"
-              className="btn btn--small btn--ghost"
+              className="btn btn--compact btn--quiet"
               disabled={busy !== null}
               onClick={() => setAdding(true)}
             >

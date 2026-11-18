@@ -284,7 +284,7 @@ describe("an escalation on the desk", () => {
     draw([], [stuckOn()]);
     const open = screen.getByRole("button", { name: "Open channel" });
     expect(open.className).toContain("btn--primary");
-    expect(screen.getByRole("button", { name: "Clear" }).className).toContain("btn--ghost");
+    expect(screen.getByRole("button", { name: "Clear" }).className).toContain("btn--quiet");
   });
 
   it("opens the channel of the agent that raised it", () => {

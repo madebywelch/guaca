@@ -456,7 +456,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
           <label className="field">
             <span className="field__label">API key</span>
             <input
-              className="input input--mono"
+              className="input"
               type="password"
               autoComplete="off"
               spellCheck={false}
@@ -469,7 +469,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
           <label className="field">
             <span className="field__label">Inference endpoint</span>
             <input
-              className="input input--mono"
+              className="input"
               value={baseUrl}
               disabled={Boolean(busy)}
               onChange={(event) => changeEndpoint(event.target.value)}
@@ -478,7 +478,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
           <label className="field">
             <span className="field__label">Default model</span>
             <input
-              className="input input--mono"
+              className="input"
               value={model}
               placeholder={preset?.model || "A model your endpoint serves"}
               disabled={Boolean(busy)}

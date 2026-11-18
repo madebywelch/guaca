@@ -87,7 +87,7 @@ export function SkillList({ scope }: Props) {
       <label className="field">
         <span className="field__label">Name</span>
         <input
-          className="input input--mono"
+          className="input"
           placeholder="deploy-site"
           ref={nameRef}
           value={draft.name}
@@ -119,7 +119,7 @@ export function SkillList({ scope }: Props) {
       <div className="access__row">
         <button
           type="button"
-          className="btn btn--small btn--primary"
+          className="btn btn--compact btn--primary"
           disabled={busy || !draft.name.trim() || !draft.description.trim() || !draft.body.trim()}
           onClick={() => void run(() => api.saveSkill(scope, draft))}
         >
@@ -127,7 +127,7 @@ export function SkillList({ scope }: Props) {
         </button>
         <button
           type="button"
-          className="btn btn--small btn--ghost"
+          className="btn btn--compact btn--quiet"
           disabled={busy}
           onClick={() => setDraft(null)}
         >
@@ -162,7 +162,7 @@ export function SkillList({ scope }: Props) {
               </span>
               <button
                 type="button"
-                className="btn btn--small"
+                className="btn btn--compact"
                 disabled={busy || draft !== null}
                 onClick={() => void open(skill, !readOnly)}
               >
@@ -171,7 +171,7 @@ export function SkillList({ scope }: Props) {
               {!readOnly && (
                 <button
                   type="button"
-                  className="btn btn--small btn--ghost"
+                  className="btn btn--compact btn--quiet"
                   disabled={busy || draft !== null}
                   onClick={() => void run(() => api.deleteSkill(scope, skill.name))}
                 >
@@ -204,7 +204,7 @@ export function SkillList({ scope }: Props) {
         <div className="access__row">
           <button
             type="button"
-            className="btn btn--small"
+            className="btn btn--compact"
             disabled={busy || skills === null}
             onClick={() => setDraft({ ...BLANK })}
           >
@@ -212,7 +212,7 @@ export function SkillList({ scope }: Props) {
           </button>
           <button
             type="button"
-            className="btn btn--small btn--ghost"
+            className="btn btn--compact btn--quiet"
             aria-expanded={browsing}
             onClick={() => setBrowsing(!browsing)}
           >

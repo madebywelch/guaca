@@ -203,7 +203,7 @@ export function BrowserScreen({ agent }: Props) {
                   <>
                     <button
                       type="button"
-                      className="btn btn--small btn--danger"
+                      className="btn btn--compact btn--danger"
                       disabled={busy}
                       onClick={() =>
                         void act(async () => {
@@ -216,7 +216,7 @@ export function BrowserScreen({ agent }: Props) {
                     </button>
                     <button
                       type="button"
-                      className="btn btn--small btn--ghost"
+                      className="btn btn--compact btn--quiet"
                       onClick={() => {
                         setConfirming(false);
                         grabKeyboard();
@@ -228,7 +228,7 @@ export function BrowserScreen({ agent }: Props) {
                 ) : (
                   <button
                     type="button"
-                    className="btn btn--small btn--ghost"
+                    className="btn btn--compact btn--quiet"
                     disabled={busy}
                     onClick={() => setConfirming(true)}
                     title="Close it. What it is signed in to is saved, and the next one opens signed in."
@@ -238,7 +238,7 @@ export function BrowserScreen({ agent }: Props) {
                 )}
 
                 <div className="screen__actions">
-                  <button type="button" className="btn btn--small" onClick={() => setFull(false)}>
+                  <button type="button" className="btn btn--compact" onClick={() => setFull(false)}>
                     Done
                   </button>
                 </div>
@@ -281,7 +281,7 @@ export function BrowserScreen({ agent }: Props) {
                 </p>
                 <button
                   type="button"
-                  className="btn btn--small btn--primary"
+                  className="btn btn--compact btn--primary"
                   disabled={busy}
                   onClick={() => void act(() => api.startAgentBrowser(agent.id))}
                 >

@@ -505,7 +505,7 @@ function WorkingNote({
         {run && (
           <button
             type="button"
-            className="btn btn--ghost btn--small"
+            className="btn btn--quiet btn--compact"
             disabled={stopping}
             title="Stop this conversation and everything it set off"
             onClick={async () => {

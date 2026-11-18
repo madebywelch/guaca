@@ -192,7 +192,7 @@ export function HtmlArtifact({
         {!fill && (
           <button
             type="button"
-            className="btn btn--ghost btn--small artifact__open"
+            className="btn btn--quiet btn--compact artifact__open"
             ref={openButton}
             onClick={() => {
               returnFocus.current = true;
@@ -236,7 +236,7 @@ function Answer({
       <div className="artifact__answer">
         <p className="artifact__answer-note artifact__answer-note--fault">{ready.why}</p>
         <div className="artifact__answer-acts">
-          <button type="button" className="btn btn--ghost btn--small" onClick={onDismiss}>
+          <button type="button" className="btn btn--quiet btn--compact" onClick={onDismiss}>
             Dismiss
           </button>
         </div>
@@ -253,13 +253,13 @@ function Answer({
       <div className="artifact__answer-acts">
         <button
           type="button"
-          className="btn btn--small"
+          className="btn btn--compact"
           disabled={sending}
           onClick={() => onSend(ready.json)}
         >
           {sending ? "Sending…" : `Send to ${to.name}`}
         </button>
-        <button type="button" className="btn btn--ghost btn--small" onClick={onDismiss}>
+        <button type="button" className="btn btn--quiet btn--compact" onClick={onDismiss}>
           Dismiss
         </button>
       </div>

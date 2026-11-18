@@ -89,7 +89,7 @@ export function Home({ onSearch, onManageGroups }: Props) {
                     </div>
                     <button
                       type="button"
-                      className="btn btn--small"
+                      className="btn btn--compact"
                       onClick={() => showForYou(true)}
                     >
                       Answer in For you

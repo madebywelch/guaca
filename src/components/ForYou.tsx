@@ -123,7 +123,7 @@ export function ForYou({ onClose }: { onClose: () => void }) {
             <h2>
               For you <span>{count}</span>
             </h2>
-            <button type="button" className="btn btn--ghost" onClick={onClose}>
+            <button type="button" className="btn btn--quiet" onClick={onClose}>
               Close
             </button>
           </div>
@@ -164,7 +164,7 @@ export function ForYou({ onClose }: { onClose: () => void }) {
               {banner.text}
               <button
                 type="button"
-                className="btn btn--small"
+                className="btn btn--compact"
                 onClick={() => useStore.getState().setBanner(null)}
               >
                 Dismiss
@@ -174,7 +174,7 @@ export function ForYou({ onClose }: { onClose: () => void }) {
           {error && (
             <p role="alert">
               Could not refresh decisions: {error}{" "}
-              <button type="button" className="btn btn--small" onClick={() => void refresh()}>
+              <button type="button" className="btn btn--compact" onClick={() => void refresh()}>
                 Retry
               </button>
             </p>
@@ -234,7 +234,7 @@ export function ForYou({ onClose }: { onClose: () => void }) {
                 <h3 id="for-you-finished">Finished</h3>
                 <button
                   type="button"
-                  className="btn btn--ghost btn--small"
+                  className="btn btn--quiet btn--compact"
                   onClick={() => {
                     const through = drawnThrough(news);
                     if (through !== null) void seeOutcomes({ before: through });
@@ -445,7 +445,7 @@ function DecisionCard({
         {waiting && !writing && (
           <button
             type="button"
-            className="btn btn--ghost"
+            className="btn btn--quiet"
             disabled={busy}
             onClick={() => setWriting(true)}
           >
@@ -470,7 +470,7 @@ function DecisionCard({
         {needsAnswer(item) && (
           <button
             type="button"
-            className="btn btn--ghost"
+            className="btn btn--quiet"
             disabled={busy}
             onClick={() =>
               void act(
@@ -484,7 +484,7 @@ function DecisionCard({
         )}
         <button
           type="button"
-          className="btn btn--ghost"
+          className="btn btn--quiet"
           onClick={() => {
             void select(item.agentId);
             onClose();

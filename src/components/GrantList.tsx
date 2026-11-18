@@ -57,7 +57,7 @@ export function GrantList({ agent }: Props) {
             <strong className="access__name">{PHRASE[action]}</strong>
             <button
               type="button"
-              className="btn btn--ghost btn--small"
+              className="btn btn--quiet btn--compact"
               style={{ marginLeft: "auto" }}
               disabled={busy !== null}
               onClick={() => void revoke(action)}

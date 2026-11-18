@@ -93,7 +93,7 @@ export function HostSetup({ children }: { children: ReactNode }) {
             <div className="access__row">
               {!checking && (
                 <button
-                  className="btn btn--small"
+                  className="btn btn--compact"
                   type="button"
                   onClick={() => {
                     choosing.current = false;
@@ -108,7 +108,7 @@ export function HostSetup({ children }: { children: ReactNode }) {
               )}
               {!chooser && (
                 <button
-                  className="btn btn--small"
+                  className="btn btn--compact"
                   type="button"
                   onClick={() => {
                     choosing.current = true;
@@ -295,7 +295,7 @@ export function HostChoice({
               {existing.map((host) => (
                 <button
                   key={host.name}
-                  className="btn btn--small"
+                  className="btn btn--compact"
                   type="button"
                   disabled={busy}
                   onClick={() => void connectExisting(host.name)}
@@ -321,7 +321,7 @@ export function HostChoice({
               <div className="access__row">
                 {docker.state === "missing" ? (
                   <button
-                    className="btn btn--small"
+                    className="btn btn--compact"
                     type="button"
                     onClick={() =>
                       void openExternal("https://www.docker.com/products/docker-desktop/")
@@ -331,7 +331,7 @@ export function HostChoice({
                   </button>
                 ) : (
                   <button
-                    className="btn btn--small"
+                    className="btn btn--compact"
                     type="button"
                     disabled={busy}
                     onClick={() =>
@@ -345,7 +345,7 @@ export function HostChoice({
                   </button>
                 )}
                 <button
-                  className="btn btn--small"
+                  className="btn btn--compact"
                   type="button"
                   disabled={busy}
                   onClick={() => void refresh()}
@@ -362,7 +362,7 @@ export function HostChoice({
                 </p>
                 <button
                   type="button"
-                  className="btn btn--small"
+                  className="btn btn--compact"
                   disabled={busy}
                   onClick={() => void connect(true)}
                 >
@@ -380,7 +380,7 @@ export function HostChoice({
           <div className="access__row">
             <button
               ref={change}
-              className="btn btn--small"
+              className="btn btn--compact"
               type="button"
               onClick={() => setChanging(true)}
             >
@@ -453,7 +453,7 @@ export function HostChoice({
                 : "Connect to host"}
           </button>
           {changing && mode === "remote" && (
-            <button className="btn btn--ghost" type="button" disabled={busy} onClick={keep}>
+            <button className="btn btn--quiet" type="button" disabled={busy} onClick={keep}>
               Cancel
             </button>
           )}

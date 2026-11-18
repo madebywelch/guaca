@@ -493,7 +493,7 @@ function QuickActionForm({ onAdded }: { onAdded: () => void }) {
       <div className="access__row">
         <button
           type="button"
-          className="btn btn--small btn--primary"
+          className="btn btn--compact btn--primary"
           disabled={busy || !ready}
           onClick={() => void add()}
         >
