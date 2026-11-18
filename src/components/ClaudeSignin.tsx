@@ -164,7 +164,7 @@ export function ClaudeSignin({
   const action = !signedIn && (
     <button
       type="button"
-      className="btn btn--small"
+      className="btn btn--compact"
       aria-label={!busy && !checking && !session && !error ? "Sign in with Claude" : undefined}
       disabled={busy || checking || Boolean(session)}
       onClick={() => void begin()}
@@ -212,7 +212,7 @@ export function ClaudeSignin({
               <label className="field">
                 <span className="field__label">Code from browser</span>
                 <input
-                  className="input input--mono"
+                  className="input"
                   value={code}
                   onChange={(event) => setCode(event.target.value)}
                   autoComplete="off"

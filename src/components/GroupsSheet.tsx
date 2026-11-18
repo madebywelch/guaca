@@ -31,7 +31,7 @@ export function GroupsSheet({ onClose, onOpenChannel, ...rest }: Props) {
       >
         <header className="sheet__head" data-lights={LIGHTS ? "" : undefined}>
           <h2 className="sheet__title">{title}</h2>
-          <button type="button" className="btn btn--ghost btn--small" onClick={onClose}>
+          <button type="button" className="btn btn--quiet btn--compact" onClick={onClose}>
             Done
           </button>
         </header>

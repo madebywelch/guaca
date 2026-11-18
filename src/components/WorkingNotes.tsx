@@ -179,7 +179,7 @@ export function WorkingNotes({ agentId }: Props) {
         {expanded && notes !== null && notes.length > 0 && (
           <button
             type="button"
-            className="btn btn--small btn--ghost"
+            className="btn btn--compact btn--quiet"
             disabled={busy}
             onClick={() => void clear()}
           >
@@ -222,7 +222,7 @@ export function WorkingNotes({ agentId }: Props) {
           {read.kind === "failed" && (
             <button
               type="button"
-              className="btn btn--small btn--ghost"
+              className="btn btn--compact btn--quiet"
               aria-label="Retry reading working notes"
               onClick={load}
             >

@@ -64,7 +64,11 @@ function Nowhere({ text }: { text: string }) {
     <div className="menubar">
       <p className="menubar__note">{text}</p>
       <footer className="menubar__foot">
-        <button type="button" className="btn btn--small" onClick={() => void api.openWindow(null)}>
+        <button
+          type="button"
+          className="btn btn--compact"
+          onClick={() => void api.openWindow(null)}
+        >
           Open Guaca
         </button>
       </footer>

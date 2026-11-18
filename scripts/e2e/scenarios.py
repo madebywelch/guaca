@@ -9,6 +9,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Callable
 
+from . import look
 from .world import STAND_IN_KEY, STAND_IN_MODEL, Call, Reply, World, call, held, refuse, say, text_of
 
 AGENT = "Executive Assistant"
@@ -373,6 +374,121 @@ def scenario_permission(w: World) -> None:
     w.check("a setting only the person may change is refused without asking anyone",
             len(approvals(w)) == before and w.host.call("get_settings")["baseUrl"] == endpoint,
             observed={"asked": len(approvals(w)) - before, "said": said(w, AGENT)[-1]})
+    no_unscripted(w)
+
+
+LOOK_SURFACES = ("light", "dark")
+LOOK_SCREENS = ("Today", "a conversation", "Settings", "New agent", "the Groups sheet", "Search")
+AGENT_TABS = ("Now", "Memory", "Notebook", "Routines", "Profile")
+SETTINGS_TABS = ("Host", "Provider", "Limits", "Permissions", "Machines", "Account", "Appearance",
+                 "Notifications", "Shortcuts", "Skills", "Compost", "About")
+PLACES = ("Artifacts", "Calendar", "For you, 1 waiting")
+
+
+def show(w: World, screen: str) -> None:
+    ui = w.ui
+    if screen == "Today":
+        if ui.find("button", "Today"):
+            ui.click("button", "Today")
+        w.wait("Today is shown", lambda: ui.find("region", "Today"))
+    elif screen == "a conversation":
+        open_agent(w, AGENT)
+        w.wait("the request waits in the conversation", lambda: ui.find("button", "Allow"))
+    elif screen == "Settings":
+        ui.click("button", "App settings")
+        w.wait("Settings opens", lambda: ui.find("dialog", "Settings", exact=False))
+    elif screen == "New agent":
+        ui.click("button", "Make something new")
+        ui.click("menuitem", "New agent", exact=False)
+        w.wait("the New agent dialog", lambda: ui.find("dialog", "New agent"))
+    elif screen == "the Groups sheet":
+        ui.click("button", "Agents")
+        w.wait("the Groups sheet opens", lambda: ui.find("dialog", "Groups and agents"))
+    elif screen == "Search":
+        ui.click("button", "Search")
+        w.wait("Search opens", lambda: ui.find("dialog", "Search", exact=False))
+
+
+def dismiss(w: World) -> None:
+    ui = w.ui
+    if ui.find("dialog", "", exact=False):
+        ui.key("Escape")
+    w.wait("every dialog closes on Escape", lambda: not ui.find("dialog", "", exact=False))
+    w.wait("the page has finished moving", lambda: ui.evaluate(look.SETTLED))
+
+
+def measure(w: World, screen: str, surface: str, seen: dict[str, look.Verdict]) -> None:
+    ui = w.ui
+    w.wait(f"{screen} has finished moving", lambda: ui.evaluate(look.SETTLED))
+    seen[screen] = look.judge(f"{screen} ({surface})", ui.evaluate(look.MEASURE))
+    w.capture(f"{screen} in {surface}")
+
+
+def sweep(w: World, seen: dict[str, look.Verdict]) -> None:
+    ui = w.ui
+    open_agent(w, AGENT)
+    for tab in AGENT_TABS:
+        ui.click("button", tab)
+        measure(w, f"the agent's {tab} tab", "light", seen)
+    ui.click("button", "Conversation")
+    ui.click("button", "App settings")
+    w.wait("Settings opens", lambda: ui.find("dialog", "Settings", exact=False))
+    for tab in SETTINGS_TABS:
+        ui.click("tab", tab)
+        w.wait(f"the {tab} pane is shown", lambda: ui.find("tab", tab)[0].get("properties") is not None)
+        measure(w, f"Settings, {tab}", "light", seen)
+    dismiss(w)
+    for place in PLACES:
+        ui.click("button", place)
+        measure(w, f"{place.split(',')[0]} from the status bar", "light", seen)
+        ui.key("Escape")
+        dismiss(w)
+
+
+def scenario_look(w: World) -> None:
+
+    def script(c: Call) -> Reply | None:
+        if c.last_user == "ping":
+            return say("pong")
+        if c.speaker != AGENT:
+            return None
+        if c.last_user.endswith("Say hello."):
+            return say(HELLO)
+        if c.last_user.endswith(CALL_ME):
+            return ask_name(c, "Robin")
+        return None
+
+    w.model.script = script
+    w.start()
+    first_run(w)
+    settled(w, 1)
+    ui = w.ui
+    new_agent(w, "Researcher", "Find sources and say where each came from.")
+    write(w, AGENT, CALL_ME)
+    w.wait("the request is shown", lambda: ui.find("button", "Allow"))
+    for surface in LOOK_SURFACES:
+        ui.evaluate("localStorage.setItem('guac.prefs', JSON.stringify({...JSON.parse("
+                    "localStorage.getItem('guac.prefs') || '{}'), surface: '%s', look: 2})); location.reload()"
+                    % surface)
+        w.wait(f"the page comes back {surface}", lambda: ui.evaluate(
+            "document.documentElement.dataset.surface") == surface and ui.find("button", "App settings"))
+        ui.viewport(*look.FRAME)
+        seen: dict[str, look.Verdict] = {}
+        for screen in LOOK_SCREENS:
+            show(w, screen)
+            measure(w, screen, surface, seen)
+            dismiss(w)
+        faults = [fault for verdict in seen.values() for fault in verdict.faults]
+        styles = {screen: verdict.styles for screen, verdict in seen.items()}
+        if surface == "light":
+            sweep(w, seen)
+            faults = [fault for verdict in seen.values() for fault in verdict.faults]
+            styles = {screen: verdict.styles for screen, verdict in seen.items()}
+            w.check("every screen in light keeps to the six type roles, the control family and the radii",
+                    not faults, observed=styles, detail=faults or None, stop=False)
+        else:
+            w.check("every screen in dark keeps to the six type roles, the control family and the radii",
+                    not faults, observed=styles, detail=faults or None, stop=False)
     no_unscripted(w)
 
 
@@ -1208,6 +1324,15 @@ SCENARIOS: dict[str, Scenario] = {
         "one delivery fires the routine once, with its body, in a run of its own",
         "a retry of the same delivery does not fire it again",
         "the routine's history shows the one firing",
+        "every model call was one the scenario scripted",
+    )),
+    "look": Scenario(scenario_look, "Today, a conversation, Settings, New agent, the Groups sheet and Search, in "
+                     "light and dark, each keep to the six type roles, eight styles at most, the control heights "
+                     "and the radii; a screen with a size, weight, corner or control outside them fails, naming "
+                     "the element and the token to use.",
+    (
+        "every screen in light keeps to the six type roles, the control family and the radii",
+        "every screen in dark keeps to the six type roles, the control family and the radii",
         "every model call was one the scenario scripted",
     )),
     "update": Scenario(scenario_update, "A person updates a box that follows main while another client's update is "

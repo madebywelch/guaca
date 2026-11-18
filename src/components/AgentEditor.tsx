@@ -138,7 +138,7 @@ export function AgentEditor({ agent, onClose }: Props) {
               Name
             </span>
             <input
-              className="input input--mono"
+              className="input"
               ref={nameRef}
               value={draft.name}
               maxLength={48}
@@ -194,7 +194,7 @@ export function AgentEditor({ agent, onClose }: Props) {
                 Group
               </span>
               <select
-                className="input input--mono"
+                className="input"
                 value={draft.groupId ?? groups[0]?.id ?? ""}
                 onChange={(event) => patch({ groupId: event.target.value })}
               >
@@ -242,7 +242,7 @@ export function AgentEditor({ agent, onClose }: Props) {
               <label className="field">
                 <span className="field__label">Model</span>
                 <input
-                  className="input input--mono"
+                  className="input"
                   value={draft.model}
                   placeholder={inherit}
                   title={`A model ID ${providerName} accepts. Blank uses the group default.`}
@@ -253,7 +253,7 @@ export function AgentEditor({ agent, onClose }: Props) {
                 <div className="field">
                   <button
                     type="button"
-                    className="btn btn--small"
+                    className="btn btn--compact"
                     onClick={() => patch({ model: "" })}
                   >
                     Use group default
@@ -326,7 +326,7 @@ export function AgentEditor({ agent, onClose }: Props) {
                   </button>
                   <button
                     type="button"
-                    className="btn btn--ghost"
+                    className="btn btn--quiet"
                     onClick={() => setConfirmDelete(false)}
                   >
                     Keep
@@ -350,6 +350,7 @@ export function AgentEditor({ agent, onClose }: Props) {
                 type="button"
                 className="btn btn--primary"
                 disabled={busy || draft.name.trim().length === 0}
+                aria-busy={busy}
                 onClick={() => void save()}
               >
                 {agent ? "Save changes" : "Create agent"}

@@ -133,7 +133,7 @@ export function Cafeteria({ onClose }: Props) {
             <label className="field" style={{ margin: 0, minWidth: "11rem" }}>
               <span className="field__label">Hire into</span>
               <select
-                className="input input--mono"
+                className="input"
                 value={groupId}
                 onChange={(event) => setGroupId(event.target.value)}
               >
@@ -168,7 +168,7 @@ export function Cafeteria({ onClose }: Props) {
           {employed.size === 0 && (
             <button
               type="button"
-              className="btn btn--ghost"
+              className="btn btn--quiet"
               onClick={() => setPicked(new Set(STARTER_CREW))}
             >
               Pick a starter group
@@ -176,7 +176,7 @@ export function Cafeteria({ onClose }: Props) {
           )}
           <button
             type="button"
-            className="btn btn--ghost"
+            className="btn btn--quiet"
             disabled={picked.size === 0}
             onClick={() => setPicked(new Set())}
           >

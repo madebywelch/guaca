@@ -79,7 +79,7 @@ export function GroupTransfer({ group }: { group?: Group }) {
       </p>
       {group && (
         <button
-          className="btn btn--small"
+          className="btn btn--compact"
           type="button"
           disabled={busy}
           onClick={() =>
@@ -186,7 +186,7 @@ export function LegacyGroups() {
       {groups.map((group) => (
         <button
           key={group.id}
-          className="btn btn--small"
+          className="btn btn--compact"
           type="button"
           disabled={busy}
           onClick={() => {

@@ -69,7 +69,7 @@ export function TopBar({
           title={groups.length > 1 ? "Groups and agents" : "Agents"}
           onClick={onGroups}
         >
-          <Icon name="people" />
+          <Icon name="group" />
         </button>
         <NewMenu
           onNewAgent={onNewAgent}
@@ -83,7 +83,7 @@ export function TopBar({
           title="App settings"
           onClick={onSettings}
         >
-          <Icon name="settings" />
+          <Icon name="gear" />
         </button>
       </nav>
     </header>

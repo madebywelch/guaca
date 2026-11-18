@@ -588,11 +588,11 @@ function FailureBanner({
           </button>
         )}
         {banner.fix === "host" && desktop && (
-          <button type="button" className="btn btn--ghost" onClick={() => onSettings("workspace")}>
+          <button type="button" className="btn btn--quiet" onClick={() => onSettings("workspace")}>
             Check the host
           </button>
         )}
-        <button type="button" className="btn btn--ghost" onClick={() => setBanner(null)}>
+        <button type="button" className="btn btn--quiet" onClick={() => setBanner(null)}>
           Dismiss
         </button>
       </span>

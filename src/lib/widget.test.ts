@@ -68,8 +68,8 @@ describe("the sizes an agent is told", () => {
   });
 
   it("draw a condensed view in the bar's own type size", () => {
-    expect(css).toMatch(/\.statusbar \{[^}]*font-size: var\(--type-small\);/);
-    expect(rem("--type-small") * ROOT_PX).toBe(BAR_TYPE_PX);
+    expect(css).toMatch(/\.statusbar \{[^}]*font-size: var\(--type-support\);/);
+    expect(rem("--type-support") * ROOT_PX).toBe(BAR_TYPE_PX);
   });
 
   it("draw a condensed view in the bar's own height", () => {

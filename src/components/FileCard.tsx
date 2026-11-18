@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-
 import { useDismiss } from "../lib/dismiss";
 import {
   fileUrl,
@@ -15,6 +14,7 @@ import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import { desktop } from "../lib/transport";
 import { type Attachment, errorMessage } from "../lib/types";
+import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
 
 export function FileCard({ file }: { file: Attachment }) {
@@ -140,7 +140,7 @@ function Unreadable({
       <div className="file__failed-actions">
         <button
           type="button"
-          className="btn btn--ghost btn--small"
+          className="btn btn--quiet btn--compact"
           onClick={(event) => {
             event.stopPropagation();
             onRetry();
@@ -222,7 +222,7 @@ export function FilePreview({ file, onClose }: { file: Attachment; onClose: () =
               title="Close"
               onClick={onClose}
             >
-              ×
+              <Icon name="close" />
             </button>
           </div>
         </div>
@@ -264,7 +264,7 @@ function SaveButton({ file }: { file: Attachment }) {
   if (!desktop) {
     return (
       <a
-        className="btn btn--ghost btn--small"
+        className="btn btn--quiet btn--compact"
         href={`${fileUrl(file)}&download=true`}
         download={file.name}
         target="_blank"
@@ -279,7 +279,7 @@ function SaveButton({ file }: { file: Attachment }) {
   return (
     <button
       type="button"
-      className="btn btn--ghost btn--small"
+      className="btn btn--quiet btn--compact"
       title={`Copy ${file.name} to your downloads folder`}
       disabled={saving}
       onClick={() => {

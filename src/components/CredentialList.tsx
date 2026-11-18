@@ -104,7 +104,7 @@ export function CredentialList({ groupId, crew = [] }: Props) {
             </span>
             <button
               type="button"
-              className="btn btn--small"
+              className="btn btn--compact"
               disabled={busy || editor.kind === "add"}
               onClick={() => {
                 setEditor({ kind: "edit", connector, agents: connector.agents, replacement: "" });
@@ -114,7 +114,7 @@ export function CredentialList({ groupId, crew = [] }: Props) {
             </button>
             <button
               type="button"
-              className="btn btn--small btn--ghost"
+              className="btn btn--compact btn--quiet"
               disabled={busy}
               onClick={() => void run(() => api.deleteConnector(connector.id))}
             >
@@ -136,7 +136,7 @@ export function CredentialList({ groupId, crew = [] }: Props) {
               <label className="field">
                 <span className="field__label">Replace value (optional)</span>
                 <input
-                  className="input input--mono"
+                  className="input"
                   type="password"
                   autoComplete="new-password"
                   value={editor.replacement}
@@ -146,7 +146,7 @@ export function CredentialList({ groupId, crew = [] }: Props) {
               <div className="access__row">
                 <button
                   type="button"
-                  className="btn btn--small"
+                  className="btn btn--compact"
                   disabled={busy || (editor.replacement.length > 0 && !editor.replacement.trim())}
                   onClick={() =>
                     void run(() =>
@@ -158,7 +158,7 @@ export function CredentialList({ groupId, crew = [] }: Props) {
                 </button>
                 <button
                   type="button"
-                  className="btn btn--small btn--ghost"
+                  className="btn btn--compact btn--quiet"
                   disabled={busy}
                   onClick={reset}
                 >
@@ -185,7 +185,7 @@ export function CredentialList({ groupId, crew = [] }: Props) {
           <label className="field">
             <span className="field__label">Environment variable</span>
             <input
-              className="input input--mono"
+              className="input"
               placeholder="MY_API_KEY"
               value={editor.envVar}
               onChange={(event) => setEditor({ ...editor, envVar: event.target.value })}
@@ -194,7 +194,7 @@ export function CredentialList({ groupId, crew = [] }: Props) {
           <label className="field">
             <span className="field__label">Secret value</span>
             <input
-              className="input input--mono"
+              className="input"
               type="password"
               autoComplete="new-password"
               placeholder={`${editor.service.trim() || "the"} token`}
@@ -206,7 +206,7 @@ export function CredentialList({ groupId, crew = [] }: Props) {
           <div className="access__row">
             <button
               type="button"
-              className="btn btn--small btn--primary"
+              className="btn btn--compact btn--primary"
               disabled={
                 busy || !editor.secret.trim() || !editor.service.trim() || !editor.envVar.trim()
               }
@@ -228,7 +228,7 @@ export function CredentialList({ groupId, crew = [] }: Props) {
             </button>
             <button
               type="button"
-              className="btn btn--small btn--ghost"
+              className="btn btn--compact btn--quiet"
               disabled={busy}
               onClick={reset}
             >
@@ -239,7 +239,7 @@ export function CredentialList({ groupId, crew = [] }: Props) {
       ) : (
         <button
           type="button"
-          className="btn btn--small"
+          className="btn btn--compact"
           disabled={busy || editor.kind === "edit" || connectors === null}
           onClick={() =>
             setEditor({ kind: "add", service: "", envVar: "", secret: "", agents: [] })

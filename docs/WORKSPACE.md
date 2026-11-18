@@ -37,7 +37,7 @@ were centered rows of their own. One lane, because they are one question, and
 because a page has one margin.
 
 **A running head.** Every turn is headed with the speaker's name, set in the
-display face in small caps at the ladder's floor. It is drawn once on the first
+interface face at the meta size. It is drawn once on the first
 message of a run: a second message by the same author inside four minutes is the
 same passage continuing, so it has no head, no clock and no rule above it. The
 head appears in an agent's own channel too, which is a reversal. The old
@@ -336,7 +336,7 @@ The gear said nothing about what it opened and sat beside the arrow that closes
 the panel; two glyphs a few pixels apart, one of which loses your place.
 
 Ledger sets that head as a ledger's first page: *The agent*, the name in the
-display face, the group and the model in the machine texture, the creature on a
+title role, the group and the model in the machine texture, the creature on a
 plate of its own, what it is doing now, and then a table of the one fact that
 is read constantly: the model. It was a row of four things beside a 44-pixel
 portrait, which is a contact card. The browser and the computer were rows of
@@ -1895,8 +1895,8 @@ both light and dark at the user's whim.
 `guaca` drawn as circles and one round stroke. It leads the README in both
 surfaces through a `<picture>`, which is the one place the app is seen before it
 is opened. Its generator, `design/wordmarks/wordmarks.py`, cuts the three
-typeset prototypes it is compared with from `--font-display` — Literata, the
-face `.brand__name` sets the rail's name in — so the page shows the app's own
+typeset prototypes it is compared with from `--font-read`, Literata, the
+reading face Field and Paper set agents' words in, so the page shows the app's own
 type rather than a face it used to ship, and it rebuilds from a clean checkout
 with `./design/wordmarks/make.sh`. The page and its five SVGs are committed as
 the record, and the one that ships is the drawn one.
@@ -2605,10 +2605,20 @@ new default once on load (`LOOK` in `lib/prefs.ts`); every save writes the
 mark, so a Signal chosen afterward stays. A preset chooses the palette and
 reading face; it does not change the layout. Each has a light and a dark surface, and Match system is the default.
 The choice stays in local preferences and never reaches the runtime.
-Signal uses cool blue-gray and blue actions, Field uses mineral greens and teal,
-Violet uses neutral grounds and violet actions, and Paper retains the warmer
-paper palette. The send control is filled in the action color even before a
-draft is entered, so its position is visible while it is disabled.
+Signal uses cool blue-gray grounds, Field uses mineral greens, Violet uses
+neutral grounds, and Paper retains the warmer paper palette. Each gives the
+system's own words a hue of its own: blue, teal, violet or slate. The action
+color is ink under every preset: a primary or send control is filled in the
+text color with the ground written on it, so the one thing to press reads as
+the darkest thing on paper and the brightest in a dark room. The send control
+is filled in the action color even before a draft is entered, so its position
+is visible while it is disabled.
+
+A dark surface has four layers, each a step lighter than the one under it:
+sunken (the page behind the columns), ground, raised (a card or a field) and
+popover (a menu, the palette, a dialog), and the rail has the same ladder. Each step is at least 1.08 to 1 and raised clears sunken by 1.2 to 1,
+whatever the grays, temperature or contrast, which `theme.test.ts` measures. On
+paper a popover is drawn as raised and its lift's shadow carries it.
 
 A palette is expressed through the four theme choices: gray hue, attention hue,
 contrast and temperature. `lib/theme.ts` solves the semantic colors against
@@ -2630,12 +2640,13 @@ lightness, which is the axis red-green colorblindness keeps.
 And it is spent only on attention. It had become the focus ring, the primary
 button, the send button, every toggle that was on, every link, a running job
 and the streaming caret, so "you tabbed here" and "answer me" were one ring. A
-focus ring and a drop target use the system color. Primary and send buttons use
-the preset's action fill and its paired text color. Something running uses the
-system color. `styles.test.ts`
-fails a focus rule or an on-state spelled from the attention color, and a
-fill whose text is not its own on-color. The groups' waiting count is still red,
-and that is on purpose: it is drawn to match the menu bar's attention glyph,
+focus ring and a drop target use the system color, and nothing else is filled
+or edged in it: something running is drawn in ink, and the system's chips and
+banners sit on a neutral wash. Primary and send buttons use the action fill
+and its paired text color. `styles.test.ts` fails a focus rule or an on-state
+spelled from the attention color, a fill or an edge in the system color outside
+a focus rule or a drop target, and a fill whose text is not its own on-color.
+The groups' waiting count is still red, and that is on purpose: it is drawn to match the menu bar's attention glyph,
 which is the macOS convention for "needs you" and not this app's to repaint.
 
 The theme reaches the document as a second pair of token blocks, `:root` and
@@ -2643,10 +2654,14 @@ The theme reaches the document as a second pair of token blocks, `:root` and
 properties on the root: those would pin the columns to whichever surface was
 current when they were written, and the surface would stop switching in CSS.
 
-## Type is one interface face, one reading face, one display face and a reading size
+## Type is one interface face, one reading face, six roles and a reading size
 
 Inter carries the interface, loaded with its optical-size axis so a title comes
-from the display cut and a line of text from the text cut. That is the job a
+from the display cut and a line of text from the text cut. Every piece of text
+is one of six roles: meta 12/400, support 13/400, UI 15/400 and 15/600, reading
+16/400 and title 20/600. Two weights and five sizes are what a screen can tell
+apart at a glance; the nine-step ladder with four weights let one screen reach
+24 styles, and nothing ranked above anything else. That is the job a
 second family, Instrument Sans, used to do, so it is gone. An operator can pick
 the system's own face instead, which is SF Pro on a Mac, or Atkinson
 Hyperlegible, whose letters are drawn so no two are easy to mistake. Each brings
@@ -2663,11 +2678,11 @@ would be the interface scale under a second name, and somebody who wants long
 replies at 18px has not asked for an 18px rail.
 
 Labels are sentence case in the interface face at 12px. They were 9px uppercase
-monospace, which is 8.1px at the smallest scale, and the ladder's floor is 11px
-now. Three things are still set in capitals: the wordmark, a code somebody types
-by hand, and the running head over a turn, which is a printed convention and not
-a label — it names who is speaking and is the one line in the transcript that
-sits in the margin.
+monospace, and later 11px tracked capitals. Nothing is set in capitals now, not
+even the running head over a turn, and nothing in italics: your own words were
+italic gray, which read as less than the agent's. Mono is for code a person
+reads as code, a `<code>` element, a diff, a file or a webhook line; times,
+counts, model names and keyboard keys are set in the interface face.
 
 Every face ships with the app and none is fetched until something is drawn in
 it. Literata is most of the weight, at 729 KB across its subsets and italic,

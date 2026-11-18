@@ -84,7 +84,7 @@ export function Notebook({ agentId }: Props) {
               <span className="worknotes__age">{ago(entry.updatedAt, now)}</span>
               <button
                 type="button"
-                className="btn btn--small btn--ghost"
+                className="btn btn--compact btn--quiet"
                 aria-label={`Delete ${entry.path}`}
                 onClick={() => void remove(entry.path)}
               >

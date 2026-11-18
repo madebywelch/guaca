@@ -7,7 +7,6 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import {
   type DraftAction,
@@ -23,6 +22,7 @@ import { applyMention, matchMentions, mentionAt, splitMentions } from "../lib/me
 import { useLiveAgents, useStore } from "../lib/store";
 import { BEFORE_RELOAD, workspaceOrigin } from "../lib/transport";
 import { type Attachment, errorMessage, type GroupId, type Staged } from "../lib/types";
+import { Icon } from "./Icon";
 import "./Composer.css";
 
 const owners = new Map<string, ReturnType<typeof createOwner>>();
@@ -390,7 +390,7 @@ export function Composer({
                   setFiles((held) => held.filter((have) => have.digest !== file.digest))
                 }
               >
-                ×
+                <Icon name="close" size={16} />
               </button>
             </li>
           ))}
@@ -414,7 +414,7 @@ export function Composer({
           )}
           <button
             type="button"
-            className="btn btn--small"
+            className="btn btn--compact"
             disabled={disabled || stagingCount > 0}
             onClick={() => {
               const delivery = owner.get().delivery;
@@ -444,7 +444,7 @@ export function Composer({
             </p>
             <button
               type="button"
-              className="btn btn--small"
+              className="btn btn--compact"
               aria-label={`Switch to saved draft ${index + 1}`}
               disabled={state.delivery.kind !== "idle" || stagingCount > 0}
               onClick={() => owner.dispatch({ type: "switch", index })}
@@ -465,7 +465,7 @@ export function Composer({
                 aria-label={`Dismiss: ${why}`}
                 onClick={() => setRefused((held) => held.filter((line) => line !== why))}
               >
-                ×
+                <Icon name="close" size={16} />
               </button>
             </li>
           ))}
@@ -569,7 +569,7 @@ export function Composer({
               disabled={disabled || sending}
               onClick={() => picker.current?.click()}
             >
-              <span aria-hidden="true">+</span>
+              <Icon name="attach" />
             </button>
           </>
         )}
@@ -577,6 +577,7 @@ export function Composer({
           type="button"
           className="composer__send"
           aria-label="Send"
+          aria-busy={sending}
           title="Send"
           onClick={() => void submit()}
           disabled={
@@ -587,7 +588,7 @@ export function Composer({
           }
         >
           <span>Send</span>
-          <span aria-hidden="true">↑</span>
+          <Icon name="arrow-up" size={16} />
         </button>
       </div>
 

@@ -233,7 +233,7 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
               <>
                 <button
                   type="button"
-                  className="btn btn--small btn--danger"
+                  className="btn btn--compact btn--danger"
                   disabled={busy}
                   onClick={() =>
                     void run(() => api.deleteRoutine(routine.id)).then((ok) => {
@@ -245,7 +245,7 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
                 </button>
                 <button
                   type="button"
-                  className="btn btn--small btn--ghost"
+                  className="btn btn--compact btn--quiet"
                   onClick={() => setConfirmDelete(false)}
                 >
                   Keep
@@ -255,7 +255,7 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
               <>
                 <button
                   type="button"
-                  className="btn btn--small"
+                  className="btn btn--compact"
                   disabled={busy}
                   onClick={() => setConfirmDelete(true)}
                 >
@@ -263,7 +263,7 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
                 </button>
                 <button
                   type="button"
-                  className="btn btn--small btn--primary"
+                  className="btn btn--compact btn--primary"
                   disabled={busy || dirty}
                   title={
                     dirty
@@ -447,7 +447,7 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
             <div className="webhook__actions">
               <button
                 type="button"
-                className="btn btn--small btn--ghost"
+                className="btn btn--compact btn--quiet"
                 onClick={() => {
                   if (secret !== null) {
                     setSecret(null);
@@ -463,7 +463,7 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
               </button>
               <button
                 type="button"
-                className="btn btn--small btn--ghost"
+                className="btn btn--compact btn--quiet"
                 onClick={() => {
                   const url = address.url;
                   if (!url) return;
@@ -529,7 +529,7 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
         <div className="detail__save">
           <button
             type="button"
-            className="btn btn--small btn--primary"
+            className="btn btn--compact btn--primary"
             disabled={busy || !draft.what.trim() || problem !== null}
             onClick={save}
           >
@@ -538,7 +538,7 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
           {routine && (
             <button
               type="button"
-              className="btn btn--small btn--ghost"
+              className="btn btn--compact btn--quiet"
               onClick={() => {
                 setDraft(editingFor(routine));
                 setMoved(false);

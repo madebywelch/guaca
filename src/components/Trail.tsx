@@ -1,5 +1,4 @@
 import { useId, useState } from "react";
-
 import { type DiffLine, diffSummary } from "../lib/diff";
 import {
   foldTrail,
@@ -11,6 +10,7 @@ import {
   type TrailGroup,
   tellsMore,
 } from "../lib/trail";
+import { Icon } from "./Icon";
 import { FootnoteRow, why } from "./WireRow";
 
 export function TrailFootnote({
@@ -215,7 +215,7 @@ function TrailChip({
       onClick={onToggle}
     >
       <span className="trail__caret" aria-hidden="true">
-        {open ? "▾" : "▸"}
+        <Icon name={open ? "chevron-down" : "chevron-right"} size={16} />
       </span>
       {face}
     </button>

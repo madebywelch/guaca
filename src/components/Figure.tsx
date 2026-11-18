@@ -34,7 +34,7 @@ export function Figure({ figure, source }: { figure: FigureValue; source: string
             {drawn && <ChartFigures chart={drawn} />}
             <button
               type="button"
-              className="btn btn--ghost btn--small"
+              className="btn btn--quiet btn--compact"
               aria-expanded={showing}
               onClick={() => setShowing((was) => !was)}
             >

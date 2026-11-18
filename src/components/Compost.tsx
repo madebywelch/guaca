@@ -74,7 +74,7 @@ export function Compost() {
             <>
               <button
                 type="button"
-                className="btn btn--ghost"
+                className="btn btn--quiet"
                 disabled={working}
                 onClick={() => setConfirming(null)}
               >
@@ -93,7 +93,7 @@ export function Compost() {
             <>
               <button
                 type="button"
-                className="btn btn--ghost"
+                className="btn btn--quiet"
                 disabled={working}
                 onClick={() => setConfirming(agent.id)}
               >

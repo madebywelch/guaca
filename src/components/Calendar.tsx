@@ -22,6 +22,7 @@ import {
   type OccasionDraft,
   type OccasionId,
 } from "../lib/types";
+import { Icon } from "./Icon";
 
 interface Props {
   onClose: () => void;
@@ -205,26 +206,26 @@ export function Calendar({ onClose }: Props) {
             <div className="calendar__nav">
               <button
                 type="button"
-                className="btn btn--ghost"
+                className="btn btn--quiet"
                 aria-label="Previous month"
                 onClick={() => setWindow(monthOf(window.from, -1))}
               >
-                ‹
+                <Icon name="chevron-left" size={16} />
               </button>
               <button
                 type="button"
-                className="btn btn--ghost"
+                className="btn btn--quiet"
                 onClick={() => setWindow(openingWindow(Date.now()))}
               >
                 Today
               </button>
               <button
                 type="button"
-                className="btn btn--ghost"
+                className="btn btn--quiet"
                 aria-label="Next month"
                 onClick={() => setWindow(monthOf(window.from, 1))}
               >
-                ›
+                <Icon name="chevron-right" size={16} />
               </button>
               <button
                 type="button"
@@ -383,7 +384,7 @@ export function Calendar({ onClose }: Props) {
               <span style={{ flex: 1 }} />
               <button
                 type="button"
-                className="btn btn--ghost"
+                className="btn btn--quiet"
                 disabled={busy}
                 onClick={() => setEditing(null)}
               >

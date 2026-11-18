@@ -82,7 +82,7 @@ function Profile({ agent, onEdit }: { agent: AgentCard; onEdit: () => void }) {
       <div className="profile__actions">
         <button
           type="button"
-          className="btn btn--small btn--ghost"
+          className="btn btn--compact btn--quiet"
           aria-label={`Edit ${agent.name}'s profile`}
           onClick={onEdit}
         >

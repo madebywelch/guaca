@@ -41,28 +41,122 @@ describe("avatar sizes", () => {
   );
 });
 
-describe("the type ladder", () => {
-  const ladder = [...css.matchAll(/^\s*--type-([a-z]+): ([\d.]+)rem;$/gm)].map(([, role, rem]) => ({
-    role,
-    px: Number(rem) * ROOT_PX,
-  }));
+describe("the type roles", () => {
+  const sizes = Object.fromEntries(
+    [...css.matchAll(/^\s*--type-([a-z]+): ([\d.]+)rem;$/gm)].map(([, role, rem]) => [
+      role,
+      Number(rem) * ROOT_PX,
+    ]),
+  );
+  const weights = Object.fromEntries(
+    [...css.matchAll(/^\s*--weight-([a-z]+): (\d+);$/gm)].map(([, name, value]) => [
+      name,
+      Number(value),
+    ]),
+  );
+  const rules = () => {
+    const by = new Map<number, Record<string, string>>();
+    for (const d of declarations()) by.set(d.rule, { ...by.get(d.rule), [d.property]: d.value });
+    return [...by.values()];
+  };
+  const shown = (rule: Record<string, string>) =>
+    Object.entries(rule)
+      .map(([property, value]) => `${property}: ${value}`)
+      .join("; ");
 
-  it("has nine roles", () => {
-    expect(ladder.map(({ role }) => role)).toHaveLength(9);
+  it("are five sizes and two weights, and nothing else", () => {
+    expect(sizes).toEqual({ meta: 12, support: 13, ui: 15, read: 16, title: 20 });
+    expect(weights).toEqual({ regular: 400, strong: 600 });
   });
 
-  it("sets every role in whole pixels at scale 1", () => {
-    for (const { role, px } of ladder) expect(Number.isInteger(px), `--type-${role}`).toBe(true);
+  it("set every weight from a weight token", () => {
+    const bad = declarations()
+      .filter((d) => d.property === "font-weight")
+      .filter((d) => !/^var\(--weight-(regular|strong)\)$/.test(d.value));
+    expect(bad.map((d) => `${d.selector} { font-weight: ${d.value} }`)).toEqual([]);
   });
 
-  it("puts nothing under 11px", () => {
-    for (const { role, px } of ladder) expect(px, `--type-${role}`).toBeGreaterThanOrEqual(11);
+  it("pair a size only with the weights its role allows", () => {
+    const bad = rules().filter(
+      (rule) =>
+        (/--type-(meta|support|read)\)/.test(rule["font-size"] ?? "") &&
+          rule["font-weight"] === "var(--weight-strong)") ||
+        (rule["font-size"] === "var(--type-title)" &&
+          rule["font-weight"] !== "var(--weight-strong)"),
+    );
+    expect(bad.map(shown)).toEqual([]);
   });
 
-  it("keeps every role at least 1px from the one below it", () => {
-    const sizes = ladder.map(({ px }) => px).sort((a, b) => a - b);
-    for (const [index, px] of sizes.slice(1).entries()) {
-      expect(px - (sizes[index] ?? 0)).toBeGreaterThanOrEqual(1);
+  it("track only a title", () => {
+    const bad = rules().filter(
+      (rule) =>
+        rule["letter-spacing"] !== undefined &&
+        !/^(inherit|0)$/.test(rule["letter-spacing"]) &&
+        !(
+          rule["letter-spacing"] === "var(--track-title)" &&
+          rule["font-size"] === "var(--type-title)"
+        ),
+    );
+    expect(bad.map(shown)).toEqual([]);
+  });
+
+  it("set no capitals and no italics", () => {
+    const bad = declarations().filter(
+      (d) =>
+        (d.property === "text-transform" && /uppercase|capitalize/.test(d.value)) ||
+        (d.property === "font-style" && /italic|oblique/.test(d.value)) ||
+        (d.property === "font-variant-caps" && d.value !== "normal"),
+    );
+    expect(bad.map((d) => `${d.selector} { ${d.property}: ${d.value} }`)).toEqual([]);
+  });
+
+  it("set code, and only code, in the mono face", () => {
+    const mono = declarations().filter((d) => d.value.includes("var(--font-mono)"));
+    expect(mono.map((d) => d.selector)).toEqual([
+      ":is(code, pre, .diff, .file__text, .connector-failure__detail > pre, .textarea--code, .webhook, .devicecode__code, .skill__body)",
+    ]);
+  });
+
+  it("are set in the stylesheet, never by a component", () => {
+    const dir = join(process.cwd(), "src");
+    const code = readdirSync(dir, { recursive: true, encoding: "utf8" })
+      .filter((file) => /\.tsx?$/.test(file) && !/\.test\.tsx?$/.test(file))
+      .filter((file) =>
+        /\b(fontSize|fontWeight|fontFamily|fontStyle|letterSpacing|textTransform)\s*:/.test(
+          readFileSync(join(dir, file), "utf8"),
+        ),
+      );
+    expect(code).toEqual([]);
+  });
+});
+
+describe("the control family", () => {
+  const px = (pattern: RegExp) =>
+    Object.fromEntries(
+      [...css.matchAll(pattern)].map(([, name, rem]) => [name, Number(rem) * ROOT_PX]),
+    );
+
+  it("has two heights, 32px and 28px compact", () => {
+    expect(px(/^\s*--(control-h(?:-sm)?): ([\d.]+)rem;$/gm)).toEqual({
+      "control-h": 32,
+      "control-h-sm": 28,
+    });
+  });
+
+  it("has a 6px corner for controls and a 10px corner for cards", () => {
+    expect(px(/^\s*--(radius-[a-z]+): ([\d.]+)rem;$/gm)).toEqual({
+      "radius-control": 6,
+      "radius-card": 10,
+    });
+  });
+
+  it("gives a button a pressed, a disabled and a pending state as well as a hover", () => {
+    const selectors = declarations().map((d) => d.selector);
+    for (const state of [":hover", ":active", ":disabled", '[aria-busy="true"]']) {
+      expect(
+        selectors.some((selector) => selector.startsWith(".btn") && selector.includes(state)),
+        state,
+      ).toBe(true);
     }
   });
 });
@@ -458,12 +552,13 @@ describe("the agent's tabs", () => {
   });
 });
 
-function declarations(): { selector: string; property: string; value: string }[] {
+function declarations(): { selector: string; property: string; value: string; rule: number }[] {
   const body = `${css.slice(css.indexOf("\n* {"))}\n${signalCss}\n${composerCss}`.replace(
     /\/\*[\s\S]*?\*\//g,
     "",
   );
-  const found: { selector: string; property: string; value: string }[] = [];
+  const found: { selector: string; property: string; value: string; rule: number }[] = [];
+  let rule = 0;
   const stack: string[] = [];
   let token = "";
   for (const ch of body) {
@@ -472,9 +567,10 @@ function declarations(): { selector: string; property: string; value: string }[]
       token = "";
     } else if (ch === "}") {
       const selector = stack.join(" ") || "?";
+      rule += 1;
       for (const declaration of token.matchAll(/([a-z-]+):\s*([^;]+);/g)) {
         const [, property = "", value = ""] = declaration;
-        found.push({ selector, property, value: value.trim().replace(/\s+/g, " ") });
+        found.push({ selector, property, value: value.trim().replace(/\s+/g, " "), rule });
       }
       stack.pop();
       token = "";
@@ -499,10 +595,10 @@ describe("every length is named, not spelled", () => {
   };
 
   it.each([
-    ["font-size", /^--type-/, /^[0-9.]+em$|--ui-scale/, /^$/],
+    ["font-size", /^--type-/, /--ui-scale/, /^$/],
     ["letter-spacing", /^--track-/, /^inherit$/, /^$/],
     ["line-height", /^--(lead-|badge)/, /^0$/, /^$/],
-    ["border-radius", /^--radius/, /^$/, /^(50%|1px)$/],
+    ["border-radius", /^--radius-(control|card|pill)$/, /^$/, /^50%$/],
   ])("%s", (property, family, exempt, also) => {
     const bad = declarations()
       .filter((d) => d.property === property)
@@ -590,6 +686,28 @@ describe("what the attention color is spent on", () => {
     expect(bad.map((d) => `${d.selector} { ${d.property}: ${d.value} }`)).toEqual([]);
   });
 
+  it("spends the system color on focus and drop targets only, never on a fill or an edge", () => {
+    const bad = declarations()
+      .filter((d) => /^(background|border|outline|box-shadow)/.test(d.property))
+      .filter((d) => /var\(--(system|focus)\b/.test(d.value))
+      .filter((d) => !/:focus|data-over|data-dragging|data-lands/.test(d.selector));
+    expect(bad.map((d) => `${d.selector} { ${d.property}: ${d.value} }`)).toEqual([]);
+  });
+
+  it("fills a primary control in ink, at rest and under the pointer", () => {
+    const fills = declarations()
+      .filter((d) => /\.btn--primary(?![\w-])/.test(d.selector) && d.property === "background")
+      .map((d) => d.value);
+    expect(fills.length).toBeGreaterThan(0);
+    for (const fill of fills)
+      expect(fill).toMatch(/^(var|color-mix\(in oklab, var)\(--(text|action-fill)\)/);
+    const signal = declarations().filter(
+      (d) => d.selector === ".btn--primary:hover:not(:disabled)" && d.property === "background",
+    );
+    expect(new Set(signal.map((d) => d.value)).size).toBe(signal.length);
+    expect(signal.at(-1)?.value).not.toBe("var(--action-fill)");
+  });
+
   it("sets text on a fill in that fill's own text color", () => {
     const rules = new Map<string, Map<string, string>>();
     for (const d of declarations()) {
@@ -607,7 +725,7 @@ describe("what the attention color is spent on", () => {
     expect(bad).toEqual([]);
   });
 
-  it.each(['input[type="file"]::file-selector-button', ".input, .textarea, .select", ".choice"])(
+  it.each([".input, .textarea, .select", ".choice"])(
     "borders %s in a control's edge",
     (selector) => {
       const border = declarations().find(
@@ -622,7 +740,7 @@ describe("what the attention color is spent on", () => {
     const last = (selector: string, property: string) =>
       rules.filter((d) => d.selector === selector && d.property === property).at(-1)?.value;
     expect(last(".composer", "border")).toBe("1px solid var(--edge-control)");
-    expect(last(".composer", "border-radius")).toBe("var(--radius-signal)");
+    expect(last(".composer", "border-radius")).toBe("var(--radius-card)");
     expect(last(".composer:focus-within", "border-color")).toBe("var(--focus)");
     expect(
       last(

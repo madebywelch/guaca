@@ -142,6 +142,19 @@ system sitting at the top of it the whole time. Nobody chose that, and no review
 would have caught it. The exceptions are named in the suite with their reasons;
 add one there rather than working around it.
 
+**One visual language, measured on the screen.** Text is set in six roles and no
+others: meta 12/400, support 13/400, UI 15/400 and 15/600, reading 16/400 and
+title 20/600, from `--type-*` and `--weight-*`. Mono is for code, in the one
+rule that names the code surfaces. Nothing is set in capitals, small capitals or
+italics. A control is 32px, or 28px compact, with a 6px corner; a card has a
+10px corner; full round is for faces, marks and the now pill. Ink is the primary
+action, amber means needs you, red means failed, and violet is the focus ring.
+`styles.test.ts` holds the tokens and the rules that spend them, and the
+`look` scenario holds what a person sees: it opens every screen in a real
+browser and fails one that shows more than eight type styles, or a size,
+weight, corner or control height outside the tokens, naming the element and the
+token to use. A screen got to 24 styles one reasonable rule at a time.
+
 **One arrival, and two registers of motion in CSS.** Every surface that appears
 runs `@keyframes pop` at `--tempo-enter` on `--ease`, listed in one rule, and a
 new surface joins by adding its selector to it. What tells a menu from a dialog

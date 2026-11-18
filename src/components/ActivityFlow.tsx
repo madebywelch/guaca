@@ -7,6 +7,7 @@ import { useStore } from "../lib/store";
 import type { WirePeer } from "../lib/transcript";
 import type { AgentCard, AgentId, Envelope, Participant, RunId, Tokens } from "../lib/types";
 import { plainText } from "../lib/types";
+import { Icon } from "./Icon";
 import { compact, money, priced } from "./Spend";
 import { MessageModal } from "./WireRow";
 
@@ -121,7 +122,7 @@ export function ActivityFlow({ messages, byId }: Props) {
                 aria-expanded={isOpen}
               >
                 <span className="run__caret" aria-hidden="true">
-                  {isOpen ? "▾" : "▸"}
+                  <Icon name={isOpen ? "chevron-down" : "chevron-right"} size={16} />
                 </span>
                 <span className="run__when">
                   {day && <span className="run__day">{day}</span>}

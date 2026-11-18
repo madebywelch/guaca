@@ -227,7 +227,7 @@ export function HostMonitor({ children }: { children: ReactNode }) {
             )}
             {desktop && (
               <button
-                className="btn btn--ghost"
+                className="btn btn--quiet"
                 type="button"
                 onClick={() => setShowHostChoice(!showHostChoice)}
               >
@@ -267,7 +267,7 @@ export function HostUpdateNotice({ onReview }: { onReview: () => void }) {
         Review update
       </button>
       <button
-        className="btn btn--ghost"
+        className="btn btn--quiet"
         type="button"
         onClick={() => {
           setDismissed(key);
@@ -780,7 +780,7 @@ export function HostUpdatePanel() {
       <div className="access__row">
         {!(unknown && accepted) && (
           <button
-            className="btn btn--small"
+            className="btn btn--compact"
             disabled={checking || updating}
             type="button"
             onClick={() => void refresh(true)}
@@ -790,7 +790,7 @@ export function HostUpdatePanel() {
         )}
         {!boxed && (
           <button
-            className="btn btn--small"
+            className="btn btn--compact"
             type="button"
             onClick={() => setInstructions(!instructions)}
           >

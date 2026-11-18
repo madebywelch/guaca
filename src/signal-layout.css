@@ -1,7 +1,7 @@
 .rail__group-head {
   font-family: var(--font-ui);
-  font-size: var(--type-aside);
-  font-weight: 600;
+  font-size: var(--type-ui);
+  font-weight: var(--weight-strong);
   letter-spacing: 0;
   text-transform: none;
   color: var(--rail-text);
@@ -10,23 +10,26 @@
 .agent-row {
   width: calc(100% - var(--space-4));
   margin-left: var(--space-4);
-  border-radius: var(--radius-signal) 0 0 var(--radius-signal);
+  border-radius: var(--radius-card) 0 0 var(--radius-card);
 }
 
 .agent-row[aria-current="true"] {
-  border-left-color: var(--system);
-  background: color-mix(in srgb, var(--system) 16%, var(--rail-ground));
+  border-left-color: var(--rail-text);
+  background: color-mix(in srgb, var(--rail-text) 8%, var(--rail-ground));
 }
 
 .agent-row:not([aria-current="true"]) .avatar {
   filter: none;
 }
 
-.btn--primary,
-.btn--primary:hover:not(:disabled) {
+.btn--primary {
   background: var(--action-fill);
   border-color: var(--action-fill);
   color: var(--on-action-fill);
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--action-fill) 84%, var(--on-action-fill));
 }
 
 .agent-row__name,
@@ -47,7 +50,7 @@
 .host-setup {
   padding: var(--space-8);
   border: 1px solid var(--rule);
-  border-radius: var(--radius-signal);
+  border-radius: var(--radius-card);
   background: var(--raised);
 }
 
@@ -57,7 +60,7 @@
 
 .host-setup .choice--place,
 .host-setup .host-status {
-  border-radius: var(--radius-signal);
+  border-radius: var(--radius-card);
 }
 
 @media (max-width: 36rem) {

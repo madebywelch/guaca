@@ -158,7 +158,7 @@ function MemoryPage({ agentId }: Props) {
         {!editing && (
           <button
             type="button"
-            className="btn btn--small btn--ghost"
+            className="btn btn--compact btn--quiet"
             disabled={state.phase === "failed"}
             onClick={() => dispatch({ type: "edit" })}
           >
@@ -191,7 +191,7 @@ function MemoryPage({ agentId }: Props) {
         <div className="memory__actions">
           <button
             type="button"
-            className="btn btn--small btn--primary"
+            className="btn btn--compact btn--primary"
             disabled={busy || !dirty}
             onClick={() => void save()}
           >
@@ -199,7 +199,7 @@ function MemoryPage({ agentId }: Props) {
           </button>
           <button
             type="button"
-            className="btn btn--small btn--ghost"
+            className="btn btn--compact btn--quiet"
             disabled={busy}
             onClick={() => dispatch({ type: "cancel" })}
           >
@@ -225,7 +225,11 @@ function MemoryPage({ agentId }: Props) {
         <div className="banner banner--error" style={{ margin: "0.5rem 0 0" }}>
           <span>{error}</span>
           {state.phase === "failed" && (
-            <button type="button" className="btn btn--small btn--ghost" onClick={() => void load()}>
+            <button
+              type="button"
+              className="btn btn--compact btn--quiet"
+              onClick={() => void load()}
+            >
               Retry
             </button>
           )}

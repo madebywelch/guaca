@@ -209,7 +209,7 @@ export function ComputerScreen({ agent }: Props) {
                   <>
                     <button
                       type="button"
-                      className="btn btn--small btn--danger"
+                      className="btn btn--compact btn--danger"
                       disabled={busy}
                       onClick={() => void act(() => api.stopAgentComputer(agent.id))}
                     >
@@ -217,7 +217,7 @@ export function ComputerScreen({ agent }: Props) {
                     </button>
                     <button
                       type="button"
-                      className="btn btn--small btn--ghost"
+                      className="btn btn--compact btn--quiet"
                       onClick={() => setConfirming(null)}
                     >
                       Keep awake
@@ -227,7 +227,7 @@ export function ComputerScreen({ agent }: Props) {
                   <>
                     <button
                       type="button"
-                      className="btn btn--small btn--danger"
+                      className="btn btn--compact btn--danger"
                       disabled={busy}
                       onClick={() =>
                         void act(async () => {
@@ -240,7 +240,7 @@ export function ComputerScreen({ agent }: Props) {
                     </button>
                     <button
                       type="button"
-                      className="btn btn--small btn--ghost"
+                      className="btn btn--compact btn--quiet"
                       onClick={() => setConfirming(null)}
                     >
                       Keep
@@ -250,7 +250,7 @@ export function ComputerScreen({ agent }: Props) {
                   <>
                     <button
                       type="button"
-                      className="btn btn--small btn--ghost"
+                      className="btn btn--compact btn--quiet"
                       disabled={busy}
                       onClick={() => setConfirming("sleep")}
                       title="Sleep. The disk is kept, so it wakes signed in."
@@ -259,7 +259,7 @@ export function ComputerScreen({ agent }: Props) {
                     </button>
                     <button
                       type="button"
-                      className="btn btn--small btn--ghost"
+                      className="btn btn--compact btn--quiet"
                       disabled={busy}
                       onClick={() => setConfirming("destroy")}
                     >
@@ -269,7 +269,7 @@ export function ComputerScreen({ agent }: Props) {
                 )}
 
                 <div className="screen__actions">
-                  <button type="button" className="btn btn--small" onClick={() => setFull(false)}>
+                  <button type="button" className="btn btn--compact" onClick={() => setFull(false)}>
                     Done
                   </button>
                 </div>
@@ -311,7 +311,7 @@ export function ComputerScreen({ agent }: Props) {
                 </p>
                 <button
                   type="button"
-                  className="btn btn--small btn--primary"
+                  className="btn btn--compact btn--primary"
                   disabled={busy}
                   onClick={() => void act(() => api.startAgentComputer(agent.id))}
                 >

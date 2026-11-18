@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-
 import {
   detailsLine,
   logRows,
@@ -23,6 +22,7 @@ import {
   type WidgetWidth,
 } from "../lib/types";
 import { HtmlArtifact } from "./HtmlArtifact";
+import { Icon } from "./Icon";
 
 interface Props {
   onClose: () => void;
@@ -290,8 +290,9 @@ function ArtifactView({
     return (
       <>
         <div className="artifacts__head">
-          <button type="button" className="btn btn--ghost" onClick={onBack}>
-            ‹ All artifacts
+          <button type="button" className="btn btn--quiet" onClick={onBack}>
+            <Icon name="chevron-left" size={16} />
+            All artifacts
           </button>
         </div>
         <div className="artifacts__body">
@@ -342,8 +343,9 @@ function ArtifactView({
     <>
       <div className="artifacts__head">
         <div className="artifacts__title-row">
-          <button type="button" className="btn btn--ghost" onClick={back} ref={backRef}>
-            {history ? "‹ Back to the page" : "‹ All artifacts"}
+          <button type="button" className="btn btn--quiet" onClick={back} ref={backRef}>
+            <Icon name="chevron-left" size={16} />
+            {history ? "Back to the page" : "All artifacts"}
           </button>
           <h2 className="dialog__title artifacts__title">{artifact.title}</h2>
         </div>
@@ -421,7 +423,7 @@ function ArtifactView({
               </ul>
               <button
                 type="button"
-                className="btn btn--primary btn--small"
+                className="btn btn--primary btn--compact"
                 disabled={busy}
                 onClick={() =>
                   void act(async () => {
@@ -456,7 +458,7 @@ function ArtifactView({
                 <div className="artifact__answer-acts">
                   <button
                     type="button"
-                    className="btn btn--small"
+                    className="btn btn--compact"
                     disabled={sending}
                     onClick={() => {
                       const owner = artifact.owner;
@@ -493,7 +495,7 @@ function ArtifactView({
                   </button>
                   <button
                     type="button"
-                    className="btn btn--ghost btn--small"
+                    className="btn btn--quiet btn--compact"
                     disabled={sending}
                     onClick={() => {
                       proposalRef.current = false;
@@ -512,7 +514,7 @@ function ArtifactView({
               </span>
               <button
                 type="button"
-                className="btn btn--small"
+                className="btn btn--compact"
                 disabled={busy}
                 onClick={() =>
                   void act(async () => {
@@ -526,7 +528,7 @@ function ArtifactView({
               </button>
               <button
                 type="button"
-                className="btn btn--ghost btn--small"
+                className="btn btn--quiet btn--compact"
                 onClick={() => setViewing(null)}
               >
                 Show the current one
@@ -558,7 +560,7 @@ function ArtifactView({
         {!history && (
           <button
             type="button"
-            className="btn btn--ghost"
+            className="btn btn--quiet"
             onClick={(event) => {
               event.currentTarget.focus();
               setHistory(true);
@@ -571,7 +573,7 @@ function ArtifactView({
         {!history && artifact.sourcesAllowed && (
           <button
             type="button"
-            className="btn btn--ghost"
+            className="btn btn--quiet"
             onClick={() => setFresh((count) => count + 1)}
           >
             Refresh
@@ -625,12 +627,12 @@ function ArtifactView({
             >
               Delete it and its history
             </button>
-            <button type="button" className="btn btn--ghost" onClick={() => setConfirming(false)}>
+            <button type="button" className="btn btn--quiet" onClick={() => setConfirming(false)}>
               Keep
             </button>
           </>
         ) : (
-          <button type="button" className="btn btn--ghost" onClick={() => setConfirming(true)}>
+          <button type="button" className="btn btn--quiet" onClick={() => setConfirming(true)}>
             Delete
           </button>
         )}
@@ -647,7 +649,7 @@ export function ArtifactCard({ made }: { made: ArtifactMade }) {
   return (
     <button type="button" className="artifact-card" onClick={() => show({ id: made.id })}>
       <span className="artifact-card__mark">
-        <ArtifactMark />
+        <Icon name="artifact" />
       </span>
       <span className="artifact-card__text">
         <span className="artifact-card__title">{made.title}</span>
@@ -655,18 +657,7 @@ export function ArtifactCard({ made }: { made: ArtifactMade }) {
           {made.version === 1 ? "New artifact" : `Artifact, version ${made.version}`}
         </span>
       </span>
-      <svg className="artifact-card__go" viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M9.5 6l6 6-6 6" />
-      </svg>
+      <Icon name="chevron-right" />
     </button>
-  );
-}
-
-export function ArtifactMark() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M13.5 3.5H7A1.5 1.5 0 0 0 5.5 5v14A1.5 1.5 0 0 0 7 20.5h10a1.5 1.5 0 0 0 1.5-1.5V8.5z" />
-      <path d="M13.5 3.5v5h5M9 13h6M9 16.5h4" />
-    </svg>
   );
 }

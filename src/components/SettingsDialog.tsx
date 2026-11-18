@@ -904,7 +904,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       ) : (
                         <button
                           type="button"
-                          className="btn btn--small"
+                          className="btn btn--compact"
                           aria-label="Use the ChatGPT subscription"
                           disabled={busy}
                           onClick={() => setProvider("chatgpt")}
@@ -914,7 +914,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       )}
                       <button
                         type="button"
-                        className="btn btn--small"
+                        className="btn btn--compact"
                         disabled={busy}
                         onClick={() => void signOut()}
                       >
@@ -924,7 +924,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   ) : (
                     <button
                       type="button"
-                      className="btn btn--small"
+                      className="btn btn--compact"
                       disabled={busy || pendingCode !== null}
                       onClick={() => void signIn()}
                     >
@@ -989,7 +989,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       ) : (
                         <button
                           type="button"
-                          className="btn btn--small"
+                          className="btn btn--compact"
                           aria-label="Use the Claude subscription"
                           disabled={busy || claudeInstalled === null}
                           onClick={() => setProvider("claude")}
@@ -1041,7 +1041,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                     <label className="field" style={{ marginTop: "1.1rem" }}>
                       <span className="field__label">Inference endpoint</span>
                       <input
-                        className="input input--mono"
+                        className="input"
                         value={baseUrl}
                         placeholder="https://openrouter.ai/api/v1"
                         title="Any OpenAI-compatible base URL. A local server runs without a network."
@@ -1072,7 +1072,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                     <label className="field">
                       <span className="field__label">Default model</span>
                       <input
-                        className="input input--mono"
+                        className="input"
                         value={model}
                         placeholder={providerFor(baseUrl)?.model || "A model your endpoint serves"}
                         title="The default for any group or agent that does not name one."
@@ -1090,7 +1090,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                     </span>
                     <button
                       type="button"
-                      className="btn btn--small"
+                      className="btn btn--compact"
                       aria-label="Use an API provider"
                       disabled={busy}
                       onClick={() => setProvider("compatible")}
@@ -1103,7 +1103,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                 <label className="field">
                   <span className="field__label">Give up on a call after</span>
                   <input
-                    className="input input--mono"
+                    className="input"
                     inputMode="numeric"
                     value={timeout}
                     placeholder={`${settings?.requestTimeoutSecs ?? 120} seconds`}
@@ -1136,7 +1136,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       {field.label}
                     </span>
                     <input
-                      className="input input--mono input--number"
+                      className="input input--number"
                       type="number"
                       min={field.min}
                       max={field.max}
@@ -1178,7 +1178,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                 <label className="field">
                   <span className="field__label">Sleep computers after</span>
                   <input
-                    className="input input--mono"
+                    className="input"
                     inputMode="numeric"
                     value={idleMinutes}
                     placeholder={`${settings?.computerIdleMinutes ?? 15} minutes`}
@@ -1205,7 +1205,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                 <label className="field">
                   <span className="field__label">Close browsers after</span>
                   <input
-                    className="input input--mono"
+                    className="input"
                     inputMode="numeric"
                     value={browserIdleMinutes}
                     placeholder={`${settings?.browserIdleMinutes ?? 60} minutes`}
@@ -1263,7 +1263,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                     <span className="preset__actions">
                       <button
                         type="button"
-                        className="btn btn--small"
+                        className="btn btn--compact"
                         disabled={linking}
                         onClick={() =>
                           account.broker
@@ -1276,7 +1276,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       {!account.broker && (
                         <button
                           type="button"
-                          className="btn btn--small"
+                          className="btn btn--compact"
                           disabled={linking}
                           title="Forgets the sign-in on this machine immediately."
                           onClick={() => void unlinkAccount()}
@@ -1288,7 +1288,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   ) : (
                     <button
                       type="button"
-                      className="btn btn--small"
+                      className="btn btn--compact"
                       disabled={linking}
                       onClick={() => void linkAccount()}
                     >
@@ -1744,7 +1744,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       {macAccess === "denied" && (
                         <button
                           type="button"
-                          className="btn btn--small"
+                          className="btn btn--compact"
                           style={{ marginTop: "0.4rem" }}
                           onClick={() =>
                             api
@@ -1826,7 +1826,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                           <span className="api-key__hint">{settings.delivery.urlHint}</span>
                           <button
                             type="button"
-                            className="btn btn--small"
+                            className="btn btn--compact"
                             disabled={pushBusy}
                             onClick={async () => {
                               if (await writePush({ url: "", token: "" })) setPushReport(null);
@@ -1838,7 +1838,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       )}
                       <input
                         id="push-url"
-                        className="input input--mono"
+                        className="input"
                         value={pushUrl}
                         placeholder={
                           settings.delivery.urlSet
@@ -1862,7 +1862,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                           <span className="api-key__hint">{settings.delivery.tokenHint}</span>
                           <button
                             type="button"
-                            className="btn btn--small"
+                            className="btn btn--compact"
                             disabled={pushBusy}
                             onClick={() => void writePush({ token: "" })}
                           >
@@ -1872,7 +1872,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       )}
                       <input
                         id="push-token"
-                        className="input input--mono"
+                        className="input"
                         type="password"
                         value={pushToken}
                         placeholder={
@@ -1896,7 +1896,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       </label>
                       <input
                         id="push-link"
-                        className="input input--mono"
+                        className="input"
                         value={pushLink ?? settings.delivery.linkBase}
                         placeholder="https://guaca.example.com (optional)"
                         autoComplete="off"
@@ -2185,7 +2185,7 @@ function ApiKeyField({
             <button
               ref={change}
               type="button"
-              className="btn btn--small"
+              className="btn btn--compact"
               aria-label={`Change ${label}`}
               disabled={busy}
               onClick={() => onEdit(true)}
@@ -2199,7 +2199,7 @@ function ApiKeyField({
         <div className="api-key__entry">
           <input
             ref={input}
-            className="input input--mono"
+            className="input"
             type="password"
             aria-label={label}
             aria-describedby={children ? id : undefined}
@@ -2212,7 +2212,7 @@ function ApiKeyField({
           {stored && (
             <button
               type="button"
-              className="btn btn--small"
+              className="btn btn--compact"
               aria-label={`Cancel changing ${label}`}
               disabled={busy}
               onClick={() => {

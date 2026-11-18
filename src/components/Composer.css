@@ -2,7 +2,7 @@
   margin-bottom: var(--space-4);
   padding: var(--space-4);
   border: 1px solid var(--edge-control);
-  border-radius: var(--radius-signal);
+  border-radius: var(--radius-card);
   background: var(--raised);
 }
 
@@ -13,11 +13,13 @@
 
 .composer__send {
   width: auto;
+  height: var(--control-h);
   display: flex;
   align-items: center;
   gap: var(--space-2);
   padding: 0 var(--space-5);
-  border-radius: var(--radius-signal);
+  border-radius: var(--radius-control);
+  font-weight: var(--weight-strong);
 }
 
 .composer__send,
@@ -27,12 +29,24 @@
   color: var(--on-action-fill);
 }
 
+.composer__send:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--action-fill) 86%, var(--ground));
+}
+
+.composer__send:active:not(:disabled) {
+  background: color-mix(in oklab, var(--action-fill) 72%, var(--ground));
+}
+
+.composer__send:disabled {
+  opacity: 0.45;
+}
+
 .composer__recipient {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   color: var(--muted);
-  font-size: var(--type-small);
+  font-size: var(--type-support);
 }
 
 .composer__recipient select {

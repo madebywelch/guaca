@@ -160,7 +160,7 @@ export function SkillDirectory({ scope, taken, onAdded }: Props) {
         <div className="access__row">
           <button
             type="button"
-            className="btn btn--small btn--primary"
+            className="btn btn--compact btn--primary"
             disabled={busy || here || clash}
             onClick={() => void add(skill)}
           >
@@ -168,7 +168,7 @@ export function SkillDirectory({ scope, taken, onAdded }: Props) {
           </button>
           <button
             type="button"
-            className="btn btn--small btn--ghost"
+            className="btn btn--compact btn--quiet"
             onClick={() => void openExternal(skill.url)}
           >
             Open on skills.sh
@@ -234,7 +234,7 @@ export function SkillDirectory({ scope, taken, onAdded }: Props) {
                 {listing.addable ? (
                   <button
                     type="button"
-                    className="btn btn--small"
+                    className="btn btn--compact"
                     disabled={opening !== null}
                     onClick={() => void open(listing)}
                   >
@@ -247,7 +247,7 @@ export function SkillDirectory({ scope, taken, onAdded }: Props) {
                 ) : (
                   <button
                     type="button"
-                    className="btn btn--small btn--ghost"
+                    className="btn btn--compact btn--quiet"
                     title="Published by its own site, which Guaca cannot add from yet"
                     onClick={() => void openExternal(listing.url)}
                   >
@@ -261,7 +261,7 @@ export function SkillDirectory({ scope, taken, onAdded }: Props) {
         </ol>
       )}
       {hasMore && searched === null && (
-        <button type="button" className="btn btn--small" disabled={busy} onClick={more}>
+        <button type="button" className="btn btn--compact" disabled={busy} onClick={more}>
           Show more
         </button>
       )}

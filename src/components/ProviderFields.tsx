@@ -123,11 +123,7 @@ export function SubscriptionModel({
         <span className="field__label" title={title}>
           Model
         </span>
-        <select
-          className="input input--mono"
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-        >
+        <select className="input" value={value} onChange={(event) => onChange(event.target.value)}>
           {inherit !== undefined && <option value="">{inherit}</option>}
           {offered.map((slug) => (
             <option key={slug} value={slug}>
