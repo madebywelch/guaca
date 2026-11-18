@@ -358,12 +358,55 @@ class Browser:
                                                  "commands": ["selectAll"] if kind == "keyDown" else []})
         self.send("Input.insertText", {"text": text})
 
-    def key(self, key: str) -> None:
+    def viewport(self, width: int, height: int) -> None:
+        self.send("Emulation.setDeviceMetricsOverride",
+                  {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": False})
+
+    def on_screen(self, role: str, name: str, exact: bool = True) -> bool:
+        node = self.one(role, name, exact)
+        target = self.send("DOM.resolveNode", {"backendNodeId": node["backendDOMNodeId"]})["object"]
+        return bool(self.send("Runtime.callFunctionOn", {
+            "objectId": target["objectId"],
+            "returnByValue": True,
+            "functionDeclaration": """function () {
+                const box = this.getBoundingClientRect();
+                if (box.width === 0 || box.height === 0) return false;
+                const x = box.left + box.width / 2;
+                return [box.top + 2, box.top + box.height / 2, box.bottom - 2].every((y) => {
+                    if (y < 0 || y > innerHeight || x < 0 || x > innerWidth) return false;
+                    const hit = document.elementFromPoint(x, y);
+                    return hit !== null && (hit === this || this.contains(hit));
+                });
+            }""",
+        })["result"].get("value"))
+
+    def property(self, role: str, name: str, field: str, exact: bool = True) -> Any:
+        node = self.one(role, name, exact)
+        target = self.send("DOM.resolveNode", {"backendNodeId": node["backendDOMNodeId"]})["object"]
+        return self.send("Runtime.callFunctionOn", {
+            "objectId": target["objectId"], "returnByValue": True, "arguments": [{"value": field}],
+            "functionDeclaration": "function (field) { return this[field]; }",
+        })["result"].get("value")
+
+    def focused(self) -> tuple[str, str]:
+        for node in self.ax_nodes():
+            role = (node.get("role") or {}).get("value") or ""
+            if node.get("ignored") or role == "RootWebArea":
+                continue
+            if any(p.get("name") == "focused" and (p.get("value") or {}).get("value")
+                   for p in node.get("properties", [])):
+                return role, str((node.get("name") or {}).get("value") or "")
+        return "", ""
+
+    def key(self, key: str, mod: bool = False, shift: bool = False) -> None:
         code, keycode, text = {"Enter": ("Enter", 13, "\r"), "Escape": ("Escape", 27, None),
                                "Tab": ("Tab", 9, None), "ArrowDown": ("ArrowDown", 40, None),
-                               "ArrowUp": ("ArrowUp", 38, None)}[key]
-        base: dict[str, Any] = {"key": key, "code": code, "windowsVirtualKeyCode": keycode}
-        if text:
+                               "ArrowUp": ("ArrowUp", 38, None), "Home": ("Home", 36, None),
+                               "End": ("End", 35, None), "k": ("KeyK", 75, "k"),
+                               ",": ("Comma", 188, ",")}[key]
+        base: dict[str, Any] = {"key": key, "code": code, "windowsVirtualKeyCode": keycode,
+                                "modifiers": (2 if mod else 0) | (8 if shift else 0)}
+        if text and not mod:
             base["text"] = text
         self.send("Input.dispatchKeyEvent", {"type": "keyDown", **base})
         self.send("Input.dispatchKeyEvent", {"type": "keyUp", **base})
