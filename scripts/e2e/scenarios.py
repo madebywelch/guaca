@@ -1464,7 +1464,8 @@ def scenario_queue(w: World) -> None:
     w.wait("both answers are sent after the Undo has passed", lambda: sorted(
         a["state"] for a in approvals(w)) == ["allow", "answered"] and operator_name(w) == "Robin")
     w.check("the held answers are each sent once, and the agents are told",
-            operator_name(w) == "Robin" and "Early" in " ".join(said(w, RESEARCHER)),
+            operator_name(w) == "Robin"
+            and w.wait(f"{RESEARCHER} replies with the answer", lambda: "Early" in " ".join(said(w, RESEARCHER))),
             observed={"approvals": approvals(w), "said": said(w, RESEARCHER)[-1:]})
     w.check("after the last answer the focus is back in the field",
             w.wait("the field takes the focus back", lambda: ui.focused() == ("textbox", "What do you need?")),
