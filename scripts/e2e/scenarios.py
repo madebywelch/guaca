@@ -1146,6 +1146,52 @@ def scenario_tabs(w: World) -> None:
     no_unscripted(w)
 
 
+IDLE = ("Researcher", "Critic", "Archivist")
+NAMES_APART = ("(() => { const r = [...document.querySelectorAll('.ribbon__name')]"
+               ".map(e => e.getBoundingClientRect()); for (let i = 0; i < r.length; i++)"
+               " for (let j = i + 1; j < r.length; j++) { const a = r[i], b = r[j];"
+               " if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom)"
+               " return false; } return r.length > 0; })()")
+SEEN = ("((name) => { const face = [...document.querySelectorAll('.ribbon__face')]"
+        ".find(f => f.querySelector('.ribbon__name').textContent === name);"
+        " const through = (e) => { let o = 1; for (; e; e = e.parentElement)"
+        " o *= Number(getComputedStyle(e).opacity); return o; };"
+        " return { name: through(face.querySelector('.ribbon__name')),"
+        " portrait: through(face.querySelector('.ribbon__portrait')) }; })(%s)")
+
+
+def timeline(w: World) -> list[str]:
+    return w.ui.names_within("list", "Today's timeline", "button")
+
+
+def scenario_ribbon(w: World) -> None:
+    w.model.script = hello
+    w.start()
+    w.ui.viewport(*WINDOW)
+    first_run(w)
+    settled(w, 1)
+    ui = w.ui
+    for name in IDLE:
+        new_agent(w, name, "Wait to be asked.")
+    w.wait("every new agent has a face on today's timeline",
+           lambda: all(any(n.startswith(f"{name}, ") for n in timeline(w)) for name in IDLE))
+    idle = [n for n in timeline(w) if n.split(", ")[0] in IDLE]
+    w.check("an agent that has done nothing today has a face of its own, named and called idle",
+            sorted(idle) == sorted(f"{name}, idle" for name in IDLE), observed=sorted(idle), shot=True)
+    w.check("no face on the timeline is called asleep, and there is no pile",
+            not [n for n in timeline(w) if "asleep" in n] and not ui.evaluate(
+                "document.querySelector('.ribbon__pile') !== null"),
+            observed=[n for n in timeline(w) if "asleep" in n], detail=timeline(w))
+    w.check("at 1280 wide no two names on the timeline overlap", bool(ui.evaluate(NAMES_APART)),
+            observed=bool(ui.evaluate(NAMES_APART)))
+
+    open_agent(w, AGENT)
+    seen = ui.evaluate(SEEN % json.dumps(IDLE[0]))
+    w.check("with another agent's page open, an idle face fades its drawing and not its name",
+            seen["name"] == 1 and seen["portrait"] < 1, observed=seen, shot=True)
+    no_unscripted(w)
+
+
 NEEDS_KEY = "verify/needs-key"
 
 
@@ -1515,6 +1561,16 @@ SCENARIOS: dict[str, Scenario] = {
         "with a question waiting, Tab from the composer reaches its first answer",
         "Return answers the question, and the agent is told the answer",
         "with nothing waiting, Tab leaves the composer for its own next control",
+        "every model call was one the scenario scripted",
+    )),
+    "ribbon": Scenario(scenario_ribbon, "Three agents that have done nothing today each get a face of their own "
+                       "on the timeline, named and called idle, with no pile and no name over another at 1280 "
+                       "wide; while another agent's page is open their drawings fade and their names do not.",
+    (
+        "an agent that has done nothing today has a face of its own, named and called idle",
+        "no face on the timeline is called asleep, and there is no pile",
+        "at 1280 wide no two names on the timeline overlap",
+        "with another agent's page open, an idle face fades its drawing and not its name",
         "every model call was one the scenario scripted",
     )),
     "tabs": Scenario(scenario_tabs, "A person opens Settings from the keyboard, reaches the tab list in one Tab, "

@@ -20,6 +20,7 @@ function morning(): Layout {
   return layoutRibbon({
     now: at(16, 9, 12),
     agents: AGENTS,
+    groups: [],
     activity: { marlow: { state: "thinking" } },
     outcomes: [
       anOutcome({ agentId: "kit", finishedAt: at(15, 23), seenAt: at(15, 23, 40) }),
@@ -41,24 +42,24 @@ function morning(): Layout {
 }
 
 const openAgent = vi.fn<(id: string) => void>();
-const openPile = vi.fn<() => void>();
+const openGroups = vi.fn<() => void>();
 
 function draw(ribbon = morning()) {
-  render(<Ribbon ribbon={ribbon} onOpenAgent={openAgent} onOpenPile={openPile} />);
+  render(<Ribbon ribbon={ribbon} onOpenAgent={openAgent} onOpenGroups={openGroups} />);
   return screen.getByRole("list", { name: "Today's timeline" });
 }
 
 beforeEach(() => {
   openAgent.mockReset();
-  openPile.mockReset();
+  openGroups.mockReset();
   useStore.setState({ agents: AGENTS, activity: { marlow: { state: "thinking" } } });
 });
 
 describe("what a screen reader hears", () => {
-  it("is one list, every face, the pile and the schedule in it", () => {
+  it("is one list, every face and the schedule in it", () => {
     const list = draw();
     const items = within(list).getAllByRole("listitem");
-    expect(items).toHaveLength(6);
+    expect(items).toHaveLength(8);
   });
 
   it("names each face with who, its state and its time", () => {
@@ -70,23 +71,22 @@ describe("what a screen reader hears", () => {
     expect(within(list).getByRole("button", { name: "Ines, finished 2:56 AM" })).toBeTruthy();
   });
 
-  it("says how many are asleep on the pile", () => {
+  it("names each agent with nothing today as idle, on a face of its own", () => {
     const list = draw();
-    expect(within(list).getByRole("button", { name: "3 asleep" })).toBeTruthy();
-  });
-
-  it("calls the pile how many more, not asleep, once it holds faces moved there for room", () => {
-    const list = draw({ ...morning(), pile: ["kit", "wren", "pip", "ines"], crowded: 1 });
-    expect(within(list).getByRole("button", { name: "4 more" })).toBeTruthy();
-    expect(within(list).queryByRole("button", { name: /asleep/ })).toBeNull();
+    for (const name of ["Kit", "Wren", "Pip"]) {
+      const face = within(list).getByRole("button", { name: `${name}, idle` });
+      expect(face.textContent).toBe(name);
+      expect(face.closest("li")?.getAttribute("data-state")).toBe("idle");
+    }
+    expect(within(list).queryByRole("button", { name: /asleep|more/ })).toBeNull();
   });
 
   it("reads the strip in the order it is drawn, left to right", () => {
     const ribbon = morning();
     const list = draw(ribbon);
     const items = within(list).getAllByRole("listitem");
-    expect(items[0]?.className).toBe("ribbon__pile");
-    const xs = items.slice(1).map((item) => Number(item.style.getPropertyValue("--ribbon-x")));
+    expect(items[0]?.textContent).toBe("Kit");
+    const xs = items.map((item) => Number(item.style.getPropertyValue("--ribbon-x")));
     expect(xs).toEqual([...xs].sort((a, b) => a - b));
     expect(new Set(xs).size).toBe(xs.length);
   });
@@ -100,6 +100,7 @@ describe("what a screen reader hears", () => {
     const ribbon = layoutRibbon({
       now: at(16, 9, 12),
       agents: AGENTS,
+      groups: [],
       activity: Object.fromEntries(crowd.map((id) => [id, { state: "thinking" as const }])),
       outcomes: [],
       approvals: [],
@@ -112,7 +113,7 @@ describe("what a screen reader hears", () => {
     const count = within(list).getByRole("button", { name: /^\+\d+ working: / });
     expect(count.textContent).toMatch(/^\+\d+ working$/);
     fireEvent.click(count);
-    expect(openPile).toHaveBeenCalledTimes(1);
+    expect(openGroups).toHaveBeenCalledTimes(1);
   });
 
   it("reads a scheduled run with its day, and does not offer it as a button", () => {
@@ -134,12 +135,6 @@ describe("what a screen reader hears", () => {
     expect(alert?.textContent).toBe("!");
     expect(alert?.closest(".avatar")).toBeNull();
   });
-
-  it("draws no pile when nobody is asleep", () => {
-    const ribbon = { ...morning(), pile: [] };
-    const list = draw(ribbon);
-    expect(within(list).queryByRole("button", { name: /asleep/ })).toBeNull();
-  });
 });
 
 describe("the keyboard", () => {
@@ -154,11 +149,15 @@ describe("the keyboard", () => {
     expect(names()).toHaveLength(1);
   });
 
-  it("walks the pile and the faces in time order with the arrows", () => {
+  it("walks the idle faces and then the rest in time order with the arrows", () => {
     const list = draw();
-    const pile = within(list).getByRole("button", { name: "3 asleep" });
-    act(() => pile.focus());
-    fireEvent.keyDown(pile, { key: "ArrowRight" });
+    const kit = within(list).getByRole("button", { name: "Kit, idle" });
+    act(() => kit.focus());
+    fireEvent.keyDown(kit, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(within(list).getByRole("button", { name: "Wren, idle" }));
+    fireEvent.keyDown(document.activeElement as Element, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(within(list).getByRole("button", { name: "Pip, idle" }));
+    fireEvent.keyDown(document.activeElement as Element, { key: "ArrowRight" });
     expect(document.activeElement).toBe(within(list).getByRole("button", { name: /^Ines/ }));
     fireEvent.keyDown(document.activeElement as Element, { key: "ArrowRight" });
     expect(document.activeElement).toBe(within(list).getByRole("button", { name: /^Dara/ }));
@@ -170,17 +169,17 @@ describe("the keyboard", () => {
 
   it("goes to either end with Home and End, and stops there", () => {
     const list = draw();
-    const pile = within(list).getByRole("button", { name: "3 asleep" });
-    act(() => pile.focus());
-    fireEvent.keyDown(pile, { key: "End" });
+    const first = within(list).getByRole("button", { name: "Kit, idle" });
+    act(() => first.focus());
+    fireEvent.keyDown(first, { key: "End" });
     const last = within(list).getByRole("button", { name: /^Marlow/ });
     expect(document.activeElement).toBe(last);
     fireEvent.keyDown(last, { key: "ArrowRight" });
     expect(document.activeElement).toBe(last);
     fireEvent.keyDown(last, { key: "Home" });
-    expect(document.activeElement).toBe(pile);
-    fireEvent.keyDown(pile, { key: "ArrowLeft" });
-    expect(document.activeElement).toBe(pile);
+    expect(document.activeElement).toBe(first);
+    fireEvent.keyDown(first, { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(first);
   });
 });
 
@@ -189,14 +188,14 @@ describe("a click", () => {
     const list = draw();
     fireEvent.click(within(list).getByRole("button", { name: /^Dara/ }));
     expect(openAgent).toHaveBeenCalledWith("dara");
-    expect(openPile).not.toHaveBeenCalled();
+    expect(openGroups).not.toHaveBeenCalled();
   });
 
-  it("on the pile opens the pile", () => {
+  it("on an idle face opens that agent", () => {
     const list = draw();
-    fireEvent.click(within(list).getByRole("button", { name: "3 asleep" }));
-    expect(openPile).toHaveBeenCalledTimes(1);
-    expect(openAgent).not.toHaveBeenCalled();
+    fireEvent.click(within(list).getByRole("button", { name: "Kit, idle" }));
+    expect(openAgent).toHaveBeenCalledWith("kit");
+    expect(openGroups).not.toHaveBeenCalled();
   });
 });
 
@@ -206,7 +205,7 @@ describe("an agent's page", () => {
       <Ribbon
         ribbon={morning()}
         onOpenAgent={openAgent}
-        onOpenPile={openPile}
+        onOpenGroups={openGroups}
         openAgentId="marlow"
       />,
     );
@@ -223,11 +222,20 @@ describe("an agent's page", () => {
     ).toBeNull();
   });
 
-  it("dims nobody when the open agent is asleep in the pile", () => {
+  it("marks an idle agent's face when its page is open", () => {
     render(
-      <Ribbon ribbon={morning()} onOpenAgent={openAgent} onOpenPile={openPile} openAgentId="kit" />,
+      <Ribbon
+        ribbon={morning()}
+        onOpenAgent={openAgent}
+        onOpenGroups={openGroups}
+        openAgentId="kit"
+      />,
     );
-    expect(screen.getByRole("navigation", { name: "Agents" }).getAttribute("data-open")).toBeNull();
+    const strip = screen.getByRole("navigation", { name: "Agents" });
+    expect(strip.getAttribute("data-open")).toBe("some");
+    expect(
+      within(strip).getByRole("button", { name: "Kit, idle" }).getAttribute("aria-current"),
+    ).toBe("page");
   });
 });
 
@@ -239,7 +247,7 @@ describe("a coming item", () => {
       scheduled: ribbon.scheduled.map((item) => ({ ...item, words: false })),
     };
     const { container } = render(
-      <Ribbon ribbon={crowded} onOpenAgent={openAgent} onOpenPile={openPile} />,
+      <Ribbon ribbon={crowded} onOpenAgent={openAgent} onOpenGroups={openGroups} />,
     );
     const item = container.querySelector(".ribbon__item");
     expect(item?.querySelector(".ribbon__item-when")?.textContent).toBe("9:00 AM");

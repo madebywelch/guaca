@@ -107,14 +107,12 @@
   --ribbon-axis: 1.125rem;
   --ribbon-line-y: 3.25rem;
   --ribbon-face: 2.75rem;
-  --ribbon-pile-face: 2rem;
-  --ribbon-pile-label: 4.5rem;
   --ribbon-mark: 1rem;
   --ribbon-ring: 0.125rem;
   --ribbon-now-w: 0.09375rem;
   --ribbon-lapse: 0.375rem;
-  --ribbon-asleep: 0.55;
-  --ribbon-asleep-lift: 1;
+  --ribbon-idle: 0.55;
+  --ribbon-idle-lift: 1;
   --ribbon-aside: 0.42;
   --column-edge: var(--space-7);
   --column-w: 46rem;
@@ -141,8 +139,8 @@
 }
 
 :root[data-surface="dark"] {
-  --ribbon-asleep: 0.8;
-  --ribbon-asleep-lift: 1.9;
+  --ribbon-idle: 0.8;
+  --ribbon-idle-lift: 1.9;
 
   --rail-ground: #1e1b14;
   --rail-raised: #282622;
@@ -8115,13 +8113,7 @@ button.artifacts__version[aria-pressed="true"] {
 
 
 .ribbon {
-  --ribbon-lead: calc(
-    max(
-        var(--ribbon-pile-label),
-        var(--ribbon-pile-face) + (var(--ribbon-pile) - 1) * (var(--ribbon-pile-face) - var(--space-5))
-      ) +
-      var(--space-6)
-  );
+  --ribbon-lead: var(--space-4);
   flex: none;
   height: var(--ribbon-h);
   background: var(--ground);
@@ -8132,10 +8124,6 @@ button.artifacts__version[aria-pressed="true"] {
   position: relative;
   height: 100%;
   margin: 0 var(--column-edge);
-}
-
-.ribbon[data-pile="none"] {
-  --ribbon-lead: var(--space-4);
 }
 
 .ribbon__line {
@@ -8270,10 +8258,16 @@ button.artifacts__version[aria-pressed="true"] {
   color: var(--attention);
 }
 
+.ribbon__face,
 .ribbon__item {
   max-width: calc(var(--ribbon-room, 1) * (100% - var(--ribbon-lead)));
 }
 
+.ribbon__face-button {
+  max-width: 100%;
+}
+
+.ribbon__name,
 .ribbon__item-what,
 .ribbon__item-when {
   max-width: 100%;
@@ -8296,15 +8290,22 @@ button.artifacts__version[aria-pressed="true"] {
 }
 
 .ribbon__face,
-.ribbon__item,
-.ribbon__pile {
+.ribbon__item {
   transition: left var(--tempo-move) var(--ease), opacity var(--tempo-tap) var(--ease);
 }
 
-.ribbon[data-open] .ribbon__face:not([data-open]),
+.ribbon__portrait {
+  transition: opacity var(--tempo-tap) var(--ease);
+}
+
+.ribbon__face[data-state="idle"] .ribbon__portrait {
+  opacity: var(--ribbon-idle);
+  filter: grayscale(1) brightness(var(--ribbon-idle-lift));
+}
+
+.ribbon[data-open] .ribbon__face:not([data-open]) .ribbon__portrait,
 .ribbon[data-open] .ribbon__item,
 .ribbon[data-open] .ribbon__count,
-.ribbon[data-open] .ribbon__pile,
 .ribbon[data-open] .ribbon__band-label {
   opacity: var(--ribbon-aside);
 }
@@ -8316,8 +8317,7 @@ button.artifacts__version[aria-pressed="true"] {
   text-underline-offset: var(--space-2);
 }
 
-.ribbon__face-button,
-.ribbon__pile-button {
+.ribbon__face-button {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -8336,8 +8336,7 @@ button.artifacts__version[aria-pressed="true"] {
 }
 
 .ribbon__name,
-.ribbon__item-what,
-.ribbon__pile-label {
+.ribbon__item-what {
   margin-top: var(--space-2);
   font-size: var(--type-support);
   line-height: var(--lead-tight);
@@ -8447,37 +8446,6 @@ button.artifacts__version[aria-pressed="true"] {
   z-index: 3;
 }
 
-.ribbon__pile {
-  position: absolute;
-  top: calc(var(--ribbon-line-y) - var(--ribbon-face) / 2);
-  left: 0;
-  z-index: 2;
-}
-
-.ribbon__pile-button {
-  align-items: flex-start;
-}
-
-.ribbon__pile-faces {
-  height: var(--ribbon-face);
-  display: flex;
-  align-items: center;
-  opacity: var(--ribbon-asleep);
-  filter: grayscale(1) brightness(var(--ribbon-asleep-lift));
-}
-
-.ribbon__pile-faces .avatar + .avatar {
-  margin-left: calc(var(--space-5) * -1);
-}
-
-.ribbon__pile-label {
-  color: var(--faint);
-}
-
-.ribbon__pile-button:hover .ribbon__pile-label {
-  color: var(--text);
-}
-
 .ribbon__said {
   position: absolute;
   width: 1px;
@@ -8490,6 +8458,7 @@ button.artifacts__version[aria-pressed="true"] {
 @media (prefers-reduced-motion: reduce) {
   .ribbon__face,
   .ribbon__item,
+  .ribbon__portrait,
   .ribbon__name {
     transition: none;
   }

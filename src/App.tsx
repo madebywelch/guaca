@@ -365,7 +365,7 @@ export default function App() {
       {ready && (
         <Timeline
           onOpenAgent={(id) => void select(id)}
-          onOpenPile={() => setShowGroups(true)}
+          onOpenGroups={() => setShowGroups(true)}
           openAgentId={selected}
         />
       )}

@@ -1118,10 +1118,19 @@ Each agent is one face, placed by the first of these that holds:
    finished or failed.
 4. It did anything today. The face sits at the last of it, unmarked.
 
-An agent none of those hold for goes to a pile at the left edge, labeled "N
-asleep", and the pile opens the Groups sheet. Faces that would overlap are
-spread as one cluster centered on where they wanted to be, because pushing each
-one right of the last would drag a crowd past the moment it belongs to.
+An agent none of those hold for is idle, and it gets a face like any other, at
+the left edge in the order the Groups sheet lists it: group by group, pinned
+first, then as the operator arranged them. Its drawing is faded to gray and its
+name is not, and it is named "Dara, idle", or "Dara, paused" when it is paused,
+as the Groups sheet says. Faces that would
+overlap are spread as one cluster centered on where they wanted to be, because
+pushing each one right of the last would drag a crowd past the moment it belongs
+to. When the stretch before now cannot hold every name, the names there are cut
+to the room each face has rather than any agent leaving the strip, and a crowd
+too large even for that is spaced evenly along the stretch. Requests or working
+faces that still do not fit fold into one count, such as "+3 working", which
+opens the Groups sheet. While an agent's page is open the other faces step
+back: their drawings fade and their names stay at full contrast.
 
 A band labeled "Since you last looked" runs from the latest `seenAt` of any
 finished run to now, or from where the oldest unseen run began when that is
@@ -1147,7 +1156,7 @@ store keeps, because a face rests on the last thing its agent did today.
 
 **Each face is a button named with the agent, its state and its time:** "Dara,
 needs you, asked 9:05 AM", "Dara, working now", "Dara, finished 2:56 AM", "Dara,
-last active 11:40 AM". The faces and the pile are one stop on the Tab key, and
+last active 11:40 AM", "Dara, idle". The faces are one stop on the Tab key, and
 the arrow keys, Home and End move along the list, so a dozen agents are not a
 dozen stops on the way to the field. Pressing a face opens that agent's page.
 
@@ -1293,8 +1302,8 @@ group's settings, the groups' column for going inside one, search, the plus for
 making something, and a foot of places. Opening an agent from it closes it.
 Escape or a press outside closes it too.
 
-Three things open it: the people button in the top bar, the "asleep" pile on
-the timeline, and the last row of the field's picker. Group names are read in
+Three things open it: the people button in the top bar, a count of faces on
+the timeline that had no room, and the last row of the field's picker. Group names are read in
 two places now, here and in that picker, which sets each group's name over its
 agents so the group an agent belongs to is said where the agent is chosen. The timeline draws agents
 by when they did something, not by whose they are.

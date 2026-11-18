@@ -615,7 +615,7 @@ describe("App", () => {
     listAgents.mockResolvedValue([agent("Manager"), agent("Chef")]);
     render(<App />);
 
-    await waitFor(() => expect(screen.getByText("Manager")).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Manager, / })).toBeTruthy());
     expect(railRow("Chef")).toBeTruthy();
     fireEvent.click(railRow("Manager"));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Manager" })).toBeTruthy());
@@ -635,7 +635,7 @@ describe("App", () => {
     agentActivity.mockResolvedValue({ "id-Host": { state: "thinking" } });
     render(<App />);
 
-    await waitFor(() => expect(screen.getByText("Manager")).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Manager, / })).toBeTruthy());
     expect(railNames()).toEqual(["Host", "Manager", "Chef"]);
 
     useStore
@@ -650,7 +650,7 @@ describe("App", () => {
       { ...agent("Ghost"), lifecycle: "terminated" },
     ]);
     render(<App />);
-    await waitFor(() => expect(screen.getByText("Manager")).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Manager, / })).toBeTruthy());
     expect(screen.queryByText("Ghost")).toBeNull();
   });
 
@@ -749,7 +749,7 @@ describe("App", () => {
       { ...agent("Other agent"), groupId: unpaid.id },
     ]);
     render(<App />);
-    await waitFor(() => expect(screen.getByText("Manager")).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Manager, / })).toBeTruthy());
     fireEvent.click(railRow("Manager"));
     await waitFor(() => expect(screen.queryByText(/Add an API key/i)).toBeNull());
     fireEvent.click(railRow("Other agent"));
@@ -803,7 +803,7 @@ describe("App", () => {
     });
     listAgents.mockResolvedValue([agent("Manager")]);
     render(<App />);
-    await waitFor(() => expect(screen.getByText("Manager")).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Manager, / })).toBeTruthy());
     expect(screen.queryByText(/Add an API key/i)).toBeNull();
   });
 
