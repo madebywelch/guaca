@@ -126,6 +126,62 @@ class Pipe(unittest.TestCase):
         page.click("button", "Deny")
         self.assertEqual({y for method, y in page.sent if method == "Input.dispatchMouseEvent"}, {5.0})
 
+    def test_a_press_waits_for_a_face_still_sliding_into_place_and_clicks_where_it_stops(self) -> None:
+        class Sliding(Rendering):
+            boxes = [[0, 0, 10, 0, 10, 10, 0, 10], [13, 0, 23, 0, 23, 10, 13, 10]]
+            boxes += [[26, 0, 36, 0, 36, 10, 26, 10]] * 2
+
+            def send(self, method: str, params: dict | None = None, session: bool = True,
+                     timeout: float = 30) -> dict:
+                if method == "DOM.getContentQuads":
+                    return {"quads": [self.boxes.pop(0) if len(self.boxes) > 1 else self.boxes[0]]}
+                self.sent.append((method, (params or {}).get("x", "")))
+                return {}
+
+        page = Sliding(appears_after=0)
+        page._center = lambda node: Browser._center(page, node)
+        page.press(page.find("button", "Deny")[0])
+        self.assertEqual({x for method, x in page.sent if method == "Input.dispatchMouseEvent"}, {31.0})
+
+    def test_a_press_on_a_face_that_never_stops_moving_says_so_and_not_that_it_was_gone(self) -> None:
+        class Shaking(Rendering):
+            frame = 0
+
+            def send(self, method: str, params: dict | None = None, session: bool = True,
+                     timeout: float = 30) -> dict:
+                if method == "DOM.getContentQuads":
+                    self.frame += 1
+                    x = self.frame % 2 * 26
+                    return {"quads": [[x, 0, x + 10, 0, x + 10, 10, x, 10]]}
+                self.sent.append((method, ""))
+                return {}
+
+        page = Shaking(appears_after=0)
+        page._center = lambda node: Browser._center(page, node)
+        with mock.patch("e2e.browser.ACTIONABLE_SECONDS", 0.3):
+            with self.assertRaises(BrowserError) as raised:
+                page.press(page.find("button", "Deny")[0])
+        self.assertRegex(str(raised.exception), r"button 'Deny' was still moving .*from \(\d+, 5\) to \(\d+, 5\)")
+        self.assertNotIn("gone", str(raised.exception))
+        self.assertNotIn("Input.dispatchMouseEvent", [method for method, _ in page.sent])
+
+    def test_a_press_on_a_face_with_no_box_fails_at_once_as_gone(self) -> None:
+        class Removed(Rendering):
+            def send(self, method: str, params: dict | None = None, session: bool = True,
+                     timeout: float = 30) -> dict:
+                if method == "DOM.getContentQuads":
+                    return {"quads": []}
+                self.sent.append((method, ""))
+                return {}
+
+        page = Removed(appears_after=0)
+        page._center = lambda node: Browser._center(page, node)
+        started = time.monotonic()
+        with mock.patch("e2e.browser.ACTIONABLE_SECONDS", 60):
+            with self.assertRaisesRegex(BrowserError, "button 'Deny' was gone from the page.*no box"):
+                page.press(page.find("button", "Deny")[0])
+        self.assertLess(time.monotonic() - started, 1)
+
     def test_a_browser_that_dies_at_launch_says_why_and_never_breaks_the_pipe(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             binary = Path(temp) / "chromium"
