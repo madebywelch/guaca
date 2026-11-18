@@ -1054,6 +1054,14 @@ export type OutcomeNeed =
   | { kind: "decision"; id: string }
   | { kind: "escalation"; id: EscalationId };
 
+export interface Running {
+  runId: RunId;
+  agentId: AgentId;
+  groupId: GroupId;
+  startedAt: number;
+  note: string | null;
+}
+
 export interface Outcome {
   runId: RunId;
   agentId: AgentId;

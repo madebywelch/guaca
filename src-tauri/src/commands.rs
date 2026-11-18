@@ -2265,6 +2265,10 @@ pub async fn list_outcomes(
     Ok(state.runtime.store().outcomes(since, group_id, unseen_only.unwrap_or(false), limit)?)
 }
 
+pub async fn running_runs(state: &AppState) -> Reply<Vec<crate::domain::outcome::Running>> {
+    Ok(state.runtime.store().running()?)
+}
+
 pub async fn mark_outcomes_seen(
     state: &AppState,
     run_ids: Option<Vec<RunId>>,

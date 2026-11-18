@@ -1,6 +1,6 @@
 import { ABSENT_ACCENT } from "../avatars/catalog";
 import { sendBody, sendRecipients } from "./toolArgs";
-import type { AgentCard, AgentId, Envelope, MessageId, Part, ToolOutcome } from "./types";
+import type { AgentCard, AgentId, Envelope, MessageId, Part, RunId, ToolOutcome } from "./types";
 import { plainText } from "./types";
 
 export interface Lookups {
@@ -31,6 +31,10 @@ export interface PeerSummary {
   sent: number;
   received: number;
   gist: string | null;
+  asked: string | null;
+  askedAt: number | null;
+  answer: string | null;
+  answeredAt: number | null;
 }
 
 export type Row =
@@ -38,6 +42,7 @@ export type Row =
   | {
       kind: "peers";
       key: string;
+      runId: RunId;
       peers: PeerSummary[];
       folded: MessageId[];
       at: number;
@@ -91,25 +96,59 @@ export function transcriptRows(messages: Envelope[], lookups: Lookups): Row[] {
     direction: "sent" | "received",
     key: string,
     at: number,
+    runId: RunId,
     folded: MessageId | undefined,
     said: string | null,
   ) => {
-    let open = burst;
-    if (!open) {
+    const question =
+      direction === "received"
+        ? [...rows]
+            .reverse()
+            .find(
+              (row): row is Extract<Row, { kind: "peers" }> =>
+                row.kind === "peers" &&
+                row.runId === runId &&
+                row.peers.some(
+                  (entry) =>
+                    entry.peer.id === peer.id && entry.asked !== null && entry.answer === null,
+                ),
+            )
+        : undefined;
+    let open = question ?? burst;
+    if (!open || open.runId !== runId) {
       mark();
-      open = { kind: "peers", key: `peers:${key}`, peers: [], folded: [], at };
+      open = { kind: "peers", key: `peers:${key}`, runId, peers: [], folded: [], at };
       rows.push(open);
       burst = open;
     }
     if (folded) open.folded.push(folded);
     let held = open.peers.find((entry) => entry.peer.id === peer.id);
     if (!held) {
-      held = { peer, agentId, sent: 0, received: 0, gist: null };
+      held = {
+        peer,
+        agentId,
+        sent: 0,
+        received: 0,
+        gist: null,
+        asked: null,
+        askedAt: null,
+        answer: null,
+        answeredAt: null,
+      };
       open.peers.push(held);
     }
     if (held.gist === null && said) held.gist = gist(said);
-    if (direction === "sent") held.sent += 1;
-    else held.received += 1;
+    if (direction === "sent") {
+      held.sent += 1;
+      if (held.asked === null) {
+        held.asked = said;
+        held.askedAt = at;
+      }
+    } else {
+      held.received += 1;
+      held.answer = said;
+      held.answeredAt = at;
+    }
   };
 
   const interrupt = (row: Row) => {
@@ -146,6 +185,7 @@ export function transcriptRows(messages: Envelope[], lookups: Lookups): Row[] {
         "received",
         message.id,
         message.createdAt,
+        message.runId,
         message.id,
         plainText(message),
       );
@@ -187,6 +227,7 @@ export function transcriptRows(messages: Envelope[], lookups: Lookups): Row[] {
               "sent",
               `${message.id}:${name}`,
               message.createdAt,
+              message.runId,
               undefined,
               body,
             );
@@ -233,7 +274,7 @@ export function gist(text: string): string | null {
   return `${(space > 40 ? cut.slice(0, space) : cut).replace(/[.,;:]$/, "")}…`;
 }
 
-export function summaryLabel(summary: PeerSummary): string {
+export function summaryLabel(summary: Pick<PeerSummary, "peer" | "sent" | "received">): string {
   const total = summary.sent + summary.received;
   if (total === 1)
     return summary.sent === 1

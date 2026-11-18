@@ -3,11 +3,13 @@ import { AgentAvatar } from "../avatars/AgentAvatar";
 import { rememberDismissOpener } from "../lib/dismiss";
 import { waitingQuestion } from "../lib/field";
 import { useFollowBottom } from "../lib/follow";
+import { waitingLine } from "../lib/handoff";
 import { api } from "../lib/ipc";
 import { runsOn } from "../lib/profile";
 import { thoughtNow } from "../lib/reasoning";
+import { colleaguesOn, runningNote } from "../lib/running";
 import { type ChannelKey, useAgentLookup, useStore } from "../lib/store";
-import { elapsed, useNow } from "../lib/time";
+import { clockLabel, elapsed, useNow } from "../lib/time";
 import {
   callInFlight,
   type LiveCall,
@@ -16,7 +18,7 @@ import {
   tallyTrail,
   trailStep,
 } from "../lib/trail";
-import { rowStandsFor, toPeer, transcriptRows } from "../lib/transcript";
+import { type Row, rowStandsFor, toPeer, transcriptRows } from "../lib/transcript";
 import {
   type Activity,
   type AgentCard,
@@ -24,6 +26,7 @@ import {
   type Envelope,
   type Group,
   plainText,
+  type RunId,
   type Settings,
 } from "../lib/types";
 import { AgentPanel, type AgentSection } from "./AgentPanel";
@@ -34,7 +37,7 @@ import { MessageItem, StreamingMessage, WhenRow } from "./MessageItem";
 import { PairThread } from "./PairThread";
 import { TrailRow } from "./Trail";
 import { TurnWork } from "./TurnWork";
-import { PeerBurstRow, RefusedRow, WritingRow } from "./WireRow";
+import { HandoffRow, RefusedRow, WritingRow } from "./WireRow";
 
 export type AgentView = "conversation" | AgentSection;
 
@@ -75,6 +78,7 @@ export function ChannelView({
   const select = useStore((s) => s.select);
 
   const [reading, setReading] = useState<AgentId | null>(null);
+  const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(() => new Set());
 
   const { ref: scrollRef, node: transcript, follow, pin } = useFollowBottom();
 
@@ -103,17 +107,19 @@ export function ChannelView({
   useLayoutEffect(pin, [pin, channel, reading]);
 
   const rows = useMemo(() => transcriptRows(messages ?? [], lookups), [messages, lookups]);
-  const footnotes = useMemo(() => {
-    let at = 0;
-    return rows.map((row) =>
-      row.kind === "peers" ||
-      row.kind === "refused" ||
-      (row.kind === "message" &&
-        row.message.from.kind === "agent" &&
-        row.message.to.kind === "system")
-        ? ++at
-        : 0,
-    );
+  const asked = useMemo((): Asked | null => {
+    let last: Row | undefined;
+    for (const row of rows) if (row.kind === "peers") last = row;
+    return last?.kind === "peers"
+      ? {
+          runId: last.runId,
+          ids: last.peers.flatMap((one) => (one.agentId ? [one.agentId] : [])),
+          names: last.peers.filter((one) => one.sent > 0).map((one) => one.peer.name),
+          waiting: last.peers
+            .filter((one) => one.sent > 0 && one.received === 0)
+            .map((one) => one.peer.name),
+        }
+      : null;
   }, [rows]);
 
   useEffect(() => {
@@ -219,50 +225,40 @@ export function ChannelView({
                 <p className="empty__body">No messages with {agent?.name ?? "this agent"} yet.</p>
               </div>
             ) : (
-              rows.map((row, index) => {
+              rows.map((row) => {
                 const stands = rowStandsFor(row);
-                const number = footnotes[index] ?? 0;
                 return (
                   <div
                     key={row.key}
                     data-message={stands.join(" ")}
                     data-found={focused && stands.includes(focused) ? "true" : undefined}
-                    ref={(node) => {
-                      if (!node || row.kind !== "peers") return;
-                      const peers = row.peers.filter((peer) => peer.agentId !== null);
-                      node
-                        .querySelectorAll<HTMLButtonElement>("button.footnote__send")
-                        .forEach((button, i) => {
-                          button.dataset.dismissId = JSON.stringify([
-                            channel,
-                            row.key,
-                            peers[i]?.agentId,
-                          ]);
-                        });
-                    }}
                     onClickCapture={(event) => {
                       if (!agent || row.kind !== "peers" || !(event.target instanceof Element))
                         return;
-                      const button =
-                        event.target.closest<HTMLButtonElement>("button.footnote__send");
+                      const button = event.target.closest<HTMLButtonElement>(
+                        "button.handoff__name, button.footnote__send",
+                      );
                       if (button) rememberDismissOpener(button);
                     }}
                   >
                     {row.kind === "peers" ? (
-                      <PeerBurstRow
+                      <HandoffRow
                         peers={row.peers}
-                        number={number}
-                        at={row.at}
+                        runId={row.runId}
+                        channel={channel}
+                        rowKey={row.key}
+                        open={unfolded.has(row.key)}
+                        onToggle={() =>
+                          setUnfolded((held) => {
+                            const next = new Set(held);
+                            if (!next.delete(row.key)) next.add(row.key);
+                            return next;
+                          })
+                        }
                         onOpen={setReading}
                       />
                     ) : row.kind === "refused" ? (
-                      <RefusedRow
-                        peer={row.peer}
-                        at={row.at}
-                        number={number}
-                        body={row.body}
-                        reason={row.reason}
-                      />
+                      <RefusedRow peer={row.peer} at={row.at} body={row.body} reason={row.reason} />
                     ) : row.kind === "when" ? (
                       <WhenRow at={row.at} />
                     ) : (
@@ -270,7 +266,6 @@ export function ChannelView({
                         message={row.message}
                         lookups={lookups}
                         continued={row.continued}
-                        footnote={number || undefined}
                       />
                     )}
                   </div>
@@ -279,7 +274,7 @@ export function ChannelView({
             )}
 
             {agent && <TurnWork key={agent.id} agent={agent.id} follow={follow} />}
-            <LiveStreams channel={channel} lookups={lookups} follow={follow} />
+            <LiveStreams channel={channel} lookups={lookups} follow={follow} asked={asked} />
           </Answering.Provider>
         </div>
 
@@ -290,6 +285,7 @@ export function ChannelView({
             agent={agent}
             state={activity[agent.id]}
             now={view === "now"}
+            asked={asked}
           />
         )}
         <Composer
@@ -331,26 +327,43 @@ export function ChannelView({
   );
 }
 
+interface Asked {
+  runId: RunId;
+  ids: string[];
+  names: string[];
+  waiting: string[];
+}
+
 function TurnFooter({
   agent,
   state,
   now,
+  asked,
 }: {
   agent: AgentCard;
   state: Activity | undefined;
   now: boolean;
+  asked: Asked | null;
 }) {
   const inline = useStore((s) => s.prefs.showReasoning);
   const [showing, setShowing] = useState<Showing | null>(null);
   const panel = useId();
 
-  const working = state?.state === "thinking" || state?.state === "queued";
+  const behind = useStore((s) => {
+    const owned = s.running.find((one) => one.agentId === agent.id);
+    return (
+      state?.state === "queued" &&
+      owned !== undefined &&
+      Object.entries(s.activeRun).some(([id, run]) => id !== agent.id && run === owned.runId)
+    );
+  });
+  const working = state?.state === "thinking" || (state?.state === "queued" && !behind);
 
   useEffect(() => {
     if (!working) setShowing(null);
   }, [working]);
 
-  if (!working) return null;
+  if (!working) return now ? null : <WaitingLine agent={agent} asked={asked} />;
 
   return (
     <div className="turn">
@@ -423,8 +436,9 @@ function WorkingNote({
   const held = useStore((s) => (s.prefs.showReasoning ? undefined : s.reasoning[agent.id]));
   const calls = useStore((s) => s.trail[agent.id]);
   const run = useStore((s) => s.activeRun[agent.id]);
-  const showFailure = useStore((s) => s.showFailure);
-  const [stopping, setStopping] = useState(false);
+  const owned = useStore((s) => s.running.find((one) => one.runId === run));
+  const since = owned?.startedAt;
+  const noted = owned?.agentId === agent.id ? owned.note : null;
   const now = useNow(1000);
 
   const thought = thoughtNow(held);
@@ -443,6 +457,8 @@ function WorkingNote({
       {thought.heading && <span className="working__topic">{thought.heading}</span>}
       {thought.line && <span className="working__thought">{thought.line}</span>}
     </>
+  ) : noted ? (
+    <span className="working__thought">{noted}</span>
   ) : (
     `${agent.name} is working`
   );
@@ -451,7 +467,7 @@ function WorkingNote({
     <div
       className="working"
       role={saying || onNow ? undefined : "status"}
-      data-thinking={saying || undefined}
+      data-thinking={saying || Boolean(noted) || undefined}
     >
       {!onNow && (
         <>
@@ -502,26 +518,69 @@ function WorkingNote({
             {tallyLabel(tally)}
           </button>
         )}
-        {run && (
-          <button
-            type="button"
-            className="btn btn--quiet btn--compact"
-            disabled={stopping}
-            title="Stop this conversation and everything it set off"
-            onClick={async () => {
-              setStopping(true);
-              try {
-                await api.stopRun(run);
-              } catch (error) {
-                showFailure(error);
-              } finally {
-                setStopping(false);
-              }
-            }}
-          >
-            Stop
-          </button>
+        {run && since !== undefined && (
+          <span className="working__for" title={`Started at ${clockLabel(since)}`}>
+            {elapsed(now, since)}
+          </span>
         )}
+        {run && <StopConversation run={run} />}
+      </div>
+    </div>
+  );
+}
+
+function StopConversation({ run }: { run: RunId }) {
+  const showFailure = useStore((s) => s.showFailure);
+  const [stopping, setStopping] = useState(false);
+  return (
+    <button
+      type="button"
+      className="btn btn--quiet btn--compact"
+      disabled={stopping}
+      title="Stop this conversation and everything it set off"
+      onClick={async () => {
+        setStopping(true);
+        try {
+          await api.stopRun(run);
+        } catch (error) {
+          showFailure(error);
+        } finally {
+          setStopping(false);
+        }
+      }}
+    >
+      Stop
+    </button>
+  );
+}
+
+function WaitingLine({ agent, asked }: { agent: AgentCard; asked: Asked | null }) {
+  const owned = useStore((s) => s.running.find((one) => one.agentId === agent.id));
+  const agents = useStore((s) => s.agents);
+  const activeRun = useStore((s) => s.activeRun);
+  const activity = useStore((s) => s.activity[agent.id]);
+  const now = useNow(1000);
+  if (!owned) return null;
+
+  const mine = asked?.runId === owned.runId ? asked : null;
+  const waiting =
+    mine?.waiting ??
+    colleaguesOn(owned, activeRun, (id) => agents.find((one) => one.id === id)?.name);
+  const line = waitingLine(mine?.names ?? [], waiting) ?? runningNote(owned, activity, []);
+
+  return (
+    <div className="turn">
+      <div className="working" role="status" data-thinking>
+        <AgentAvatar avatar={agent.avatar} color={agent.color} size="md" seed={agent.id} />
+        <span className="working__label">
+          <span className="working__thought">{line}</span>
+        </span>
+        <div className="working__end">
+          <span className="working__for" title={`Started at ${clockLabel(owned.startedAt)}`}>
+            {elapsed(now, owned.startedAt)}
+          </span>
+          <StopConversation run={owned.runId} />
+        </div>
       </div>
     </div>
   );
@@ -531,12 +590,15 @@ function LiveStreams({
   channel,
   lookups,
   follow,
+  asked,
 }: {
   channel: ChannelKey;
   lookups: ReturnType<typeof useAgentLookup>;
   follow: () => void;
+  asked: Asked | null;
 }) {
   const streams = useStore((s) => s.streams);
+  const activeRun = useStore((s) => s.activeRun);
   const live = Object.entries(streams).filter(([, buffer]) => buffer?.channelId === channel);
 
   useLayoutEffect(follow);
@@ -547,7 +609,9 @@ function LiveStreams({
         if (!buffer) return null;
 
         if (buffer.to.kind === "agent") {
-          return (
+          const carded =
+            asked?.ids.includes(buffer.agentId) && activeRun[buffer.agentId] === asked.runId;
+          return carded ? null : (
             <WritingRow key={id} peer={toPeer(lookups.byId(buffer.agentId), buffer.agentId)} />
           );
         }

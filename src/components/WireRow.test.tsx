@@ -1,12 +1,14 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useEffect, useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { bindingFor } from "../lib/keybinds";
-import type { WirePeer } from "../lib/transcript";
+import { useStore } from "../lib/store";
+import type { PeerSummary, WirePeer } from "../lib/transcript";
+import type { RunId } from "../lib/types";
 import { Search } from "./Search";
 import { SettingsDialog } from "./SettingsDialog";
-import { NoticeRow, PeerBurstRow, RefusedRow, WritingRow, why } from "./WireRow";
+import { HandoffRow, NoticeRow, RefusedRow, WritingRow, why } from "./WireRow";
 
 vi.mock("../lib/ipc", async (original) => {
   const actual = await original<typeof import("../lib/ipc")>();
@@ -56,46 +58,121 @@ describe("a system notice", () => {
 });
 
 describe("a peer message arriving", () => {
-  const said = (root: HTMLElement) =>
-    [...root.querySelectorAll(".footnote__send")].map((one) => one.textContent);
-
-  it("is announced as the line it settles into", () => {
-    const live = render(<WritingRow peer={GOV} />);
-    const settled = render(
-      <PeerBurstRow
-        peers={[{ peer: GOV, agentId: "gov", sent: 0, received: 1, gist: null }]}
-        number={1}
-        at={0}
-        onOpen={vi.fn()}
-      />,
+  it("is announced by name while it is written", () => {
+    const { container } = render(<WritingRow peer={GOV} />);
+    expect(container.querySelector(".footnote__send")?.textContent).toBe(
+      "Message from Government Procurement",
     );
+    expect(container.querySelector(".footnote__dots")).not.toBeNull();
+  });
+});
 
-    expect(said(live.container)).toEqual(["Message from Government Procurement"]);
-    expect(said(settled.container)).toEqual(said(live.container));
-    expect(live.container.querySelector(".footnote__dots")).not.toBeNull();
-    expect(settled.container.querySelector(".footnote__dots")).toBeNull();
+function Toggled({ peers, onOpen }: { peers: PeerSummary[]; onOpen: (peer: string) => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <HandoffRow
+      peers={peers}
+      runId={"run-1" as RunId}
+      channel="lead"
+      rowKey="peers:1"
+      open={open}
+      onToggle={() => setOpen((held) => !held)}
+      onOpen={onOpen}
+    />
+  );
+}
+
+describe("a hand-off", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+  const RUN = "run-1" as RunId;
+  const NOW = 100_000;
+  const asked = (peer: WirePeer, over: Partial<PeerSummary> = {}): PeerSummary => ({
+    peer,
+    agentId: peer.id,
+    sent: 1,
+    received: 0,
+    gist: null,
+    asked: `What does ${peer.name} see this quarter?`,
+    askedAt: NOW - 15_000,
+    answer: null,
+    answeredAt: null,
+    ...over,
+  });
+  const answered = asked(GOV, {
+    received: 1,
+    answer: "Two tenders closed early.",
+    answeredAt: NOW - 6_000,
   });
 
-  it("keeps a burst on one line, with the count it stands for", () => {
-    const { container } = render(
-      <PeerBurstRow
-        peers={[
-          { peer: GOV, agentId: "gov", sent: 1, received: 1, gist: null },
-          { peer: REV, agentId: "rev", sent: 0, received: 1, gist: null },
-        ]}
-        number={2}
-        at={0}
-        onOpen={vi.fn()}
-      />,
-    );
+  function draw(peers: PeerSummary[], live: boolean, onOpen = vi.fn()) {
+    vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
+    act(() => {
+      useStore.setState({
+        running: live
+          ? [{ runId: RUN, agentId: "lead", groupId: "g", startedAt: NOW - 20_000, note: null }]
+          : [],
+        activity: { rev: { state: "thinking" } },
+        activeRun: { rev: RUN },
+        streams: {},
+      });
+    });
+    return render(<Toggled peers={peers} onOpen={onOpen} />);
+  }
 
-    const line = container.querySelector(".footnote__line");
-    expect(line?.children).toHaveLength(2);
-    expect(said(container)).toEqual([
-      "2 messages with Government Procurement",
-      "Message from Revenue Operations",
-    ]);
-    expect(container.querySelector(".footnote__number")?.textContent).toBe("2");
+  it("draws a colleague who wrote unasked as a line that opens the pair's thread", () => {
+    const onOpen = vi.fn();
+    draw(
+      [asked(GOV, { sent: 0, received: 1, asked: null, askedAt: null, gist: "Two tenders" })],
+      true,
+      onOpen,
+    );
+    expect(screen.queryByRole("region", { name: /Asked/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Message from Government Procurement" }));
+    expect(onOpen).toHaveBeenCalledWith("gov");
+  });
+
+  it("shows each colleague's face, the question, what they are doing and for how long, and an answer at reading size", () => {
+    const { container } = draw([answered, asked(REV)], true);
+    const card = screen.getByRole("region", { name: "Asked 2 colleagues" });
+    expect(
+      within(card).getByText("What does Government Procurement see this quarter?"),
+    ).toBeTruthy();
+    expect(within(card).getByText("answered in 9s")).toBeTruthy();
+    expect(container.querySelector(".handoff__answer .md")?.textContent).toContain(
+      "Two tenders closed early.",
+    );
+    expect(within(card).getByText("working, 15s")).toBeTruthy();
+    expect(card.querySelectorAll(".avatar")).toHaveLength(2);
+  });
+
+  it("folds to one line once every colleague has answered, and opens again on a press", () => {
+    draw([answered, asked(REV, { received: 1, answer: "Flat.", answeredAt: NOW - 1_000 })], true);
+    expect(screen.queryByRole("region", { name: /Asked/ })).toBeNull();
+    const fold = screen.getByRole("button", {
+      name: /Asked Government Procurement and Revenue Operations, both answered/,
+    });
+    expect(fold.textContent).toContain("14s");
+    fireEvent.click(fold);
+    expect(fold.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("Flat.")).toBeTruthy();
+  });
+
+  it("folds when the conversation ended without an answer, and says who answered", () => {
+    draw([answered, asked(REV)], false);
+    expect(
+      screen.getByRole("button", {
+        name: /Asked Government Procurement and Revenue Operations, Government Procurement answered/,
+      }),
+    ).toBeTruthy();
+  });
+
+  it("opens the pair's own thread from a colleague's name", () => {
+    const onOpen = vi.fn();
+    draw([answered, asked(REV)], true, onOpen);
+    fireEvent.click(screen.getByRole("button", { name: "Revenue Operations" }));
+    expect(onOpen).toHaveBeenCalledWith("rev");
   });
 });
 
@@ -115,7 +192,7 @@ function Workspace() {
   const close = () => setUpper(null);
   return (
     <>
-      <RefusedRow peer={GOV} at={0} number={1} body="The message" reason="Refused: no" />
+      <RefusedRow peer={GOV} at={0} body="The message" reason="Refused: no" />
       {upper === "settings" && <SettingsDialog onClose={close} />}
       {upper === "search" && (
         <Search

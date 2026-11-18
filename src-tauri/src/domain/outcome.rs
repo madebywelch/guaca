@@ -113,6 +113,16 @@ pub enum Need {
     Escalation { id: EscalationId },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Running {
+    pub run_id: RunId,
+    pub agent_id: AgentId,
+    pub group_id: GroupId,
+    pub started_at: i64,
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Outcome {

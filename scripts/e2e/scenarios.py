@@ -725,6 +725,243 @@ def scenario_stop(w: World) -> None:
     no_unscripted(w)
 
 
+LOOK_INTO = "Look into the quarterly filings."
+READING = "Reading the quarterly filings."
+FILINGS = "The filings are in order."
+PICKED_UP = "restarted partway through your turn"
+
+
+def running_text(w: World) -> str:
+    if not w.ui.find("region", "Running", exact=False):
+        return ""
+    return w.ui.evaluate("document.querySelector('.home__running')?.innerText ?? ''") or ""
+
+
+def running_for(w: World) -> int | None:
+    found = re.search(r"(?:(\d+)m )?(\d+)s", running_text(w))
+    return int(found.group(1) or 0) * 60 + int(found.group(2)) if found else None
+
+
+def started_marks(w: World) -> list:
+    return [row["started_at"] for row in w.host.rows("SELECT started_at FROM pending_runs")]
+
+
+def scenario_running(w: World) -> None:
+    before = threading.Event()
+    after = threading.Event()
+    picked = threading.Event()
+
+    def script(c: Call) -> Reply | None:
+        if c.last_user == "ping":
+            return say("pong")
+        if c.speaker != AGENT:
+            return None
+        if c.last_user.endswith("Say hello."):
+            return say(HELLO)
+        if c.said(LOOK_INTO) and c.said(PICKED_UP):
+            picked.set()
+            return held(after, say(FILINGS))
+        if c.last_user.endswith(LOOK_INTO) and not c.tool_results():
+            return call("note_progress", note=READING)
+        if c.last_user.endswith(LOOK_INTO):
+            return held(before, say(FILINGS))
+        return None
+
+    w.model.script = script
+    w.start()
+    first_run(w)
+    settled(w, 1)
+    show(w, "Today")
+    w.check("with nothing running, Today has no Running section",
+            not w.ui.find("region", "Running", exact=False), observed=running_text(w))
+    w.ui.click("button", f"{AGENT}, ", exact=False)
+    w.wait(f"{AGENT}'s conversation opens", lambda: w.ui.find("log", f"Conversation with {AGENT}"))
+    write(w, AGENT, LOOK_INTO)
+    show(w, "Today")
+    w.wait("Today lists the conversation as running", lambda: READING in running_text(w))
+    first = running_for(w)
+    marks = started_marks(w)
+    w.check("Running shows the agent, its latest note, the time since the Host started the work, and Stop",
+            AGENT in running_text(w) and first is not None and len(marks) == 1 and marks[0] is not None
+            and w.ui.find("button", f"Stop {AGENT}'s conversation"),
+            observed={"agent": AGENT in running_text(w), "note": READING in running_text(w),
+                      "clock": first is not None, "marked": [m is not None for m in marks]},
+            detail=running_text(w), shot=True)
+    w.wait("the clock ticks past three seconds", lambda: (running_for(w) or 0) >= 3)
+    w.check("the clock on Running ticks while the turn works", (running_for(w) or 0) > (first or 0),
+            observed=True, detail={"first": first, "now": running_for(w)})
+
+    held_for = running_for(w) or 0
+    w.host.stop()
+    before.set()
+    w.host.start()
+    w.open_browser()
+    show(w, "Today")
+    w.wait("the next Host picks the turn up", picked.is_set)
+    w.wait("Today lists the conversation again", lambda: AGENT in running_text(w))
+    again = running_for(w)
+    w.check("after a restart mid-turn the clock goes on from the first Host's start rather than from zero",
+            started_marks(w) == marks and again is not None and again >= held_for,
+            observed={"sameStart": started_marks(w) == marks, "carriedOn": again is not None and again >= held_for},
+            detail={"before": held_for, "after": again, "marks": marks}, shot=True)
+
+    w.ui.click("button", f"Stop {AGENT}'s conversation")
+    after.set()
+    ended = settled(w, 2, "the stopped conversation settles")
+    w.wait("Running leaves Today once the conversation ends", lambda: not running_text(w))
+    w.check("Stop ends the conversation, and it leaves Running for Finished",
+            ended[-1]["status"] == "stopped" and not w.ui.find("region", "Running", exact=False)
+            and w.ui.find("region", "Finished", exact=False),
+            observed={"outcomes": ended}, shot=True)
+    no_unscripted(w)
+
+
+ASK_BOTH = "Ask Researcher and Analyst what changed in the quarterly filings."
+ASK_AGAIN = "Ask them both about the lease note."
+FILINGS_Q = "What changed in the quarterly filings since last quarter?"
+LEASE_Q = "What does the lease note change?"
+R_SAYS = "Revenue rose four percent."
+A_SAYS = "Margins held at 31 percent."
+BOTH_SAID = "Both answered: revenue up four percent, margins held."
+TWO_EDGES = """(() => {
+  const log = document.querySelector('[role=log]');
+  const lefts = new Set();
+  const walk = document.createTreeWalker(log, NodeFilter.SHOW_TEXT);
+  for (let node = walk.nextNode(); node; node = walk.nextNode()) {
+    if (!node.textContent.trim() || node.parentElement.closest('.handoff__card, .handoff__fold, .msg__head, .footnote')) continue;
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    const rect = range.getClientRects()[0];
+    if (rect && rect.width > 0) lefts.add(Math.round(rect.left));
+  }
+  return [...lefts].sort((a, b) => a - b);
+})()"""
+
+
+def card_text(w: World) -> str:
+    return w.ui.evaluate("[...document.querySelectorAll('.handoff__card')].at(-1)?.innerText ?? ''") or ""
+
+
+def working_line(w: World) -> str:
+    return w.ui.evaluate("document.querySelector('.working')?.innerText ?? ''") or ""
+
+
+def scenario_handoff(w: World) -> None:
+    analyst = threading.Event()
+    never = threading.Event()
+
+    def script(c: Call) -> Reply | None:
+        if c.last_user == "ping":
+            return say("pong")
+        results = c.tool_results()
+        if c.speaker == AGENT:
+            if c.last_user.endswith("Say hello."):
+                return say(HELLO)
+            for ask, question in ((ASK_BOTH, FILINGS_Q), (ASK_AGAIN, LEASE_Q)):
+                if c.last_user.endswith(ask):
+                    return say("I asked them both.") if results else call(
+                        "send_message", to=["Researcher", "Analyst"], text=question, intent="work")
+            if A_SAYS in c.last_user:
+                return say(BOTH_SAID)
+            if R_SAYS in c.last_user:
+                return say("Researcher answered.")
+        if c.speaker == "Researcher" and (FILINGS_Q in c.last_user or LEASE_Q in c.last_user):
+            return say(R_SAYS)
+        if c.speaker == "Analyst" and FILINGS_Q in c.last_user:
+            return held(analyst, say(A_SAYS))
+        if c.speaker == "Analyst" and LEASE_Q in c.last_user:
+            return held(never, say(A_SAYS))
+        return None
+
+    w.model.script = script
+    w.start()
+    first_run(w)
+    settled(w, 1)
+    new_agent(w, "Researcher", "Find sources and say where each came from.")
+    new_agent(w, "Analyst", "Read the numbers and say what moved.")
+    open_agent(w, AGENT)
+    write(w, AGENT, ASK_BOTH)
+    ui = w.ui
+    w.wait("the card shows Researcher's answer while Analyst works", lambda: R_SAYS in card_text(w)
+           and "writing" in card_text(w))
+    answer_px = ui.evaluate("getComputedStyle(document.querySelector('.handoff__answer .md')).fontSize")
+    faces = ui.evaluate("document.querySelectorAll('.handoff__card .avatar').length")
+    w.check("a live card shows each colleague's face, the question, a status word with time, and the answer at reading size",
+            ui.find("region", "Asked 2 colleagues") and faces == 2 and card_text(w).count(FILINGS_Q) == 2
+            and "answered in" in card_text(w) and re.search(r"writing, \d+s", card_text(w))
+            and answer_px == "16px",
+            observed={"faces": faces, "questions": card_text(w).count(FILINGS_Q), "answerSize": answer_px,
+                      "answered": "answered in" in card_text(w)},
+            detail=card_text(w), shot=True)
+    w.wait("the status line says who it waits for", lambda: "waiting for Analyst" in working_line(w))
+    w.check("under the running turn a status line says what it is doing, for how long, with Stop",
+            working_line(w).startswith("Messaged Researcher and Analyst, waiting for Analyst")
+            and re.search(r"\d+s", working_line(w)) and ui.find("button", "Stop"),
+            observed=re.sub(r"\d+s", "Ns", working_line(w)))
+    edges = ui.evaluate(TWO_EDGES)
+    w.check("text in the transcript starts on two left edges", len(edges) <= 2, observed=len(edges), detail=edges)
+    fills = ui.evaluate("""(() => {
+  const bubble = document.querySelector('.msg__bubble');
+  let under = bubble.parentElement;
+  while (under && ['rgba(0, 0, 0, 0)', 'transparent'].includes(getComputedStyle(under).backgroundColor))
+    under = under.parentElement;
+  return {bubble: getComputedStyle(bubble).backgroundColor, page: under && getComputedStyle(under).backgroundColor};
+})()""")
+    w.check("the person's turn sits in a bubble that stands apart from the page",
+            fills["bubble"] not in ("rgba(0, 0, 0, 0)", fills["page"]), observed=fills)
+    mask = ui.evaluate("getComputedStyle(document.querySelector('[role=log]')).maskImage")
+    w.check("a turn scrolled under the tabs fades out instead of being cut by them",
+            mask.startswith("linear-gradient(rgba(0, 0, 0, 0)"), observed=mask)
+    seen: dict[str, look.Verdict] = {}
+    for surface in LOOK_SURFACES:
+        ui.evaluate("localStorage.setItem('guac.prefs', JSON.stringify({...JSON.parse("
+                    "localStorage.getItem('guac.prefs') || '{}'), surface: '%s', look: 2})); location.reload()"
+                    % surface)
+        w.wait(f"the page comes back {surface}", lambda: ui.evaluate(
+            "document.documentElement.dataset.surface") == surface and ui.find("button", "App settings"))
+        ui.viewport(*look.FRAME)
+        open_agent(w, AGENT)
+        w.wait("the live card is drawn again", lambda: "writing" in card_text(w))
+        measure(w, f"a hand-off in {surface}", surface, seen)
+    faults = [fault for verdict in seen.values() for fault in verdict.faults]
+    w.check("the hand-off keeps to the six type roles, the control family and the radii in light and dark",
+            not faults, observed={s: v.styles for s, v in seen.items()}, detail=faults or None)
+    placed = ui.evaluate("""(() => {
+  const line = document.querySelector('.working');
+  const box = line.getBoundingClientRect();
+  return {inLog: Boolean(line.closest('[role=log]')), onScreen: box.top >= 0 && box.bottom <= innerHeight};
+})()""")
+    w.check("an agent opened mid-turn shows its status line without scrolling",
+            placed == {"inLog": False, "onScreen": True}, observed=placed)
+
+    analyst.set()
+    w.wait("the card folds once both have answered", lambda: ui.find(
+        "button", "Asked Researcher and Analyst, both answered", exact=False))
+    w.check("after the reply the hand-off folds to one line that says both answered",
+            not ui.find("region", "Asked 2 colleagues") and BOTH_SAID in conversation(w),
+            observed={"folded": True, "card": bool(ui.find("region", "Asked 2 colleagues"))}, shot=True)
+    ui.click("button", "Asked Researcher and Analyst, both answered", exact=False)
+    w.check("the folded line opens onto both answers",
+            R_SAYS in card_text(w) and A_SAYS in card_text(w), observed=True, detail=card_text(w))
+    ui.click("button", "Asked Researcher and Analyst, both answered", exact=False)
+    w.wait("the opened hand-off folds again", lambda: not ui.find("region", "Asked 2 colleagues"))
+
+    settled(w, 2)
+    write(w, AGENT, ASK_AGAIN)
+    w.wait("the second hand-off is live", lambda: card_text(w).count(LEASE_Q) == 2 and R_SAYS in card_text(w))
+    w.wait("the status line offers Stop", lambda: ui.find("button", "Stop"))
+    ui.click("button", "Stop")
+    never.set()
+    ended = settled(w, 3, "the stopped conversation settles")
+    w.wait("the stopped hand-off folds", lambda: ui.find(
+        "button", "Asked Researcher and Analyst, Researcher answered", exact=False))
+    w.check("a hand-off cut short by Stop folds and says who answered, instead of ticking on",
+            ended[-1]["status"] == "stopped" and not ui.find("region", "Asked 2 colleagues")
+            and not ui.find("button", "Stop"),
+            observed={"outcome": ended[-1]["status"]}, shot=True)
+    no_unscripted(w)
+
+
 FAILED_TOGETHER = (f"{AGENT} was working on this and another conversation together when a model call failed, so "
                    "this was not finished. Review any actions already taken before retrying.")
 
@@ -1415,6 +1652,7 @@ def scenario_menu(w: World) -> None:
     sections = ui.evaluate("Array.from(document.querySelectorAll('.palette__section')).map(e => e.textContent)")
     ui.type("textbox", "Command menu", "dark")
     w.wait("dark selects a setting", lambda: menu_choice(w) == "Reading surface: Dark")
+    w.wait("the menu has finished moving", lambda: ui.evaluate(look.SETTLED))
     w.capture("the command menu after typing dark")
     ui.key("Enter")
     w.check("one word, dark, and Return switch the reading surface to dark",
@@ -1615,6 +1853,34 @@ SCENARIOS: dict[str, Scenario] = {
         "the turn took the second conversation in and acted on it",
         "stopping one conversation tells the other at once that it was not finished, with Try again",
         "Try again sends the cut-short message once more and it is answered",
+        "every model call was one the scenario scripted",
+    )),
+    "running": Scenario(scenario_running, "Today lists a conversation while it runs, with the agent, its latest note, "
+                        "a clock from when the Host started the work and Stop; a Host restarted mid-turn keeps the "
+                        "clock going from the first start, and Stop moves the conversation to Finished.",
+    (
+        "with nothing running, Today has no Running section",
+        "Running shows the agent, its latest note, the time since the Host started the work, and Stop",
+        "the clock on Running ticks while the turn works",
+        "after a restart mid-turn the clock goes on from the first Host's start rather than from zero",
+        "Stop ends the conversation, and it leaves Running for Finished",
+        "every model call was one the scenario scripted",
+    )),
+    "handoff": Scenario(scenario_handoff, "An agent asks two colleagues; a live card shows each face, the question, a "
+                        "status word with time and the answer at reading size, the status line says who it waits "
+                        "for with Stop, and the transcript keeps two text edges; after the replies the card folds "
+                        "to one line; a hand-off cut short by Stop folds and says who answered.",
+    (
+        "a live card shows each colleague's face, the question, a status word with time, and the answer at reading size",
+        "under the running turn a status line says what it is doing, for how long, with Stop",
+        "text in the transcript starts on two left edges",
+        "the person's turn sits in a bubble that stands apart from the page",
+        "a turn scrolled under the tabs fades out instead of being cut by them",
+        "the hand-off keeps to the six type roles, the control family and the radii in light and dark",
+        "an agent opened mid-turn shows its status line without scrolling",
+        "after the reply the hand-off folds to one line that says both answered",
+        "the folded line opens onto both answers",
+        "a hand-off cut short by Stop folds and says who answered, instead of ticking on",
         "every model call was one the scenario scripted",
     )),
     "failed": Scenario(scenario_failed, "A model call fails while a turn is also working on a second conversation; "

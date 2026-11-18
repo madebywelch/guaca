@@ -13,16 +13,14 @@ import {
 import { Icon } from "./Icon";
 import { FootnoteRow, why } from "./WireRow";
 
-export function TrailFootnote({
-  steps,
-  number,
-  at,
-}: {
-  steps: Step[];
-  number: number;
-  at?: number;
-}) {
+export function trailSummary(groups: readonly TrailGroup[]): string {
+  const count = groups.reduce((sum, group) => sum + group.steps.length, 0);
+  return `${count} steps: ${groups.map((group) => group.label).join(", ")}`;
+}
+
+export function TrailFootnote({ steps }: { steps: Step[] }) {
   const groups = foldTrail(steps);
+  const [shown, setShown] = useState(false);
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
   const region = useId();
 
@@ -35,9 +33,8 @@ export function TrailFootnote({
       return next;
     });
   const failed = groups.some((group) => group.failed);
-
-  return (
-    <FootnoteRow number={number} at={at} failed={failed}>
+  const calls = (
+    <>
       <span className="footnote__line">
         {groups.map((group) => (
           <span className="footnote__item" key={group.key}>
@@ -50,7 +47,6 @@ export function TrailFootnote({
           </span>
         ))}
       </span>
-
       {groups
         .filter((group) => open.has(group.key))
         .map((group) => (
@@ -60,6 +56,42 @@ export function TrailFootnote({
             ))}
           </ul>
         ))}
+    </>
+  );
+
+  if (groups.length === 1) return <FootnoteRow failed={failed}>{calls}</FootnoteRow>;
+
+  const reasons = groups.flatMap((group) =>
+    group.steps.flatMap((step) => {
+      const reason = stepReason(step);
+      return reason ? [why(reason)] : [];
+    }),
+  );
+  const spent = [...new Set(groups.flatMap((group) => group.spent))];
+  return (
+    <FootnoteRow failed={failed}>
+      <button
+        type="button"
+        className="footnote__fold"
+        aria-expanded={shown}
+        aria-controls={shown ? region : undefined}
+        onClick={() => setShown((held) => !held)}
+      >
+        <span className="footnote__summary">{trailSummary(groups)}</span>
+        <Icon name={shown ? "chevron-down" : "chevron-right"} size={16} />
+      </button>
+      {!shown && reasons.length > 0 && <span className="footnote__gist">{reasons[0]}</span>}
+      {!shown &&
+        spent.map((credential) => (
+          <span className="trail__spent" key={credential}>
+            {credential}
+          </span>
+        ))}
+      {shown && (
+        <div id={region} className="footnote__open">
+          {calls}
+        </div>
+      )}
     </FootnoteRow>
   );
 }

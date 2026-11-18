@@ -108,16 +108,17 @@ describe("the running head", () => {
   it("names the speaker on every turn, including in a channel of one agent", () => {
     render(<MessageItem message={reply} lookups={lookups} continued={false} />);
     expect(screen.getByText("Manager")).toBeTruthy();
-    expect(document.querySelector(".msg__margin .avatar")).toBeTruthy();
+    expect(document.querySelector(".msg__head .avatar")).toBeTruthy();
   });
 
-  it("keeps your own message unmistakable, and names you too", () => {
+  it("keeps your own message unmistakable in a bubble, and names you to a screen reader", () => {
     const { container } = render(
       <MessageItem message={envelope({})} lookups={lookups} continued={false} />,
     );
-    expect(screen.getByText("You")).toBeTruthy();
-    expect(container.querySelector(".msg[data-operator='true']")).toBeTruthy();
+    expect(screen.getByRole("article", { name: /^You, / })).toBeTruthy();
+    expect(container.querySelector(".msg[data-operator='true'] > .msg__bubble")).toBeTruthy();
     expect(container.querySelector(".avatar")).toBeNull();
+    expect(container.querySelector(".msg__head")).toBeNull();
   });
 
   it("draws it once for a run of messages, on the first", () => {
@@ -126,14 +127,14 @@ describe("the running head", () => {
     expect(container.querySelector(".msg--continued")).toBeTruthy();
   });
 
-  it("still carries the time, in the margin", () => {
+  it("carries the time on the head line, beside the name", () => {
     const { container } = render(
       <MessageItem message={reply} lookups={lookups} continued={false} />,
     );
     const at = container.querySelector("time.msg__at");
     expect(at).toBeTruthy();
     expect(at?.getAttribute("datetime")).toBe(new Date(reply.createdAt).toISOString());
-    expect(at?.closest(".msg__margin")).toBeTruthy();
+    expect(at?.closest(".msg__head")?.textContent).toContain("Manager");
   });
 });
 

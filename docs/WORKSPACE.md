@@ -21,49 +21,50 @@ open, because two exchanges three hours apart are two things that happened.
 What a channel folds and what it must never fold is in *A channel says an
 exchange happened; the pair's thread is what it said*, in `ARCHITECTURE.md`.
 
-## The transcript is a page, and its margin carries when and who
+## A transcript reads as a conversation: who said what, on two edges
 
-A channel is a record of work, and a record reads as a page rather than as a
-chat. That is the change the whole transcript is arranged around, and it is four
-moves that only work together.
+A channel is a conversation between a person and agents, so it is drawn as one.
+An audit counted eight different left edges for text within 106 pixels of each
+other: a time gutter, a face lane, vertical rules, footnote numbers and the
+text beside each. Text now starts on two edges, and every row is placed by
+three tokens: `--column-inset` (the face), `--column-face` (the face's lane)
+and `--column-bubble`, which sets a box back by its own padding so the words
+inside it still start on the body's edge.
 
-**One margin.** Every row is a two-column grid: a 92-pixel lane, and the measure
-beside it. The lane holds the time a turn was written, the face of whoever wrote
-it, and — under the turn — the numbers of the notes that belong to it. Those
-three used to be scattered: the clock was a lane on the far right that appeared
-on hover, putting a message's time as far from its first word as the window
-allowed and hiding it besides; the face was a gutter of its own; and the notes
-were centered rows of their own. One lane, because they are one question, and
-because a page has one margin.
+**An agent's turn is its face, name and time on one line.** `.msg__head` is the
+face at `xs`, the name in the strong interface role and the time in meta, and
+the body sits under it on the name's edge (`.msg__body`, indented by
+`--column-face`). A second message by the same author inside four minutes is
+the same turn continuing, so it has no head. There is no time gutter and no
+vertical rule: a turn's time belongs beside the name it qualifies.
+The log fades its top edge over `--space-6`, the length its first turn starts
+below the tabs, so a turn scrolled under the tabs fades out instead of being
+cut by their rule.
 
-**A running head.** Every turn is headed with the speaker's name, set in the
-interface face at the meta size. It is drawn once on the first
-message of a run: a second message by the same author inside four minutes is the
-same passage continuing, so it has no head, no clock and no rule above it. The
-head appears in an agent's own channel too, which is a reversal. The old
-argument was that a channel names its agent at the top of the pane, so a name
-over every message was the loudest thing on the page and the one that said
-least. On a page, the head is what tells a reader scanning back up whose
-passage they are in, and it costs one line of 11px type.
+**The person's turn is upright in a tinted bubble.** `.msg__bubble` is on
+`--wash`, a tint of the text color, with the card corner. The page itself is
+`--sunken`, so a bubble of that fill would vanish into it. Its words start on
+the same edge as an agent's body.
+It has no head: the bubble is the one shape on the page that is yours, and its
+article is named "You" with the time for a screen reader.
 
-**Your turns are quoted, not boxed.** What the operator said is set in the same
-column and the same face, in italic and in the second ink. It was a recessed
-bubble against the right edge, which made every line they had ever typed a shape
-competing with the one card on the page that actually wanted something from
-them. A page quotes the other voice; it does not draw it a box.
+**Tool steps are one quiet line.** See the next section. **A hand-off is shown,
+not footnoted.** When an agent asks colleagues, `HandoffRow` draws a card: each
+colleague's face and name, the question in the interface role, a status word
+with elapsed time (asked, working, writing, waiting its turn, waiting for you,
+or answered in), and the answer at reading size when it lands. The words come
+from `lib/handoff.ts`, pure functions over the burst `lib/transcript.ts`
+folds. The card is live while the host lists the run as running and a
+colleague still owes an answer; after that it folds to one line, such as
+"Asked Researcher and Analyst, both answered", with the time from the first
+question to the last answer, and opens again on a press. Which rows are open is
+kept by `ChannelView`, so reading a pair's thread and coming back does not
+fold the card under the button that opened it. A colleague who wrote without
+being asked is a line naming them, which opens the pair's thread in one press.
 
-**A rule between passages.** `--rule`, not `--rule-hard`: it is the page's
-rhythm rather than a boundary somebody has to find, and one hairline for both
-jobs is why the app could not say where a turn starts any louder than it said
-"hairline".
-
-Signal adds a vertical trace beside each passage. The channel header names the
-group and the agent without a decorative rule before the group name.
-
-The margin is what makes the calm work at 1440. Ledger's risk was that a page
-reads as flat on a wide window with one short message in it; the answer is that
-the margin always has something in it — a time, a face, a number — and the eye
-has an edge to return to.
+While a colleague named on a live card is writing, the card says "writing" and
+the separate "Message from" line is not drawn: one place says what that
+colleague is doing.
 
 ## A turn's own work is a footnote, not a line per call
 
@@ -89,9 +90,11 @@ turn legitimately spends most of it, and every one of those was a line reading
 arriving from the other direction, and it sat between the operator's question
 and the answer to it.
 
-So a run of calls is a footnote: one numbered line under the passage it
-belongs to, one item per kind of work, and the calls themselves open underneath
-it. `lib/trail.ts` holds the rules as pure functions over a list, the way
+So a run of calls is a footnote: one quiet line under the passage it belongs
+to. With one kind of work it is that item; with more it folds to "N steps:" and
+the kinds, with a chevron, and opens onto one item per kind and the calls
+underneath. A failure's reason and a credential used stay on the folded line,
+because those are the parts somebody may act on. `lib/trail.ts` holds the rules as pure functions over a list, the way
 `lib/rail.ts` does for the rail, so what folds can be read and tested without a
 DOM; the footnote is a second drawing of those rules, not a second set.
 
@@ -100,15 +103,13 @@ a box, and a box between two paragraphs is a third voice in the transcript: the
 operator's conversation, the agent's answer, and the tools, all drawn as things
 of the same size. Ledger's page separates them the way a printed page does —
 what somebody said is set as a passage; what the turn *did* is apparatus, set in
-the machine texture at the floor of the ladder, numbered, and under the passage
-it belongs to. Nothing is lost, and nothing has to be clicked to be skipped.
+the machine texture at the floor of the ladder, and under the passage it
+belongs to. Nothing is lost, and nothing has to be clicked to be skipped.
 
-The peer traffic is the same object: a burst becomes one numbered note quoting
-the first thing said in the exchange, so a reader can tell whether opening the
-thread is worth it. `lib/transcript.ts` still decides what folds and what does
-not. The number is the channel's, assigned in the order the notes are drawn,
-because a footnote is a position in a page and only the page knows what came
-before it.
+Peer traffic the agent did not ask for is the same object: a burst becomes one
+note quoting the first thing said in the exchange, so a reader can tell whether
+opening the thread is worth it. A hand-off the agent started is the card above.
+`lib/transcript.ts` still decides what folds and what does not.
 
 Grouped by tool across the run rather than only where calls are adjacent. The
 order a model happens to interleave `browse` and `run_command` in is not
@@ -1233,6 +1234,11 @@ the numbers on the Agents rows, which are the order of the Groups sheet with
 pinned agents first and nobody lifted for being busy: an agent's number does
 not change because it started working.
 
+Each request is drawn once, as its asker's face, name and question, with its
+answers as rows under it. Rows are set in the regular weight with their state
+on the same line, so the only bold in the menu is an asker's name, and the
+Return key is drawn on the row Return acts on and on no other.
+
 A row answering a request shows Command Return or Command Backspace when that is
 the key that answers it from the menu. Those keys act on the request the
 selected row belongs to, or the first one waiting, and only its rows show them.
@@ -1248,9 +1254,16 @@ window for:
 1. The field.
 2. What needs the operator: requests waiting and agents that cannot go on, the
    same desk For you draws, answered where they are drawn.
-3. Filed decisions that are due, three as cards and the rest as a count, each
+3. What is running: each conversation the Host still owes and has started, as
+   its owner's face and name, the owner's latest working note (or, without one,
+   who it is waiting for), a clock and Stop. The clock counts from
+   `pending_runs.started_at`, which `runningRuns` reads, so a Host restarted
+   mid-turn carries the conversation on from its first start instead of from
+   zero. A row leaves when the run settles, and its outcome takes its place
+   under Finished.
+4. Filed decisions that are due, three as cards and the rest as a count, each
    answered in For you.
-4. What finished while they were away, with its count and Mark all seen. A row
+5. What finished while they were away, with its count and Mark all seen. A row
    opens the run's closing note, or the agent's conversation, and marks it
    seen.
 
@@ -1270,9 +1283,16 @@ stands for two answers. Closing the window sends a held answer rather than
 dropping it. The same holds for answers given from the command menu. For you
 and the menu bar send at once and offer no Undo.
 
-With none of those it is one sentence, "Nothing needs you.", with who is still
-working under it and one way back into what already happened today. That is
-the screen seen most, and it is the one that has to be calm.
+With none of those it is one sentence, "Nothing needs
+you.", with what is running listed under it, or who is still working when
+nothing is, and one way back into what already happened today. That is the
+screen seen most, and it is the one that has to be calm.
+
+The line above the composer carries the same clock for the conversation the
+agent is working in, beside Stop, and says the owner's latest working note in
+place of a bare "is working" when there is one. Running and that line come
+only from the host, so an answer still held for Undo shows no agent as resumed
+until the host has it.
 
 ## An agent's page is tabs, and opens where the agent is
 
