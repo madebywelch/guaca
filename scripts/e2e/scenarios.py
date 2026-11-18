@@ -660,6 +660,97 @@ def scenario_stop(w: World) -> None:
     no_unscripted(w)
 
 
+LOOK_INTO = "Look into the quarterly filings."
+READING = "Reading the quarterly filings."
+FILINGS = "The filings are in order."
+PICKED_UP = "restarted partway through your turn"
+
+
+def running_text(w: World) -> str:
+    if not w.ui.find("region", "Running", exact=False):
+        return ""
+    return w.ui.evaluate("document.querySelector('.home__running')?.innerText ?? ''") or ""
+
+
+def running_for(w: World) -> int | None:
+    found = re.search(r"(?:(\d+)m )?(\d+)s", running_text(w))
+    return int(found.group(1) or 0) * 60 + int(found.group(2)) if found else None
+
+
+def started_marks(w: World) -> list:
+    return [row["started_at"] for row in w.host.rows("SELECT started_at FROM pending_runs")]
+
+
+def scenario_running(w: World) -> None:
+    before = threading.Event()
+    after = threading.Event()
+    picked = threading.Event()
+
+    def script(c: Call) -> Reply | None:
+        if c.last_user == "ping":
+            return say("pong")
+        if c.speaker != AGENT:
+            return None
+        if c.last_user.endswith("Say hello."):
+            return say(HELLO)
+        if c.said(LOOK_INTO) and c.said(PICKED_UP):
+            picked.set()
+            return held(after, say(FILINGS))
+        if c.last_user.endswith(LOOK_INTO) and not c.tool_results():
+            return call("note_progress", note=READING)
+        if c.last_user.endswith(LOOK_INTO):
+            return held(before, say(FILINGS))
+        return None
+
+    w.model.script = script
+    w.start()
+    first_run(w)
+    settled(w, 1)
+    show(w, "Today")
+    w.check("with nothing running, Today has no Running section",
+            not w.ui.find("region", "Running", exact=False), observed=running_text(w))
+
+    open_agent(w, AGENT)
+    write(w, AGENT, LOOK_INTO)
+    show(w, "Today")
+    w.wait("Today lists the conversation as running", lambda: READING in running_text(w))
+    first = running_for(w)
+    marks = started_marks(w)
+    w.check("Running shows the agent, its latest note, the time since the Host started the work, and Stop",
+            AGENT in running_text(w) and first is not None and len(marks) == 1 and marks[0] is not None
+            and w.ui.find("button", f"Stop {AGENT}'s conversation"),
+            observed={"agent": AGENT in running_text(w), "note": READING in running_text(w),
+                      "clock": first is not None, "marked": [m is not None for m in marks]},
+            detail=running_text(w), shot=True)
+    w.wait("the clock ticks past three seconds", lambda: (running_for(w) or 0) >= 3)
+    w.check("the clock on Running ticks while the turn works", (running_for(w) or 0) > (first or 0),
+            observed=True, detail={"first": first, "now": running_for(w)})
+
+    held_for = running_for(w) or 0
+    w.host.stop()
+    before.set()
+    w.host.start()
+    w.open_browser()
+    show(w, "Today")
+    w.wait("the next Host picks the turn up", picked.is_set)
+    w.wait("Today lists the conversation again", lambda: AGENT in running_text(w))
+    again = running_for(w)
+    w.check("after a restart mid-turn the clock goes on from the first Host's start rather than from zero",
+            started_marks(w) == marks and again is not None and again >= held_for,
+            observed={"sameStart": started_marks(w) == marks, "carriedOn": again is not None and again >= held_for},
+            detail={"before": held_for, "after": again, "marks": marks}, shot=True)
+
+    w.ui.click("button", f"Stop {AGENT}'s conversation")
+    after.set()
+    ended = settled(w, 2, "the stopped conversation settles")
+    w.wait("Running leaves Today once the conversation ends", lambda: not running_text(w))
+    w.check("Stop ends the conversation, and it leaves Running for Finished",
+            ended[-1]["status"] == "stopped" and not w.ui.find("region", "Running", exact=False)
+            and w.ui.find("region", "Finished", exact=False),
+            observed={"outcomes": ended}, shot=True)
+    no_unscripted(w)
+
+
 FAILED_TOGETHER = (f"{AGENT} was working on this and another conversation together when a model call failed, so "
                    "this was not finished. Review any actions already taken before retrying.")
 
@@ -1301,6 +1392,17 @@ SCENARIOS: dict[str, Scenario] = {
         "the turn took the second conversation in and acted on it",
         "stopping one conversation tells the other at once that it was not finished, with Try again",
         "Try again sends the cut-short message once more and it is answered",
+        "every model call was one the scenario scripted",
+    )),
+    "running": Scenario(scenario_running, "Today lists a conversation while it runs, with the agent, its latest note, "
+                        "a clock from when the Host started the work and Stop; a Host restarted mid-turn keeps the "
+                        "clock going from the first start, and Stop moves the conversation to Finished.",
+    (
+        "with nothing running, Today has no Running section",
+        "Running shows the agent, its latest note, the time since the Host started the work, and Stop",
+        "the clock on Running ticks while the turn works",
+        "after a restart mid-turn the clock goes on from the first Host's start rather than from zero",
+        "Stop ends the conversation, and it leaves Running for Finished",
         "every model call was one the scenario scripted",
     )),
     "failed": Scenario(scenario_failed, "A model call fails while a turn is also working on a second conversation; "
