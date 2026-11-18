@@ -96,6 +96,7 @@ interface Props {
   draftKey?: string;
   recipient?: { id: string; name: string };
   onRecipientChange?: (id: string) => void;
+  waiting?: { asker: string; answer: () => void };
   group: GroupId | null;
   disabled?: boolean;
   disabledReason?: string;
@@ -112,6 +113,7 @@ export function Composer({
   draftKey,
   recipient,
   onRecipientChange,
+  waiting,
 }: Props) {
   const storageKey = `guaca.draft:${workspaceOrigin()}:${draftKey ?? group ?? "composer"}`;
   const owner = useMemo(() => ownerFor(storageKey, !!draftKey), [storageKey, draftKey]);
@@ -290,6 +292,12 @@ export function Composer({
         setDismissed(true);
         return;
       }
+    }
+
+    if (event.key === "Tab" && !event.shiftKey && waiting && !text && files.length === 0) {
+      event.preventDefault();
+      waiting.answer();
+      return;
     }
 
     if (event.key === "Enter" && !event.shiftKey) {
@@ -586,6 +594,11 @@ export function Composer({
         <span className="hint">
           {hint ?? (
             <>
+              {waiting && (
+                <>
+                  <b>Tab</b> to answer {waiting.asker} ·{" "}
+                </>
+              )}
               {model && `${model} · `}
               <b>@</b> to name an agent
             </>

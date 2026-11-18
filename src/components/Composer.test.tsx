@@ -158,6 +158,36 @@ describe("Composer", () => {
     expect(screen.queryByRole("button", { name: "Send again" })).toBeNull();
   });
 
+  it("hands Tab to the waiting question from an empty box, and only from one", () => {
+    const answer = vi.fn();
+    render(
+      <Composer
+        placeholder="Write to Ines…"
+        group={CREW}
+        waiting={{ asker: "Ines", answer }}
+        onSend={async () => undefined}
+      />,
+    );
+    const box = screen.getByRole("combobox");
+    expect(screen.getByText(/to answer Ines/)).toBeTruthy();
+
+    expect(fireEvent.keyDown(box, { key: "Tab", shiftKey: true })).toBe(true);
+    expect(answer).not.toHaveBeenCalled();
+
+    expect(fireEvent.keyDown(box, { key: "Tab" })).toBe(false);
+    expect(answer).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(box, { target: { value: "not an answer" } });
+    expect(fireEvent.keyDown(box, { key: "Tab" })).toBe(true);
+    expect(answer).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves Tab alone when nothing is waiting", () => {
+    render(<Composer placeholder="Write to Ines…" group={CREW} onSend={async () => undefined} />);
+    expect(fireEvent.keyDown(screen.getByRole("combobox"), { key: "Tab" })).toBe(true);
+    expect(screen.queryByText(/to answer/)).toBeNull();
+  });
+
   it("groups recipients and identifies agents outside the current group", () => {
     const first = anAgent("Ines");
     const other = anAgent("Ines", ELSEWHERE);

@@ -1186,6 +1186,12 @@ placeholder, and Escape turns it back. A permission is never answered here: it
 takes a verdict rather than words, and a field that turned a typed sentence
 into Allow would be granting by accident.
 
+On an agent's page the composer does the same for that agent's question, with
+the question's own answers rather than a typed one: from an empty composer, Tab
+moves to the first answer on the question in the conversation, and the line
+under the composer says so. So Command K, Tab and Return answer it from
+anywhere, and with nothing waiting Tab leaves the composer as it always did.
+
 **`@` addresses one agent.** `@Name` at the very start, followed by a space,
 sends to that agent instead of the picked one, for that message. The longest
 name wins, so "@Ines Marie" is not read as Ines when both exist. `@Name` with

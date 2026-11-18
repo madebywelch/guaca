@@ -1,6 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { rememberDismissOpener } from "../lib/dismiss";
+import { waitingQuestion } from "../lib/field";
 import { useFollowBottom } from "../lib/follow";
 import { api } from "../lib/ipc";
 import { runsOn } from "../lib/profile";
@@ -82,6 +83,9 @@ export function ChannelView({
   const group = useStore((s) => s.groups.find((entry) => entry.id === agent?.groupId));
   const settings = useStore((s) => s.settings);
   const asking = useStore((s) => s.pending.some((one) => one.agentId === agent?.id));
+  const question = useStore((s) =>
+    waitingQuestion(s.pending.filter((one) => one.agentId === agent?.id)),
+  );
   const model = agent && settings ? runsOn(agent, group, settings).model : undefined;
   const answeringId = agent?.id;
   const answeringName = agent?.name;
@@ -293,6 +297,19 @@ export function ChannelView({
           draftKey={channel}
           recipient={agent ? { id: agent.id, name: agent.name } : undefined}
           onRecipientChange={(id) => void select(id)}
+          waiting={
+            agent && question
+              ? {
+                  asker: agent.name,
+                  answer: () =>
+                    document
+                      .querySelector<HTMLElement>(
+                        `[data-question="${question.id}"] :is(button, input):not(:disabled)`,
+                      )
+                      ?.focus(),
+                }
+              : undefined
+          }
           placeholder={`Write to ${agent?.name ?? "agent"}…`}
           model={model}
           group={agent?.groupId ?? null}

@@ -43,7 +43,7 @@ export function QuestionRequest({ part, agent }: Props) {
   };
 
   return (
-    <div className="ask ask--question" data-state={state}>
+    <div className="ask ask--question" data-state={state} data-question={part.id}>
       <div className="ask__head">
         <AgentAvatar
           avatar={agent?.avatar ?? "blank"}

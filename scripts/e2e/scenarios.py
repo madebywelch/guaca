@@ -925,6 +925,49 @@ def scenario_newagent(w: World) -> None:
     no_unscripted(w)
 
 
+BOOK_FLIGHT = "Book the flight."
+WHICH = "Which flight, the early one or the late one?"
+
+
+def scenario_answer(w: World) -> None:
+
+    def script(c: Call) -> Reply | None:
+        if c.speaker == AGENT and c.last_user.endswith(BOOK_FLIGHT):
+            results = c.tool_results()
+            if not results:
+                return call("ask_operator", question=WHICH, options=["Early", "Late"])
+            return say(f"Booked: {results[-1][:80]}")
+        return hello(c)
+
+    w.model.script = script
+    w.start()
+    first_run(w)
+    settled(w, 1)
+    ui = w.ui
+
+    write(w, AGENT, BOOK_FLIGHT)
+    w.wait("the question is shown in the conversation", lambda: ui.find("button", "Early"))
+    ui.evaluate("document.activeElement && document.activeElement.blur()")
+    ui.key("k", mod=True)
+    w.wait("Command K focuses the composer", lambda: ui.focused()[0] == "combobox")
+    ui.key("Tab")
+    w.check("with a question waiting, Command K then Tab reaches its first answer",
+            ui.focused() == ("button", "Early"), observed=ui.focused(), shot=True)
+    ui.key("Enter")
+    settled(w, 2, "the answered turn finishes")
+    w.check("Return answers the question, and the agent is told the answer",
+            [a["state"] for a in approvals(w)] == ["answered"] and "Early" in said(w, AGENT)[-1],
+            observed={"approvals": [a["state"] for a in approvals(w)], "said": said(w, AGENT)[-1]})
+
+    ui.evaluate("document.activeElement && document.activeElement.blur()")
+    ui.key("k", mod=True)
+    w.wait("Command K focuses the composer again", lambda: ui.focused()[0] == "combobox")
+    ui.key("Tab")
+    w.check("with nothing waiting, Tab leaves the composer for its own next control",
+            ui.focused() == ("button", "Attach a file"), observed=ui.focused())
+    no_unscripted(w)
+
+
 @dataclass(frozen=True)
 class Scenario:
     run: Callable[[World], None]
@@ -1048,6 +1091,15 @@ SCENARIOS: dict[str, Scenario] = {
         "Create agent is one button, on screen without scrolling",
         "with no name, a press on Create agent creates nothing and keeps the dialog",
         "a keyboard press on Create agent creates the agent and closes the dialog",
+        "every model call was one the scenario scripted",
+    )),
+    "answer": Scenario(scenario_answer, "An agent asks a question while its conversation is open, and Command K "
+                       "then Tab reaches the first answer and Return sends it; with nothing waiting, Tab from the "
+                       "composer goes where it always went.",
+    (
+        "with a question waiting, Command K then Tab reaches its first answer",
+        "Return answers the question, and the agent is told the answer",
+        "with nothing waiting, Tab leaves the composer for its own next control",
         "every model call was one the scenario scripted",
     )),
 }
