@@ -121,7 +121,7 @@ def attempt(name: str, run: int, evidence: Path, keep: bool) -> dict:
         if world.page_errors:
             world.check("the page threw nothing", False, observed=world.page_errors, stop=False)
     except Failed as why:
-        if not world.steps or world.steps[-1]["pass"]:
+        if not world.steps or world.steps[-1]["step"] != str(why):
             world.steps.append({"step": str(why), "pass": False})
             world.capture(f"failed {why}") if world.browser else None
     except BrowserError as why:

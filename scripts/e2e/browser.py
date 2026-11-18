@@ -300,6 +300,14 @@ class Browser:
     def text(self) -> str:
         return self.evaluate("document.body ? document.body.innerText : ''") or ""
 
+    def viewport(self, width: int, height: int) -> None:
+        self.send("Emulation.setDeviceMetricsOverride",
+                  {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": False})
+
+    def viewport(self, width: int, height: int) -> None:
+        self.send("Emulation.setDeviceMetricsOverride",
+                  {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": False})
+
     def screenshot(self, path: Path) -> None:
         data = self.send("Page.captureScreenshot", {"format": "png"})["data"]
         path.write_bytes(base64.b64decode(data))
