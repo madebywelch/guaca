@@ -126,3 +126,40 @@ def judge(screen: str, measured: dict) -> Verdict:
             faults.append(f"{screen}: the control {control['where']} ({control['name']!r}) is "
                           f"{control['height']:g}px tall; use --control-h (32px) or --control-h-sm (28px)")
     return Verdict(screen, len(styles), faults)
+
+LAYOUT = """
+(() => {
+  const seen = (el) => {
+    if (!el.checkVisibility({ opacityProperty: true, visibilityProperty: true })) return false;
+    const r = el.getBoundingClientRect();
+    return r.width >= 1 && r.height >= 1 && r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth;
+  };
+  const named = (el) => (el.className && typeof el.className === 'string' && el.className.split(' ')[0]) || el.tagName.toLowerCase();
+  const boxes = [];
+  const scrollers = [];
+  for (const el of document.body.querySelectorAll('*')) {
+    if (el.closest('svg, .ribbon') || !seen(el)) continue;
+    const r = el.getBoundingClientRect();
+    boxes.push([named(el), Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)]);
+    const s = getComputedStyle(el);
+    if (/auto|scroll/.test(s.overflowY) && el.scrollHeight > el.clientHeight) {
+      scrollers.push(`${named(el)} by ${el.scrollHeight - el.clientHeight}px`);
+    }
+  }
+  const tops = new Map();
+  for (const item of document.querySelectorAll('.picker > *')) {
+    const top = Math.round(item.getBoundingClientRect().top);
+    tops.set(top, (tops.get(top) || 0) + 1);
+  }
+  const rows = [...tops.entries()].sort((a, b) => a[0] - b[0]).map(([, count]) => count);
+  return { boxes, scrollers, rows };
+})()
+"""
+
+
+def moved(overlay: dict, classic: dict, limit: int = 6) -> list[str]:
+    a, b = overlay["boxes"], classic["boxes"]
+    if len(a) != len(b):
+        return [f"{len(a)} elements are drawn with overlay scroll bars and {len(b)} with classic ones"]
+    return [f"{one[0]} is {one[1:]} with overlay scroll bars and {two[1:]} with classic ones (x, y, width, height)"
+            for one, two in zip(a, b) if one != two][:limit]
