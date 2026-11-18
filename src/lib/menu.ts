@@ -35,9 +35,17 @@ export type MenuAction =
   | { do: "section"; section: Section }
   | { do: "look"; patch: Partial<Prefs> };
 
+export interface Asking {
+  id: string;
+  agent: AgentCard | undefined;
+  who: string;
+  text: string;
+}
+
 export interface MenuRow {
   id: string;
   section: MenuSection | null;
+  asking?: Asking;
   title: string;
   detail?: string;
   key?: string;
@@ -120,12 +128,15 @@ function waitingRows(input: MenuInput): MenuRow[] {
   const named = (id: AgentId) =>
     input.agents.find((agent) => agent.id === id)?.name ?? "A deleted agent";
   const rows: MenuRow[] = [];
+  const faceOf = (id: AgentId) => input.agents.find((agent) => agent.id === id);
   for (const request of input.pending) {
     const asker = named(request.agentId);
-    const detail = request.summary.startsWith(asker)
-      ? request.summary
-      : `${asker}: ${request.summary}`;
-    const base = { section: "Waiting on you" as const, detail, request: request.id };
+    const detail = `${asker} ${request.summary}`;
+    const base = {
+      section: "Waiting on you" as const,
+      request: request.id,
+      asking: { id: request.id, agent: faceOf(request.agentId), who: asker, text: request.summary },
+    };
     if (request.request.kind === "permission") {
       rows.push({
         ...base,
@@ -158,7 +169,7 @@ function waitingRows(input: MenuInput): MenuRow[] {
       rows.push({
         ...base,
         id: `${request.id}:open`,
-        title: `Answer ${asker}`,
+        title: "Answer in the conversation",
         icon: "message",
         words: `answer reply question ${detail}`,
         action: { do: "open", agentId: request.agentId },
@@ -181,10 +192,10 @@ function waitingRows(input: MenuInput): MenuRow[] {
     rows.push({
       id: `${one.id}:open`,
       section: "Waiting on you",
-      title: `Help ${asker}`,
-      detail: one.summary,
+      asking: { id: one.id, agent: faceOf(one.agentId), who: asker, text: one.summary },
+      title: "Open the conversation",
       icon: "alert",
-      words: `stuck help ${asker}`,
+      words: `stuck help ${asker} ${one.summary}`,
       action: { do: "open", agentId: one.agentId },
     });
   }
@@ -297,7 +308,6 @@ export function menuRows(input: MenuInput): MenuRow[] {
             title: `Write to ${input.recipient.name}`,
             detail: text,
             face: input.recipient,
-            key: formatCombo({ key: "Enter" }),
             words: "",
             action: { do: "write", agentId: input.recipient.id, text },
           },

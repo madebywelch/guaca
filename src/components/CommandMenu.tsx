@@ -1,4 +1,4 @@
-import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { useDismiss } from "../lib/dismiss";
@@ -7,6 +7,7 @@ import { useHeld } from "../lib/held";
 import { api } from "../lib/ipc";
 import { formatCombo } from "../lib/keybinds";
 import {
+  type Asking,
   firstChoice,
   MENU_SECTIONS,
   type MenuAction,
@@ -30,6 +31,7 @@ interface Props {
 
 const ALLOW = formatCombo({ key: "Enter", mod: true });
 const DENY = formatCombo({ key: "Backspace", mod: true });
+const RETURN = formatCombo({ key: "Enter" });
 
 export function CommandMenu({ onClose, onPlace, onSection }: Props) {
   const agents = useStore((s) => s.agents);
@@ -181,7 +183,12 @@ export function CommandMenu({ onClose, onPlace, onSection }: Props) {
         onClick={onClose}
       />
 
-      <div className="palette" role="dialog" aria-modal="true" aria-label="Command menu">
+      <div
+        className="palette palette--menu"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command menu"
+      >
         <div className="palette__query">
           <span className="palette__to" title="Tab changes who you write to">
             {recipient && (
@@ -227,25 +234,29 @@ export function CommandMenu({ onClose, onPlace, onSection }: Props) {
               return (
                 <div key={section ?? "write"}>
                   {section && <p className="palette__section">{section}</p>}
-                  {inside.map((row) => (
-                    <MenuItem
-                      key={row.id}
-                      row={row}
-                      selected={row.id === selected}
-                      keys={
-                        row.request !== undefined &&
-                        row.request === current &&
-                        row.action.do === "decide"
-                          ? row.action.decision === "allow"
-                            ? ALLOW
-                            : row.action.decision === "deny"
-                              ? DENY
-                              : undefined
-                          : row.key
-                      }
-                      onHover={() => setChosen(row.id)}
-                      onPick={() => run(row.action)}
-                    />
+                  {inside.map((row, index) => (
+                    <Fragment key={row.id}>
+                      {row.asking && row.asking.id !== inside[index - 1]?.asking?.id && (
+                        <Heading asking={row.asking} />
+                      )}
+                      <MenuItem
+                        row={row}
+                        selected={row.id === selected}
+                        keys={
+                          row.request !== undefined &&
+                          row.request === current &&
+                          row.action.do === "decide"
+                            ? row.action.decision === "allow"
+                              ? ALLOW
+                              : row.action.decision === "deny"
+                                ? DENY
+                                : undefined
+                            : row.key
+                        }
+                        onHover={() => setChosen(row.id)}
+                        onPick={() => run(row.action)}
+                      />
+                    </Fragment>
                   ))}
                 </div>
               );
@@ -254,6 +265,35 @@ export function CommandMenu({ onClose, onPlace, onSection }: Props) {
         </div>
       </div>
     </div>
+  );
+}
+
+function Heading({ asking }: { asking: Asking }) {
+  return (
+    <p className="palette__asking">
+      <span className="palette__face">
+        {asking.agent && (
+          <AgentAvatar
+            avatar={asking.agent.avatar}
+            color={asking.agent.color}
+            seed={asking.agent.id}
+            size="sm"
+          />
+        )}
+      </span>
+      <span className="palette__text">
+        {asking.text.startsWith(`${asking.who} `) ? (
+          <>
+            <strong className="palette__who">{asking.who}</strong>
+            {asking.text.slice(asking.who.length)}
+          </>
+        ) : (
+          <>
+            <strong className="palette__who">{asking.who}:</strong> {asking.text}
+          </>
+        )}
+      </span>
+    </p>
   );
 }
 
@@ -281,7 +321,7 @@ function MenuItem({
       onClick={onPick}
     >
       <span className="palette__face">
-        {row.face ? (
+        {row.asking ? null : row.face ? (
           <AgentAvatar
             avatar={row.face.avatar}
             color={row.face.color}
@@ -298,7 +338,10 @@ function MenuItem({
         <span className="palette__title">{row.title}</span>
         {row.detail && <span className="palette__detail">{row.detail}</span>}
       </span>
-      <span className="palette__meta">{keys && <kbd className="palette__key">{keys}</kbd>}</span>
+      <span className="palette__meta">
+        {selected && <kbd className="palette__key">{RETURN}</kbd>}
+        {keys && <kbd className="palette__key">{keys}</kbd>}
+      </span>
     </button>
   );
 }

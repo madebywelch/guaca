@@ -9585,3 +9585,48 @@ button.artifacts__version[aria-pressed="true"] {
   gap: var(--space-3);
 }
 
+
+.palette--menu .palette__title {
+  flex: none;
+  max-width: 100%;
+  font-weight: var(--weight-regular);
+}
+
+.palette--menu .palette__text {
+  flex-direction: row;
+  align-items: baseline;
+  gap: var(--space-4);
+}
+
+.palette--menu .palette__detail {
+  min-width: 0;
+}
+
+.palette--menu .palette__meta {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.palette__asking {
+  display: grid;
+  grid-template-columns: 1.85rem 1fr;
+  align-items: center;
+  gap: var(--space-5);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--type-ui);
+  color: var(--muted);
+}
+
+.palette__asking .palette__text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette__who {
+  font-weight: var(--weight-strong);
+  color: var(--text);
+}
+
