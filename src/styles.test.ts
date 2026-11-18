@@ -402,28 +402,38 @@ describe("the trail above the composer", () => {
   });
 });
 
-describe("a message's clock", () => {
-  it.each([
-    ["an agent's", undefined],
-    ["the operator's", "true"],
-  ])("is beside %s words rather than over them", (_whose, operator) => {
-    const msg = document.createElement("article");
-    msg.className = "msg";
-    if (operator) msg.dataset.operator = operator;
-    const margin = document.createElement("div");
-    margin.className = "msg__margin";
-    const body = document.createElement("div");
-    body.className = "msg__body";
-    const at = document.createElement("time");
-    at.className = "msg__at";
-    margin.append(at);
-    msg.append(margin, body);
-    document.body.append(msg);
+describe("a turn on the page", () => {
+  const rule = (selector: string) =>
+    css.match(
+      new RegExp(`^${selector.replace(/[.[\]"=]/g, "\\$&")} \\{\\n([\\s\\S]*?)^\\}`, "m"),
+    )?.[1] ?? "";
 
-    const rule = css.match(/^\.msg \{\n([\s\S]*?)^\}/m)?.[1] ?? "";
-    expect(rule).toMatch(/grid-template-columns: var\(--column-margin\) minmax\(0, 1fr\)/);
-    expect(getComputedStyle(at).position).not.toBe("absolute");
-    expect(at.parentElement?.className).toBe("msg__margin");
+  it("keeps no time gutter: a turn is one column, with its clock on the head line", () => {
+    expect(rule(".msg")).not.toMatch(/grid-template-columns/);
+    expect(rule(".msg__head")).toMatch(/grid-template-columns: var\(--column-face\) auto auto/);
+  });
+
+  it("starts an agent's words on the name's edge, and the person's inside a bubble on the same edge", () => {
+    expect(rule(".msg__body")).toMatch(/margin-left: var\(--column-face\)/);
+    expect(css).toMatch(/--column-bubble: calc\(var\(--column-face\) - var\(--space-5\)\);/);
+    expect(rule(".msg__bubble")).toMatch(/margin-left: var\(--column-bubble\)/);
+    expect(rule(".msg__bubble")).toMatch(/padding: var\(--space-4\) var\(--space-5\)/);
+    expect(rule(".msg__bubble")).toMatch(/background: var\(--wash\)/);
+    expect(css).toMatch(/--page: var\(--sunken\);/);
+  });
+
+  it("fades a turn scrolled under the tabs over the same length the first turn starts below them", () => {
+    expect(rule(".pane__scroll")).toMatch(/padding: var\(--space-6\) /);
+    expect(rule(".pane__scroll")).toMatch(/scroll-padding-top: var\(--space-6\);/);
+    expect(rule(".pane__scroll")).toMatch(
+      /mask-image: linear-gradient\(to bottom, transparent, #000 var\(--space-6\)\);/,
+    );
+  });
+
+  it("draws no vertical rule beside a turn or an aside", () => {
+    for (const selector of [".msg", ".msg__body", ".msg__bubble", ".aside .md", ".footnote"]) {
+      expect(rule(selector)).not.toMatch(/border-left/);
+    }
   });
 });
 

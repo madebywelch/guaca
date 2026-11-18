@@ -89,6 +89,43 @@ describe("the line above the composer", () => {
     expect(line.hasAttribute("data-thinking")).toBe(true);
   });
 
+  it("says who it waits for while its turn is queued behind a colleague's", async () => {
+    const agent = anAgent("manager", { name: "Manager" });
+    const chef = anAgent("chef", { name: "Chef" });
+    useStore.setState({
+      prefs: DEFAULT_PREFS,
+      agents: [agent, chef],
+      messages: { [agent.id]: [] },
+      streams: {},
+      reasoning: {},
+      trail: {},
+      activity: { [agent.id]: { state: "queued", depth: 1 }, [chef.id]: { state: "thinking" } },
+      activeRun: { [chef.id]: "r1" },
+      running: [
+        {
+          runId: "r1",
+          agentId: agent.id,
+          groupId: agent.groupId,
+          startedAt: Date.now(),
+          note: null,
+        },
+      ],
+      lastActive: {},
+      banner: null,
+    });
+    const { container } = render(
+      <ChannelView
+        channel={agent.id}
+        onOpenMenu={() => {}}
+        view="conversation"
+        onView={() => {}}
+      />,
+    );
+    const line = await waitFor(() => container.querySelector(".working") as HTMLElement);
+    expect(within(line).getByText("Waiting for Chef")).toBeTruthy();
+    expect(within(line).getByRole("button", { name: "Stop" })).toBeTruthy();
+  });
+
   it("promises no time for a conversation the host has not listed", async () => {
     const agent = anAgent("manager", { name: "Manager" });
     useStore.setState({
