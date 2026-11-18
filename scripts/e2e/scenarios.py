@@ -825,8 +825,7 @@ def scenario_handoff(w: World) -> None:
            and "writing" in card_text(w))
     answer_px = ui.evaluate("getComputedStyle(document.querySelector('.handoff__answer .md')).fontSize")
     faces = ui.evaluate("document.querySelectorAll('.handoff__card .avatar').length")
-    w.check("a live card shows each colleague's face, the question, a status word with time, and the answer at "
-            "reading size",
+    w.check("a live card shows each colleague's face, the question, a status word with time, and the answer at reading size",
             ui.find("region", "Asked 2 colleagues") and faces == 2 and card_text(w).count(FILINGS_Q) == 2
             and "answered in" in card_text(w) and re.search(r"writing, \d+s", card_text(w))
             and answer_px == "16px",
