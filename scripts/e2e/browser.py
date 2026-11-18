@@ -46,6 +46,10 @@ def find_chromium() -> str | None:
     return None
 
 
+def label(node: dict) -> str:
+    return str((node.get("name") or {}).get("value") or "")
+
+
 def split_frames(buffer: bytes) -> tuple[list[bytes], bytes]:
     *whole, rest = buffer.split(b"\0")
     return [frame for frame in whole if frame], rest
@@ -254,6 +258,9 @@ class Browser:
         })
 
     def names_within(self, container_role: str, container_name: str, role: str) -> list[str]:
+        return sorted(label(node) for node in self.within(container_role, container_name, role))
+
+    def within(self, container_role: str, container_name: str, role: str) -> list[dict]:
         nodes = self.ax_nodes()
         by_id = {node["nodeId"]: node for node in nodes}
         roots = [node for node in nodes if (node.get("role") or {}).get("value") == container_role
@@ -265,8 +272,8 @@ class Browser:
                 continue
             stack.extend(node.get("childIds", []))
             if not node.get("ignored") and (node.get("role") or {}).get("value") == role:
-                found.append(str((node.get("name") or {}).get("value") or ""))
-        return sorted(found)
+                found.append(node)
+        return found
 
     def one(self, role: str, name: str, exact: bool = True) -> dict:
         found = self.find(role, name, exact)
@@ -322,22 +329,70 @@ class Browser:
         quad = quads[0]
         return sum(quad[0::2]) / 4, sum(quad[1::2]) / 4
 
+    def _arm(self, node: dict, x: float, y: float) -> str:
+        try:
+            target = self.send("DOM.resolveNode", {"backendNodeId": node["backendDOMNodeId"]})["object"]
+        except BrowserGone:
+            raise
+        except BrowserError:
+            return "gone"
+        return self.send("Runtime.callFunctionOn", {
+            "objectId": target["objectId"], "returnByValue": True,
+            "arguments": [{"value": x}, {"value": y}, {"value": f"click-{time.monotonic_ns()}"}],
+            "functionDeclaration": """function (x, y, token) {
+                if (!this.isConnected) return "gone";
+                const hit = document.elementFromPoint(x, y);
+                const reaches = hit !== null && (hit === this || this.contains(hit)
+                    || hit.closest("label")?.control === this);
+                if (!reaches) return "elsewhere";
+                if (this.disabled) return "disabled";
+                this.addEventListener("click", () => { window.__verifyClicked = token; },
+                                      { capture: true, once: true });
+                return token;
+            }""",
+        })["result"].get("value") or "gone"
+
+    def _landed(self, token: str) -> bool:
+        return self.evaluate("window.__verifyClicked") == token
+
+    def press(self, node: dict, point: tuple[float, float] | None = None) -> None:
+        what = f"{(node.get('role') or {}).get('value')} {label(node)!r}"
+        gone = BrowserError(f"the {what} was gone from the page by the time it was clicked")
+        if point is None:
+            try:
+                point = self._center(node)
+            except BrowserGone:
+                raise
+            except BrowserError:
+                raise gone from None
+        x, y = point
+        moved = BrowserError(f"the click at ({x:.0f}, {y:.0f}) never reached the {what}; "
+                             "it moved or left the page between being found and being clicked")
+        token = self._arm(node, x, y)
+        if token == "gone":
+            raise gone
+        if token == "elsewhere":
+            raise moved
+        for kind in ("mouseMoved", "mousePressed", "mouseReleased"):
+            self.send("Input.dispatchMouseEvent",
+                      {"type": kind, "x": x, "y": y, "button": "left", "clickCount": 1})
+        if token != "disabled" and not self._landed(token):
+            raise moved
+
     def click(self, role: str, name: str, exact: bool = True) -> None:
         deadline = time.monotonic() + ACTIONABLE_SECONDS
-        point = None
-        while point is None:
+        node, point = None, None
+        while node is None or point is None:
             try:
-                point = self._center(self.one(role, name, exact))
+                node = self.one(role, name, exact)
+                point = self._center(node)
             except BrowserGone:
                 raise
             except BrowserError:
                 if time.monotonic() >= deadline:
                     raise
                 time.sleep(0.1)
-        x, y = point
-        for kind in ("mouseMoved", "mousePressed", "mouseReleased"):
-            self.send("Input.dispatchMouseEvent",
-                      {"type": kind, "x": x, "y": y, "button": "left", "clickCount": 1})
+        self.press(node, point)
 
     def type(self, role: str, name: str, text: str, exact: bool = True) -> None:
         self.click(role, name, exact)

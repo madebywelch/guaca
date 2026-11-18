@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from . import look
+from .browser import label
 from .world import STAND_IN_KEY, STAND_IN_MODEL, Call, Reply, World, call, held, refuse, say, text_of
 
 AGENT = "Executive Assistant"
@@ -72,8 +73,8 @@ def open_agent(w: World, name: str) -> None:
     if w.ui.find("log", f"Conversation with {name}"):
         return
     face = w.wait(f"{name} has a face on today's timeline", lambda: [
-        n for n in w.ui.names_within("list", "Today's timeline", "button") if n.startswith(f"{name}, ")])
-    w.ui.click("button", face[0])
+        n for n in w.ui.within("list", "Today's timeline", "button") if label(n).startswith(f"{name}, ")])
+    w.ui.press(face[0])
     w.wait(f"{name}'s conversation opens", lambda: w.ui.find("log", f"Conversation with {name}"))
 
 
