@@ -109,6 +109,23 @@ class Pipe(unittest.TestCase):
             page.click("button", "Deny")
         self.assertEqual([kind for _, kind in page.sent], ["mouseMoved", "mousePressed", "mouseReleased"])
 
+    def test_a_click_waits_for_a_button_still_moving_into_place(self) -> None:
+        class Rising(Rendering):
+            boxes = [[0, 20, 10, 20, 10, 30, 0, 30], [0, 12, 10, 12, 10, 22, 0, 22]]
+            boxes += [[0, 0, 10, 0, 10, 10, 0, 10]] * 2
+
+            def send(self, method: str, params: dict | None = None, session: bool = True,
+                     timeout: float = 30) -> dict:
+                if method == "DOM.getContentQuads":
+                    return {"quads": [self.boxes.pop(0) if len(self.boxes) > 1 else self.boxes[0]]}
+                self.sent.append((method, (params or {}).get("y", "")))
+                return {}
+
+        page = Rising(appears_after=0)
+        page._center = lambda node: Browser._center(page, node)
+        page.click("button", "Deny")
+        self.assertEqual({y for method, y in page.sent if method == "Input.dispatchMouseEvent"}, {5.0})
+
     def test_a_browser_that_dies_at_launch_says_why_and_never_breaks_the_pipe(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             binary = Path(temp) / "chromium"

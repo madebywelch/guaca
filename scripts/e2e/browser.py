@@ -326,6 +326,11 @@ class Browser:
         quads = self.send("DOM.getContentQuads", {"backendNodeId": backend}).get("quads") or []
         if not quads:
             raise BrowserError("the element has no box on the page; it is not visible")
+        self.send("Runtime.evaluate", {"awaitPromise": True, "expression":
+                  "new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))"})
+        settled = self.send("DOM.getContentQuads", {"backendNodeId": backend}).get("quads") or []
+        if settled[:1] != quads[:1]:
+            raise BrowserError("the element is still moving on the page")
         quad = quads[0]
         return sum(quad[0::2]) / 4, sum(quad[1::2]) / 4
 
