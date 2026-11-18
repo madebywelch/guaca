@@ -26,7 +26,7 @@ import {
   type Typeface,
   UI_SCALES,
 } from "../lib/prefs";
-import { type Provider as Preset, planLabel } from "../lib/providers";
+import { type Provider as Preset, planLabel, providerFor } from "../lib/providers";
 import { SECTION_LABELS, SECTIONS, type Section } from "../lib/sections";
 import { useStore } from "../lib/store";
 import {
@@ -792,14 +792,35 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
             role="tablist"
             aria-orientation="vertical"
             aria-label="Settings sections"
+            onKeyDown={(event) => {
+              const all = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')];
+              const at = all.findIndex((tab) => tab.getAttribute("aria-selected") === "true");
+              const to =
+                event.key === "ArrowDown" || event.key === "ArrowRight"
+                  ? (at + 1) % all.length
+                  : event.key === "ArrowUp" || event.key === "ArrowLeft"
+                    ? (at - 1 + all.length) % all.length
+                    : event.key === "Home"
+                      ? 0
+                      : event.key === "End"
+                        ? all.length - 1
+                        : null;
+              if (to === null) return;
+              event.preventDefault();
+              all[to]?.focus();
+              all[to]?.click();
+            }}
           >
             {SECTIONS.map((key) => (
               <button
                 key={key}
                 type="button"
                 role="tab"
+                id={`settings-tab-${key}`}
                 className="settings__tab"
                 aria-selected={section === key}
+                aria-controls="settings-pane"
+                tabIndex={section === key ? 0 : -1}
                 onClick={() => setSection(key)}
               >
                 {SECTION_LABELS[key]}
@@ -807,7 +828,12 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
             ))}
           </div>
 
-          <div className="settings__pane">
+          <div
+            className="settings__pane"
+            id="settings-pane"
+            role="tabpanel"
+            aria-labelledby={`settings-tab-${section}`}
+          >
             {section === "general" && (
               <>
                 <h3 className="settings__title">General</h3>
@@ -1048,7 +1074,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       <input
                         className="input input--mono"
                         value={model}
-                        placeholder="anthropic/claude-sonnet-4.5"
+                        placeholder={providerFor(baseUrl)?.model || "A model your endpoint serves"}
                         title="The default for any group or agent that does not name one."
                         onChange={(event) => setModel(event.target.value)}
                       />

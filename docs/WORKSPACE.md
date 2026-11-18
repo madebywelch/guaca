@@ -1186,6 +1186,12 @@ placeholder, and Escape turns it back. A permission is never answered here: it
 takes a verdict rather than words, and a field that turned a typed sentence
 into Allow would be granting by accident.
 
+On an agent's page the composer does the same for that agent's question, with
+the question's own answers rather than a typed one: from an empty composer, Tab
+moves to the first answer on the question in the conversation, and the line
+under the composer says so. So Command K, Tab and Return answer it from
+anywhere, and with nothing waiting Tab leaves the composer as it always did.
+
 **`@` addresses one agent.** `@Name` at the very start, followed by a space,
 sends to that agent instead of the picked one, for that message. The longest
 name wins, so "@Ines Marie" is not read as Ines when both exist. `@Name` with
@@ -2277,6 +2283,11 @@ twelfth free to add; the cost is paid when one is not a subject, which is why a
 new pane has to argue it is one rather than a field that belongs in an existing
 one.
 
+The nav is a tab list and is reached the way one is: it is a single Tab stop on
+the open section, the arrow keys, Home and End move through it and open what
+they land on, and Tab goes on into the open pane. When every section was its own
+stop, reaching Appearance from the keyboard took eight Tabs.
+
 Two of those panes are defaults rather than orders. Whatever Provider and Limits
 say is what a group falls back to, and a group that answers for itself is not
 affected by either. What stays app-wide is what is genuinely one of: the
@@ -2359,6 +2370,13 @@ off by a path segment and fails on every turn of every agent with an error from
 somebody else's server. A local endpoint is marked as local because that changes
 what the key field means: an empty key beside a warning about a missing key is a
 state an operator will try to fix forever.
+
+So an empty key is not refused before the endpoint is asked. The runtime sends
+no Authorization header, and the endpoint decides: a local server answers, and
+one that wants a key refuses, which is reported as that endpoint asking for a
+key rather than as a missing OpenRouter key. The banner asking for a key is
+shown only for a preset that needs one, and a custom endpoint suggests no
+preset's model.
 
 About says the version this build ships as, and the commit behind it. It said
 only the commit for as long as `package.json` and `tauri.conf.json` were

@@ -123,9 +123,7 @@ impl InferenceConfig {
     pub fn is_ready(&self) -> bool {
         match self.provider {
             Provider::Chatgpt | Provider::Claude => true,
-            Provider::Compatible => {
-                !self.api_key.expose().trim().is_empty() && !self.base_url.trim().is_empty()
-            }
+            Provider::Compatible => !self.base_url.trim().is_empty(),
         }
     }
 

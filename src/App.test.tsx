@@ -755,6 +755,24 @@ describe("App", () => {
     expect(await screen.findByText(/Add an API key/i)).toBeTruthy();
   });
 
+  it("does not ask for a key for a custom endpoint, which may not need one", async () => {
+    getSettings.mockResolvedValue({
+      ...(await getSettings()),
+      provider: "compatible",
+      baseUrl: "http://127.0.0.1:9/v1",
+      apiKeySet: false,
+    });
+    listGroups.mockResolvedValue([aGroup({ apiKeySet: false })]);
+    listAgents.mockResolvedValue([agent("Manager")]);
+    render(<App />);
+    await waitFor(() =>
+      expect(useStore.getState().settings?.baseUrl).toBe("http://127.0.0.1:9/v1"),
+    );
+    await waitFor(() => expect(useStore.getState().agents).toHaveLength(1));
+    await act(async () => {});
+    expect(screen.queryByText(/Add an API key/i)).toBeNull();
+  });
+
   it("does not ask for a key when a subscription is what pays", async () => {
     getSettings.mockResolvedValue({
       operatorName: "",

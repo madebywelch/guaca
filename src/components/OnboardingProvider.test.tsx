@@ -277,6 +277,55 @@ it("reuses a saved key only for its own endpoint", async () => {
   });
 });
 
+it("shows the endpoint and the model beside the key, with nothing to open first", async () => {
+  await draw();
+  expect((screen.getByLabelText("Inference endpoint") as HTMLInputElement).value).toBe(
+    "https://openrouter.ai/api/v1",
+  );
+  expect((screen.getByLabelText("Default model") as HTMLInputElement).value).toBe(
+    "anthropic/claude-sonnet-4.5",
+  );
+  expect(screen.queryByText("Advanced options")).toBeNull();
+});
+
+it("says why a test failed in the bar with the buttons, so it is never scrolled under them", async () => {
+  mocks.testConnection.mockRejectedValue(new Error("the endpoint said no"));
+  await draw();
+  key();
+  submit();
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain("the endpoint said no");
+  expect(alert.closest(".onboarding-actions")).toBe(
+    screen.getByRole("button", { name: "Test and continue" }).closest(".onboarding-actions"),
+  );
+});
+
+it("suggests no other provider's model for a custom endpoint, and tests one with no key", async () => {
+  await draw();
+  fireEvent.change(screen.getByLabelText("API provider"), { target: { value: "custom" } });
+  const model = screen.getByLabelText("Default model") as HTMLInputElement;
+  expect(model.value).toBe("");
+  expect(model.placeholder).not.toContain("anthropic/");
+  expect(screen.getByText(/may not need a key/)).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("Inference endpoint"), {
+    target: { value: "http://127.0.0.1:8080/v1" },
+  });
+  fireEvent.change(model, { target: { value: "local-model" } });
+  mocks.testConnection.mockRejectedValueOnce(
+    new Error("http://127.0.0.1:8080/v1 asked for an API key, and none is set for it: Missing."),
+  );
+  submit();
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain("http://127.0.0.1:8080/v1");
+  expect(alert.textContent).not.toMatch(/OpenRouter|Settings/);
+  expect(mocks.testConnection).toHaveBeenCalledWith({
+    provider: "compatible",
+    baseUrl: "http://127.0.0.1:8080/v1",
+    defaultModel: "local-model",
+    apiKey: "",
+  });
+});
+
 it("clears typed keys on endpoint changes and excludes stored keys from custom probes", async () => {
   useStore.setState({ settings: stored({ apiKeySet: true }) });
   await draw();

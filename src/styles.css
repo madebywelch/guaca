@@ -4865,6 +4865,25 @@ input[type="file"]:disabled {
   }
 }
 
+.dialog--form {
+  display: flex;
+  flex-direction: column;
+  max-height: 100%;
+  padding: 0;
+}
+
+.dialog__body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-7);
+}
+
+.dialog__foot {
+  flex: none;
+  padding: var(--space-6) var(--space-7);
+  border-top: 1px solid var(--rule);
+}
+
 .dialog__title {
   font-family: var(--font-ui);
   font-size: var(--type-lede);
@@ -4943,7 +4962,7 @@ input[type="file"]:disabled {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-8) var(--space-7) 0;
+  padding: var(--space-7) var(--space-7) 0;
   display: flex;
 }
 
@@ -4959,7 +4978,7 @@ input[type="file"]:disabled {
   gap: var(--space-5);
   list-style: none;
   padding: 0;
-  margin: 0 0 var(--space-8);
+  margin: 0 0 var(--space-7);
   color: var(--faint);
   font-size: var(--type-small);
 }
@@ -5106,12 +5125,41 @@ input[type="file"]:disabled {
   align-items: center;
   gap: var(--space-5);
   margin-top: var(--space-5);
-  padding: var(--space-5) 0 calc(var(--space-8) + var(--space-5));
+  padding: var(--space-5) 0 var(--space-7);
   position: sticky;
   bottom: 0;
   z-index: 1;
   background: var(--ground);
   border-top: 1px solid var(--rule);
+}
+
+.onboarding-actions > div.onboarding-notice {
+  flex-basis: 100%;
+}
+
+.onboarding-actions > p.onboarding-notice {
+  flex: 1 1 0;
+  min-width: 12rem;
+  margin: 0;
+}
+
+.onboarding-endpoint {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  column-gap: var(--space-5);
+}
+
+.onboarding-endpoint > .field {
+  margin-bottom: var(--space-5);
+}
+
+.onboarding-endpoint > .field__hint {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.onboarding-provider > .onboarding-options {
+  margin-bottom: var(--space-6);
 }
 
 .onboarding-actions > span,

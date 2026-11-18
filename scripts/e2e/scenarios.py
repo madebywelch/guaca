@@ -50,7 +50,7 @@ def write(w: World, to: str, text: str) -> None:
     ui = w.ui
     if ui.find("combobox", "Recipient") and ui.value("combobox", "Recipient") != to:
         ui.choose("combobox", "Recipient", to)
-    ui.fill("combobox", f"Write to {to}\u2026", text)
+    ui.fill("combobox", f"Write to {to}", text)
     ui.click("button", "Send")
 
 
@@ -873,6 +873,237 @@ def scenario_update(w: World) -> None:
                       "asked": asked()}, shot=True)
 
 
+WINDOW = (1280, 820)
+TRAVEL = "Travel Planner"
+
+
+def hello(c: Call) -> Reply | None:
+    if c.last_user == "ping":
+        return say("pong")
+    if c.speaker == AGENT and c.last_user.endswith("Say hello."):
+        return say(HELLO)
+    return None
+
+
+def scenario_newagent(w: World) -> None:
+    w.model.script = hello
+    w.start()
+    w.ui.viewport(*WINDOW)
+    first_run(w)
+    settled(w, 1)
+    ui = w.ui
+
+    ui.click("button", "Make something new")
+    ui.click("menuitem", "New agent", exact=False)
+    w.wait("the New agent dialog", lambda: ui.find("dialog", "New agent"))
+    w.check("Create agent is one button, on screen without scrolling",
+            len(ui.find("button", "Create agent")) == 1 and ui.on_screen("button", "Create agent"),
+            observed={"buttons": len(ui.find("button", "Create agent")),
+                      "onScreen": bool(ui.find("button", "Create agent")) and ui.on_screen("button", "Create agent")},
+            shot=True)
+
+    ui.click("button", "Create agent")
+    w.check("with no name, a press on Create agent creates nothing and keeps the dialog",
+            ui.property("button", "Create agent", "disabled") and bool(ui.find("dialog", "New agent"))
+            and w.host.scalar("SELECT count(*) FROM agents") == 1,
+            observed={"disabled": ui.property("button", "Create agent", "disabled"),
+                      "dialog": bool(ui.find("dialog", "New agent")),
+                      "agents": w.host.scalar("SELECT count(*) FROM agents")})
+
+    ui.fill("textbox", "Name", TRAVEL)
+    ui.send("DOM.focus", {"backendNodeId": ui.one("button", "Create agent")["backendDOMNodeId"]})
+    ui.key("Enter")
+    w.wait(f"{TRAVEL} exists", lambda: w.host.scalar(
+        "SELECT count(*) FROM agents WHERE name = ? AND lifecycle != 'terminated'", TRAVEL))
+    w.wait("the dialog closes", lambda: not ui.find("dialog", "New agent"))
+    w.check("a keyboard press on Create agent creates the agent and closes the dialog",
+            not ui.find("dialog", "New agent")
+            and w.host.scalar("SELECT count(*) FROM agents WHERE name = ?", TRAVEL) == 1,
+            observed={"dialog": bool(ui.find("dialog", "New agent")),
+                      "created": w.host.scalar("SELECT count(*) FROM agents WHERE name = ?", TRAVEL)},
+            shot=True)
+    no_unscripted(w)
+
+
+BOOK_FLIGHT = "Book the flight."
+WHICH = "Which flight, the early one or the late one?"
+
+
+def scenario_answer(w: World) -> None:
+
+    def script(c: Call) -> Reply | None:
+        if c.speaker == AGENT and c.last_user.endswith(BOOK_FLIGHT):
+            results = c.tool_results()
+            if not results:
+                return call("ask_operator", question=WHICH, options=["Early", "Late"])
+            return say(f"Booked: {results[-1][:80]}")
+        return hello(c)
+
+    w.model.script = script
+    w.start()
+    first_run(w)
+    settled(w, 1)
+    ui = w.ui
+
+    write(w, AGENT, BOOK_FLIGHT)
+    w.wait("the question is shown in the conversation", lambda: ui.find("button", "Early"))
+    ui.evaluate("document.activeElement && document.activeElement.blur()")
+    ui.key("k", mod=True)
+    w.wait("Command K focuses the composer", lambda: ui.focused() == ("combobox", f"Write to {AGENT}"))
+    ui.key("Tab")
+    w.check("with a question waiting, Command K then Tab reaches its first answer",
+            ui.focused() == ("button", "Early"), observed=ui.focused(), shot=True)
+    ui.key("Enter")
+    settled(w, 2, "the answered turn finishes")
+    w.check("Return answers the question, and the agent is told the answer",
+            [a["state"] for a in approvals(w)] == ["answered"] and "Early" in said(w, AGENT)[-1],
+            observed={"approvals": [a["state"] for a in approvals(w)], "said": said(w, AGENT)[-1]})
+
+    ui.evaluate("document.activeElement && document.activeElement.blur()")
+    ui.key("k", mod=True)
+    w.wait("Command K focuses the composer again", lambda: ui.focused() == ("combobox", f"Write to {AGENT}"))
+    ui.key("Tab")
+    w.check("with nothing waiting, Tab leaves the composer for its own next control",
+            ui.focused() == ("button", "Attach a file"), observed=ui.focused())
+    no_unscripted(w)
+
+
+def selected_tab(w: World) -> list[str]:
+    return [str((n.get("name") or {}).get("value") or "") for n in w.ui.ax_nodes()
+            if (n.get("role") or {}).get("value") == "tab" and any(
+                p.get("name") == "selected" and (p.get("value") or {}).get("value")
+                for p in n.get("properties", []))]
+
+
+def scenario_tabs(w: World) -> None:
+    w.model.script = hello
+    w.start()
+    first_run(w)
+    settled(w, 1)
+    ui = w.ui
+
+    ui.evaluate("document.activeElement && document.activeElement.blur()")
+    ui.key(",", mod=True)
+    w.wait("Settings opens", lambda: ui.find("dialog", "Settings"))
+    stops = []
+    for _ in range(4):
+        ui.key("Tab")
+        stops.append(ui.focused())
+        if stops[-1][0] == "tab":
+            break
+    w.check("the first Tab stop in Settings is the open tab", stops[-1] == ("tab", "General"),
+            observed=stops)
+
+    ui.key("ArrowDown")
+    moved = ui.focused()
+    w.check("an arrow key moves to the next tab and opens it",
+            moved[0] == "tab" and moved[1] != "General" and selected_tab(w) == [moved[1]],
+            observed={"focused": moved, "selected": selected_tab(w)})
+    ui.key("End")
+    last = ui.focused()
+    ui.key("Home")
+    w.check("Home and End reach the first and the last tab",
+            last[0] == "tab" and last[1] != "General" and ui.focused() == ("tab", "General")
+            and selected_tab(w) == ["General"],
+            observed={"end": last, "home": ui.focused()})
+
+    presses = 0
+    while ui.focused() != ("tab", "Appearance") and presses < 16:
+        ui.key("ArrowDown")
+        presses += 1
+    w.check("Appearance is reached and opened with arrow keys",
+            selected_tab(w) == ["Appearance"] and ui.find("heading", "Appearance"),
+            observed={"selected": selected_tab(w)}, detail={"presses": presses}, shot=True)
+
+    ui.key("Tab")
+    inside = ui.focused()
+    w.check("Tab goes from the tab list into the open panel",
+            inside[0] not in ("tab", "") and selected_tab(w) == ["Appearance"], observed=inside)
+    ui.key("Tab", shift=True)
+    back = ui.focused()
+    ui.key("Tab", shift=True)
+    w.check("the tab list is one Tab stop",
+            back == ("tab", "Appearance") and ui.focused()[0] != "tab",
+            observed={"back": back, "before": ui.focused()})
+    no_unscripted(w)
+
+
+NEEDS_KEY = "verify/needs-key"
+
+
+def to_connect(w: World) -> None:
+    ui = w.ui
+    w.wait("the first visit offers a first task", lambda: ui.find("button", FIRST_TASK))
+    ui.click("button", FIRST_TASK)
+    ui.fill("textbox", "Your first brief", "Say hello.")
+    ui.click("button", "Continue")
+    w.wait("the Connect your AI step", lambda: ui.find("button", "Test and continue"))
+    ui.click("button", API_KEY)
+    ui.choose("combobox", "API provider", "Custom endpoint")
+    w.wait("the endpoint fields", lambda: ui.find("textbox", "Inference endpoint"))
+    ui.evaluate("document.activeElement && document.activeElement.blur()")
+    ui.evaluate("document.querySelector('.onboarding').scrollTop = 0")
+
+
+def refusal(w: World, why: str) -> tuple[str, bool]:
+    ui = w.ui
+    ui.click("button", "Test and continue")
+    alert = w.wait(why, lambda: [
+        t for t in (ui.evaluate("Array.from(document.querySelectorAll('[role=alert]')).map(e=>e.innerText)") or [])
+        if t.strip()])
+    shown = ui.evaluate("(() => { const a = document.querySelector('[role=alert]'); const r = a.getBoundingClientRect();"
+                        " const hit = document.elementFromPoint(r.left + 4, r.bottom - 4);"
+                        " return r.bottom <= innerHeight && hit !== null && a.contains(hit); })()")
+    return alert[0], bool(shown)
+
+
+def scenario_connect(w: World) -> None:
+
+    def script(c: Call) -> Reply | None:
+        if c.body.get("model") == NEEDS_KEY and c.key != STAND_IN_KEY:
+            return refuse(401, "Missing or wrong API key.")
+        return hello(c)
+
+    w.model.script = script
+    w.start()
+    ui = w.ui
+    ui.viewport(*WINDOW)
+    to_connect(w)
+    fields = {name: bool(ui.find("textbox", name, exact=False)) and ui.on_screen("textbox", name, exact=False)
+              for name in ("API key", "Inference endpoint", "Default model")}
+    w.check("the key, endpoint and model fields are on screen without scrolling", all(fields.values()),
+            observed=fields, shot=True, stop=False)
+
+    model = {"value": ui.property("textbox", "Default model", "value"),
+             "placeholder": ui.property("textbox", "Default model", "placeholder")}
+    w.check("a Custom endpoint suggests no other provider's model",
+            not model["value"] and "anthropic/" not in model["placeholder"], observed=model, shot=True, stop=False)
+
+    ui.fill("textbox", "Inference endpoint", w.model.base)
+    ui.fill("textbox", "Default model", NEEDS_KEY)
+    ui.fill("textbox", "API key", WRONG_KEY, exact=False)
+    said_, shown = refusal(w, "the endpoint refuses the wrong key, and the form says so")
+    w.check("a refusal is shown beside the buttons, not under them", shown,
+            observed={"onScreen": shown}, detail=said_, shot=True)
+
+    ui.fill("textbox", "API key", "", exact=False)
+    said_, shown = refusal(w, "the endpoint refuses a request with no key, and the form says so")
+    w.check("with no key, the refusal is about this endpoint and names no other provider or place",
+            shown and "127.0.0.1" in said_ and "OpenRouter" not in said_ and "Settings" not in said_,
+            observed={"onScreen": shown, "namesEndpoint": "127.0.0.1" in said_,
+                      "namesOpenRouter": "OpenRouter" in said_, "namesSettings": "Settings" in said_},
+            detail=said_, shot=True)
+
+    ui.fill("textbox", "Default model", STAND_IN_MODEL)
+    ui.click("button", "Test and continue")
+    w.wait("the endpoint test passes", lambda: ui.find("button", "Start task"))
+    kept = w.host.call("get_settings")
+    w.check("an endpoint that needs no key passes the test with none, and is kept",
+            kept["baseUrl"] == w.model.base and not kept["apiKeySet"],
+            observed={"endpointSaved": kept["baseUrl"] == w.model.base, "keySaved": kept["apiKeySet"]})
+    no_unscripted(w)
+
+
 @dataclass(frozen=True)
 class Scenario:
     run: Callable[[World], None]
@@ -989,4 +1220,46 @@ SCENARIOS: dict[str, Scenario] = {
         "when the other update ends, the panel offers main's new build and claims nothing as its own",
         "an updater that does not answer leaves the outcome unknown, and nothing is sent twice",
     ), updater=True),
+    "newagent": Scenario(scenario_newagent, "A person opens New agent in a 1280 by 820 window and creates an agent "
+                         "with a keyboard press on its one Create agent button, which is on screen without "
+                         "scrolling; a press with no name creates nothing.",
+    (
+        "Create agent is one button, on screen without scrolling",
+        "with no name, a press on Create agent creates nothing and keeps the dialog",
+        "a keyboard press on Create agent creates the agent and closes the dialog",
+        "every model call was one the scenario scripted",
+    )),
+    "answer": Scenario(scenario_answer, "An agent asks a question while its conversation is open, and Command K "
+                       "then Tab reaches the first answer and Return sends it; with nothing waiting, Tab from the "
+                       "composer goes where it always went.",
+    (
+        "with a question waiting, Command K then Tab reaches its first answer",
+        "Return answers the question, and the agent is told the answer",
+        "with nothing waiting, Tab leaves the composer for its own next control",
+        "every model call was one the scenario scripted",
+    )),
+    "tabs": Scenario(scenario_tabs, "A person opens Settings from the keyboard, reaches the tab list in one Tab, "
+                     "moves between tabs with the arrow keys and Tabs into the open panel; the list is a single "
+                     "Tab stop in both directions.",
+    (
+        "the first Tab stop in Settings is the open tab",
+        "an arrow key moves to the next tab and opens it",
+        "Home and End reach the first and the last tab",
+        "Appearance is reached and opened with arrow keys",
+        "Tab goes from the tab list into the open panel",
+        "the tab list is one Tab stop",
+        "every model call was one the scenario scripted",
+    )),
+    "connect": Scenario(scenario_connect, "A person connects a Custom endpoint in a 1280 by 820 window with the "
+                        "key, endpoint and model fields on screen and no other provider's model suggested, and an "
+                        "endpoint that needs no key passes with none; a refusal is reported beside the buttons, and "
+                        "one for a missing key is about that endpoint rather than another provider or place.",
+    (
+        "the key, endpoint and model fields are on screen without scrolling",
+        "a Custom endpoint suggests no other provider's model",
+        "a refusal is shown beside the buttons, not under them",
+        "with no key, the refusal is about this endpoint and names no other provider or place",
+        "an endpoint that needs no key passes the test with none, and is kept",
+        "every model call was one the scenario scripted",
+    )),
 }

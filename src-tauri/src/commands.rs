@@ -2374,7 +2374,7 @@ mod tests {
     #[test]
     fn a_patch_can_supply_a_key_that_was_never_saved() {
         let mut config = AppConfig::default();
-        assert!(!config.inference.is_ready(), "no key stored yet");
+        assert_eq!(config.inference.api_key.expose(), "", "no key stored yet");
 
         apply_patch(
             Deployment::Desktop.capabilities(),
@@ -2384,7 +2384,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.inference.api_key.expose(), "sk-typed", "whitespace is trimmed");
-        assert!(config.inference.is_ready(), "the typed key must be usable without saving");
     }
 
     #[test]
