@@ -1158,12 +1158,11 @@ and a picture with one row missing is better than a banner over it.
 ## The field writes to someone and leaves you where you are
 
 `Field.tsx` is the first thing in Today's column, and `lib/field.ts` decides
-what it does with what was typed before anything is sent. Command K focuses it,
-except from under a dialog, a menu or the Groups sheet, where the box is out of
-sight.
-On an agent's page the same key switches to Conversation and focuses that
-composer instead, because both are the box that writes to someone from where
-the operator is.
+what it does with what was typed before anything is sent. It has the focus
+whenever Today opens, and an agent's composer has it whenever that agent's page
+opens, so after every move the next key typed lands in the box that writes to
+someone from where the operator is. Nothing takes the focus from under a dialog,
+a menu or the Groups sheet.
 
 It is a field rather than a composer. It sends one message and stays where it
 is, which is the whole of the most common errand: tell someone something, then
@@ -1205,6 +1204,30 @@ runtime's.
 search. The search key does the same from the field while it holds text. The field does not search as it is typed into: a sentence meant for an
 agent is not a query, and the row is there for the times it was one.
 
+## Command K is one box that writes, answers, jumps and sets
+
+`CommandMenu.tsx` draws it and `lib/menu.ts` decides its rows. It is one input
+with the recipient beside it, then four sections: Waiting on you, with each
+request's own answers as rows, Agents, Actions and Settings, which holds the
+reading surface, the typeface and every pane. Typing filters every section at
+once.
+
+Writing to someone stays three presses: Command K, the sentence, Return. Three
+words or more select "Write to" and the recipient, because a sentence is a
+message and not a search. One or two words select the best match instead, so
+"dark" selects the dark reading surface, "approve" an Allow and a name that
+agent. Tab and Shift Tab change who the message goes to, in the same order as
+the numbers on the Agents rows, which are the order of the Groups sheet with
+pinned agents first and nobody lifted for being busy: an agent's number does
+not change because it started working.
+
+A row answering a request shows Command Return or Command Backspace when that is
+the key that answers it from the menu. Those keys act on the request the
+selected row belongs to, or the first one waiting, and only its rows show them.
+The menu shows no number keys on a question's answers, because in a box being
+typed into a number is a character.
+
+
 ## Today is what needs you, then what finished
 
 `Home.tsx` is the column while nobody is open, in the order a person opens the
@@ -1218,6 +1241,22 @@ window for:
 4. What finished while they were away, with its count and Mark all seen. A row
    opens the run's closing note, or the agent's conversation, and marks it
    seen.
+
+**Needs you is a queue the keyboard can go through.** Escape from the field
+selects the first card, J and K move the ring, Command Return allows (or, on an
+agent that is stuck, opens it), Command Backspace denies (or clears), and 1 to 9
+pick a question's answer. The keys are drawn on the selected card's buttons and
+on no other card's. After each answer the next card is selected, and after the
+last the focus goes back to the field.
+
+**An answer given on Today waits five seconds before it is sent.** A notice says
+what was answered and offers Undo, with Command Z. An answer an agent has
+already acted on cannot be taken back, so the answer is held in the window
+(`lib/held.ts`) and only sent when the notice goes: Undo always undoes, because
+nothing has left. A second answer sends the first at once, so one Undo never
+stands for two answers. Closing the window sends a held answer rather than
+dropping it. The same holds for answers given from the command menu. For you
+and the menu bar send at once and offer no Undo.
 
 With none of those it is one sentence, "Nothing needs you.", with who is still
 working under it and one way back into what already happened today. That is
@@ -2914,11 +2953,13 @@ keys are handled by the component that owns the surface they act on — Escape b
 whatever is open, Enter and the arrows by the composer and the palette — so
 rebinding would mean routing all nine through one dispatcher, and a setting that
 appears to rebind a key while only moving one of them is worse than no setting.
-The fixed ones are listed as fixed, and the four listed under *Anywhere* are
+The fixed ones are listed as fixed, and the ones listed under *Anywhere* are
 matched from the same table the pane draws, so a key listed there is a key that
-works: Command K focuses the field (or the open conversation's composer),
-Command F opens search, Command comma opens settings, and Command slash opens
-the list itself.
+works: Command K opens the command menu, Command 1 to 9 open the agents the menu
+numbers, Command F opens search, Command comma opens settings, Command slash
+opens the list itself, and Command Z takes back an answer while it still offers
+Undo. The keys of the command menu and of Needs you are listed under those two
+surfaces, from the same table, and `keybinds.test.ts` holds that each is there.
 
 `mod` means Command or Control on every platform, both accepted. Only the label
 follows the platform: a label naming a key the keyboard does not have is worse
