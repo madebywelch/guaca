@@ -325,7 +325,7 @@ it earns the line.
 Every tab of an agent's page except Conversation draws one page,
 `AgentPanel.tsx`, scrolled to the section the tab names. It was the inspector,
 a panel beside the transcript, until the window became one column; *An agent's
-page is tabs, and opens where the agent is* has the tabs. What follows is what
+page is tabs, and opens on its conversation* has the tabs. What follows is what
 the page itself holds.
 
 It opened on "Routines", under a gear and two typed arrows, and
@@ -1274,7 +1274,7 @@ With none of those it is one sentence, "Nothing needs you.", with who is still
 working under it and one way back into what already happened today. That is
 the screen seen most, and it is the one that has to be calm.
 
-## An agent's page is tabs, and opens where the agent is
+## An agent's page is tabs, and opens on its conversation
 
 `ChannelView.tsx` heads the page with the agent, then a nav of tabs: Now,
 Conversation, Memory, Notebook, Routines and Skills. Conversation is the
@@ -1287,13 +1287,18 @@ per section would leave each one a page with one thing on it.
 The transcript is hidden rather than unmounted while another tab is drawn, so
 the composer keeps its draft and the transcript its place.
 
-**Opening lands on Now when the agent is working, and on Conversation
-otherwise.** Somebody mid-turn is best read by what they are doing; somebody
-idle, by what was said. The landing is decided as the agent is opened, and
-only then. A message opened from search is always in the conversation, because
-the message is what was asked for, and it stays there after its mark fades. A
-fired routine pressed in the transcript opens the Routines tab with that
-routine open.
+**Opening an agent lands on Conversation, by every route.** A face on the
+timeline, the Groups sheet, Command 1 to 9, the command menu, search, a
+notification, the menu bar and Start task on first run all open the
+transcript. It used to land on Now when the agent was working at the instant it
+was opened, so where a person landed depended on a race: after Start task the
+page could open on Now and stay there, saying nothing was running over the
+reply the person was waiting for. Now is a tab the person chooses, and leaving
+the agent and opening it again lands on Conversation. A message opened from
+search stays in the conversation after its mark fades. A fired routine pressed
+in the transcript opens the Routines tab with that routine open, because the
+routine is what was asked for. For you and an artifact are their own surfaces,
+not an agent's page, and open as they did.
 
 ## The Groups sheet is where groups are switched and managed
 

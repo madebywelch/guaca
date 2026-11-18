@@ -36,6 +36,8 @@ def first_run(w: World, brief: str = "Say hello.", reply_to_brief: str = HELLO) 
     ui.click("button", "Test and continue")
     w.wait("the endpoint test passes", lambda: ui.find("button", "Start task"))
     ui.click("button", "Start task")
+    w.wait("Start task opens the first agent's conversation",
+           lambda: ui.find("log", "Conversation with", exact=False))
     w.wait("the first agent answers its brief", lambda: reply_to_brief in conversation(w))
 
 
