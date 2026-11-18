@@ -95,6 +95,11 @@
   --radius-card: 0.625rem;
   --radius-pill: 999px;
 
+  --scrollbar-size: 0.625rem;
+  --scrollbar-thumb: color-mix(in oklab, var(--muted) 32%, transparent);
+  --scrollbar-thumb-hover: color-mix(in oklab, var(--muted) 55%, transparent);
+  --scrollbar-thumb-drag: color-mix(in oklab, var(--muted) 78%, transparent);
+
   --control-h: 2rem;
   --control-h-sm: 1.75rem;
   --control-tint: color-mix(in oklab, var(--text) 7%, transparent);
@@ -284,24 +289,6 @@ input[type="file"]::file-selector-button {
 :focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
-}
-
-::-webkit-scrollbar {
-  width: 0.7rem;
-  height: 0.7rem;
-}
-::-webkit-scrollbar-thumb {
-  background: color-mix(in oklab, var(--muted) 32%, transparent);
-  border-radius: var(--radius-pill);
-  border: 0.19rem solid transparent;
-  background-clip: content-box;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in oklab, var(--muted) 55%, transparent);
-  background-clip: content-box;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
 }
 
 .app,
@@ -9412,3 +9399,81 @@ button.artifacts__version[aria-pressed="true"] {
   gap: var(--space-3);
 }
 
+::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  min-height: var(--control-h);
+  min-width: var(--control-h);
+  border: var(--space-1) solid transparent;
+  border-radius: var(--radius-pill);
+  background: var(--scrollbar-thumb) content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+}
+
+::-webkit-scrollbar-thumb:active {
+  background-color: var(--scrollbar-thumb-drag);
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
+}
+
+.menubar__body,
+.rail__list,
+.pane__scroll,
+.flow__scroll,
+.trail__target,
+.diff,
+.ask__detail dd,
+.wire-modal__body,
+.thought,
+.steps,
+.file-view__body,
+.mentions,
+.connector-failure__detail > pre,
+.scrim,
+.dialog__body,
+.onboarding,
+.memory__text,
+.skill__body,
+.menu__sub,
+.palette__results,
+.cafeteria__stations,
+.calendar__body,
+.calendar__editor,
+.artifacts__body,
+.settings__nav,
+.settings__pane,
+.for-you__body,
+.directory__list,
+.home,
+.intake__menu,
+.agent-panel {
+  scrollbar-gutter: stable;
+}
+
+.pane__scroll {
+  margin-inline-end: calc(var(--scrollbar-size) * -1);
+}
+
+.dialog__body {
+  padding-inline-end: calc(var(--space-7) + var(--scrollbar-size) * -1);
+}
+
+.settings__nav {
+  width: calc(11rem + var(--scrollbar-size));
+}
