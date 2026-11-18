@@ -621,7 +621,9 @@ describe("every length is named, not spelled", () => {
     (base) => {
       const bad = declarations()
         .filter((d) => d.property === base || d.property.startsWith(`${base}-`))
-        .filter((d) => !named(d.value, /^--(space-|column-|dot|flow-)/, /^(-?1px|12vh)$/));
+        .filter(
+          (d) => !named(d.value, /^--(space-|column-|dot|flow-|scrollbar-size$)/, /^(-?1px|12vh)$/),
+        );
       expect(bad.map((d) => `${d.selector} { ${d.property}: ${d.value} }`)).toEqual([]);
     },
   );
@@ -659,6 +661,74 @@ describe("every length is named, not spelled", () => {
       .filter((d) => !d.value.includes("inset"))
       .filter((d) => !/^0 0 /.test(d.value));
     expect(bad.map((d) => `${d.selector} { box-shadow: ${d.value} }`)).toEqual([]);
+  });
+});
+
+describe("scroll bars", () => {
+  const ruled = (selector: string) =>
+    declarations().filter((d) =>
+      d.selector
+        .split(",")
+        .map((one) => one.trim())
+        .includes(selector),
+    );
+
+  it("reserve their room in every region that scrolls, so a bar never takes it from the content", () => {
+    const hidden = new Set(
+      declarations()
+        .filter((d) => d.property === "scrollbar-width" && d.value === "none")
+        .flatMap((d) => d.selector.split(",").map((one) => one.trim())),
+    );
+    const reserved = new Set(
+      declarations()
+        .filter((d) => d.property === "scrollbar-gutter" && d.value === "stable")
+        .flatMap((d) => d.selector.split(",").map((one) => one.trim())),
+    );
+    const scrolling = declarations()
+      .filter((d) => !d.selector.startsWith("@"))
+      .filter(
+        (d) =>
+          (d.property === "overflow-y" && /^(auto|scroll)$/.test(d.value)) ||
+          (d.property === "overflow" && /^(auto|scroll)\b/.test(d.value)),
+      )
+      .flatMap((d) => d.selector.split(",").map((one) => one.trim()));
+    expect(scrolling.length).toBeGreaterThan(20);
+    expect(
+      scrolling.filter((selector) => !hidden.has(selector) && !reserved.has(selector)),
+    ).toEqual([]);
+  });
+
+  it("are one thin bar drawn from the tokens, with a hover and a drag state", () => {
+    expect(ruled("::-webkit-scrollbar").find((d) => d.property === "width")?.value).toBe(
+      "var(--scrollbar-size)",
+    );
+    expect(ruled("::-webkit-scrollbar").find((d) => d.property === "height")?.value).toBe(
+      "var(--scrollbar-size)",
+    );
+    const thumb = (selector: string) =>
+      ruled(selector).find((d) => d.property === "background" || d.property === "background-color")
+        ?.value;
+    expect(thumb("::-webkit-scrollbar-thumb")).toBe("var(--scrollbar-thumb) content-box");
+    expect(thumb("::-webkit-scrollbar-thumb:hover")).toBe("var(--scrollbar-thumb-hover)");
+    expect(thumb("::-webkit-scrollbar-thumb:active")).toBe("var(--scrollbar-thumb-drag)");
+    expect(css).toMatch(
+      /@supports not selector\(::-webkit-scrollbar\) \{\n {2}\* \{\n {4}scrollbar-width: thin;\n {4}scrollbar-color: var\(--scrollbar-thumb\) transparent;/,
+    );
+    const sizes = declarations().filter(
+      (d) => /^(width|height)$/.test(d.property) && d.selector.includes("scrollbar"),
+    );
+    expect(sizes.every((d) => d.value === "var(--scrollbar-size)")).toBe(true);
+  });
+});
+
+describe("the menu bar panel", () => {
+  it("draws no focus ring until a key is pressed", () => {
+    const rule = declarations().find(
+      (d) =>
+        d.selector === ":root:not([data-keyboard]) .menubar :focus-visible" &&
+        d.property === "outline",
+    );
+    expect(rule?.value).toBe("none");
   });
 });
 

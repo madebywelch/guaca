@@ -9,6 +9,7 @@ import { Roster } from "./components/Markdown";
 import { MenubarPanel } from "./components/MenubarPanel";
 import { applyAppearance, watchSystemSurface } from "./lib/appearance";
 import { api } from "./lib/ipc";
+import { watchKeyboard } from "./lib/keyboard";
 import { loadPrefs } from "./lib/prefs";
 import { useRuntime } from "./lib/runtime";
 import { useStore } from "./lib/store";
@@ -19,6 +20,8 @@ if (import.meta.env.MODE === "probe") void import("./lib/probe").then((probe) =>
 
 const root = document.getElementById("root");
 if (!root) throw new Error("missing #root");
+
+watchKeyboard(window);
 
 function Panel() {
   const everyone = useStore((state) => state.agents);

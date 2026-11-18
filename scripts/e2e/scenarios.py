@@ -461,7 +461,7 @@ def sweep(w: World, seen: dict[str, look.Verdict]) -> None:
         dismiss(w)
 
 
-def scenario_look(w: World) -> None:
+def look_world(w: World) -> None:
 
     def script(c: Call) -> Reply | None:
         if c.last_user == "ping":
@@ -478,17 +478,26 @@ def scenario_look(w: World) -> None:
     w.start()
     first_run(w)
     settled(w, 1)
-    ui = w.ui
     new_agent(w, "Researcher", "Find sources and say where each came from.")
     write(w, AGENT, CALL_ME)
-    w.wait("the request is shown", lambda: ui.find("button", "Allow"))
+    w.wait("the request is shown", lambda: w.ui.find("button", "Allow"))
+
+
+def look_surface(w: World, surface: str) -> None:
+    ui = w.ui
+    ui.evaluate("localStorage.setItem('guac.prefs', JSON.stringify({...JSON.parse("
+                "localStorage.getItem('guac.prefs') || '{}'), surface: '%s', look: 2})); location.reload()"
+                % surface)
+    w.wait(f"the page comes back {surface}", lambda: ui.evaluate(
+        "document.documentElement.dataset.surface") == surface and ui.find("button", "App settings"))
+    ui.viewport(*look.FRAME)
+
+
+def scenario_look(w: World) -> None:
+    look_world(w)
+    ui = w.ui
     for surface in LOOK_SURFACES:
-        ui.evaluate("localStorage.setItem('guac.prefs', JSON.stringify({...JSON.parse("
-                    "localStorage.getItem('guac.prefs') || '{}'), surface: '%s', look: 2})); location.reload()"
-                    % surface)
-        w.wait(f"the page comes back {surface}", lambda: ui.evaluate(
-            "document.documentElement.dataset.surface") == surface and ui.find("button", "App settings"))
-        ui.viewport(*look.FRAME)
+        look_surface(w, surface)
         seen: dict[str, look.Verdict] = {}
         for screen in LOOK_SCREENS:
             show(w, screen)
@@ -505,6 +514,57 @@ def scenario_look(w: World) -> None:
         else:
             w.check("every screen in dark keeps to the six type roles, the control family and the radii",
                     not faults, observed=styles, detail=faults or None, stop=False)
+    no_unscripted(w)
+
+
+def laid_out(w: World, what: str) -> dict:
+    last: list[dict] = []
+
+    def still() -> dict | None:
+        if not (w.ui.evaluate(look.SETTLED) and w.ui.evaluate("document.fonts.status") == "loaded"):
+            return None
+        now = w.ui.evaluate(look.LAYOUT)
+        held = now if last and last[-1] == now else None
+        last.append(now)
+        return held
+
+    return w.wait(f"{what} holds still", still)
+
+
+def bars_hold(w: World, surface: str) -> tuple[list[str], dict[str, dict]]:
+    ui = w.ui
+    laid: dict[str, dict[str, dict]] = {}
+    for mode in ("overlay", "classic"):
+        ui.scrollbars(mode == "classic")
+        look_surface(w, surface)
+        for screen in LOOK_SCREENS:
+            show(w, screen)
+            laid.setdefault(screen, {})[mode] = laid_out(w, screen)
+            w.capture(f"{screen} in {surface}, {mode} scroll bars")
+            dismiss(w)
+    ui.scrollbars(False)
+    faults: list[str] = []
+    for screen, modes in laid.items():
+        faults += [f"{screen} ({surface}): {fault}" for fault in look.moved(modes["overlay"], modes["classic"])]
+    for mode, layout in laid["New agent"].items():
+        if len(layout["rows"]) != 2:
+            faults.append(f"New agent ({surface}, {mode} scroll bars) lays its Character grid out in rows of "
+                          f"{layout['rows']}; at {look.FRAME[0]}x{look.FRAME[1]} it is two rows")
+    observed = {screen: {"rows": modes["classic"]["rows"], "scrolls": modes["classic"]["scrollers"]}
+                for screen, modes in laid.items()}
+    return faults, observed
+
+
+def scenario_scrollbars(w: World) -> None:
+    look_world(w)
+    w.wait("the first answer is marked seen", lambda: w.host.scalar(
+        "SELECT count(*) FROM outcomes WHERE seen_at IS NULL") == 0)
+    faults, observed = bars_hold(w, "light")
+    w.check("every screen in light lays out the same with classic scroll bars as with overlay ones",
+            not faults, observed=observed, detail=faults or None, shot=False, stop=False)
+    faults, observed = bars_hold(w, "dark")
+    w.check("every screen in dark lays out the same with classic scroll bars as with overlay ones",
+            not faults, observed=observed, detail=faults or None, shot=False, stop=False)
     no_unscripted(w)
 
 
@@ -1865,6 +1925,16 @@ SCENARIOS: dict[str, Scenario] = {
     (
         "every screen in light keeps to the six type roles, the control family and the radii",
         "every screen in dark keeps to the six type roles, the control family and the radii",
+        "every model call was one the scenario scripted",
+    )),
+    "scrollbars": Scenario(scenario_scrollbars, "Today, a conversation, Settings, New agent, the Groups sheet, "
+                           "Search and the command menu, in light and dark at 1280x820, put every element in the "
+                           "same place whether scroll bars overlay the page or take room beside it, and New agent "
+                           "shows its Character grid in two rows either way; a region whose "
+                           "scroll bar takes width from its content fails, naming what moved.",
+    (
+        "every screen in light lays out the same with classic scroll bars as with overlay ones",
+        "every screen in dark lays out the same with classic scroll bars as with overlay ones",
         "every model call was one the scenario scripted",
     )),
     "update": Scenario(scenario_update, "A person updates a box that follows main while another client's update is "

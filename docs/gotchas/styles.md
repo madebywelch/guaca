@@ -119,3 +119,19 @@ and *Every length is named* in `docs/INVARIANTS.md` is the rule they all sit und
 - **A composer needs a visible control boundary.** Its border uses
   `--edge-control`, not the decorative `--rule-hard`, so the operator can find
   the field against the surrounding surface.
+- **A scroll bar's room is reserved, never taken.** The Mac's web view draws a
+  bar beside the content whenever a mouse is attached, and the browser the
+  Linux captures come from draws none, so one window wrapped New agent's
+  Character grid to a third row and narrowed the Settings list on one and not
+  the other. Every region that scrolls keeps `scrollbar-gutter: stable`, so the
+  room is there whether a bar is drawn or not, and the regions with a designed
+  width give it room outside that width: the conversation's scroller reaches
+  past its column, a dialog's body takes it from its padding, and the Settings
+  list grows by it. `styles.test.ts` fails a scroller that reserves nothing,
+  and the `scrollbars` scenario fails a screen that moves when classic bars
+  are on.
+- **The bar is drawn with the WebKit pseudo-elements, and the standard pair is
+  only the fallback.** Chromium drops `::-webkit-scrollbar` on an element that
+  sets `scrollbar-width` or `scrollbar-color`, and the pseudo-elements are the
+  only way to give the thumb a hover and a drag state. The standard pair is set
+  only where `selector(::-webkit-scrollbar)` is unsupported.

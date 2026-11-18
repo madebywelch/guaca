@@ -92,7 +92,6 @@ class Browser:
             "--disable-features=Translate,MediaRouter,OptimizationHints,NetworkTimeServiceQuerying",
             "--password-store=basic",
             "--use-mock-keychain",
-            "--hide-scrollbars",
             "--mute-audio",
             "--force-color-profile=srgb",
             "--lang=en-US",
@@ -197,6 +196,7 @@ class Browser:
                   {"width": WINDOW[0], "height": WINDOW[1], "deviceScaleFactor": 1, "mobile": False})
         self.send("Emulation.setTimezoneOverride", {"timezoneId": "UTC"})
         self.send("Emulation.setLocaleOverride", {"locale": "en-US"})
+        self.scrollbars(False)
         self.send("Page.addScriptToEvaluateOnNewDocument", {"source": SEEDED_RANDOM})
         self.send("Page.navigate", {"url": url})
 
@@ -318,6 +318,9 @@ class Browser:
     def viewport(self, width: int, height: int) -> None:
         self.send("Emulation.setDeviceMetricsOverride",
                   {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": False})
+
+    def scrollbars(self, classic: bool) -> None:
+        self.send("Emulation.setScrollbarsHidden", {"hidden": not classic})
 
     def screenshot(self, path: Path) -> None:
         data = self.send("Page.captureScreenshot", {"format": "png"})["data"]
