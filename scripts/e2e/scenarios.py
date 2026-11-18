@@ -546,13 +546,17 @@ def bars_hold(w: World, surface: str) -> tuple[list[str], dict[str, dict]]:
     faults: list[str] = []
     for screen, modes in laid.items():
         faults += [f"{screen} ({surface}): {fault}" for fault in look.moved(modes["overlay"], modes["classic"])]
-        faults += [f"{screen} ({surface}, {mode}): dialog center is {layout['centerOffset']}px from viewport center"
-                   for mode, layout in modes.items() if abs(layout["centerOffset"]) > 1]
+        for mode, layout in modes.items():
+            if (edges := layout.get("horizontal")) and (
+                abs(edges["left"] - edges["right"]) > 1 or edges["scrimGutter"]
+            ):
+                faults.append(f"{screen} ({surface}, {mode}): dialog horizontal placement is {edges}")
     for mode, layout in laid["New agent"].items():
         if layout["rows"] != [11, 10]:
             faults.append(f"New agent ({surface}, {mode} scroll bars) lays its Character grid out in rows of "
                           f"{layout['rows']}; at {look.FRAME[0]}x{look.FRAME[1]} it is [11, 10]")
-    observed = {screen: {"rows": modes["classic"]["rows"], "scrolls": modes["classic"]["scrollers"]}
+    observed = {screen: {"rows": modes["classic"]["rows"], "scrolls": modes["classic"]["scrollers"],
+                         "position": modes["classic"].get("horizontal")}
                 for screen, modes in laid.items()}
     return faults, observed
 
@@ -582,9 +586,10 @@ def scenario_scrollbars(w: World) -> None:
         laid_out(w, "the Settings controls")
         measured.append(ui.evaluate(look.SETTINGS_CONTROLS))
     overlay, classic = measured
-    w.check("Settings keeps the General tab and Your name field the same width with a native gutter",
+    w.check("Settings keeps the General tab and Your name field in place with a native gutter",
             overlay["gutters"] == [0, 0] and classic["gutters"] == [17, 17]
-            and all(abs(overlay[key] - classic[key]) <= 1 for key in ("general", "yourName")),
+            and all(abs(a - b) <= 1 for key in ("general", "yourName")
+                    for a, b in zip(overlay[key], classic[key])),
             observed=measured)
     no_unscripted(w)
 
@@ -1956,7 +1961,7 @@ SCENARIOS: dict[str, Scenario] = {
     (
         "every screen in light lays out the same with classic scroll bars as with overlay ones",
         "every screen in dark lays out the same with classic scroll bars as with overlay ones",
-        "Settings keeps the General tab and Your name field the same width with a native gutter",
+        "Settings keeps the General tab and Your name field in place with a native gutter",
         "every model call was one the scenario scripted",
     )),
     "update": Scenario(scenario_update, "A person updates a box that follows main while another client's update is "

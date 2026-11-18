@@ -9700,7 +9700,8 @@ button.artifacts__version[aria-pressed="true"] {
 }
 
 .scrim:has(> .dialog--settings, > .dialog--form) {
-  scrollbar-gutter: stable both-edges;
+  overflow: clip;
+  scrollbar-gutter: auto;
 }
 
 .settings__nav,
