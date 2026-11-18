@@ -103,6 +103,7 @@ vi.mock("./lib/ipc", () => ({
 
 const { default: App } = await import("./App");
 const { useStore } = await import("./lib/store");
+const { useHeld } = await import("./lib/held");
 
 function agent(name: string, railOrder = 0): AgentCard {
   return {
@@ -1093,22 +1094,70 @@ describe("where an agent's page lands", () => {
   });
 });
 
-describe("the field's shortcut", () => {
-  it("does not reach the field from under the Groups sheet", async () => {
+describe("the command menu's shortcut", () => {
+  it("lands in the field when the window opens on Today", async () => {
     listAgents.mockResolvedValue([agent("Manager")]);
     render(<App />);
     const field = await screen.findByRole("textbox", { name: "What do you need?" });
+    await waitFor(() => expect(document.activeElement).toBe(field));
+  });
+
+  it("does not open the menu from under the Groups sheet", async () => {
+    listAgents.mockResolvedValue([agent("Manager")]);
+    render(<App />);
+    await screen.findByRole("textbox", { name: "What do you need?" });
     groupsSheet();
     fireEvent.keyDown(window, { key: "k", ctrlKey: true });
     await act(() => new Promise<void>((done) => requestAnimationFrame(() => done())));
-    expect(document.activeElement).not.toBe(field);
+    expect(screen.queryByRole("dialog", { name: "Command menu" })).toBeNull();
   });
 
-  it("reaches the field when nothing is open over it", async () => {
+  it("opens the menu with its input focused, and Escape gives the field back", async () => {
     listAgents.mockResolvedValue([agent("Manager")]);
     render(<App />);
     const field = await screen.findByRole("textbox", { name: "What do you need?" });
-    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
     await waitFor(() => expect(document.activeElement).toBe(field));
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    const menu = await screen.findByRole("dialog", { name: "Command menu" });
+    expect(document.activeElement).toBe(
+      within(menu).getByRole("textbox", { name: "Command menu" }),
+    );
+    fireEvent.keyDown(document.activeElement as Element, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Command menu" })).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(field));
+  });
+
+  it("takes a held answer back on Command Z, and leaves Command Z to a box with words in it", async () => {
+    listAgents.mockResolvedValue([agent("Manager")]);
+    render(<App />);
+    const field = await screen.findByRole("textbox", { name: "What do you need?" });
+    const send = vi.fn(async () => {});
+    act(() => useHeld.getState().hold("req-1", "Allowed Manager's request.", send));
+    fireEvent.change(field, { target: { value: "half a sentence" } });
+    fireEvent.keyDown(field, { key: "z", metaKey: true });
+    expect(useHeld.getState().held?.id).toBe("req-1");
+    fireEvent.change(field, { target: { value: "" } });
+    fireEvent.click(await screen.findByRole("button", { name: /^Undo/ }));
+    expect(useHeld.getState().held).toBeNull();
+    act(() => useHeld.getState().hold("req-2", "Allowed Manager's request.", send));
+    fireEvent.keyDown(document.body, { key: "z", metaKey: true });
+    expect(useHeld.getState().held).toBeNull();
+    expect(screen.queryByRole("status", { name: "" })).toBeNull();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("opens the agent a number names, in the menu's order, and leaves the next number alone", async () => {
+    listAgents.mockResolvedValue([agent("Manager", 1), agent("Writer", 0)]);
+    render(<App />);
+    await screen.findByRole("textbox", { name: "What do you need?" });
+    fireEvent.keyDown(window, { key: "3", metaKey: true });
+    expect(useStore.getState().selected).toBeNull();
+    fireEvent.keyDown(window, { key: "1", metaKey: true });
+    await waitFor(() => expect(useStore.getState().selected).toBe("id-Writer"));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("combobox", { name: "Write to Writer" }),
+      ),
+    );
   });
 });
