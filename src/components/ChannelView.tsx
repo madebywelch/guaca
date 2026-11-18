@@ -7,7 +7,7 @@ import { api } from "../lib/ipc";
 import { runsOn } from "../lib/profile";
 import { thoughtNow } from "../lib/reasoning";
 import { type ChannelKey, useAgentLookup, useStore } from "../lib/store";
-import { elapsed, useNow } from "../lib/time";
+import { clockLabel, elapsed, useNow } from "../lib/time";
 import {
   callInFlight,
   type LiveCall,
@@ -423,6 +423,9 @@ function WorkingNote({
   const held = useStore((s) => (s.prefs.showReasoning ? undefined : s.reasoning[agent.id]));
   const calls = useStore((s) => s.trail[agent.id]);
   const run = useStore((s) => s.activeRun[agent.id]);
+  const owned = useStore((s) => s.running.find((one) => one.runId === run));
+  const since = owned?.startedAt;
+  const noted = owned?.agentId === agent.id ? owned.note : null;
   const showFailure = useStore((s) => s.showFailure);
   const [stopping, setStopping] = useState(false);
   const now = useNow(1000);
@@ -443,6 +446,8 @@ function WorkingNote({
       {thought.heading && <span className="working__topic">{thought.heading}</span>}
       {thought.line && <span className="working__thought">{thought.line}</span>}
     </>
+  ) : noted ? (
+    <span className="working__thought">{noted}</span>
   ) : (
     `${agent.name} is working`
   );
@@ -451,7 +456,7 @@ function WorkingNote({
     <div
       className="working"
       role={saying || onNow ? undefined : "status"}
-      data-thinking={saying || undefined}
+      data-thinking={saying || Boolean(noted) || undefined}
     >
       {!onNow && (
         <>
@@ -501,6 +506,11 @@ function WorkingNote({
             </span>
             {tallyLabel(tally)}
           </button>
+        )}
+        {run && since !== undefined && (
+          <span className="working__for" title={`Started at ${clockLabel(since)}`}>
+            {elapsed(now, since)}
+          </span>
         )}
         {run && (
           <button
