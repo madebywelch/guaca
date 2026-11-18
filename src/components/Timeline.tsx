@@ -9,15 +9,16 @@ import { Ribbon } from "./Ribbon";
 
 interface Props {
   onOpenAgent: (agentId: string) => void;
-  onOpenPile: () => void;
+  onOpenGroups: () => void;
   openAgentId?: string | null;
 }
 
 const AHEAD_MS = 8 * 86_400_000;
 const TODAY_RUNS = 100;
 
-export function Timeline({ onOpenAgent, onOpenPile, openAgentId }: Props) {
+export function Timeline({ onOpenAgent, onOpenGroups, openAgentId }: Props) {
   const agents = useStore((state) => state.agents);
+  const groups = useStore((state) => state.groups);
   const activity = useStore((state) => state.activity);
   const outcomes = useStore((state) => state.outcomes);
   const pending = useStore((state) => state.pending);
@@ -74,6 +75,7 @@ export function Timeline({ onOpenAgent, onOpenPile, openAgentId }: Props) {
       layoutRibbon({
         now,
         agents: agents.filter((agent) => agent.lifecycle !== "terminated"),
+        groups: groups.map((group) => group.id),
         activity,
         outcomes: runs,
         approvals: pending,
@@ -82,14 +84,14 @@ export function Timeline({ onOpenAgent, onOpenPile, openAgentId }: Props) {
         faceSpan: width > 0 ? RIBBON_FACE_PX / width : 0,
         charSpan: width > 0 ? RIBBON_CHAR_PX / width : 0,
       }),
-    [now, agents, activity, runs, pending, upcoming, occasions, width],
+    [now, agents, groups, activity, runs, pending, upcoming, occasions, width],
   );
 
   return (
     <Ribbon
       ribbon={ribbon}
       onOpenAgent={onOpenAgent}
-      onOpenPile={onOpenPile}
+      onOpenGroups={onOpenGroups}
       openAgentId={openAgentId}
       onTrackWidth={setWidth}
     />

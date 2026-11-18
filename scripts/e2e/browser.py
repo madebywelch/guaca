@@ -407,11 +407,17 @@ class Browser:
         return "", ""
 
     def key(self, key: str, mod: bool = False, shift: bool = False) -> None:
-        code, keycode, text = {"Enter": ("Enter", 13, "\r"), "Escape": ("Escape", 27, None),
-                               "Tab": ("Tab", 9, None), "ArrowDown": ("ArrowDown", 40, None),
-                               "ArrowUp": ("ArrowUp", 38, None), "Home": ("Home", 36, None),
-                               "End": ("End", 35, None), "k": ("KeyK", 75, "k"),
-                               ",": ("Comma", 188, ",")}[key]
+        named = {"Enter": ("Enter", 13, "\r"), "Escape": ("Escape", 27, None),
+                 "Tab": ("Tab", 9, None), "ArrowDown": ("ArrowDown", 40, None),
+                 "ArrowUp": ("ArrowUp", 38, None), "Home": ("Home", 36, None),
+                 "End": ("End", 35, None), "Backspace": ("Backspace", 8, None),
+                 ",": ("Comma", 188, ",")}
+        if key in named:
+            code, keycode, text = named[key]
+        elif len(key) == 1 and key.isdigit():
+            code, keycode, text = f"Digit{key}", ord(key), key
+        else:
+            code, keycode, text = f"Key{key.upper()}", ord(key.upper()), key
         base: dict[str, Any] = {"key": key, "code": code, "windowsVirtualKeyCode": keycode,
                                 "modifiers": (2 if mod else 0) | (8 if shift else 0)}
         if text and not mod:

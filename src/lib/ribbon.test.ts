@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { anAgent, anApproval, anOutcome } from "../test-fixtures";
-import { BAND_LABEL, layoutRibbon, type RibbonInput, spread, xAt } from "./ribbon";
+import { BAND_LABEL, layoutRibbon, type RibbonFace, type RibbonInput, spread, xAt } from "./ribbon";
 import type { Occasion, UpcomingRun } from "./types";
 
 const at = (day: number, hour: number, minute = 0) =>
@@ -38,6 +38,7 @@ function morning(over: Partial<RibbonInput> = {}): RibbonInput {
   return {
     now: NOW,
     agents: AGENTS,
+    groups: [],
     activity: { marlow: { state: "thinking" } },
     outcomes: [
       anOutcome({
@@ -65,16 +66,61 @@ function morning(over: Partial<RibbonInput> = {}): RibbonInput {
 const face = (input: RibbonInput, id: string) =>
   layoutRibbon(input).faces.find((one) => one.agentId === id);
 
-describe("the pile", () => {
-  it("takes an agent with nothing live, unseen or from today", () => {
+describe("an agent with nothing today", () => {
+  it("has a face of its own, named and called idle", () => {
     const ribbon = layoutRibbon(morning());
-    expect(ribbon.pile).toEqual(["kit", "wren", "pip"]);
-    expect(ribbon.faces.map((one) => one.agentId)).not.toContain("kit");
+    const idle = ribbon.faces.filter((one) => one.state === "idle");
+    expect(idle.map((one) => one.agentId)).toEqual(["kit", "wren", "pip"]);
+    expect(idle.map((one) => one.label)).toEqual(["Kit, idle", "Wren, idle", "Pip, idle"]);
+    expect(ribbon).not.toHaveProperty("pile");
   });
 
-  it("is empty when every agent has somewhere to be", () => {
-    const ribbon = layoutRibbon(morning({ agents: AGENTS.slice(0, 5) }));
-    expect(ribbon.pile).toEqual([]);
+  it("gives every agent exactly one face", () => {
+    const ribbon = layoutRibbon(morning());
+    expect(ribbon.faces.map((one) => one.agentId).sort()).toEqual(
+      AGENTS.map((one) => one.id).sort(),
+    );
+  });
+
+  it("is called paused, as the Groups sheet calls it, when it is paused", () => {
+    const ribbon = layoutRibbon(morning({ activity: { kit: { state: "paused" } } }));
+    expect(ribbon.faces.find((one) => one.agentId === "kit")?.label).toBe("Kit, paused");
+  });
+
+  it("sits at the left edge, before every face with a moment", () => {
+    const ribbon = layoutRibbon(morning({ charSpan: 0.005 }));
+    const byX = [...ribbon.faces].sort((a, b) => a.x - b.x).map((one) => one.state);
+    expect(byX.slice(0, 3)).toEqual(["idle", "idle", "idle"]);
+    expect(byX.slice(3)).not.toContain("idle");
+    const first = [...ribbon.faces].sort((a, b) => a.x - b.x)[0];
+    expect(first?.x).toBeCloseTo(SPAN / 2);
+  });
+
+  it("keeps the order of the Groups sheet: group by group, pinned first, then by hand", () => {
+    const agents = [
+      anAgent("ash", { groupId: "second", railOrder: 0 }),
+      anAgent("bea", { groupId: "first", railOrder: 2 }),
+      anAgent("cy", { groupId: "first", railOrder: 1 }),
+      anAgent("dov", { groupId: "first", railOrder: 3, pinned: true }),
+      anAgent("eli", { groupId: "gone", railOrder: 0 }),
+    ];
+    const ribbon = layoutRibbon(
+      morning({ agents, groups: ["first", "second"], activity: {}, outcomes: [], approvals: [] }),
+    );
+    const order = [...ribbon.faces].sort((a, b) => a.x - b.x).map((one) => one.agentId);
+    expect(order).toEqual(["dov", "cy", "bea", "ash", "eli"]);
+  });
+
+  it("holds its place when another agent's day moves around it", () => {
+    const quiet = layoutRibbon(morning({ activity: {} }));
+    const busy = layoutRibbon(morning({ activity: { kit: { state: "thinking" } } }));
+    const idle = (ribbon: typeof quiet) =>
+      [...ribbon.faces]
+        .sort((a, b) => a.x - b.x)
+        .filter((one) => one.state === "idle")
+        .map((one) => one.agentId);
+    expect(idle(quiet)).toEqual(["marlow", "kit", "wren", "pip"]);
+    expect(idle(busy)).toEqual(["marlow", "wren", "pip"]);
   });
 });
 
@@ -85,9 +131,9 @@ describe("where a face goes", () => {
       outcomes: [...morning().outcomes, anOutcome({ agentId: "dara", finishedAt: at(16, 8) })],
     });
     const ribbon = layoutRibbon(input);
-    const ids = [...ribbon.faces.map((one) => one.agentId), ...ribbon.pile];
+    const ids = ribbon.faces.map((one) => one.agentId);
     expect(ids.filter((id) => id === "dara")).toHaveLength(1);
-    expect(new Set(ids).size).toBe(AGENTS.length);
+    expect(ids).toHaveLength(AGENTS.length);
   });
 
   it("puts needing you before working, and working before an unseen run", () => {
@@ -121,13 +167,12 @@ describe("where a face goes", () => {
     expect(caughtUp.faces.find((f) => f.agentId === "dara")!.x).toBeLessThan(caughtUp.now.x);
   });
 
-  it("places a run that finished after the clock last ticked, rather than piling its agent", () => {
+  it("places a run that finished after the clock last ticked, rather than calling it idle", () => {
     const finished = NOW + 30_000;
     const outcomes = [
       anOutcome({ agentId: "pip", startedAt: NOW + 5_000, finishedAt: finished, seenAt: finished }),
     ];
     const ribbon = layoutRibbon(morning({ outcomes }));
-    expect(ribbon.pile).not.toContain("pip");
     expect(ribbon.faces.find((one) => one.agentId === "pip")).toMatchObject({
       state: "rest",
       at: finished,
@@ -346,38 +391,61 @@ describe("crowding", () => {
     return { ribbon: layoutRibbon(input), agents, faceSpan, charSpan };
   }
 
-  for (const [names, width] of [
-    [NAMES, 1280],
-    [NAMES, 900],
-    [NAMES, 375],
-    [NAMES_12, 1280],
-    [NAMES_12, 900],
-    [NAMES_12, 375],
+  const drawnHalf = (face: RibbonFace, name: string, faceSpan: number, charSpan: number) =>
+    face.room === null ? Math.max(faceSpan, name.length * charSpan) / 2 : face.room / 2;
+
+  for (const [names, width, roomy] of [
+    [NAMES, 1280, true],
+    [NAMES, 900, false],
+    [NAMES, 375, false],
+    [NAMES_12, 1280, false],
+    [NAMES_12, 900, false],
+    [NAMES_12, 375, false],
   ] as const) {
-    it(`never lets ${names.length} faces or their names touch at ${width} wide`, () => {
+    it(`names all ${names.length} agents and lets no two names touch at ${width} wide`, () => {
       const { ribbon, agents, faceSpan, charSpan } = crowd([...names], width);
       const name = new Map(agents.map((agent) => [agent.id, agent.name]));
-      const half = (id: string) => Math.max(faceSpan, (name.get(id) ?? "").length * charSpan) / 2;
+      const half = (face: RibbonFace) =>
+        drawnHalf(face, name.get(face.agentId) ?? "", faceSpan, charSpan);
       const faces = [...ribbon.faces].sort((a, b) => a.x - b.x);
+      expect(faces.map((face) => face.agentId).sort()).toEqual(
+        agents.map((agent) => agent.id).sort(),
+      );
       for (let i = 1; i < faces.length; i++) {
-        const a = faces[i - 1] as (typeof faces)[number];
-        const b = faces[i] as (typeof faces)[number];
-        expect(b.x - a.x).toBeGreaterThanOrEqual(
-          half(a.agentId) + half(b.agentId) + charSpan - 1e-9,
-        );
+        const a = faces[i - 1] as RibbonFace;
+        const b = faces[i] as RibbonFace;
+        expect(b.x - a.x).toBeGreaterThanOrEqual(half(a) + half(b) - 1e-9);
       }
       for (const face of faces) {
         expect(face.x).toBeGreaterThanOrEqual(faceSpan / 2 - 1e-9);
         expect(face.x).toBeLessThanOrEqual(1 - faceSpan / 2 + 1e-9);
-        const off = Math.abs(face.x - ribbon.now.x);
-        expect(off).toBeGreaterThanOrEqual(half(face.agentId) - 1e-9);
+        expect(Math.abs(face.x - ribbon.now.x)).toBeGreaterThanOrEqual(half(face) - 1e-9);
       }
-      expect([...faces.map((face) => face.agentId), ...ribbon.pile].sort()).toEqual(
-        agents.map((agent) => agent.id).sort(),
-      );
-      expect(faces.length).toBeGreaterThan(0);
+      expect(faces.every((face) => face.room === null)).toBe(roomy);
     });
   }
+
+  it("cuts a name to the room it has rather than letting it run into the next", () => {
+    const { ribbon, faceSpan, charSpan } = crowd(NAMES, 900);
+    const cut = ribbon.faces.filter((face) => face.room !== null);
+    expect(cut.length).toBeGreaterThan(0);
+    for (const face of cut) expect(face.room).toBeLessThanOrEqual(faceSpan + 1e-9);
+    const sorted = [...ribbon.faces].sort((a, b) => a.x - b.x);
+    for (let i = 1; i < sorted.length; i++) {
+      const gap = (sorted[i] as RibbonFace).x - (sorted[i - 1] as RibbonFace).x;
+      for (const face of [sorted[i - 1], sorted[i]] as RibbonFace[]) {
+        if (face.room !== null) expect(face.room).toBeLessThanOrEqual(gap - charSpan + 1e-9);
+      }
+    }
+  });
+
+  it("spreads a crowd that cannot fit evenly along its stretch, none stacked on another", () => {
+    const { ribbon } = crowd(NAMES_12, 375);
+    const xs = ribbon.faces.map((face) => face.x).sort((a, b) => a - b);
+    expect(new Set(xs.map((x) => x.toFixed(6))).size).toBe(xs.length);
+    const steps = xs.slice(1).map((x, i) => x - (xs[i] as number));
+    for (const step of steps) expect(step).toBeCloseTo(steps[0] as number);
+  });
 
   function live(kind: "working" | "needsYou", count: number, width: number) {
     const agents = NAMES_12.slice(0, count).map((name) => anAgent(name.toLowerCase(), { name }));
@@ -431,7 +499,6 @@ describe("crowding", () => {
         expect([...ribbon.faces.map((face) => face.agentId), ...counted].sort()).toEqual(
           agents.map((agent) => agent.id).sort(),
         );
-        expect(ribbon.pile).toEqual([]);
         for (const one of ribbon.counts) expect(one.kind).toBe(kind);
       });
     }
@@ -445,7 +512,7 @@ describe("crowding", () => {
     expect(asking?.text).toMatch(/^\+\d+ needs? you$/);
   });
 
-  it("piles a resting face before an unseen failure, whatever their times", () => {
+  it("keeps a resting face beside an unseen failure when the strip is crowded", () => {
     const agents = NAMES.map((name) => anAgent(name.toLowerCase(), { name }));
     const outcomes = [
       anOutcome({
@@ -477,19 +544,9 @@ describe("crowding", () => {
         charSpan: 8 / width,
       }),
     );
-    expect(ribbon.pile).toEqual(["critic"]);
+    expect(ribbon.faces.find((face) => face.agentId === "critic")?.state).toBe("rest");
     expect(ribbon.faces.find((face) => face.agentId === "researcher")?.state).toBe("failed");
-  });
-
-  it("sends the oldest to the pile, not the newest, when the strip cannot hold them", () => {
-    const { ribbon } = crowd(NAMES_12, 375);
-    expect(ribbon.pile.length).toBeGreaterThan(0);
-    const finished = new Map(
-      NAMES_12.map((name, i) => [name.toLowerCase(), NOW - (i % 6) * 60_000] as const),
-    );
-    const newestPiled = Math.max(...ribbon.pile.map((id) => finished.get(id) ?? 0));
-    const oldestDrawn = Math.min(...ribbon.faces.map((face) => finished.get(face.agentId) ?? 0));
-    expect(newestPiled).toBeLessThanOrEqual(oldestDrawn);
+    expect(ribbon.faces).toHaveLength(agents.length);
   });
 
   it("pushes faces at one moment a face apart", () => {
@@ -600,14 +657,13 @@ describe("what is scheduled", () => {
     const ribbon = layoutRibbon(morning({ faceSpan: 0.2 }));
     const drawn = ribbon.faces.map((one) => one.agentId);
     for (const one of layoutRibbon(morning()).faces) {
-      expect(drawn.includes(one.agentId) || ribbon.pile.includes(one.agentId)).toBe(true);
+      expect(drawn.includes(one.agentId)).toBe(true);
     }
     expect(drawn).toContain("dara");
     expect(drawn).toContain("marlow");
     const xs = ribbon.faces.map((one) => one.x).sort((a, b) => a - b);
-    for (let i = 1; i < xs.length; i++) {
-      expect((xs[i] as number) - (xs[i - 1] as number)).toBeGreaterThanOrEqual(0.2 - 1e-9);
-    }
+    expect(new Set(xs).size).toBe(xs.length);
+    for (const x of xs) expect(x).toBeGreaterThanOrEqual(0);
     expect(ribbon.scheduled).toEqual([]);
   });
 
@@ -724,16 +780,21 @@ describe("a quiet afternoon", () => {
 
   it("rests faces at their last event today, unmarked", () => {
     const ribbon = layoutRibbon(quiet);
-    expect(ribbon.faces.map((one) => [one.agentId, one.state, one.at])).toEqual([
+    const resting = ribbon.faces.filter((one) => one.state !== "idle");
+    expect(resting.map((one) => [one.agentId, one.state, one.at])).toEqual([
       ["dara", "rest", at(16, 10)],
       ["marlow", "rest", at(16, 11, 32)],
     ]);
-    expect(ribbon.faces[0]?.label).toBe("Dara, last active 10:00 AM");
+    expect(resting[0]?.label).toBe("Dara, last active 10:00 AM");
   });
 
-  it("has no band and piles everyone else", () => {
+  it("has no band and draws everyone else idle at the left edge, in the sheet's order", () => {
     const ribbon = layoutRibbon(quiet);
     expect(ribbon.band).toBeNull();
-    expect(ribbon.pile).toEqual(["ines", "tomas", "noor", "kit", "wren", "pip"]);
+    const idle = [...ribbon.faces]
+      .sort((a, b) => a.x - b.x)
+      .filter((one) => one.state === "idle")
+      .map((one) => one.agentId);
+    expect(idle).toEqual(["ines", "tomas", "noor", "kit", "wren", "pip"]);
   });
 });

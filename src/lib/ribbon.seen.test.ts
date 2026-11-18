@@ -10,6 +10,7 @@ function strip(over: Partial<RibbonInput>): RibbonInput {
   return {
     now: at(16, 9, 12),
     agents: ["ines", "tomas", "noor", "dara"].map((id) => anAgent(id)),
+    groups: [],
     activity: {},
     outcomes: [],
     approvals: [],

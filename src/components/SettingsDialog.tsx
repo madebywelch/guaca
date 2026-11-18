@@ -29,6 +29,7 @@ import {
 import { type Provider as Preset, planLabel, providerFor } from "../lib/providers";
 import { SECTION_LABELS, SECTIONS, type Section } from "../lib/sections";
 import { useStore } from "../lib/store";
+import { moveAlongTabs } from "../lib/tablist";
 import {
   ATTENTIONS,
   type AttentionKey,
@@ -792,24 +793,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
             role="tablist"
             aria-orientation="vertical"
             aria-label="Settings sections"
-            onKeyDown={(event) => {
-              const all = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')];
-              const at = all.findIndex((tab) => tab.getAttribute("aria-selected") === "true");
-              const to =
-                event.key === "ArrowDown" || event.key === "ArrowRight"
-                  ? (at + 1) % all.length
-                  : event.key === "ArrowUp" || event.key === "ArrowLeft"
-                    ? (at - 1 + all.length) % all.length
-                    : event.key === "Home"
-                      ? 0
-                      : event.key === "End"
-                        ? all.length - 1
-                        : null;
-              if (to === null) return;
-              event.preventDefault();
-              all[to]?.focus();
-              all[to]?.click();
-            }}
+            onKeyDown={moveAlongTabs}
           >
             {SECTIONS.map((key) => (
               <button
@@ -2004,7 +1988,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
               <>
                 <h3 className="settings__title">Shortcuts</h3>
                 <p className="settings__lede">
-                  Every key the app answers to. The four under Anywhere work wherever you are; the
+                  Every key the app answers to. The keys under Anywhere work wherever you are; the
                   rest belong to the surface they are listed under.
                 </p>
 

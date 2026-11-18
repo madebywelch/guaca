@@ -4,7 +4,14 @@ export interface Combo {
   shift?: boolean;
 }
 
-export const SURFACES = ["Anywhere", "A channel", "Search", "Anything open"] as const;
+export const SURFACES = [
+  "Anywhere",
+  "The command menu",
+  "Needs you",
+  "A channel",
+  "Search",
+  "Anything open",
+] as const;
 
 export type Surface = (typeof SURFACES)[number];
 
@@ -12,6 +19,7 @@ export interface Binding {
   id: string;
   what: string;
   combo: Combo;
+  to?: { combo: Combo; joint: "pair" | "either" | "range" };
   where: Surface;
   fixed?: boolean;
 }
@@ -20,13 +28,20 @@ export const IS_MAC = /mac/i.test(navigator.platform || navigator.userAgent);
 
 export const FIND_KEY = IS_MAC ? "⌘F" : "Ctrl F";
 
-export const FIELD_KEY = IS_MAC ? "⌘K" : "Ctrl K";
+export const MENU_KEY = IS_MAC ? "⌘K" : "Ctrl K";
 
 export const BINDINGS: Binding[] = [
   {
-    id: "field",
-    what: "Write to an agent, or answer the one waiting",
+    id: "menu",
+    what: "Open the command menu: write to an agent, answer, jump or change a setting",
     combo: { key: "k", mod: true },
+    where: "Anywhere",
+  },
+  {
+    id: "agent",
+    what: "Open the agent with that number in the command menu",
+    combo: { key: "1", mod: true },
+    to: { combo: { key: "9", mod: true }, joint: "range" },
     where: "Anywhere",
   },
   {
@@ -41,6 +56,107 @@ export const BINDINGS: Binding[] = [
     what: "Open this list",
     combo: { key: "/", mod: true },
     where: "Anywhere",
+  },
+  {
+    id: "undo",
+    what: "Take back the answer you just gave, while it offers Undo",
+    combo: { key: "z", mod: true, shift: false },
+    where: "Anywhere",
+  },
+  {
+    id: "menu-move",
+    what: "Move through the rows",
+    combo: { key: "ArrowUp" },
+    to: { combo: { key: "ArrowDown" }, joint: "pair" },
+    where: "The command menu",
+    fixed: true,
+  },
+  {
+    id: "menu-do",
+    what: "Do the selected row; with three words or more, send them",
+    combo: { key: "Enter" },
+    where: "The command menu",
+    fixed: true,
+  },
+  {
+    id: "recipient",
+    what: "Change who you write to",
+    combo: { key: "Tab" },
+    to: { combo: { key: "Tab", shift: true }, joint: "either" },
+    where: "The command menu",
+    fixed: true,
+  },
+  {
+    id: "menu-allow",
+    what: "Allow the request the selected row belongs to",
+    combo: { key: "Enter", mod: true },
+    where: "The command menu",
+    fixed: true,
+  },
+  {
+    id: "menu-deny",
+    what: "Deny it",
+    combo: { key: "Backspace", mod: true },
+    where: "The command menu",
+    fixed: true,
+  },
+  {
+    id: "field-answer",
+    what: "From the empty field on Today, answer the question that is waiting",
+    combo: { key: "Tab" },
+    where: "Needs you",
+    fixed: true,
+  },
+  {
+    id: "queue",
+    what: "Leave the field on Today and select the first request",
+    combo: { key: "Escape" },
+    where: "Needs you",
+    fixed: true,
+  },
+  {
+    id: "queue-move",
+    what: "Select the next or the previous request",
+    combo: { key: "j" },
+    to: { combo: { key: "k" }, joint: "either" },
+    where: "Needs you",
+    fixed: true,
+  },
+  {
+    id: "queue-allow",
+    what: "Allow, or the selected request's first button",
+    combo: { key: "Enter", mod: true },
+    where: "Needs you",
+    fixed: true,
+  },
+  {
+    id: "queue-deny",
+    what: "Deny, or clear the selected request",
+    combo: { key: "Backspace", mod: true },
+    where: "Needs you",
+    fixed: true,
+  },
+  {
+    id: "queue-option",
+    what: "Choose one of the selected question's answers",
+    combo: { key: "1" },
+    to: { combo: { key: "9" }, joint: "range" },
+    where: "Needs you",
+    fixed: true,
+  },
+  {
+    id: "queue-leave",
+    what: "Go back to the field",
+    combo: { key: "Escape" },
+    where: "Needs you",
+    fixed: true,
+  },
+  {
+    id: "answer",
+    what: "From an empty box, answer the question that is waiting",
+    combo: { key: "Tab" },
+    where: "A channel",
+    fixed: true,
   },
   {
     id: "send",
@@ -60,13 +176,15 @@ export const BINDINGS: Binding[] = [
     id: "mention",
     what: "Choose which agent to mention",
     combo: { key: "ArrowUp" },
+    to: { combo: { key: "ArrowDown" }, joint: "pair" },
     where: "A channel",
     fixed: true,
   },
   {
     id: "hit",
     what: "Move through the results",
-    combo: { key: "ArrowDown" },
+    combo: { key: "ArrowUp" },
+    to: { combo: { key: "ArrowDown" }, joint: "pair" },
     where: "Search",
     fixed: true,
   },
@@ -74,6 +192,7 @@ export const BINDINGS: Binding[] = [
     id: "scope",
     what: "Change what is being searched",
     combo: { key: "Tab" },
+    to: { combo: { key: "Tab", shift: true }, joint: "either" },
     where: "Search",
     fixed: true,
   },
@@ -104,8 +223,22 @@ export function matches(event: KeyboardEvent, combo: Combo): boolean {
   return true;
 }
 
+export function heard(event: KeyboardEvent, binding: Binding): boolean {
+  if (matches(event, binding.combo)) return true;
+  const to = binding.to;
+  if (!to) return false;
+  if (to.joint !== "range") return matches(event, to.combo);
+  const from = binding.combo.key;
+  if (event.key.length !== 1 || event.key < from || event.key > to.combo.key) return false;
+  return matches(event, { ...binding.combo, key: event.key });
+}
+
 export function bindingFor(event: KeyboardEvent): Binding | undefined {
-  return BINDINGS.find((binding) => !binding.fixed && matches(event, binding.combo));
+  return BINDINGS.find((binding) => !binding.fixed && heard(event, binding));
+}
+
+export function agentNumber(event: KeyboardEvent): number | null {
+  return bindingFor(event)?.id === "agent" ? Number(event.key) : null;
 }
 
 const NAMED: Record<string, string> = {
@@ -114,6 +247,7 @@ const NAMED: Record<string, string> = {
   Tab: "Tab",
   ArrowUp: "↑",
   ArrowDown: "↓",
+  Backspace: "⌫",
 };
 
 export function formatCombo(combo: Combo): string {
@@ -125,9 +259,17 @@ export function formatCombo(combo: Combo): string {
 }
 
 export function comboLabel(binding: Binding): string {
-  if (binding.id === "mention" || binding.id === "hit")
-    return formatCombo({ key: "ArrowUp" }) + formatCombo({ key: "ArrowDown" });
-  if (binding.id === "scope")
-    return `${formatCombo({ key: "Tab" })} / ${formatCombo({ key: "Tab", shift: true })}`;
+  const first = formatCombo(binding.combo);
+  const to = binding.to;
+  if (!to) return first;
+  const last = formatCombo(to.combo);
+  if (to.joint === "pair") return first + last;
+  if (to.joint === "either") return `${first} / ${last}`;
+  return `${first} to ${last}`;
+}
+
+export function keyOf(id: string): string {
+  const binding = BINDINGS.find((one) => one.id === id);
+  if (!binding) throw new Error(`no binding named ${id}`);
   return formatCombo(binding.combo);
 }

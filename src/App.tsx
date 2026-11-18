@@ -7,6 +7,7 @@ import { Artifacts } from "./components/Artifacts";
 import { Cafeteria } from "./components/Cafeteria";
 import { Calendar } from "./components/Calendar";
 import { type AgentView, ChannelView } from "./components/ChannelView";
+import { CommandMenu } from "./components/CommandMenu";
 import { ForYou } from "./components/ForYou";
 import { GroupEditor } from "./components/GroupEditor";
 import { GroupsSheet } from "./components/GroupsSheet";
@@ -17,10 +18,13 @@ import { Search } from "./components/Search";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { StatusBar } from "./components/StatusBar";
 import { Timeline } from "./components/Timeline";
+import { Toast } from "./components/Toast";
 import { TopBar } from "./components/TopBar";
 import { applyAppearance, watchSystemSurface } from "./lib/appearance";
 import { diagnostic } from "./lib/diagnostic";
 import { dismissing } from "./lib/dismiss";
+import { editingText } from "./lib/focus";
+import { useHeld } from "./lib/held";
 import { unreachableHint } from "./lib/host";
 import { api, onRevealRequest } from "./lib/ipc";
 import { bindingFor } from "./lib/keybinds";
@@ -28,6 +32,7 @@ import { FEED_COALESCE_MS, presenceOf, presenceReporter, samePresence } from "./
 import { catchUp, deliver, land } from "./lib/notify";
 import { readFirstTask } from "./lib/onboarding";
 import { inferenceOf, providerFor } from "./lib/providers";
+import { numbered } from "./lib/rail";
 import { useRuntime } from "./lib/runtime";
 import { asSection, type Section } from "./lib/sections";
 import { type Banner, useLiveAgents, useStore } from "./lib/store";
@@ -112,6 +117,9 @@ export default function App() {
   const [showSettings, setShowSettings] = useState<Section | true | null>(null);
   const [searching, setSearching] = useState<string | false>(false);
   const [showGroups, setShowGroups] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
+  const menuOpen = useRef(false);
+  menuOpen.current = showMenu;
   const [showCafeteria, setShowCafeteria] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
   const [openSection, setOpenSection] = useState<string | null>(null);
@@ -153,14 +161,24 @@ export default function App() {
     const onKey = (event: KeyboardEvent) => {
       const binding = bindingFor(event);
       if (!binding) return;
+      if (binding.id === "undo") {
+        if (editingText(event.target) || !useHeld.getState().undo()) return;
+        event.preventDefault();
+        return;
+      }
       event.preventDefault();
 
-      if (binding.id === "field") {
-        if (dismissing()) return;
-        if (useStore.getState().selected) setAgentView("conversation");
-        requestAnimationFrame(() =>
-          document.querySelector<HTMLElement>("[data-field]:not([disabled])")?.focus(),
-        );
+      if (binding.id === "menu") {
+        if (menuOpen.current) setShowMenu(false);
+        else if (!dismissing()) setShowMenu(true);
+      }
+      if (binding.id === "agent") {
+        const state = useStore.getState();
+        const agent = numbered(state.agents, state.groups)[Number(event.key) - 1];
+        if (!agent || (dismissing() && !menuOpen.current)) return;
+        setShowMenu(false);
+        setAgentView("conversation");
+        void state.select(agent.id);
       }
       if (binding.id === "search") setSearching("");
       if (binding.id === "settings") setShowSettings(true);
@@ -347,7 +365,7 @@ export default function App() {
       {ready && (
         <Timeline
           onOpenAgent={(id) => void select(id)}
-          onOpenPile={() => setShowGroups(true)}
+          onOpenGroups={() => setShowGroups(true)}
           openAgentId={selected}
         />
       )}
@@ -473,6 +491,25 @@ export default function App() {
           onDelete={(agent) => void onAgent(() => api.deleteAgent(agent.id))}
         />
       )}
+
+      {showMenu && (
+        <CommandMenu
+          onClose={() => setShowMenu(false)}
+          onSection={(section) => setShowSettings(section)}
+          onPlace={(place, query) => {
+            if (place === "search") setSearching(query ?? "");
+            if (place === "forYou") showForYou(true);
+            if (place === "calendar") setShowCalendar(true);
+            if (place === "artifacts") showArtifacts({ id: null });
+            if (place === "groups") setShowGroups(true);
+            if (place === "newAgent") setEditing("new");
+            if (place === "newGroup") setEditingGroup("new");
+            if (place === "cafeteria") setShowCafeteria(true);
+          }}
+        />
+      )}
+
+      {ready && <Toast />}
 
       {showGroups && (
         <GroupsSheet
