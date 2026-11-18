@@ -714,8 +714,8 @@ def scenario_running(w: World) -> None:
     show(w, "Today")
     w.check("with nothing running, Today has no Running section",
             not w.ui.find("region", "Running", exact=False), observed=running_text(w))
-
-    open_agent(w, AGENT)
+    w.ui.click("button", f"{AGENT}, ", exact=False)
+    w.wait(f"{AGENT}'s conversation opens", lambda: w.ui.find("log", f"Conversation with {AGENT}"))
     write(w, AGENT, LOOK_INTO)
     show(w, "Today")
     w.wait("Today lists the conversation as running", lambda: READING in running_text(w))
