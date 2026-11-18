@@ -37,6 +37,9 @@ the body sits under it on the name's edge (`.msg__body`, indented by
 `--column-face`). A second message by the same author inside four minutes is
 the same turn continuing, so it has no head. There is no time gutter and no
 vertical rule: a turn's time belongs beside the name it qualifies.
+The log fades its top edge over `--space-6`, the length its first turn starts
+below the tabs, so a turn scrolled under the tabs fades out instead of being
+cut by their rule.
 
 **The person's turn is upright in a sunken bubble.** `.msg__bubble` on
 `--sunken` with the card corner, its words on the same edge as an agent's body.

@@ -421,6 +421,14 @@ describe("a turn on the page", () => {
     expect(rule(".msg__bubble")).toMatch(/background: var\(--sunken\)/);
   });
 
+  it("fades a turn scrolled under the tabs over the same length the first turn starts below them", () => {
+    expect(rule(".pane__scroll")).toMatch(/padding: var\(--space-6\) /);
+    expect(rule(".pane__scroll")).toMatch(/scroll-padding-top: var\(--space-6\);/);
+    expect(rule(".pane__scroll")).toMatch(
+      /mask-image: linear-gradient\(to bottom, transparent, #000 var\(--space-6\)\);/,
+    );
+  });
+
   it("draws no vertical rule beside a turn or an aside", () => {
     for (const selector of [".msg", ".msg__body", ".msg__bubble", ".aside .md", ".footnote"]) {
       expect(rule(selector)).not.toMatch(/border-left/);

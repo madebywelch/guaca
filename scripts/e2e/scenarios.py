@@ -839,6 +839,9 @@ def scenario_handoff(w: World) -> None:
             observed=re.sub(r"\d+s", "Ns", working_line(w)))
     edges = ui.evaluate(TWO_EDGES)
     w.check("text in the transcript starts on two left edges", len(edges) <= 2, observed=len(edges), detail=edges)
+    mask = ui.evaluate("getComputedStyle(document.querySelector('[role=log]')).maskImage")
+    w.check("a turn scrolled under the tabs fades out instead of being cut by them",
+            mask.startswith("linear-gradient(rgba(0, 0, 0, 0)"), observed=mask)
     seen: dict[str, look.Verdict] = {}
     for surface in LOOK_SURFACES:
         ui.evaluate("localStorage.setItem('guac.prefs', JSON.stringify({...JSON.parse("
@@ -1792,6 +1795,7 @@ SCENARIOS: dict[str, Scenario] = {
         "a live card shows each colleague's face, the question, a status word with time, and the answer at reading size",
         "under the running turn a status line says what it is doing, for how long, with Stop",
         "text in the transcript starts on two left edges",
+        "a turn scrolled under the tabs fades out instead of being cut by them",
         "the hand-off keeps to the six type roles, the control family and the radii in light and dark",
         "after the reply the hand-off folds to one line that says both answered",
         "the folded line opens onto both answers",

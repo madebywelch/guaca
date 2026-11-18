@@ -2005,6 +2005,8 @@ input[type="file"]::file-selector-button {
   overflow-y: auto;
   overflow-x: hidden;
   padding: var(--space-6) 0 var(--space-4);
+  scroll-padding-top: var(--space-6);
+  mask-image: linear-gradient(to bottom, transparent, #000 var(--space-6));
 }
 
 .msg {
