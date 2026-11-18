@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { ABSENT_ACCENT } from "../avatars/catalog";
 import { needsAnswer } from "../lib/decisions";
+import { focusWriting } from "../lib/focus";
+import { useHeld } from "../lib/held";
 import { api } from "../lib/ipc";
 import { drawnThrough, finished, statusWord } from "../lib/outcomes";
 import { groupNamed } from "../lib/presence";
@@ -20,8 +21,9 @@ interface Props {
 }
 
 export function Home({ onSearch, onManageGroups }: Props) {
-  const pending = useStore((state) => state.pending);
-  const stuck = useStore((state) => state.stuck);
+  const heldId = useHeld((state) => state.held?.id);
+  const pending = useStore((state) => state.pending).filter((one) => one.id !== heldId);
+  const stuck = useStore((state) => state.stuck).filter((one) => one.id !== heldId);
   const decisions = useStore((state) => state.decisions);
   const outcomes = useStore((state) => state.outcomes);
   const agents = useStore((state) => state.agents);
@@ -33,6 +35,7 @@ export function Home({ onSearch, onManageGroups }: Props) {
   const refreshOutcomes = useStore((state) => state.refreshOutcomes);
   const showForYou = useStore((state) => state.showForYou);
   const now = useNow(30_000);
+  const [chosen, setChosen] = useState<string | null>(null);
 
   useEffect(() => {
     void refreshOutcomes();
@@ -53,7 +56,11 @@ export function Home({ onSearch, onManageGroups }: Props) {
 
   return (
     <section className="home" aria-label="Today">
-      <Field onSearch={onSearch} onManageGroups={onManageGroups} />
+      <Field
+        onSearch={onSearch}
+        onManageGroups={onManageGroups}
+        onLeave={() => setChosen(pending[0]?.id ?? stuck[0]?.id ?? null)}
+      />
 
       {quiet ? (
         <Quiet working={working.map((agent) => agent.name)} decisions={setAside} now={now} />
@@ -61,6 +68,14 @@ export function Home({ onSearch, onManageGroups }: Props) {
         <>
           <Desk
             onOpenChannel={(agent) => void select(agent)}
+            queue={{
+              selected: chosen,
+              onSelect: setChosen,
+              onLeave: () => {
+                setChosen(null);
+                focusWriting();
+              },
+            }}
             title={
               <>
                 Needs you <span className="home__count">{pending.length + stuck.length}</span>

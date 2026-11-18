@@ -3,8 +3,10 @@ import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { useDismiss } from "../lib/dismiss";
 import { addressed, defaultTarget, namedAlone, waitingQuestion, writable } from "../lib/field";
+import { focusWriting } from "../lib/focus";
+import { useHeld } from "../lib/held";
 import { api } from "../lib/ipc";
-import { bindingFor, FIELD_KEY, FIND_KEY } from "../lib/keybinds";
+import { bindingFor, FIND_KEY, MENU_KEY } from "../lib/keybinds";
 import { useStore } from "../lib/store";
 import { type AgentCard, type AgentId, errorMessage } from "../lib/types";
 import { Icon } from "./Icon";
@@ -12,14 +14,17 @@ import { Icon } from "./Icon";
 interface Props {
   onSearch: (query: string) => void;
   onManageGroups: () => void;
+  onLeave: () => void;
 }
 
 type Receipt = { kind: "sent"; agent: AgentCard } | { kind: "answered"; agent: AgentCard };
 
-export function Field({ onSearch, onManageGroups }: Props) {
+export function Field({ onSearch, onManageGroups, onLeave }: Props) {
   const agents = useStore((state) => state.agents);
   const groups = useStore((state) => state.groups);
-  const pending = useStore((state) => state.pending);
+  const heldId = useHeld((state) => state.held?.id);
+  const pending = useStore((state) => state.pending).filter((one) => one.id !== heldId);
+  const waiting = pending.length + useStore((state) => state.stuck).length > 0;
   const lastActive = useStore((state) => state.lastActive);
   const railGroup = useStore((state) => state.railGroup);
   const answer = useStore((state) => state.answerQuestion);
@@ -53,6 +58,8 @@ export function Field({ onSearch, onManageGroups }: Props) {
   useEffect(() => {
     if (!question) setAnswering(false);
   }, [question]);
+
+  useEffect(focusWriting, []);
 
   const send = async () => {
     const body = text.trim();
@@ -102,6 +109,11 @@ export function Field({ onSearch, onManageGroups }: Props) {
     if (event.key === "Escape" && answering) {
       event.preventDefault();
       setAnswering(false);
+      return;
+    }
+    if (event.key === "Escape" && waiting) {
+      event.preventDefault();
+      onLeave();
       return;
     }
     if (bindingFor(event.nativeEvent)?.id === "search" && text.trim() !== "") {
@@ -161,7 +173,7 @@ export function Field({ onSearch, onManageGroups }: Props) {
           }}
           onKeyDown={onKeyDown}
         />
-        <kbd className="intake__key">{FIELD_KEY}</kbd>
+        <kbd className="intake__key">{MENU_KEY}</kbd>
         <button
           type="submit"
           className="intake__send"
@@ -186,6 +198,11 @@ export function Field({ onSearch, onManageGroups }: Props) {
         {!asking && (
           <span className="intake__hint">
             <kbd>@</kbd> someone
+          </span>
+        )}
+        {waiting && !asking && (
+          <span className="intake__hint">
+            <kbd>Esc</kbd> go through what needs you
           </span>
         )}
         {text.trim() !== "" && !asking && (

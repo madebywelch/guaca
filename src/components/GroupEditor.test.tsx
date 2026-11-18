@@ -100,6 +100,8 @@ vi.mock("../lib/ipc", () => ({
     codingHarnesses: () => codingHarnesses(),
     conversationFlow: (group: string, limit?: number) => conversationFlow(group, limit),
     usageForRuns: () => usageForRuns(),
+    builtinTools: async () => [],
+    groupReconnect: async () => [],
   },
 }));
 
@@ -332,6 +334,63 @@ describe("what the operator is shown", () => {
   it("refuses to save a group with no name", () => {
     open(null);
     expect(button("Create").disabled).toBe(true);
+  });
+});
+
+describe("the section list", () => {
+  const tabs = () => screen.getAllByRole("tab");
+  const stops = () => tabs().filter((tab) => tab.tabIndex === 0);
+  const tab = (name: string) => screen.getByRole("tab", { name });
+
+  it("is one Tab stop, on the open section", () => {
+    open();
+    expect(stops()).toEqual([tab("General")]);
+    pane("Limits");
+    expect(stops()).toEqual([tab("Limits")]);
+  });
+
+  it("moves to the next and previous section with the arrow keys, and opens it", () => {
+    open();
+    fireEvent.keyDown(tab("General"), { key: "ArrowDown" });
+    expect(document.activeElement).toBe(tab("Provider"));
+    expect(tab("Provider").getAttribute("aria-selected")).toBe("true");
+    expect(stops()).toEqual([tab("Provider")]);
+    fireEvent.keyDown(tab("Provider"), { key: "ArrowRight" });
+    expect(document.activeElement).toBe(tab("Limits"));
+    fireEvent.keyDown(tab("Limits"), { key: "ArrowUp" });
+    expect(document.activeElement).toBe(tab("Provider"));
+    fireEvent.keyDown(tab("Provider"), { key: "ArrowLeft" });
+    expect(document.activeElement).toBe(tab("General"));
+    expect(screen.getByRole("tabpanel", { name: "General" })).toBeTruthy();
+  });
+
+  it("goes to either end with Home and End, and wraps past them", () => {
+    open();
+    fireEvent.keyDown(tab("General"), { key: "End" });
+    const last = tabs().at(-1) as HTMLElement;
+    expect(document.activeElement).toBe(last);
+    expect(last.getAttribute("aria-selected")).toBe("true");
+    fireEvent.keyDown(last, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(tab("General"));
+    fireEvent.keyDown(tab("General"), { key: "ArrowUp" });
+    expect(document.activeElement).toBe(last);
+    fireEvent.keyDown(last, { key: "Home" });
+    expect(document.activeElement).toBe(tab("General"));
+  });
+
+  it("names the open panel after its section", () => {
+    open();
+    pane("Limits");
+    const panel = screen.getByRole("tabpanel", { name: "Limits" });
+    expect(tab("Limits").getAttribute("aria-controls")).toBe(panel.id);
+  });
+
+  it("steps over a section a new group cannot open yet", () => {
+    open(null);
+    pane("Limits");
+    fireEvent.keyDown(tab("Limits"), { key: "ArrowDown" });
+    expect(document.activeElement).toBe(tab("Tools"));
+    expect(tab("Tools").getAttribute("aria-selected")).toBe("true");
   });
 });
 

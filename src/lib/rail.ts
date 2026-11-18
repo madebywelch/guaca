@@ -47,6 +47,18 @@ export function railOrder(agents: AgentCard[], options: RailOptions): AgentCard[
     .map((entry) => entry.agent);
 }
 
+export function numbered(agents: AgentCard[], groups: readonly { id: GroupId }[]): AgentCard[] {
+  const live = agents.filter((agent) => agent.lifecycle !== "terminated");
+  const still = { activity: {}, lastActive: {}, frozen: true };
+  const placed = groups.flatMap((group) =>
+    railOrder(
+      live.filter((agent) => agent.groupId === group.id),
+      still,
+    ),
+  );
+  return [...placed, ...live.filter((agent) => !placed.includes(agent))];
+}
+
 export function landsBefore(
   order: readonly { id: string }[],
   dragged: string,
