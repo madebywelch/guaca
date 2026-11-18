@@ -7204,6 +7204,34 @@ async fn hangs_until(crashed: Arc<std::sync::atomic::AtomicBool>, answer: &'stat
     .await
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_stand_in_model_has_chosen_its_answer_before_a_test_can_count_the_call() {
+    let counter: Arc<std::sync::OnceLock<Arc<AtomicUsize>>> = Arc::default();
+    let counted_when_chosen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let stub = serve({
+        let counter = counter.clone();
+        let counted_when_chosen = counted_when_chosen.clone();
+        move |_| {
+            let calls = counter.get().expect("the counter is known before any call");
+            counted_when_chosen.lock().push(calls.load(Ordering::SeqCst));
+            Script::Say("Sent.".into())
+        }
+    })
+    .await;
+    counter.set(stub.calls.clone()).expect("set once");
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Researcher"), "Send the invoice.").unwrap();
+    h.settle(run).await;
+
+    let counted_when_chosen = counted_when_chosen.lock().clone();
+    assert!(!counted_when_chosen.is_empty());
+    assert_eq!(
+        counted_when_chosen,
+        (0..counted_when_chosen.len()).collect::<Vec<_>>(),
+        "a call a test can see counted already has the answer it will get"
+    );
+}
+
 async fn queued_behind_a_busy_turn(h: &Harness, stub: &Stub) -> (RunId, RunId) {
     let researcher = h.id("Researcher");
     let first = h.runtime.send_from_human(researcher, "The first thing.").unwrap();
