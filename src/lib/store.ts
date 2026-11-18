@@ -14,7 +14,7 @@ let approvalRead = 0;
 let escalationRead = 0;
 let outcomeRead = 0;
 let runningRead = 0;
-const channelReads = new Map<string, number>();
+const channelReads = new Map<ChannelKey, { arrivals: Envelope[] }>();
 
 const EVERYTHING: Capabilities = {
   loopbackEndpoints: true,
@@ -469,18 +469,22 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async loadChannel(key, through, valid = () => true) {
-    const read = (channelReads.get(key) ?? 0) + 1;
+    const read = { arrivals: channelReads.get(key)?.arrivals ?? [] };
     channelReads.set(key, read);
     const before = new Set((get().messages[key] ?? []).map((m) => m.id));
-    const messages = await api.channelMessages(key, 300, through);
-    if (!valid() || channelReads.get(key) !== read) return;
-    set((state) => {
-      let merged = messages;
-      for (const arrived of state.messages[key] ?? []) {
-        if (!before.has(arrived.id)) merged = insert(merged, arrived) ?? merged;
-      }
-      return { messages: { ...state.messages, [key]: merged } };
-    });
+    try {
+      const messages = await api.channelMessages(key, 300, through);
+      if (!valid() || channelReads.get(key) !== read) return;
+      set((state) => {
+        let merged = messages;
+        for (const arrived of [...read.arrivals, ...(state.messages[key] ?? [])]) {
+          if (!before.has(arrived.id)) merged = insert(merged, arrived) ?? merged;
+        }
+        return { messages: { ...state.messages, [key]: merged } };
+      });
+    } finally {
+      if (channelReads.get(key) === read) channelReads.delete(key);
+    }
   },
 
   async openMessage(channel, message) {
@@ -609,6 +613,9 @@ export const useStore = create<State>((set, get) => ({
 
       case "messageAppended": {
         const message = event.message;
+        if (get().messages[message.channelId] === undefined) {
+          channelReads.get(message.channelId)?.arrivals.push(message);
+        }
         set((state) => {
           const messages = { ...state.messages };
           messages[message.channelId] = insert(messages[message.channelId], message);
@@ -778,7 +785,7 @@ export const useStore = create<State>((set, get) => ({
 
       case "channelsCleared": {
         const emptied = new Set<ChannelKey>(event.agents);
-        for (const key of emptied) channelReads.set(key, (channelReads.get(key) ?? 0) + 1);
+        for (const key of emptied) channelReads.delete(key);
         set((state) => {
           const messages = { ...state.messages };
           for (const key of Object.keys(messages) as ChannelKey[]) {
