@@ -787,6 +787,22 @@ describe("reconnecting to a running workspace", () => {
     expect(useStore.getState().messages.chef?.map((m) => m.id)).toEqual(["m1", "new"]);
   });
 
+  it("keeps a message arriving while a channel's first read is in flight", async () => {
+    const { api } = await import("./ipc");
+    let finish!: (rows: Envelope[]) => void;
+    vi.mocked(api.channelMessages).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    reset({});
+    const loading = useStore.getState().loadChannel("chef");
+    apply({ type: "messageAppended", message: envelope({ id: "new", createdAt: 200 }) });
+    finish([envelope()]);
+    await loading;
+    expect(useStore.getState().messages.chef?.map((m) => m.id)).toEqual(["m1", "new"]);
+  });
+
   it("does not commit a channel snapshot after its connection is invalidated", async () => {
     const { api } = await import("./ipc");
     let finish!: (rows: Envelope[]) => void;
