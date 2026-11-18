@@ -1101,12 +1101,29 @@ describe("where an agent's page lands", () => {
     render(<App />);
     await waitFor(() => expect(useStore.getState().activity["id-Manager"]?.state).toBe("thinking"));
     await waitFor(() => expect(screen.getByRole("button", { name: /^Manager, / })).toBeTruthy());
+    useStore.setState({
+      running: [
+        {
+          runId: "run-1",
+          agentId: "id-Manager",
+          groupId: "00000000-0000-4000-8000-000000000001",
+          startedAt: Date.now(),
+          note: "Reading the brief",
+        },
+      ],
+      activeRun: { "id-Manager": "run-1" },
+    });
 
     await open();
 
     const page = await screen.findByRole("navigation", { name: "Manager's page" });
     expect(within(page).getByRole("button", { current: "page" }).textContent).toBe("Conversation");
     expect(screen.getByRole("log", { name: "Conversation with Manager" })).toBeTruthy();
+    const line = screen
+      .getAllByRole("status")
+      .find((one) => one.textContent?.includes("Reading the brief"));
+    expect(line).toBeTruthy();
+    expect(line?.closest("[hidden]")).toBeNull();
   });
 });
 
