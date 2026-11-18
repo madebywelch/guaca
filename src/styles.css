@@ -3807,6 +3807,7 @@ input[type="file"]::file-selector-button {
   font-style: normal;
   font-size: var(--type-meta);
   color: var(--faint);
+  font-variant-numeric: tabular-nums;
 }
 
 .composer {
@@ -8860,6 +8861,49 @@ button.artifacts__version[aria-pressed="true"] {
 .home__headline {
   font-size: var(--type-read);
   line-height: var(--lead-read);
+}
+
+.home__run {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+}
+
+.home__runopen {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-size: var(--type-ui);
+  line-height: var(--lead-ui);
+  text-align: left;
+  padding: 0;
+}
+
+.home__runname {
+  font-weight: var(--weight-strong);
+  white-space: nowrap;
+}
+
+.home__runnote {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}
+
+.home__runfor {
+  color: var(--muted);
+  font-size: var(--type-meta);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .home__row[data-status="failed"] .home__meta {

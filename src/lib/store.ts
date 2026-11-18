@@ -13,6 +13,7 @@ let usageRead = 0;
 let approvalRead = 0;
 let escalationRead = 0;
 let outcomeRead = 0;
+let runningRead = 0;
 const channelReads = new Map<string, number>();
 
 const EVERYTHING: Capabilities = {
@@ -46,6 +47,7 @@ import type {
   Participant,
   RoutineId,
   RunId,
+  Running,
   Settings,
   Tokens,
   UiEvent,
@@ -108,6 +110,8 @@ export interface State {
   decisionError: string | null;
   outcomes: Outcome[];
   refreshOutcomes: (valid?: () => boolean) => Promise<void>;
+  running: Running[];
+  refreshRunning: (valid?: () => boolean) => Promise<void>;
   seeOutcomes: (target: { runIds?: RunId[]; before?: number }) => Promise<void>;
   forYou: boolean;
   forYouAsked: number;
@@ -242,6 +246,16 @@ export const useStore = create<State>((set, get) => ({
   decisions: [],
   decisionError: null,
   outcomes: [],
+  running: [],
+  async refreshRunning(valid = () => true) {
+    const read = ++runningRead;
+    try {
+      const running = await api.runningRuns();
+      if (valid() && read === runningRead) set({ running });
+    } catch (error) {
+      console.warn(`Running work could not be read: ${errorMessage(error)}`);
+    }
+  },
   async refreshOutcomes(valid = () => true) {
     const read = ++outcomeRead;
     try {
@@ -332,6 +346,7 @@ export const useStore = create<State>((set, get) => ({
       api.openEscalations(),
       api.listDecisions(),
       get().refreshOutcomes(valid),
+      get().refreshRunning(valid),
     ]);
     if (!valid()) return;
     set({
@@ -581,6 +596,7 @@ export const useStore = create<State>((set, get) => ({
           pulses: [],
           handoff: null,
         });
+        void get().refreshRunning(valid);
         break;
       }
 
@@ -756,6 +772,7 @@ export const useStore = create<State>((set, get) => ({
 
           return { activity: { ...state.activity, [event.agentId]: event.activity }, activeRun };
         });
+        void get().refreshRunning(valid);
         break;
       }
 
@@ -840,6 +857,7 @@ export const useStore = create<State>((set, get) => ({
           return changed ? { activeRun } : {};
         });
         void get().refreshUsage(valid);
+        void get().refreshRunning(valid);
         break;
       }
 
@@ -902,6 +920,7 @@ export const useStore = create<State>((set, get) => ({
             [event.agentId]: (state.workingNotesVersion[event.agentId] ?? 0) + 1,
           },
         }));
+        void get().refreshRunning(valid);
         break;
       }
 

@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_PREFS } from "../lib/prefs";
@@ -19,6 +19,103 @@ vi.mock("../lib/ipc", () => ({
   onFileDrop: async () => () => {},
   openExternal: async () => {},
 }));
+
+describe("the line above the composer", () => {
+  it("says how long the conversation has run, from the start the host sent", async () => {
+    const agent = anAgent("manager", { name: "Manager" });
+    const started = Date.now() - 95_000;
+    useStore.setState({
+      prefs: DEFAULT_PREFS,
+      agents: [agent],
+      messages: { [agent.id]: [] },
+      streams: {},
+      reasoning: {},
+      trail: {},
+      activity: { [agent.id]: { state: "thinking" } },
+      activeRun: { [agent.id]: "r1" },
+      running: [
+        { runId: "r1", agentId: agent.id, groupId: agent.groupId, startedAt: started, note: null },
+      ],
+      lastActive: {},
+      banner: null,
+    });
+    const { container } = render(
+      <ChannelView
+        channel={agent.id}
+        onOpenMenu={() => {}}
+        view="conversation"
+        onView={() => {}}
+      />,
+    );
+    const line = await waitFor(() => container.querySelector(".working") as HTMLElement);
+    expect(within(line).getByText(/^1m 3[5-7]s$/)).toBeTruthy();
+    expect(within(line).getByRole("button", { name: "Stop" })).toBeTruthy();
+  });
+
+  it("says what the agent last noted it is doing, in place of a bare is working", async () => {
+    const agent = anAgent("manager", { name: "Manager" });
+    useStore.setState({
+      prefs: DEFAULT_PREFS,
+      agents: [agent],
+      messages: { [agent.id]: [] },
+      streams: {},
+      reasoning: {},
+      trail: {},
+      activity: { [agent.id]: { state: "thinking" } },
+      activeRun: { [agent.id]: "r1" },
+      running: [
+        {
+          runId: "r1",
+          agentId: agent.id,
+          groupId: agent.groupId,
+          startedAt: Date.now(),
+          note: "Asking Chef about lunch.",
+        },
+      ],
+      lastActive: {},
+      banner: null,
+    });
+    const { container } = render(
+      <ChannelView
+        channel={agent.id}
+        onOpenMenu={() => {}}
+        view="conversation"
+        onView={() => {}}
+      />,
+    );
+    const line = await waitFor(() => container.querySelector(".working") as HTMLElement);
+    expect(within(line).getByText("Asking Chef about lunch.")).toBeTruthy();
+    expect(line.textContent).not.toContain("Manager is working");
+    expect(line.hasAttribute("data-thinking")).toBe(true);
+  });
+
+  it("promises no time for a conversation the host has not listed", async () => {
+    const agent = anAgent("manager", { name: "Manager" });
+    useStore.setState({
+      prefs: DEFAULT_PREFS,
+      agents: [agent],
+      messages: { [agent.id]: [] },
+      streams: {},
+      reasoning: {},
+      trail: {},
+      activity: { [agent.id]: { state: "thinking" } },
+      activeRun: { [agent.id]: "r1" },
+      running: [],
+      lastActive: {},
+      banner: null,
+    });
+    const { container } = render(
+      <ChannelView
+        channel={agent.id}
+        onOpenMenu={() => {}}
+        view="conversation"
+        onView={() => {}}
+      />,
+    );
+    const line = await waitFor(() => container.querySelector(".working") as HTMLElement);
+    expect(line.textContent).not.toMatch(/\d+s/);
+  });
+});
 
 describe("an agent's page on Now", () => {
   it("keeps the composer under what the agent is doing", async () => {

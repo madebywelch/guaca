@@ -7,11 +7,13 @@ import { useHeld } from "../lib/held";
 import { api } from "../lib/ipc";
 import { drawnThrough, finished, statusWord } from "../lib/outcomes";
 import { groupNamed } from "../lib/presence";
+import { colleaguesOn, runningNote } from "../lib/running";
 import { useStore } from "../lib/store";
-import { clockLabel, useNow } from "../lib/time";
-import { errorMessage, type Outcome } from "../lib/types";
+import { clockLabel, elapsed, useNow } from "../lib/time";
+import { errorMessage, type Outcome, type Running } from "../lib/types";
 import { Desk } from "./Desk";
 import { Field } from "./Field";
+import { Icon } from "./Icon";
 
 const FILED_SHOWN = 3;
 
@@ -34,6 +36,7 @@ export function Home({ onSearch, onManageGroups }: Props) {
   const seeOutcomes = useStore((state) => state.seeOutcomes);
   const refreshOutcomes = useStore((state) => state.refreshOutcomes);
   const showForYou = useStore((state) => state.showForYou);
+  const running = useStore((state) => state.running);
   const now = useNow(30_000);
   const [chosen, setChosen] = useState<string | null>(null);
 
@@ -63,7 +66,14 @@ export function Home({ onSearch, onManageGroups }: Props) {
       />
 
       {quiet ? (
-        <Quiet working={working.map((agent) => agent.name)} decisions={setAside} now={now} />
+        <>
+          <Quiet
+            working={running.length > 0 ? [] : working.map((agent) => agent.name)}
+            decisions={setAside}
+            now={now}
+          />
+          <RunningNow running={running} />
+        </>
       ) : (
         <>
           <Desk
@@ -82,6 +92,7 @@ export function Home({ onSearch, onManageGroups }: Props) {
               </>
             }
           />
+          <RunningNow running={running} />
           {due.length > 0 && (
             <section className="home__filed" aria-label="Waiting in For you">
               {due.slice(0, FILED_SHOWN).map((item) => {
@@ -174,6 +185,88 @@ export function Home({ onSearch, onManageGroups }: Props) {
         </>
       )}
     </section>
+  );
+}
+
+function RunningNow({ running }: { running: Running[] }) {
+  const agents = useStore((state) => state.agents);
+  const activity = useStore((state) => state.activity);
+  const activeRun = useStore((state) => state.activeRun);
+  const select = useStore((state) => state.select);
+  const now = useNow(1000);
+  if (running.length === 0) return null;
+
+  const nameOf = (id: string) => agents.find((agent) => agent.id === id)?.name;
+  return (
+    <section className="home__running" aria-labelledby="home-running">
+      <header className="home__head">
+        <h2 id="home-running">
+          Running <span className="home__count">{running.length}</span>
+        </h2>
+      </header>
+      <ul className="home__list">
+        {running.map((run) => {
+          const agent = agents.find((one) => one.id === run.agentId);
+          const name = agent?.name ?? "A deleted agent";
+          const note = runningNote(
+            run,
+            activity[run.agentId],
+            colleaguesOn(run, activeRun, nameOf),
+          );
+          return (
+            <li key={run.runId} className="home__run">
+              <button
+                type="button"
+                className="home__runopen"
+                onClick={() => void select(run.agentId)}
+              >
+                <AgentAvatar
+                  avatar={agent?.avatar ?? "blank"}
+                  color={agent?.color ?? ABSENT_ACCENT}
+                  size="sm"
+                  activity={activity[run.agentId]}
+                  lifecycle={agent?.lifecycle}
+                  seed={agent?.id ?? run.runId}
+                />
+                <span className="home__runname">{name}</span>
+                <span className="home__runnote">{note}</span>
+              </button>
+              <span className="home__runfor" title={`Started at ${clockLabel(run.startedAt)}`}>
+                {elapsed(now, run.startedAt)}
+              </span>
+              <StopRun run={run} name={name} />
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+function StopRun({ run, name }: { run: Running; name: string }) {
+  const showFailure = useStore((state) => state.showFailure);
+  const [stopping, setStopping] = useState(false);
+  return (
+    <button
+      type="button"
+      className="btn btn--compact"
+      disabled={stopping}
+      aria-label={`Stop ${name}'s conversation`}
+      title="Stop this conversation and everything it set off"
+      onClick={async () => {
+        setStopping(true);
+        try {
+          await api.stopRun(run.runId);
+        } catch (error) {
+          showFailure(error);
+        } finally {
+          setStopping(false);
+        }
+      }}
+    >
+      <Icon name="stop" size={16} />
+      Stop
+    </button>
   );
 }
 

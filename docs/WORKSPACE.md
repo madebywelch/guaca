@@ -1253,9 +1253,16 @@ window for:
 1. The field.
 2. What needs the operator: requests waiting and agents that cannot go on, the
    same desk For you draws, answered where they are drawn.
-3. Filed decisions that are due, three as cards and the rest as a count, each
+3. What is running: each conversation the Host still owes and has started, as
+   its owner's face and name, the owner's latest working note (or, without one,
+   who it is waiting for), a clock and Stop. The clock counts from
+   `pending_runs.started_at`, which `runningRuns` reads, so a Host restarted
+   mid-turn carries the conversation on from its first start instead of from
+   zero. A row leaves when the run settles, and its outcome takes its place
+   under Finished.
+4. Filed decisions that are due, three as cards and the rest as a count, each
    answered in For you.
-4. What finished while they were away, with its count and Mark all seen. A row
+5. What finished while they were away, with its count and Mark all seen. A row
    opens the run's closing note, or the agent's conversation, and marks it
    seen.
 
@@ -1275,9 +1282,16 @@ stands for two answers. Closing the window sends a held answer rather than
 dropping it. The same holds for answers given from the command menu. For you
 and the menu bar send at once and offer no Undo.
 
-With none of those it is one sentence, "Nothing needs you.", with who is still
-working under it and one way back into what already happened today. That is
-the screen seen most, and it is the one that has to be calm.
+With none of those it is one sentence, "Nothing needs
+you.", with what is running listed under it, or who is still working when
+nothing is, and one way back into what already happened today. That is the
+screen seen most, and it is the one that has to be calm.
+
+The line above the composer carries the same clock for the conversation the
+agent is working in, beside Stop, and says the owner's latest working note in
+place of a bare "is working" when there is one. Running and that line come
+only from the host, so an answer still held for Undo shows no agent as resumed
+until the host has it.
 
 ## An agent's page is tabs, and opens where the agent is
 
