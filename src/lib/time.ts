@@ -19,6 +19,9 @@ export function relativeTime(at: number, now: number): string {
 export function elapsed(now: number, since: number): string {
   const seconds = Math.max(0, Math.floor((now - since) / 1000));
   if (seconds < 60) return `${seconds}s`;
+  if (seconds >= 3600) {
+    return `${Math.floor(seconds / 3600)}h ${String(Math.floor(seconds / 60) % 60).padStart(2, "0")}m`;
+  }
   return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
 }
 

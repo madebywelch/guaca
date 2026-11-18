@@ -81,6 +81,11 @@ describe("elapsed", () => {
     expect(waiting(184_000)).toBe("3m 04s");
   });
 
+  it("drops the seconds once there are hours, where they stop being read", () => {
+    expect(waiting(3_600_000)).toBe("1h 00m");
+    expect(waiting(3 * 3_600_000 + 7 * 60_000 + 42_000)).toBe("3h 07m");
+  });
+
   it("does not count backward from a clock that moved", () => {
     expect(elapsed(NOW, NOW + 5_000)).toBe("0s");
   });

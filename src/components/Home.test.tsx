@@ -4,13 +4,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import { clockLabel } from "../lib/time";
-import type { WorkDecision } from "../lib/types";
+import type { Outcome, RunId, Running, WorkDecision } from "../lib/types";
 import { aDecision, aGroup, anAgent, anApproval } from "../test-fixtures";
 import { Home } from "./Home";
 
 vi.mock("../lib/ipc", () => ({
   api: {
     listOutcomes: vi.fn(async () => []),
+    stopRun: vi.fn(async () => true),
     sendMessage: vi.fn(async () => "run"),
   },
 }));
@@ -20,7 +21,12 @@ const NOW = new Date(2026, 10, 16, 9, 12).getTime();
 const ASKED = NOW - 7 * 60_000;
 const LAPSES = ASKED + 10 * 60_000;
 
-function draw(state: { pending?: ReturnType<typeof anApproval>[]; decisions?: WorkDecision[] }) {
+function draw(state: {
+  pending?: ReturnType<typeof anApproval>[];
+  decisions?: WorkDecision[];
+  running?: Running[];
+  outcomes?: Outcome[];
+}) {
   act(() => {
     useStore.setState({
       agents: [dara],
@@ -28,8 +34,10 @@ function draw(state: { pending?: ReturnType<typeof anApproval>[]; decisions?: Wo
       pending: state.pending ?? [],
       stuck: [],
       decisions: state.decisions ?? [],
-      outcomes: [],
+      outcomes: state.outcomes ?? [],
+      running: state.running ?? [],
       activity: {},
+      activeRun: {},
       refreshOutcomes: async () => {},
     });
   });
@@ -96,6 +104,78 @@ describe("the quiet screen", () => {
     draw({ decisions: [later] });
     expect(screen.getByText("Nothing needs you.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "1 decision set aside in For you" })).toBeTruthy();
+  });
+});
+
+describe("running work", () => {
+  const run: Running = {
+    runId: "run-1" as RunId,
+    agentId: dara.id,
+    groupId: dara.groupId,
+    startedAt: NOW - 125_000,
+    note: "Reading the quarterly filings",
+  };
+
+  it("shows who is working, their latest note and how long it has run, from the host's start", () => {
+    draw({ running: [run] });
+    const section = screen.getByRole("region", { name: /Running/ });
+    expect(within(section).getByText("Dara")).toBeTruthy();
+    expect(within(section).getByText("Reading the quarterly filings")).toBeTruthy();
+    expect(within(section).getByText("2m 05s")).toBeTruthy();
+  });
+
+  it("stops the conversation it names", () => {
+    draw({ running: [run] });
+    fireEvent.click(screen.getByRole("button", { name: "Stop Dara's conversation" }));
+    expect(api.stopRun).toHaveBeenCalledWith("run-1");
+  });
+
+  it("says who the agent is waiting for when it wrote no note", () => {
+    const noor = anAgent("agent-2", { name: "Noor" });
+    draw({ running: [{ ...run, note: null }] });
+    act(() => {
+      useStore.setState({
+        agents: [dara, noor],
+        activeRun: { [noor.id]: run.runId },
+      });
+    });
+    expect(screen.getByText("Waiting for Noor")).toBeTruthy();
+  });
+
+  it("sits between what needs you and what finished", () => {
+    const outcome: Outcome = {
+      runId: "run-0" as RunId,
+      agentId: dara.id,
+      groupId: dara.groupId,
+      trigger: "operator",
+      triggerRef: null,
+      status: "done",
+      headline: "Sent the digest.",
+      noteId: null,
+      needs: [],
+      steps: 1,
+      startedAt: NOW - 600_000,
+      finishedAt: NOW - 60_000,
+      seenAt: null,
+    };
+    draw({
+      pending: [anApproval({ agentId: "agent-1", createdAt: ASKED, lapsesAt: LAPSES })],
+      running: [run],
+      outcomes: [outcome],
+    });
+    const headings = screen.getAllByRole("heading").map((one) => one.textContent ?? "");
+    const at = (word: string) => headings.findIndex((text) => text.startsWith(word));
+    expect(at("Needs you")).toBeGreaterThanOrEqual(0);
+    expect(at("Needs you")).toBeLessThan(at("Running"));
+    expect(at("Running")).toBeLessThan(at("Finished"));
+  });
+
+  it("keeps the calm sentence and lists the work under it, saying it once", () => {
+    draw({ running: [run] });
+    act(() => useStore.setState({ activity: { [dara.id]: { state: "thinking" } } }));
+    expect(screen.getByText("Nothing needs you.")).toBeTruthy();
+    expect(screen.queryByText(/Dara is working/)).toBeNull();
+    expect(screen.getByRole("region", { name: /Running/ })).toBeTruthy();
   });
 });
 
