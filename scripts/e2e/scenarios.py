@@ -1192,6 +1192,58 @@ def scenario_ribbon(w: World) -> None:
     no_unscripted(w)
 
 
+def scenario_grouptabs(w: World) -> None:
+    w.model.script = hello
+    w.start()
+    first_run(w)
+    settled(w, 1)
+    ui = w.ui
+
+    group = w.host.scalar("SELECT name FROM groups ORDER BY rowid LIMIT 1")
+    show(w, "the Groups sheet")
+    ui.click("button", f"{group} settings")
+    w.wait("the group's settings open", lambda: ui.find("dialog", "Group settings"))
+    ui.click("heading", group)
+    stops = []
+    for _ in range(6):
+        ui.key("Tab")
+        stops.append(ui.focused())
+        if stops[-1][0] == "tab":
+            break
+    w.check("the first Tab stop in a group's settings is the open tab", stops[-1] == ("tab", "General"),
+            observed=stops)
+
+    ui.key("ArrowDown")
+    moved = ui.focused()
+    w.check("an arrow key moves to the next section and opens it",
+            moved == ("tab", "Provider") and selected_tab(w) == ["Provider"],
+            observed={"focused": moved, "selected": selected_tab(w)}, shot=True)
+    ui.key("ArrowUp")
+    back = ui.focused()
+    w.check("the opposite arrow key moves back and opens that section",
+            back == ("tab", "General") and selected_tab(w) == ["General"],
+            observed={"focused": back, "selected": selected_tab(w)})
+    ui.key("End")
+    last = ui.focused()
+    ui.key("Home")
+    w.check("Home and End reach the first and the last section",
+            last[0] == "tab" and last[1] != "General" and ui.focused() == ("tab", "General")
+            and selected_tab(w) == ["General"],
+            observed={"end": last, "home": ui.focused()})
+
+    ui.key("Tab")
+    inside = ui.focused()
+    w.check("Tab goes from the section list into the open panel",
+            inside[0] not in ("tab", "") and selected_tab(w) == ["General"], observed=inside)
+    ui.key("Tab", shift=True)
+    returned = ui.focused()
+    ui.key("Tab", shift=True)
+    w.check("the section list is one Tab stop",
+            returned == ("tab", "General") and ui.focused()[0] != "tab",
+            observed={"back": returned, "before": ui.focused()})
+    no_unscripted(w)
+
+
 NEEDS_KEY = "verify/needs-key"
 
 
@@ -1571,6 +1623,18 @@ SCENARIOS: dict[str, Scenario] = {
         "no face on the timeline is called asleep, and there is no pile",
         "at 1280 wide no two names on the timeline overlap",
         "with another agent's page open, an idle face fades its drawing and not its name",
+        "every model call was one the scenario scripted",
+    )),
+    "grouptabs": Scenario(scenario_grouptabs, "A person opens a group's settings from the Groups sheet, reaches "
+                          "its section list in one Tab, moves between sections with the arrow keys, Home and End "
+                          "and Tabs into the open panel; the list is a single Tab stop in both directions.",
+    (
+        "the first Tab stop in a group's settings is the open tab",
+        "an arrow key moves to the next section and opens it",
+        "the opposite arrow key moves back and opens that section",
+        "Home and End reach the first and the last section",
+        "Tab goes from the section list into the open panel",
+        "the section list is one Tab stop",
         "every model call was one the scenario scripted",
     )),
     "tabs": Scenario(scenario_tabs, "A person opens Settings from the keyboard, reaches the tab list in one Tab, "
