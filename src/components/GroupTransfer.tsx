@@ -11,6 +11,7 @@ import {
 } from "../lib/transfer";
 import { desktop } from "../lib/transport";
 import { errorMessage, type Group, type GroupId } from "../lib/types";
+import { Icon } from "./Icon";
 
 function Connections({ items }: { items: Reconnect[] }) {
   if (!items.length) return null;
@@ -176,8 +177,11 @@ export function LegacyGroups() {
   }, []);
   if (!desktop || (!groups.length && !message)) return null;
   return (
-    <details className="field host-legacy">
-      <summary>Groups from the previous desktop version</summary>
+    <details className="field host-legacy disclosure">
+      <summary>
+        <Icon name="chevron-right" size={16} />
+        Groups from the previous desktop version
+      </summary>
       <p className="field__hint">
         Your original workspace is still on this Mac. Quit the old Guaca before exporting so its
         work and memories stop changing. This app reads the old workspace without starting its

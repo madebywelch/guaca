@@ -130,7 +130,7 @@ answers before it would think to look for a tool.
 
 It is compiled in rather than copied to disk, so an updated host serves the
 manual of the build it runs. `src/lib/manual.test.ts` reads it beside the two
-settings dialogs and fails when a pane is drawn that the manual does not name.
+settings views and fails when a pane is drawn that the manual does not name.
 An agent that sends the operator to a pane that was renamed is worse than one
 that says it does not know.
 

@@ -61,7 +61,7 @@ APP_NAME = "Guaca Probe"
 AGENTS = ["Manager", "Researcher", "Critic", "Scribe"]
 GROUP = "00000000-0000-4000-8000-000000000001"
 
-DIALOG = ROOT / "src/components/SettingsDialog.tsx"
+DIALOG = ROOT / "src/components/SettingsPage.tsx"
 
 
 def settings_copy() -> tuple[dict[str, str], str]:

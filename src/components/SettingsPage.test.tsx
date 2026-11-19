@@ -146,6 +146,8 @@ vi.mock("../lib/ipc", () => ({
     updateSettings: (patch: SettingsPatch) => updateSettings(patch),
     getSettings: () => getSettings(),
     testConnection: (patch?: SettingsPatch) => testConnection(patch),
+    listPermissionRules: async () => [],
+    groupPlugins: async () => [],
     subscriptionStatus: () => subscriptionStatus(),
     subscriptionModels: async () =>
       ["gpt-5.6-luna", "gpt-5.4-mini"].map((slug) => ({
@@ -176,19 +178,19 @@ vi.mock("../lib/ipc", () => ({
   openExternal: (url: string) => openExternal(url),
 }));
 
-const { SettingsDialog, pushLine } = await import("./SettingsDialog");
+const { SettingsPage, pushLine } = await import("./SettingsPage");
 const { useStore } = await import("../lib/store");
+const { useDismiss } = await import("../lib/dismiss");
 const transport = await import("../lib/transport");
 const { DEFAULT_PREFS, loadPrefs } = await import("../lib/prefs");
 const { BINDINGS, SURFACES } = await import("../lib/keybinds");
 const { PROVIDERS } = await import("../lib/providers");
 const { themeCss, themeTokens } = await import("../lib/theme");
 
-const onClose = vi.fn();
-
 function open(settings: Settings | null = stored(), prefs: Prefs = DEFAULT_PREFS, on?: Section) {
-  useStore.setState({ settings, prefs });
-  return render(<SettingsDialog onClose={onClose} section={on} />);
+  const request = { section: on ?? null };
+  useStore.setState({ settings, prefs, settingsPage: request });
+  return render(<SettingsPage request={request} />);
 }
 
 function pane(label: string): void {
@@ -235,6 +237,7 @@ function switchOn(label: string): HTMLButtonElement {
 }
 
 beforeEach(() => {
+  useStore.setState({ settingsDraft: null });
   vi.clearAllMocks();
   claudeSigninStatus.mockResolvedValue({ signedIn: false });
   claudeProgram.mockResolvedValue({
@@ -269,7 +272,7 @@ describe("when the runtime refuses", () => {
 
     await waitFor(() => expect(screen.getByText(/config\.json is read-only/i)).toBeTruthy());
     expect(banner().className).toContain("banner--error");
-    expect(onClose).not.toHaveBeenCalled();
+    expect(useStore.getState().settingsPage).not.toBeNull();
     expect(field(/^Your name/).value).toBe("Robert W");
     expect(save().disabled).toBe(false);
   });
@@ -413,7 +416,6 @@ describe("concurrent settings edits", () => {
   it("restores a closed draft while following untouched remote fields", () => {
     const view = open();
     type(/^Your name/, "Draft name");
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
     view.unmount();
     open(stored({ defaultModel: "remote/model" }));
     expect(field(/^Your name/).value).toBe("Draft name");
@@ -438,7 +440,6 @@ describe("concurrent settings edits", () => {
     expect(field(/^Relay depth/).value).toBe(String(HELD.maxHops));
     pane("General");
     expect(field(/^Your name/).value).toBe("Robert");
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
     view.unmount();
     open();
     expect(field(/^Your name/).value).toBe("Robert");
@@ -453,7 +454,6 @@ describe("concurrent settings edits", () => {
     pane("Machines");
     type(/^E2B API key/, "computer-secret");
     type(/^Kernel API key/, "browser-secret");
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
     view.unmount();
     open();
     expect(field(/^Your name/).value).toBe("Draft name");
@@ -610,7 +610,7 @@ describe("what a save sends", () => {
   it("sends stealth turned back off, which omission would make unreachable", async () => {
     open(stored({ browserStealth: true }));
     pane("Machines");
-    expect(field(/^Hide that browsers are automated/).checked).toBe(true);
+    expect(field(/^Hide that browsers are automated/).getAttribute("aria-checked")).toBe("true");
     check(/^Hide that browsers are automated/);
 
     fireEvent.click(save());
@@ -660,7 +660,7 @@ describe("what a save sends", () => {
     fireEvent.click(save());
     await waitFor(() => expect(screen.getByText("Saved.")).toBeTruthy());
     expect(banner().className).toContain("banner--ok");
-    expect(onClose).not.toHaveBeenCalled();
+    expect(useStore.getState().settingsPage).not.toBeNull();
     expect(useStore.getState().settings?.operatorName).toBe("Robert");
   });
 });
@@ -684,7 +684,7 @@ describe("the Save in the foot", () => {
 
     pane("Notifications");
     await act(async () => fireEvent.click(switchOn("Failures")));
-    expect(switchOn("Failures").textContent).toBe("Off");
+    expect(switchOn("Failures").getAttribute("aria-checked")).toBe("false");
     expect(saveButton()).toBeNull();
   });
 
@@ -755,8 +755,8 @@ describe("moving between sections", () => {
     type(/^Your name/, "New name");
     pane("Compost");
     expect(screen.getByText("No deleted agents.")).toBeTruthy();
-    expect(screen.getAllByRole("dialog")).toHaveLength(1);
-    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryAllByRole("dialog")).toHaveLength(0);
+    expect(useStore.getState().settingsPage).not.toBeNull();
     pane("General");
     expect(field(/^Your name/).value).toBe("New name");
   });
@@ -837,24 +837,60 @@ describe("moving between sections", () => {
   });
 });
 
-describe("closing", () => {
+function Sheet() {
+  useDismiss(() => {});
+  return null;
+}
+
+describe("going back", () => {
   it("answers Escape while the focus is on a section tab", () => {
     open();
     const tab = screen.getByRole("tab", { name: "Limits" });
     tab.focus();
-    expect(document.activeElement).toBe(tab);
-
     fireEvent.keyDown(tab, { key: "Escape" });
-    expect(onClose).toHaveBeenCalledTimes(1);
-
-    fireEvent.keyDown(document.body, { key: "Escape" });
-    expect(onClose).toHaveBeenCalledTimes(2);
+    expect(useStore.getState().settingsPage).toBeNull();
   });
 
-  it("dismisses on the scrim behind it", () => {
+  it("leaves Escape to a sheet open above it", () => {
     open();
-    fireEvent.click(screen.getByRole("button", { name: "Close dialog" }));
-    expect(onClose).toHaveBeenCalledTimes(1);
+    const sheet = render(<Sheet />);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(useStore.getState().settingsPage).not.toBeNull();
+    sheet.unmount();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(useStore.getState().settingsPage).toBeNull();
+  });
+
+  it("is a page, with no scrim and no Close button", () => {
+    open();
+    expect(screen.getByRole("region", { name: "Settings" })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Close dialog" })).toBeNull();
+  });
+
+  it("keeps a draft when it is left any way at all", () => {
+    const view = open();
+    type(/^Your name/, "Draft name");
+    act(() => useStore.getState().leaveChannel());
+    view.unmount();
+    open();
+    expect(field(/^Your name/).value).toBe("Draft name");
+  });
+
+  it("turns to the section a later request names, keeping what was typed", () => {
+    const view = open();
+    type(/^Your name/, "Typed");
+    view.rerender(<SettingsPage request={{ section: "appearance" }} />);
+    expect(screen.getByRole("tab", { name: "Appearance" }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    view.rerender(<SettingsPage request={{ section: null }} />);
+    expect(screen.getByRole("tab", { name: "Appearance" }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    pane("General");
+    expect(field(/^Your name/).value).toBe("Typed");
   });
 });
 
@@ -1610,6 +1646,32 @@ describe("the Guaca account", () => {
 });
 
 describe("appearance", () => {
+  it("draws every two-state setting as one switch, never an Off or On button", async () => {
+    open(stored({ attention: { needsYou: true, finished: true, failures: false } }));
+    for (const section of ["Appearance", "Notifications", "Machines"]) {
+      pane(section);
+      const switches = screen.getAllByRole("switch");
+      expect(switches.length).toBeGreaterThan(0);
+      for (const control of switches) {
+        expect(control.className).toBe("toggle");
+        expect(control.textContent).toBe("");
+        expect(control.querySelector(".toggle__track")).not.toBeNull();
+      }
+      expect(screen.queryByRole("button", { name: /^(On|Off)$/ })).toBeNull();
+      expect(screen.queryByRole("checkbox")).toBeNull();
+    }
+  });
+
+  it("draws the disclosures inside it with the triangle the control family draws", () => {
+    open(stored(), DEFAULT_PREFS, "permissions");
+    const disclosures = document.querySelectorAll("details");
+    expect(disclosures.length).toBeGreaterThan(0);
+    for (const details of disclosures) {
+      expect(details.classList.contains("disclosure")).toBe(true);
+      expect(details.querySelector(":scope > summary > svg.icon")).not.toBeNull();
+    }
+  });
+
   it("applies and persists the inline reasoning preference immediately", () => {
     open();
     pane("Appearance");
@@ -1810,10 +1872,10 @@ describe("notifications", () => {
     pane("Notifications");
     await act(async () => fireEvent.click(switchOn(FAILURES)));
 
-    expect(switchOn(FAILURES).textContent).toBe("Off");
+    expect(switchOn(FAILURES).getAttribute("aria-checked")).toBe("false");
     expect(updateSettings.mock.calls).toEqual([[{ attention: { failures: false } }]]);
     expect(useStore.getState().settings?.attention).toEqual({ ...everything, failures: false });
-    expect(switchOn("Things that need you").textContent).toBe("On");
+    expect(switchOn("Things that need you").getAttribute("aria-checked")).toBe("true");
     expect(useStore.getState().prefs).toEqual(DEFAULT_PREFS);
   });
 
@@ -1825,7 +1887,7 @@ describe("notifications", () => {
 
     await waitFor(() => expect(screen.getByText(/could not save/)).toBeTruthy());
     expect(banner().className).toContain("banner--error");
-    expect(switchOn(FAILURES).textContent).toBe("On");
+    expect(switchOn(FAILURES).getAttribute("aria-checked")).toBe("true");
     expect(switchOn(FAILURES).disabled).toBe(false);
   });
 

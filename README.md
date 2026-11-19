@@ -31,6 +31,10 @@ It is a signed and notarized universal disk image,
 needs no Node.js, Rust or source checkout. Open it, drag Guaca into
 Applications, and launch it.
 
+You need a Mac with Docker Desktop, or a Linux box. For the model: a ChatGPT
+plan with Codex, a Claude plan, an OpenRouter or OpenAI key, or any
+OpenAI-compatible endpoint, local ones included.
+
 The disk image is only half of it: Guaca is a window on a host that runs your
 agents, and the first screen asks which host. **On this Mac** starts one in a
 Docker container, from the backend image published with that release, so it

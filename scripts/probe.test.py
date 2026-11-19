@@ -610,7 +610,7 @@ class SummaryTests(unittest.TestCase):
 
 
 class SettingsCopyTests(unittest.TestCase):
-    dialog = (probe.ROOT / "src/components/SettingsDialog.tsx").read_text()
+    dialog = (probe.ROOT / "src/components/SettingsPage.tsx").read_text()
 
     def test_the_pane_lines_are_every_line_the_dialog_can_show(self):
         block = self.dialog.split("const MAC_ACCESS", 1)[1].split("};", 1)[0]

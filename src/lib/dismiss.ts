@@ -39,6 +39,41 @@ export function dismissing(): boolean {
   return stack.length > 0;
 }
 
+function takeOpener(): HTMLElement | null {
+  const active = document.activeElement;
+  const clicked = pendingOpener?.element;
+  pendingOpener = null;
+  return (
+    (clicked?.isConnected || clicked?.dataset.dismissId ? clicked : null) ??
+    (active instanceof HTMLElement && active !== document.body ? active : handoff)
+  );
+}
+
+function giveBack(previous: HTMLElement | null) {
+  if (previous?.isConnected) previous.focus();
+  else if (previous?.dataset.dismissId) {
+    const replacement = [...document.querySelectorAll<HTMLElement>("[data-dismiss-id]")].find(
+      (element) => element.dataset.dismissId === previous.dataset.dismissId,
+    );
+    replacement?.focus();
+  }
+}
+
+export function useReturnFocus(returning: () => boolean) {
+  const previous = useRef<HTMLElement | null>(null);
+  const latest = useRef(returning);
+  latest.current = returning;
+  useLayoutEffect(() => {
+    previous.current = takeOpener();
+  }, []);
+  useEffect(
+    () => () => {
+      if (stack.length === 0 && latest.current()) giveBack(previous.current);
+    },
+    [],
+  );
+}
+
 export function useDismiss(dismiss: () => void, enabled = true) {
   const latest = useRef(dismiss);
   const current = useRef<{ dismiss: () => void } | null>(null);
@@ -46,12 +81,7 @@ export function useDismiss(dismiss: () => void, enabled = true) {
   latest.current = dismiss;
   useLayoutEffect(() => {
     if (!enabled) return;
-    const active = document.activeElement;
-    const clicked = pendingOpener?.element;
-    const previous =
-      (clicked?.isConnected || clicked?.dataset.dismissId ? clicked : null) ??
-      (active instanceof HTMLElement && active !== document.body ? active : handoff);
-    pendingOpener = null;
+    const previous = takeOpener();
     const entry = { dismiss: () => latest.current() };
     current.current = entry;
     if (stack.length === 0) window.addEventListener("keydown", onKey);
@@ -71,14 +101,7 @@ export function useDismiss(dismiss: () => void, enabled = true) {
   useEffect(() => {
     if (!enabled) return;
     return () => {
-      const previous = restore.current;
-      if (previous?.isConnected) previous.focus();
-      else if (previous?.dataset.dismissId) {
-        const replacement = [...document.querySelectorAll<HTMLElement>("[data-dismiss-id]")].find(
-          (element) => element.dataset.dismissId === previous.dataset.dismissId,
-        );
-        replacement?.focus();
-      }
+      giveBack(restore.current);
       if (handoff === restore.current) handoff = null;
       restore.current = null;
     };

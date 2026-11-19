@@ -150,6 +150,25 @@ describe("the control family", () => {
     });
   });
 
+  it("draws a disclosure as a compact control with its own triangle, not the browser's", () => {
+    const rule = (selector: string) =>
+      Object.fromEntries(
+        declarations()
+          .filter((d) => d.selector === selector)
+          .map((d) => [d.property, d.value]),
+      );
+    expect(rule(".disclosure > summary")).toMatchObject({
+      "min-height": "var(--control-h-sm)",
+      "border-radius": "var(--radius-control)",
+      "list-style": "none",
+    });
+    expect(rule(".disclosure > summary::-webkit-details-marker")).toMatchObject({
+      display: "none",
+    });
+    expect(rule(".disclosure > summary:hover")).toMatchObject({ "text-decoration": "none" });
+    expect(rule(".disclosure[open] > summary > .icon").transform).toBeTruthy();
+  });
+
   it("gives a button a pressed, a disabled and a pending state as well as a hover", () => {
     const selectors = declarations().map((d) => d.selector);
     for (const state of [":hover", ":active", ":disabled", '[aria-busy="true"]']) {
@@ -315,6 +334,22 @@ describe("the window's columns", () => {
       expect(shown.overflowX).toBe("hidden");
     },
   );
+
+  it("keeps the window still while Today scrolls in its own column, inside the view that Settings hides", () => {
+    const app = nest("app");
+    const main = document.createElement("main");
+    const view = document.createElement("div");
+    const home = document.createElement("div");
+    view.className = "app__view";
+    home.className = "home";
+    view.append(home);
+    main.append(view);
+    app.append(main);
+    expect(getComputedStyle(main).overflow).toBe("hidden");
+    expect(getComputedStyle(view).display).toBe("contents");
+    view.hidden = true;
+    expect(getComputedStyle(view).display).toBe("none");
+  });
 
   it("breaks a path in the agent panel rather than cutting it off", () => {
     expect(getComputedStyle(nest("agent-panel")).overflowWrap).toBe("break-word");

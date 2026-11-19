@@ -122,6 +122,7 @@
   --ribbon-aside: 0.42;
   --column-edge: var(--space-7);
   --column-w: 46rem;
+  --settings-nav-w: calc(11rem + var(--scrollbar-size));
   --tabs-meta-share: 40%;
   --page: var(--sunken);
 
@@ -313,6 +314,10 @@ input[type="file"]::file-selector-button {
   min-width: 0;
   display: flex;
   flex-direction: column;
+}
+
+.app__view:not([hidden]) {
+  display: contents;
 }
 
 .app[data-link="down"] .pane__scroll {
@@ -7206,13 +7211,68 @@ button.artifacts__version[aria-pressed="true"] {
 
 .settings__nav {
   flex: none;
-  width: calc(11rem + var(--scrollbar-size));
+  width: var(--settings-nav-w);
   padding: var(--space-4) var(--space-4);
   border-right: 1px solid var(--rule);
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
   overflow-y: auto;
+}
+
+.settings {
+  flex: 1;
+  min-height: 0;
+  width: min(calc(var(--settings-nav-w) + var(--column-w)), 100%);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings:focus,
+.settings:focus-visible {
+  outline: none;
+}
+
+.settings > .settings__head {
+  padding: var(--space-6) var(--space-6) var(--space-5);
+}
+
+.settings__heading {
+  font-family: var(--font-ui);
+  font-size: var(--type-title);
+  font-weight: var(--weight-strong);
+  letter-spacing: var(--track-title);
+  line-height: var(--lead-tight);
+  margin: 0;
+}
+
+.settings__about {
+  font-size: var(--type-support);
+  line-height: var(--lead-ui);
+  color: var(--muted);
+  margin: var(--space-2) 0 0;
+}
+
+.settings .settings__nav {
+  padding-block: var(--space-3);
+}
+
+.settings .settings__tab {
+  min-height: var(--control-h-sm);
+}
+
+.settings__main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings__main > .banner {
+  flex: none;
+  margin: var(--space-4) var(--space-7) 0;
 }
 
 .settings__tab {
@@ -7637,6 +7697,39 @@ button.artifacts__version[aria-pressed="true"] {
   color: var(--system);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+.disclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: fit-content;
+  min-height: var(--control-h-sm);
+  padding: 0 var(--space-3) 0 var(--space-1);
+  margin-inline-start: calc(var(--space-1) * -1);
+  border-radius: var(--radius-control);
+  color: var(--muted);
+  font-size: var(--type-support);
+  list-style: none;
+  transition: background var(--tempo-tap) var(--ease), color var(--tempo-tap) var(--ease);
+}
+
+.disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.disclosure > summary:hover {
+  background: var(--sunken);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.disclosure > summary > .icon {
+  transition: transform var(--tempo-tap) var(--ease);
+}
+
+.disclosure[open] > summary > .icon {
+  transform: rotate(90deg);
 }
 
 .host-legacy > summary {
@@ -8080,6 +8173,14 @@ button.artifacts__version[aria-pressed="true"] {
   .settings__tab {
     flex: none;
     white-space: nowrap;
+  }
+
+  .settings > .settings__head {
+    padding: var(--space-5);
+  }
+
+  .settings__main > .banner {
+    margin: var(--space-4) var(--space-5) 0;
   }
 
   .settings__head,
@@ -8642,8 +8743,8 @@ button.artifacts__version[aria-pressed="true"] {
 .topbar__places .rail__new {
   display: inline-grid;
   place-items: center;
-  width: var(--space-8);
-  height: var(--space-8);
+  width: var(--control-h);
+  height: var(--control-h);
   border: 0;
   background: none;
   color: var(--muted);
@@ -8663,7 +8764,7 @@ button.artifacts__version[aria-pressed="true"] {
   flex: 1;
 }
 
-.app > main:has(> .home) {
+.app > main:has(> .app__view > .home) {
   overflow: hidden;
 }
 

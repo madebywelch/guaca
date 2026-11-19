@@ -11,6 +11,7 @@ import {
   type PermissionRule,
   type PermissionRuleDraft,
 } from "../lib/types";
+import { Icon } from "./Icon";
 
 const CLASSES: Record<PermissionClass, string> = {
   actOnBehalf: "Acting in your name",
@@ -226,8 +227,11 @@ export function Permissions({ groupId }: { groupId: string | null }) {
       <p className="settings__lede">
         Rules answer some questions for you, and a block always wins.
       </p>
-      <details>
-        <summary>How rules match</summary>
+      <details className="disclosure">
+        <summary>
+          <Icon name="chevron-right" size={16} />
+          How rules match
+        </summary>
         <p className="field__hint">
           Rules match facts the agent declares in its request. At a domain includes its subdomains.
           When a block needs a fact that is missing, you are asked. Connector calls do not

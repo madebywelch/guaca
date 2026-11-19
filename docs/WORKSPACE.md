@@ -2349,8 +2349,13 @@ and does not fold into a burst. Rules act on declared request facts, not on conn
 An endpoint, a set of limits, a machine's credentials, how large the window
 draws and what is allowed to interrupt you are five different questions, and one
 scroll made the operator read all five to change one. So it is a nav and a pane,
-on the Cafeteria's shape: a panel that owns its own height, a head and a foot
-pinned to it, one scrolling half.
+and it is a page in the window rather than a sheet over it, built like an
+agent's page: the timeline stays, the top bar's back control is named for where
+it was opened from and returns there, and Escape and Command-comma do the same
+and give the focus back to whatever had it. The nav is a left column of compact
+rows that fits a 900 by 700 window without scrolling, and each pane scrolls on
+its own beside it with Save pinned under it while there is something to save.
+Leaving the page any way at all keeps an unsaved draft for the next visit.
 
 It has grown to a dozen panes since, one per subsystem that arrived with
 something the operator sets: the workspace a window shows, the skills on this

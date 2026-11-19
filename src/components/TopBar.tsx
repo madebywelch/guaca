@@ -6,8 +6,7 @@ import { Icon } from "./Icon";
 import { NewMenu } from "./NewMenu";
 
 interface Props {
-  open: string | null;
-  onHome: () => void;
+  back: { to: string; go: () => void } | null;
   onSearch: () => void;
   onGroups: () => void;
   onSettings: () => void;
@@ -19,8 +18,7 @@ interface Props {
 const LIGHTS = desktop && IS_MAC;
 
 export function TopBar({
-  open,
-  onHome,
+  back,
   onSearch,
   onGroups,
   onSettings,
@@ -41,10 +39,10 @@ export function TopBar({
   });
   return (
     <header className="topbar" data-lights={LIGHTS || undefined} data-tauri-drag-region>
-      {open ? (
-        <button type="button" className="topbar__back" onClick={onHome}>
+      {back ? (
+        <button type="button" className="topbar__back" onClick={back.go}>
           <Icon name="chevron-left" />
-          Today
+          {back.to}
         </button>
       ) : (
         <p className="topbar__day" data-tauri-drag-region>
