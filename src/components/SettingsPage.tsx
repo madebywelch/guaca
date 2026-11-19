@@ -9,7 +9,7 @@ import {
   watchSystemSurface,
 } from "../lib/appearance";
 import { buildLabel } from "../lib/build";
-import { useDismiss } from "../lib/dismiss";
+import { dismissing, useReturnFocus } from "../lib/dismiss";
 import { clientKeeps, hostAt, hostPlace } from "../lib/host";
 import { api, openExternal } from "../lib/ipc";
 import { BINDINGS, comboLabel, SURFACES } from "../lib/keybinds";
@@ -28,7 +28,7 @@ import {
 } from "../lib/prefs";
 import { type Provider as Preset, planLabel, providerFor } from "../lib/providers";
 import { SECTION_LABELS, SECTIONS, type Section } from "../lib/sections";
-import { useStore } from "../lib/store";
+import { type SettingsDraft, useStore } from "../lib/store";
 import { moveAlongTabs } from "../lib/tablist";
 import {
   ATTENTIONS,
@@ -72,8 +72,7 @@ import { ProviderPresets, SubscriptionModel } from "./ProviderFields";
 import { SkillList } from "./SkillList";
 
 interface Props {
-  onClose: () => void;
-  section?: Section;
+  request: { section: Section | null };
   onSection?: (section: Section) => void;
 }
 
@@ -179,24 +178,9 @@ export function pushLine(
 const differs = (text: string, stored: number | undefined) =>
   text.trim() !== "" && Number(text) !== stored;
 
-type Draft = {
-  baseline: Settings | null;
-  operatorName: string;
-  provider: ProviderKind;
-  baseUrl: string;
-  model: string;
-  reasoningEffort: import("../lib/types").ReasoningEffort;
-  subscriptionModel: string;
-  idleMinutes: string;
-  browserIdleMinutes: string;
-  stealth: boolean;
-  timeout: string;
-  limits: GuardLimits;
-};
-let draft: Draft | null = null;
-
-export function SettingsDialog({ onClose, section: opening, onSection }: Props) {
-  const initial = useRef(draft).current;
+export function SettingsPage({ request, onSection }: Props) {
+  const opening = useRef(request).current.section ?? undefined;
+  const initial = useRef(useStore.getState().settingsDraft).current;
   const settings = useStore((s) => s.settings);
   const setSettings = useStore((s) => s.setSettings);
   const capabilities = useStore((s) => s.capabilities);
@@ -212,6 +196,9 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
   };
 
   const [section, setSection] = useState<Section>(opening ?? "general");
+  useEffect(() => {
+    if (request.section) setSection(request.section);
+  }, [request]);
   const [visitedPermissions, setVisitedPermissions] = useState(opening === "permissions");
   useEffect(() => {
     if (section === "permissions") setVisitedPermissions(true);
@@ -263,7 +250,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
   const [pushBusy, setPushBusy] = useState(false);
   const [pushReport, setPushReport] = useState<PushReport | null>(null);
   const [pushTest, setPushTest] = useState<{ ok: boolean; text: string } | null>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLElement>(null);
   const navRef = useRef<HTMLDivElement>(null);
   const paneRef = useRef<HTMLDivElement>(null);
   const pending = useRef<SettingsPatch | null>(null);
@@ -299,7 +286,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
     });
   }, [settings]);
   useEffect(() => {
-    draft = null;
+    useStore.setState({ settingsDraft: null });
   }, []);
 
   const currentKeys = useRef({ apiKey, e2bKey, kernelKey });
@@ -563,28 +550,45 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
     }
   };
 
-  const close = () => {
-    draft = dirty
-      ? {
-          baseline: settings,
-          operatorName,
-          provider,
-          baseUrl,
-          model,
-          reasoningEffort,
-          subscriptionModel,
-          idleMinutes,
-          browserIdleMinutes,
-          stealth,
-          timeout,
-          limits,
-        }
-      : null;
-    onClose();
-  };
+  const kept = useRef<SettingsDraft | null>(null);
+  kept.current = dirty
+    ? {
+        baseline: settings,
+        operatorName,
+        provider,
+        baseUrl,
+        model,
+        reasoningEffort,
+        subscriptionModel,
+        idleMinutes,
+        browserIdleMinutes,
+        stealth,
+        timeout,
+        limits,
+      }
+    : null;
+  useEffect(
+    () => () => {
+      useStore.setState({ settingsDraft: kept.current });
+    },
+    [],
+  );
+
+  const closeSettings = useStore((s) => s.closeSettings);
+  const titleId = useId();
+  useReturnFocus(() => useStore.getState().settingsGoneBack);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.isComposing || event.defaultPrevented || dismissing())
+        return;
+      event.preventDefault();
+      closeSettings();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [closeSettings]);
 
   const discard = () => {
-    draft = null;
     setOperatorName(settings?.operatorName ?? "");
     setProvider(settings?.provider ?? "compatible");
     setBaseUrl(settings?.baseUrl ?? "");
@@ -612,8 +616,6 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
     setTimeoutSecs("");
     setStatus(null);
   };
-
-  useDismiss(close);
 
   const test = async () => {
     setBusy(true);
@@ -775,64 +777,58 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
   };
 
   return (
-    <div className="scrim">
-      <button type="button" className="scrim__close" aria-label="Close dialog" onClick={close} />
-      <div
-        className="dialog dialog--settings"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Settings"
-        tabIndex={-1}
-        ref={panelRef}
-      >
-        <div className="settings__head">
-          <h2 className="dialog__title">Settings</h2>
-          <p className="dialog__lede" style={{ margin: 0 }}>
-            Your host runs your agents. Choose where they work, how they connect, and how Guaca
-            appears on this device.
-          </p>
+    <section className="settings" aria-labelledby={titleId} tabIndex={-1} ref={panelRef}>
+      <div className="settings__head">
+        <h2 className="settings__heading" id={titleId}>
+          Settings
+        </h2>
+        <p className="settings__about">
+          Your host runs your agents. Choose where they work, how they connect, and how Guaca
+          appears on this device.
+        </p>
+      </div>
+
+      <label className="mobile-only settings__section field">
+        <span className="field__label">Settings section</span>
+        <select
+          className="input"
+          value={section}
+          onChange={(event) => setSection(event.target.value as Section)}
+        >
+          {SECTIONS.map((key) => (
+            <option key={key} value={key}>
+              {SECTION_LABELS[key]}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="settings__body">
+        <div
+          className="settings__nav"
+          ref={navRef}
+          role="tablist"
+          aria-orientation="vertical"
+          aria-label="Settings sections"
+          onKeyDown={moveAlongTabs}
+        >
+          {SECTIONS.map((key) => (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              id={`settings-tab-${key}`}
+              className="settings__tab"
+              aria-selected={section === key}
+              aria-controls="settings-pane"
+              tabIndex={section === key ? 0 : -1}
+              onClick={() => setSection(key)}
+            >
+              {SECTION_LABELS[key]}
+            </button>
+          ))}
         </div>
 
-        <label className="mobile-only settings__section field">
-          <span className="field__label">Settings section</span>
-          <select
-            className="input"
-            value={section}
-            onChange={(event) => setSection(event.target.value as Section)}
-          >
-            {SECTIONS.map((key) => (
-              <option key={key} value={key}>
-                {SECTION_LABELS[key]}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="settings__body">
-          <div
-            className="settings__nav"
-            ref={navRef}
-            role="tablist"
-            aria-orientation="vertical"
-            aria-label="Settings sections"
-            onKeyDown={moveAlongTabs}
-          >
-            {SECTIONS.map((key) => (
-              <button
-                key={key}
-                type="button"
-                role="tab"
-                id={`settings-tab-${key}`}
-                className="settings__tab"
-                aria-selected={section === key}
-                aria-controls="settings-pane"
-                tabIndex={section === key ? 0 : -1}
-                onClick={() => setSection(key)}
-              >
-                {SECTION_LABELS[key]}
-              </button>
-            ))}
-          </div>
-
+        <div className="settings__main">
           <div
             className="settings__pane"
             ref={paneRef}
@@ -1222,20 +1218,25 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   />
                 </label>
 
-                <label
-                  className="field field--row"
+                <div
+                  className="switch-row"
                   title="For sites that block automation: Kernel disguises the browser and solves captchas. Needs a plan that includes it. Leave it off until a site turns an agent away."
                 >
-                  <input
-                    type="checkbox"
-                    checked={stealth}
-                    onChange={(event) => setStealth(event.target.checked)}
-                  />
-                  <span>
-                    <span className="field__label">Hide that browsers are automated</span>
-                    <span className="field__hint">Costs more per browser.</span>
+                  <span className="switch-row__text">
+                    <span className="switch-row__label">Hide that browsers are automated</span>
+                    <span className="switch-row__hint">Costs more per browser.</span>
                   </span>
-                </label>
+                  <button
+                    type="button"
+                    className="toggle"
+                    role="switch"
+                    aria-label="Hide that browsers are automated"
+                    aria-checked={stealth}
+                    onClick={() => setStealth(!stealth)}
+                  >
+                    <span aria-hidden="true" className="toggle__track" />
+                  </button>
+                </div>
               </>
             )}
 
@@ -1385,13 +1386,13 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                   </span>
                   <button
                     type="button"
-                    className="choice"
+                    className="toggle"
                     role="switch"
                     aria-label="Show reasoning and tool calls"
                     aria-checked={prefs.showReasoning}
                     onClick={() => setPrefs({ showReasoning: !prefs.showReasoning })}
                   >
-                    {prefs.showReasoning ? "On" : "Off"}
+                    <span aria-hidden="true" className="toggle__track" />
                   </button>
                 </div>
 
@@ -1731,14 +1732,14 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
                       </span>
                       <button
                         type="button"
-                        className="choice"
+                        className="toggle"
                         role="switch"
                         disabled={attending === row.key}
                         aria-checked={settings.attention?.[row.key]}
                         aria-label={row.label}
                         onClick={() => void toggleAttention(row.key)}
                       >
-                        {settings.attention?.[row.key] ? "On" : "Off"}
+                        <span aria-hidden="true" className="toggle__track" />
                       </button>
                     </div>
                   ))}
@@ -2092,45 +2093,39 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
               </>
             )}
           </div>
-        </div>
 
-        {status && (
-          <div
-            className={
-              status.tone === "error"
-                ? "banner banner--error"
-                : status.tone === "ok"
-                  ? "banner banner--ok"
-                  : "banner"
-            }
-            style={{ margin: "0.75rem 1.35rem 0" }}
-          >
-            <span>{status.text}</span>
-          </div>
-        )}
-
-        <div className="settings__foot">
-          <button type="button" className="btn" onClick={close}>
-            Close
-          </button>
-          {dirty && (
-            <button type="button" className="btn" disabled={busy} onClick={discard}>
-              Discard changes
-            </button>
-          )}
-          {dirty && (
-            <button
-              type="button"
-              className="btn btn--primary"
-              disabled={busy}
-              onClick={() => void save()}
+          {status && (
+            <div
+              className={
+                status.tone === "error"
+                  ? "banner banner--error"
+                  : status.tone === "ok"
+                    ? "banner banner--ok"
+                    : "banner"
+              }
             >
-              Save
-            </button>
+              <span>{status.text}</span>
+            </div>
+          )}
+
+          {dirty && (
+            <div className="settings__foot">
+              <button type="button" className="btn" disabled={busy} onClick={discard}>
+                Discard changes
+              </button>
+              <button
+                type="button"
+                className="btn btn--primary"
+                disabled={busy}
+                onClick={() => void save()}
+              >
+                Save
+              </button>
+            </div>
           )}
         </div>
       </div>
-    </div>
+    </section>
   );
 }
 

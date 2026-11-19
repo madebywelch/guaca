@@ -409,7 +409,7 @@ def show(w: World, screen: str) -> None:
         w.wait("the request waits in the conversation", lambda: ui.find("button", "Allow"))
     elif screen == "Settings":
         ui.click("button", "App settings")
-        w.wait("Settings opens", lambda: ui.find("dialog", "Settings", exact=False))
+        w.wait("Settings opens", lambda: ui.find("region", "Settings"))
     elif screen == "New agent":
         ui.click("button", "Make something new")
         ui.click("menuitem", "New agent", exact=False)
@@ -427,9 +427,10 @@ def show(w: World, screen: str) -> None:
 
 def dismiss(w: World) -> None:
     ui = w.ui
-    if ui.find("dialog", "", exact=False):
+    if ui.find("dialog", "", exact=False) or ui.find("region", "Settings"):
         ui.key("Escape")
-    w.wait("every dialog closes on Escape", lambda: not ui.find("dialog", "", exact=False))
+    w.wait("every dialog and Settings close on Escape",
+           lambda: not ui.find("dialog", "", exact=False) and not ui.find("region", "Settings"))
     w.wait("the page has finished moving", lambda: ui.evaluate(look.SETTLED))
 
 
@@ -448,7 +449,7 @@ def sweep(w: World, seen: dict[str, look.Verdict]) -> None:
         measure(w, f"the agent's {tab} tab", "light", seen)
     ui.click("button", "Conversation")
     ui.click("button", "App settings")
-    w.wait("Settings opens", lambda: ui.find("dialog", "Settings", exact=False))
+    w.wait("Settings opens", lambda: ui.find("region", "Settings"))
     for tab in SETTINGS_TABS:
         ui.click("tab", tab)
         w.wait(f"the {tab} pane is shown", lambda: ui.find("tab", tab)[0].get("properties") is not None)
@@ -591,6 +592,184 @@ def scenario_scrollbars(w: World) -> None:
             and all(abs(a - b) <= 1 for key in ("general", "yourName")
                     for a, b in zip(overlay[key], classic[key])),
             observed=measured)
+    no_unscripted(w)
+
+
+SETTINGS_SECTIONS = ("General",) + SETTINGS_TABS
+SETTINGS_FRAMES = ((1280, 820), (900, 700))
+SETTINGS_PAGE = """
+(() => {
+  const box = (el) => { const r = el.getBoundingClientRect(); return [Math.round(r.top), Math.round(r.bottom)]; };
+  const nav = document.querySelector('.settings__nav');
+  const pane = document.querySelector('.settings__pane');
+  const tabs = [...nav.querySelectorAll('[role=tab]')];
+  return {
+    navScrolls: nav.scrollHeight > nav.clientHeight,
+    tabs: tabs.length,
+    tabsShown: tabs.filter((t) => { const [top, bottom] = box(t); return top >= 0 && bottom <= innerHeight; }).length,
+    navTop: Math.round(nav.getBoundingClientRect().top),
+    paneScrolls: pane.scrollHeight > pane.clientHeight,
+    paneTop: pane.scrollTop,
+    inDialog: !!document.querySelector('.settings').closest('[role=dialog], .scrim'),
+    timeline: !!document.querySelector('.ribbon'),
+  };
+})()
+"""
+SHEET_FITS = """
+(() => {
+  const dialog = [...document.querySelectorAll('[role=dialog]')].at(-1);
+  const r = dialog.getBoundingClientRect();
+  const foot = [...dialog.querySelectorAll('button')].filter((b) => /^(Cancel|Create agent|Create group|Delete|Close)$/.test(b.textContent.trim()));
+  return {
+    top: Math.round(r.top), bottom: Math.round(r.bottom), height: innerHeight,
+    actions: foot.map((b) => { const q = b.getBoundingClientRect(); return [b.textContent.trim(), q.top >= 0 && q.bottom <= innerHeight && q.bottom <= r.bottom]; }),
+  };
+})()
+"""
+
+
+def section_shown(w: World) -> str:
+    return selected_tab(w)[0] if selected_tab(w) else ""
+
+
+def menu_section(w: World, section: str) -> None:
+    ui = w.ui
+    ui.key("k", mod=True)
+    w.wait("the command menu opens", lambda: ui.find("dialog", "Command menu"))
+    ui.type("textbox", "Command menu", f"Settings: {section}")
+    w.wait(f"Settings: {section} is chosen", lambda: menu_choice(w) == f"Settings: {section}")
+    ui.key("Enter")
+    w.wait("the menu closes", lambda: not ui.find("dialog", "Command menu"))
+
+
+def scenario_settings(w: World) -> None:
+    w.model.script = hello
+    w.start()
+    first_run(w)
+    settled(w, 1)
+    ui = w.ui
+    show(w, "Today")
+
+    ui.viewport(*look.FRAME)
+    gear = ui.one("button", "App settings")
+    ui.press(gear)
+    w.wait("Settings opens", lambda: ui.find("region", "Settings"))
+    page = ui.evaluate(SETTINGS_PAGE)
+    w.check("the gear opens Settings as a page in the window, with the timeline and a back control, and no dialog",
+            not ui.find("dialog", "", exact=False) and not page["inDialog"] and page["timeline"]
+            and bool(ui.find("button", "Today")) and section_shown(w) == "General",
+            observed={"dialogs": ui.names("dialog"), "inDialog": page["inDialog"], "timeline": page["timeline"],
+                      "back": bool(ui.find("button", "Today")), "section": section_shown(w)}, shot=True)
+
+    fits = {}
+    for width, height in SETTINGS_FRAMES:
+        ui.viewport(width, height)
+        w.wait(f"Settings lays out at {width}x{height}", lambda: ui.evaluate(look.SETTLED))
+        fits[f"{width}x{height}"] = {key: value for key, value in ui.evaluate(SETTINGS_PAGE).items()
+                                     if key in ("navScrolls", "tabs", "tabsShown")}
+        w.capture(f"Settings at {width}x{height}")
+    w.check("at 1280x820 and 900x700 the section list shows all thirteen sections without scrolling",
+            all(not f["navScrolls"] and f["tabs"] == 13 and f["tabsShown"] == 13 for f in fits.values()),
+            observed=fits)
+
+    ui.click("tab", "Appearance")
+    w.wait("the Appearance pane is shown", lambda: ui.find("heading", "Appearance"))
+    before = ui.evaluate(SETTINGS_PAGE)
+    ui.evaluate("document.querySelector('.settings__pane').scrollTop = 100000")
+    after = ui.evaluate(SETTINGS_PAGE)
+    w.check("a long section scrolls on its own, and the section list stays where it was",
+            before["paneScrolls"] and after["paneTop"] > 0 and after["navTop"] == before["navTop"]
+            and ui.on_screen("tab", "General") and ui.on_screen("tab", "About"),
+            observed={"paneScrolls": before["paneScrolls"], "scrolled": after["paneTop"] > 0,
+                      "listStayed": after["navTop"] == before["navTop"]}, shot=True)
+
+    ui.click("tab", "Provider")
+    ui.fill("textbox", "Give up on a call after", "45")
+    ui.evaluate("document.querySelector('.settings__pane').scrollTop = 100000")
+    w.wait("Provider has scrolled", lambda: ui.evaluate("document.querySelector('.settings__pane').scrollTop") > 0)
+    w.check("with an unsaved change, Save stays on screen after scrolling to the end of a section",
+            ui.on_screen("button", "Save") and ui.on_screen("button", "Discard changes"),
+            observed={"save": ui.on_screen("button", "Save")}, shot=True)
+    ui.click("button", "Discard changes")
+    w.wait("nothing is left to save", lambda: not ui.find("button", "Save"))
+
+    returns = {}
+    for leave in ("Escape", "back", "Command-comma"):
+        if not ui.find("region", "Settings"):
+            ui.press(ui.one("button", "App settings"))
+            w.wait("Settings opens", lambda: ui.find("region", "Settings"))
+        if leave == "Escape":
+            ui.key("Escape")
+        elif leave == "back":
+            ui.click("button", "Today")
+        else:
+            ui.key(",", mod=True)
+        w.wait(f"{leave} leaves Settings", lambda: not ui.find("region", "Settings"))
+        returns[leave] = {"today": bool(ui.find("region", "Today")),
+                          "focus": w.wait("the focus comes back", lambda: ui.focused()
+                                          if ui.focused() == ("button", "App settings") else None)}
+    ui.key(",", mod=True)
+    opened = bool(w.wait("Command-comma opens Settings", lambda: ui.find("region", "Settings")))
+    ui.key(",", mod=True)
+    w.wait("Command-comma again leaves it", lambda: not ui.find("region", "Settings"))
+    w.check("Escape, the back control and Command-comma each return to where Settings was opened, with the focus where it was",
+            opened and all(r["today"] and r["focus"] == ("button", "App settings") for r in returns.values()),
+            observed=returns)
+
+    straight = {}
+    for section in SETTINGS_SECTIONS:
+        menu_section(w, section)
+        straight[section] = w.wait(f"Settings opens on {section}", lambda: section_shown(w) == section
+                                   and ui.find("region", "Settings")) and section_shown(w)
+        ui.key("Escape")
+        w.wait("Settings closes", lambda: not ui.find("region", "Settings"))
+    ui.key(",", mod=True)
+    w.wait("Settings opens", lambda: ui.find("region", "Settings"))
+    within = {}
+    for section in reversed(SETTINGS_SECTIONS):
+        menu_section(w, section)
+        within[section] = w.wait(f"the page turns to {section}", lambda: section_shown(w) == section) and section_shown(w)
+    ui.key("Escape")
+    w.wait("Settings closes", lambda: not ui.find("region", "Settings"))
+    w.check("the command menu opens every section straight to itself, from Today and from the page",
+            all(straight[s] == s for s in SETTINGS_SECTIONS) and all(within[s] == s for s in SETTINGS_SECTIONS),
+            observed={"fromToday": straight, "fromThePage": within})
+
+    open_agent(w, AGENT)
+    ui.key(",", mod=True)
+    w.wait("Settings opens over the agent's page", lambda: ui.find("region", "Settings"))
+    gone = not ui.find("log", f"Conversation with {AGENT}")
+    ui.click("button", AGENT)
+    w.wait("the back control leaves Settings", lambda: not ui.find("region", "Settings"))
+    w.check("opened from an agent's page, the back control is named for that agent and returns to it",
+            gone and bool(ui.find("log", f"Conversation with {AGENT}")),
+            observed={"replaced": gone, "back": bool(ui.find("log", f"Conversation with {AGENT}"))}, shot=True)
+
+    show(w, "Today")
+    ui.viewport(900, 700)
+    group = w.host.scalar("SELECT name FROM groups ORDER BY rowid LIMIT 1")
+    sheets = {}
+    for sheet in ("New agent", "New group", "Group settings"):
+        if sheet == "Group settings":
+            show(w, "the Groups sheet")
+            ui.click("button", f"{group} settings")
+        else:
+            ui.click("button", "Make something new")
+            ui.click("menuitem", sheet, exact=False)
+        w.wait(f"{sheet} opens", lambda: ui.find("dialog", sheet))
+        w.wait(f"{sheet} has finished moving", lambda: ui.evaluate(look.SETTLED))
+        sheets[sheet] = ui.evaluate(SHEET_FITS)
+        w.capture(f"{sheet} at 900x700")
+        while ui.find("dialog", "", exact=False):
+            open_now = len(ui.names("dialog"))
+            ui.key("Escape")
+            w.wait("the sheet on top closes", lambda: len(ui.names("dialog")) < open_now)
+    w.check("New agent, New group and a group's settings fit a 900x700 window with their actions on screen",
+            all(f["top"] >= 0 and f["bottom"] <= f["height"] and f["actions"] and all(shown for _, shown in f["actions"])
+                for f in sheets.values()),
+            observed={k: {"fits": v["top"] >= 0 and v["bottom"] <= v["height"], "actions": v["actions"]}
+                      for k, v in sheets.items()})
+    ui.viewport(*look.FRAME)
     no_unscripted(w)
 
 
@@ -1437,7 +1616,7 @@ def scenario_tabs(w: World) -> None:
 
     ui.evaluate("document.activeElement && document.activeElement.blur()")
     ui.key(",", mod=True)
-    w.wait("Settings opens", lambda: ui.find("dialog", "Settings"))
+    w.wait("Settings opens", lambda: ui.find("region", "Settings"))
     stops = []
     for _ in range(4):
         ui.key("Tab")
@@ -2012,6 +2191,23 @@ SCENARIOS: dict[str, Scenario] = {
         "Home and End reach the first and the last section",
         "Tab goes from the section list into the open panel",
         "the section list is one Tab stop",
+        "every model call was one the scenario scripted",
+    )),
+    "settings": Scenario(scenario_settings, "A person opens Settings from the gear as a page in the window, with the "
+                         "timeline kept and a back control, and its thirteen sections listed without scrolling at "
+                         "1280 by 820 and 900 by 700; a section scrolls on its own with Save kept on screen, Escape, "
+                         "the back control and Command-comma each return to where it was opened with the focus back, "
+                         "the command menu opens every section straight to itself, and New agent, New group and a "
+                         "group's settings fit a 900 by 700 window with their actions on screen.",
+    (
+        "the gear opens Settings as a page in the window, with the timeline and a back control, and no dialog",
+        "at 1280x820 and 900x700 the section list shows all thirteen sections without scrolling",
+        "a long section scrolls on its own, and the section list stays where it was",
+        "with an unsaved change, Save stays on screen after scrolling to the end of a section",
+        "Escape, the back control and Command-comma each return to where Settings was opened, with the focus where it was",
+        "the command menu opens every section straight to itself, from Today and from the page",
+        "opened from an agent's page, the back control is named for that agent and returns to it",
+        "New agent, New group and a group's settings fit a 900x700 window with their actions on screen",
         "every model call was one the scenario scripted",
     )),
     "tabs": Scenario(scenario_tabs, "A person opens Settings from the keyboard, reaches the tab list in one Tab, "

@@ -15,7 +15,7 @@ import { Home } from "./components/Home";
 import { HostUpdateNotice } from "./components/HostUpdates";
 import { Onboarding } from "./components/Onboarding";
 import { Search } from "./components/Search";
-import { SettingsDialog } from "./components/SettingsDialog";
+import { SettingsPage } from "./components/SettingsPage";
 import { StatusBar } from "./components/StatusBar";
 import { Timeline } from "./components/Timeline";
 import { Toast } from "./components/Toast";
@@ -110,7 +110,9 @@ export default function App() {
   const showForYou = useStore((state) => state.showForYou);
   const artifactsOpen = useStore((state) => state.artifactsOpen);
   const showArtifacts = useStore((state) => state.showArtifacts);
-  const [showSettings, setShowSettings] = useState<Section | true | null>(null);
+  const settingsPage = useStore((state) => state.settingsPage);
+  const openSettings = useStore((state) => state.openSettings);
+  const closeSettings = useStore((state) => state.closeSettings);
   const [searching, setSearching] = useState<string | false>(false);
   const [showGroups, setShowGroups] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
@@ -159,8 +161,13 @@ export default function App() {
         void state.select(agent.id);
       }
       if (binding.id === "search") setSearching("");
-      if (binding.id === "settings") setShowSettings(true);
-      if (binding.id === "shortcuts") setShowSettings("shortcuts");
+      if (binding.id === "settings" || binding.id === "shortcuts") {
+        if (menuOpen.current) setShowMenu(false);
+        else if (dismissing()) return;
+        const state = useStore.getState();
+        if (binding.id === "settings" && state.settingsPage) state.closeSettings();
+        else state.openSettings(binding.id === "shortcuts" ? "shortcuts" : undefined);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -262,7 +269,7 @@ export default function App() {
         showForYou(true);
         break;
       case "settings":
-        setShowSettings(asSection(place.section) ?? true);
+        openSettings(asSection(place.section));
         break;
       case "crewSettings": {
         const group = groups.find((g) => g.id === place.groupId);
@@ -284,7 +291,6 @@ export default function App() {
     ...(showCafeteria ? ["cafeteria" as const] : []),
     ...(showCalendar ? ["calendar" as const] : []),
     ...(artifactsOpen ? ["artifacts" as const] : []),
-    ...(showSettings ? ["settings" as const] : []),
     ...(searching !== false ? ["search" as const] : []),
   ];
   const [dialogOrder, setDialogOrder] = useState<Overlay[]>([]);
@@ -294,7 +300,7 @@ export default function App() {
   ];
   if (orderedDialogs.join() !== dialogOrder.join()) setDialogOrder(orderedDialogs);
 
-  const overlay: Overlay | null = orderedDialogs.at(-1) ?? null;
+  const overlay: Overlay | null = orderedDialogs.at(-1) ?? (settingsPage ? "settings" : null);
   useReportView({
     agentId: selected ?? null,
     overlay,
@@ -327,14 +333,19 @@ export default function App() {
     <div
       className="app"
       data-link={link === "down" ? "down" : undefined}
-      data-page={selected === null ? "today" : "agent"}
+      data-page={settingsPage ? "settings" : selected === null ? "today" : "agent"}
     >
       <TopBar
-        open={openAgent?.name ?? null}
-        onHome={leaveChannel}
+        back={
+          settingsPage
+            ? { to: openAgent?.name ?? "Today", go: closeSettings }
+            : openAgent
+              ? { to: "Today", go: leaveChannel }
+              : null
+        }
         onSearch={() => setSearching("")}
         onGroups={() => setShowGroups(true)}
-        onSettings={() => setShowSettings(true)}
+        onSettings={() => openSettings()}
         onNewAgent={() => setEditing("new")}
         onNewGroup={() => setEditingGroup("new")}
         onOpenCafeteria={() => setShowCafeteria(true)}
@@ -352,13 +363,13 @@ export default function App() {
         {needsKey && !firstRun && (
           <div className="banner">
             <span>Add an API key before your agents can reply.</span>
-            <button type="button" className="btn" onClick={() => setShowSettings("provider")}>
+            <button type="button" className="btn" onClick={() => openSettings("provider")}>
               Open settings
             </button>
           </div>
         )}
 
-        <HostUpdateNotice onReview={() => setShowSettings("workspace")} />
+        <HostUpdateNotice onReview={() => openSettings("workspace")} />
 
         {handoff && (
           <div className="banner" role="status">
@@ -375,63 +386,67 @@ export default function App() {
           </div>
         )}
 
-        {banner && <FailureBanner banner={banner} onSettings={setShowSettings} />}
+        {banner && <FailureBanner banner={banner} onSettings={openSettings} />}
 
-        {firstRun && (
-          <Onboarding
-            group={groups[0]!}
-            onStarting={() => setOnboardingActive(true)}
-            onDone={() => {
-              setOnboardingActive(false);
-              setCheckingFirstTask(false);
-            }}
-            onInspect={setCheckingFirstTask}
-            onBrowse={() => setShowCafeteria(true)}
-            onCreate={() => setEditing("new")}
-          />
-        )}
+        {settingsPage && <SettingsPage request={settingsPage} onSection={setOpenSection} />}
 
-        {!ready ? (
-          <div className="empty" style={{ margin: "auto" }}>
-            <p className="empty__body">Starting up…</p>
-          </div>
-        ) : firstRun && !checkingFirstTask ? null : agents.length === 0 ? (
-          <div className="empty" style={{ margin: "auto" }}>
-            <span style={{ display: "inline-flex" }}>
-              <AgentAvatar avatar="orb" color="#5a7d99" size="lg" seed="empty-state" />
-            </span>
-            <h2 className="empty__title">No agents yet</h2>
-            <p className="empty__body">
-              Agents are the people in this workspace. You talk to them, and they can talk to each
-              other. Hire a few who are already set up, or write one from scratch.
-            </p>
-            <div style={{ display: "flex", gap: "0.5rem", justifyContent: "center" }}>
-              <button
-                type="button"
-                className="btn btn--primary"
-                onClick={() => setShowCafeteria(true)}
-              >
-                Open the cafeteria
-              </button>
-              <button type="button" className="btn" onClick={() => setEditing("new")}>
-                Create one agent
-              </button>
+        <div className="app__view" hidden={settingsPage !== null}>
+          {firstRun && (
+            <Onboarding
+              group={groups[0]!}
+              onStarting={() => setOnboardingActive(true)}
+              onDone={() => {
+                setOnboardingActive(false);
+                setCheckingFirstTask(false);
+              }}
+              onInspect={setCheckingFirstTask}
+              onBrowse={() => setShowCafeteria(true)}
+              onCreate={() => setEditing("new")}
+            />
+          )}
+
+          {!ready ? (
+            <div className="empty" style={{ margin: "auto" }}>
+              <p className="empty__body">Starting up…</p>
             </div>
-          </div>
-        ) : selected === null ? (
-          <Home
-            onSearch={(query) => setSearching(query)}
-            onManageGroups={() => setShowGroups(true)}
-          />
-        ) : (
-          <ChannelView
-            channel={selected}
-            onOpenMenu={(agent, at) => setMenu({ agent, ...at })}
-            view={agentView}
-            onView={setAgentView}
-            onEditProfile={(agent) => setEditing(agent)}
-          />
-        )}
+          ) : firstRun && !checkingFirstTask ? null : agents.length === 0 ? (
+            <div className="empty" style={{ margin: "auto" }}>
+              <span style={{ display: "inline-flex" }}>
+                <AgentAvatar avatar="orb" color="#5a7d99" size="lg" seed="empty-state" />
+              </span>
+              <h2 className="empty__title">No agents yet</h2>
+              <p className="empty__body">
+                Agents are the people in this workspace. You talk to them, and they can talk to each
+                other. Hire a few who are already set up, or write one from scratch.
+              </p>
+              <div style={{ display: "flex", gap: "0.5rem", justifyContent: "center" }}>
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  onClick={() => setShowCafeteria(true)}
+                >
+                  Open the cafeteria
+                </button>
+                <button type="button" className="btn" onClick={() => setEditing("new")}>
+                  Create one agent
+                </button>
+              </div>
+            </div>
+          ) : selected === null ? (
+            <Home
+              onSearch={(query) => setSearching(query)}
+              onManageGroups={() => setShowGroups(true)}
+            />
+          ) : (
+            <ChannelView
+              channel={selected}
+              onOpenMenu={(agent, at) => setMenu({ agent, ...at })}
+              view={agentView}
+              onView={setAgentView}
+              onEditProfile={(agent) => setEditing(agent)}
+            />
+          )}
+        </div>
 
         {ready && <StatusBar onOpen={openPlace} onMessage={sendFromBar} />}
       </main>
@@ -473,7 +488,7 @@ export default function App() {
       {showMenu && (
         <CommandMenu
           onClose={() => setShowMenu(false)}
-          onSection={(section) => setShowSettings(section)}
+          onSection={(section) => openSettings(section)}
           onPlace={(place, query) => {
             if (place === "search") setSearching(query ?? "");
             if (place === "forYou") showForYou(true);
@@ -497,7 +512,7 @@ export default function App() {
           onOpenCalendar={() => setShowCalendar(true)}
           onOpenArtifacts={() => showArtifacts({ id: null })}
           onEditGroup={(group) => setEditingGroup(group)}
-          onOpenSettings={() => setShowSettings(true)}
+          onOpenSettings={() => openSettings()}
           onOpenSearch={() => setSearching("")}
           onNewAgent={() => setEditing("new")}
           onNewGroup={() => setEditingGroup("new")}
@@ -536,17 +551,6 @@ export default function App() {
             return <Calendar key={dialog} onClose={() => setShowCalendar(false)} />;
           case "artifacts":
             return <Artifacts key={dialog} onClose={() => showArtifacts(null)} />;
-          case "settings":
-            return (
-              showSettings && (
-                <SettingsDialog
-                  key={dialog}
-                  onClose={() => setShowSettings(null)}
-                  section={showSettings === true ? undefined : showSettings}
-                  onSection={setOpenSection}
-                />
-              )
-            );
           case "search":
             return (
               <Search
@@ -558,7 +562,7 @@ export default function App() {
                 onNewAgent={() => setEditing("new")}
                 onNewGroup={() => setEditingGroup("new")}
                 onOpenCafeteria={() => setShowCafeteria(true)}
-                onOpenSettings={() => setShowSettings(true)}
+                onOpenSettings={() => openSettings()}
               />
             );
           default:
@@ -574,7 +578,7 @@ function FailureBanner({
   onSettings,
 }: {
   banner: Banner;
-  onSettings: (section: Section | true) => void;
+  onSettings: (section?: Section) => void;
 }) {
   const setBanner = useStore((state) => state.setBanner);
   const [retrying, setRetrying] = useState(false);

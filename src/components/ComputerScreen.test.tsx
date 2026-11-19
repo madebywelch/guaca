@@ -7,7 +7,6 @@ import { useStore } from "../lib/store";
 import type { AgentCard, Computer } from "../lib/types";
 import { ComputerScreen, computerRead } from "./ComputerScreen";
 import { Search } from "./Search";
-import { SettingsDialog } from "./SettingsDialog";
 
 const agentComputer = vi.fn<(id: string) => Promise<Computer | null>>();
 const giveAgentComputer = vi.fn<(id: string) => Promise<unknown>>();
@@ -30,11 +29,11 @@ vi.mock("../lib/ipc", async (original) => ({
 }));
 
 function ScreenWorkspace() {
-  const [upper, setUpper] = useState<"settings" | "search" | null>(null);
+  const [upper, setUpper] = useState<"search" | null>(null);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const binding = bindingFor(event);
-      if (binding?.id === "settings" || binding?.id === "search") {
+      if (binding?.id === "search") {
         event.preventDefault();
         setUpper(binding.id);
       }
@@ -46,7 +45,6 @@ function ScreenWorkspace() {
   return (
     <>
       <ComputerScreen agent={card("a", "Cook")} />
-      {upper === "settings" && <SettingsDialog onClose={close} />}
       {upper === "search" && (
         <Search
           onClose={close}
@@ -317,29 +315,29 @@ describe("ComputerScreen", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: /take over/i }));
   });
 
-  it.each([
-    ["Settings", ","],
-    ["Search", "f"],
-  ])("keeps the expanded computer under %s and restores focus", async (name, key) => {
-    agentComputer.mockResolvedValue(HAS_ONE);
-    render(<ScreenWorkspace />);
-    const veil = await screen.findByRole("button", { name: /take over/i });
-    veil.focus();
-    fireEvent.click(veil);
-    const computer = screen.getByRole("dialog", { name: "Cook's computer" });
-    const done = screen.getByRole("button", { name: "Done" });
-    done.focus();
-    fireEvent.keyDown(window, { key, ctrlKey: true });
-    const upper = await screen.findByRole("dialog", { name });
-    await waitFor(() => expect(computer.contains(document.activeElement)).toBe(false));
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(upper.isConnected).toBe(false);
-    expect(screen.getByRole("dialog", { name: "Cook's computer" })).toBe(computer);
-    expect(document.activeElement).toBe(done);
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.queryByRole("dialog", { name: "Cook's computer" })).toBeNull();
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: /take over/i }));
-  });
+  it.each([["Search", "f"]])(
+    "keeps the expanded computer under %s and restores focus",
+    async (name, key) => {
+      agentComputer.mockResolvedValue(HAS_ONE);
+      render(<ScreenWorkspace />);
+      const veil = await screen.findByRole("button", { name: /take over/i });
+      veil.focus();
+      fireEvent.click(veil);
+      const computer = screen.getByRole("dialog", { name: "Cook's computer" });
+      const done = screen.getByRole("button", { name: "Done" });
+      done.focus();
+      fireEvent.keyDown(window, { key, ctrlKey: true });
+      const upper = await screen.findByRole("dialog", { name });
+      await waitFor(() => expect(computer.contains(document.activeElement)).toBe(false));
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(upper.isConnected).toBe(false);
+      expect(screen.getByRole("dialog", { name: "Cook's computer" })).toBe(computer);
+      expect(document.activeElement).toBe(done);
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(screen.queryByRole("dialog", { name: "Cook's computer" })).toBeNull();
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: /take over/i }));
+    },
+  );
 
   it("holds the space the screen had while it covers the window", async () => {
     agentComputer.mockResolvedValue(HAS_ONE);

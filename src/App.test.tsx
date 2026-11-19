@@ -169,6 +169,8 @@ beforeEach(() => {
     pulses: [],
     banner: null,
     artifactsOpen: null,
+    settingsPage: null,
+    settingsDraft: null,
     link: "up",
     lastHeard: null,
   });
@@ -234,7 +236,7 @@ describe("App", () => {
     render(<App />);
     const row = await screen.findByRole("navigation", { name: "Window" });
     fireEvent.click(within(row).getByRole("button", { name: "App settings" }));
-    expect(await screen.findByRole("dialog", { name: "Settings" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Settings" })).toBeTruthy();
   });
 
   it("offers a way in when there are no agents", async () => {
@@ -249,81 +251,162 @@ describe("App", () => {
     expect(await screen.findByRole("dialog", { name: /cafeteria/i })).toBeTruthy();
   });
 
-  it("keeps the cafeteria open when settings is opened and dismissed above it", async () => {
+  it("leaves an open sheet alone on Command-comma", async () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /open the cafeteria/i }));
     const cafeteria = await screen.findByRole("dialog", { name: /cafeteria/i });
     fireEvent.keyDown(window, { key: ",", ctrlKey: true });
-    const settings = await screen.findByRole("dialog", { name: /settings/i });
+    expect(screen.queryByRole("region", { name: "Settings" })).toBeNull();
+    expect(useStore.getState().settingsPage).toBeNull();
     expect(cafeteria.isConnected).toBe(true);
-    expect(document.activeElement).toBe(settings);
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.queryByRole("dialog", { name: /settings/i })).toBeNull();
-    expect(cafeteria.isConnected).toBe(true);
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(cafeteria.isConnected).toBe(false);
   });
 
-  it("leaves settings open when search above it is dismissed", async () => {
+  it("opens Settings as a page in place of Today, with the timeline kept", async () => {
     render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: /open the cafeteria/i }));
-    const cafeteria = await screen.findByRole("dialog", { name: /cafeteria/i });
+    const heading = await screen.findByRole("heading", { name: "What would you like help with?" });
     fireEvent.keyDown(window, { key: ",", ctrlKey: true });
-    const settings = await screen.findByRole("dialog", { name: /settings/i });
-    fireEvent.keyDown(window, { key: "f", ctrlKey: true });
-    const search = await screen.findByRole("dialog", { name: /search/i });
-    expect(settings.closest(".scrim")?.nextElementSibling).toBe(search.closest(".scrim"));
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.queryByRole("dialog", { name: /search/i })).toBeNull();
-    expect(settings.isConnected).toBe(true);
-    expect(cafeteria.isConnected).toBe(true);
+    const page = await screen.findByRole("region", { name: "Settings" });
+    expect(page.closest("main")).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(heading.isConnected).toBe(true);
+    expect(screen.queryByRole("heading", { name: "What would you like help with?" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Today" })).toBeTruthy();
   });
 
-  it("opens settings above search and dismisses it first", async () => {
+  it("goes back on Command-comma, Escape and the back control, restoring the focus", async () => {
     render(<App />);
     await screen.findByRole("heading", { name: "What would you like help with?" });
-    fireEvent.keyDown(window, { key: "f", ctrlKey: true });
-    const search = await screen.findByRole("dialog", { name: "Search" });
-    fireEvent.keyDown(window, { key: ",", ctrlKey: true });
-    const settings = await screen.findByRole("dialog", { name: "Settings" });
-    expect(search.isConnected).toBe(true);
-    expect(search.closest(".scrim")?.nextElementSibling).toBe(settings.closest(".scrim"));
-    fireEvent.keyDown(settings, { key: "Enter" });
-    expect(search.isConnected).toBe(true);
-    expect(settings.isConnected).toBe(true);
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(settings.isConnected).toBe(false);
-    expect(search.isConnected).toBe(true);
-    expect(screen.getByRole("dialog", { name: "Search" })).toBe(search);
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(search.isConnected).toBe(false);
+    const gear = within(screen.getByRole("navigation", { name: "Window" })).getByRole("button", {
+      name: "App settings",
+    });
+    for (const leave of ["comma", "escape", "back"] as const) {
+      gear.focus();
+      fireEvent.click(gear);
+      const page = await screen.findByRole("region", { name: "Settings" });
+      await waitFor(() => expect(document.activeElement).toBe(page));
+      if (leave === "comma") fireEvent.keyDown(window, { key: ",", ctrlKey: true });
+      if (leave === "escape") fireEvent.keyDown(window, { key: "Escape" });
+      if (leave === "back") fireEvent.click(screen.getByRole("button", { name: "Today" }));
+      expect(screen.queryByRole("region", { name: "Settings" })).toBeNull();
+      expect(screen.getByRole("heading", { name: "What would you like help with?" })).toBeTruthy();
+      await waitFor(() => expect(document.activeElement).toBe(gear));
+    }
   });
 
-  it.each(["Calendar", "Artifacts"])(
-    "keeps %s open under settings and restores focus in order",
-    async (name) => {
+  it("goes back to the agent page it was opened from, as that page was left", async () => {
+    listAgents.mockResolvedValue([agent("Manager")]);
+    render(<App />);
+    await waitFor(() => expect(useStore.getState().agents).toHaveLength(1));
+    await act(async () => useStore.getState().select(useStore.getState().agents[0]!.id));
+    const agentPage = await screen.findByRole("navigation", { name: "Manager's page" });
+    fireEvent.keyDown(window, { key: ",", ctrlKey: true });
+    await screen.findByRole("region", { name: "Settings" });
+    expect(screen.queryByRole("navigation", { name: "Manager's page" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Manager" }));
+    expect(screen.queryByRole("region", { name: "Settings" })).toBeNull();
+    expect(screen.getByRole("navigation", { name: "Manager's page" })).toBe(agentPage);
+  });
+
+  it("leaves the page for an agent opened from anywhere while it is shown", async () => {
+    listAgents.mockResolvedValue([agent("Manager")]);
+    render(<App />);
+    await waitFor(() => expect(useStore.getState().agents).toHaveLength(1));
+    fireEvent.keyDown(window, { key: ",", ctrlKey: true });
+    await screen.findByRole("region", { name: "Settings" });
+    await act(async () => useStore.getState().select(useStore.getState().agents[0]!.id));
+    expect(screen.queryByRole("region", { name: "Settings" })).toBeNull();
+    expect(await screen.findByRole("navigation", { name: "Manager's page" })).toBeTruthy();
+  });
+
+  it.each(["openMessage", "leaveChannel"] as const)(
+    "leaves the page on %s, keeping the draft and not pulling the focus back to the gear",
+    async (how) => {
+      listAgents.mockResolvedValue([agent("Manager")]);
       render(<App />);
-      const heading = await screen.findByRole("heading", {
-        name: "What would you like help with?",
+      await waitFor(() => expect(useStore.getState().agents).toHaveLength(1));
+      const id = useStore.getState().agents[0]!.id;
+      if (how === "leaveChannel") await act(async () => useStore.getState().select(id));
+      const gear = within(screen.getByRole("navigation", { name: "Window" })).getByRole("button", {
+        name: "App settings",
       });
-      await waitFor(() => expect(document.activeElement).toBe(heading));
-      const opener = screen.getByRole("button", { name: new RegExp(`^${name}`) });
-      opener.focus();
-      fireEvent.click(opener);
-      const lower = await screen.findByRole("dialog", { name });
-      await waitFor(() => expect(document.activeElement).toBe(lower));
-      fireEvent.keyDown(window, { key: ",", ctrlKey: true });
-      const settings = await screen.findByRole("dialog", { name: "Settings" });
-      await waitFor(() => expect(document.activeElement).toBe(settings));
-      fireEvent.keyDown(window, { key: "Escape" });
-      expect(settings.isConnected).toBe(false);
-      expect(lower.isConnected).toBe(true);
-      expect(document.activeElement).toBe(lower);
-      fireEvent.keyDown(window, { key: "Escape" });
-      expect(lower.isConnected).toBe(false);
-      expect(document.activeElement).toBe(opener);
+      gear.focus();
+      fireEvent.click(gear);
+      await screen.findByRole("region", { name: "Settings" });
+      fireEvent.change(screen.getByLabelText(/^Your name/), { target: { value: "Draft name" } });
+      const elsewhere = within(screen.getByRole("navigation", { name: "Window" })).getByRole(
+        "button",
+        { name: "Search" },
+      );
+      elsewhere.focus();
+      await act(async () => {
+        if (how === "openMessage") await useStore.getState().openMessage(id, "m1");
+        else useStore.getState().leaveChannel();
+      });
+      expect(screen.queryByRole("region", { name: "Settings" })).toBeNull();
+      if (how === "openMessage")
+        expect(screen.getByRole("navigation", { name: "Manager's page" })).toBeTruthy();
+      else expect(screen.getByRole("region", { name: "Today" })).toBeTruthy();
+      await act(async () => {});
+      expect(document.activeElement).not.toBe(gear);
+      fireEvent.click(gear);
+      await screen.findByRole("region", { name: "Settings" });
+      expect((screen.getByLabelText(/^Your name/) as HTMLInputElement).value).toBe("Draft name");
     },
   );
+
+  it("leaves the focus where the person put it when they open the agent the page was over", async () => {
+    listAgents.mockResolvedValue([agent("Manager")]);
+    render(<App />);
+    await waitFor(() => expect(useStore.getState().agents).toHaveLength(1));
+    const id = useStore.getState().agents[0]!.id;
+    await act(async () => useStore.getState().select(id));
+    const bar = screen.getByRole("navigation", { name: "Window" });
+    const gear = within(bar).getByRole("button", { name: "App settings" });
+    gear.focus();
+    fireEvent.click(gear);
+    await screen.findByRole("region", { name: "Settings" });
+    const elsewhere = within(bar).getByRole("button", { name: "Search" });
+    elsewhere.focus();
+    await act(async () => useStore.getState().select(id));
+    expect(screen.queryByRole("region", { name: "Settings" })).toBeNull();
+    await act(async () => {});
+    expect(document.activeElement).toBe(elsewhere);
+  });
+
+  it("turns to the section the command menu names while the page is open", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "What would you like help with?" });
+    fireEvent.keyDown(window, { key: ",", ctrlKey: true });
+    await screen.findByRole("region", { name: "Settings" });
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    const menu = await screen.findByRole("dialog", { name: "Command menu" });
+    const input = within(menu).getByRole("textbox", { name: "Command menu" });
+    fireEvent.change(input, { target: { value: "Settings: Appearance" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Appearance" }).getAttribute("aria-selected")).toBe(
+        "true",
+      ),
+    );
+    expect(screen.queryByRole("dialog", { name: "Command menu" })).toBeNull();
+  });
+
+  it("puts a sheet opened from the page above it, and Escape closes the sheet first", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "What would you like help with?" });
+    fireEvent.keyDown(window, { key: ",", ctrlKey: true });
+    const page = await screen.findByRole("region", { name: "Settings" });
+    const tab = screen.getByRole("tab", { name: "General" });
+    tab.focus();
+    fireEvent.keyDown(window, { key: "f", ctrlKey: true });
+    const search = await screen.findByRole("dialog", { name: /search/i });
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(search.isConnected).toBe(false);
+    expect(page.isConnected).toBe(true);
+    expect(document.activeElement).toBe(tab);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(page.isConnected).toBe(false);
+  });
 
   it.each(["Calendar", "Artifacts"])("keeps %s open under search", async (name) => {
     render(<App />);
@@ -341,92 +424,95 @@ describe("App", () => {
     expect(lower.isConnected).toBe(false);
   });
 
-  it.each([
-    ["Settings", ","],
-    ["Search", "f"],
-  ])("keeps For you open under %s and restores focus", async (upperName, key) => {
-    render(<App />);
-    await screen.findByRole("heading", { name: "What would you like help with?" });
-    const opener = within(screen.getByRole("navigation", { name: "Places" })).getByRole("button", {
-      name: /^For you/,
-    });
-    opener.focus();
-    fireEvent.click(opener);
-    const lower = await screen.findByRole("dialog", { name: "For you" });
-    await waitFor(() => expect(document.activeElement).toBe(lower));
-    fireEvent.keyDown(window, { key, ctrlKey: true });
-    const upper = await screen.findByRole("dialog", { name: upperName });
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(upper.isConnected).toBe(false);
-    expect(lower.isConnected).toBe(true);
-    expect(document.activeElement).toBe(lower);
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(lower.isConnected).toBe(false);
-    expect(document.activeElement).toBe(opener);
-  });
+  it.each([["Search", "f"]])(
+    "keeps For you open under %s and restores focus",
+    async (upperName, key) => {
+      render(<App />);
+      await screen.findByRole("heading", { name: "What would you like help with?" });
+      const opener = within(screen.getByRole("navigation", { name: "Places" })).getByRole(
+        "button",
+        {
+          name: /^For you/,
+        },
+      );
+      opener.focus();
+      fireEvent.click(opener);
+      const lower = await screen.findByRole("dialog", { name: "For you" });
+      await waitFor(() => expect(document.activeElement).toBe(lower));
+      fireEvent.keyDown(window, { key, ctrlKey: true });
+      const upper = await screen.findByRole("dialog", { name: upperName });
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(upper.isConnected).toBe(false);
+      expect(lower.isConnected).toBe(true);
+      expect(document.activeElement).toBe(lower);
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(lower.isConnected).toBe(false);
+      expect(document.activeElement).toBe(opener);
+    },
+  );
 
-  it.each([
-    ["Settings", ","],
-    ["Search", "f"],
-  ])("keeps the calendar editor under %s and unwinds each layer", async (upperName, key) => {
-    render(<App />);
-    await screen.findByRole("heading", { name: "What would you like help with?" });
-    const opener = screen.getByRole("button", { name: /^Calendar/ });
-    opener.focus();
-    fireEvent.click(opener);
-    const calendar = await screen.findByRole("dialog", { name: "Calendar" });
-    const add = screen.getByRole("button", { name: "Add" });
-    add.focus();
-    fireEvent.click(add);
-    const title = await screen.findByRole("textbox", { name: "What is happening" });
-    await waitFor(() => expect(document.activeElement).toBe(title));
-    fireEvent.keyDown(window, { key, ctrlKey: true });
-    const upper = await screen.findByRole("dialog", { name: upperName });
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(upper.isConnected).toBe(false);
-    expect(title.isConnected).toBe(true);
-    expect(document.activeElement).toBe(title);
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(title.isConnected).toBe(false);
-    expect(calendar.isConnected).toBe(true);
-    expect(document.activeElement).toBe(add);
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(calendar.isConnected).toBe(false);
-    expect(document.activeElement).toBe(opener);
-  });
+  it.each([["Search", "f"]])(
+    "keeps the calendar editor under %s and unwinds each layer",
+    async (upperName, key) => {
+      render(<App />);
+      await screen.findByRole("heading", { name: "What would you like help with?" });
+      const opener = screen.getByRole("button", { name: /^Calendar/ });
+      opener.focus();
+      fireEvent.click(opener);
+      const calendar = await screen.findByRole("dialog", { name: "Calendar" });
+      const add = screen.getByRole("button", { name: "Add" });
+      add.focus();
+      fireEvent.click(add);
+      const title = await screen.findByRole("textbox", { name: "What is happening" });
+      await waitFor(() => expect(document.activeElement).toBe(title));
+      fireEvent.keyDown(window, { key, ctrlKey: true });
+      const upper = await screen.findByRole("dialog", { name: upperName });
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(upper.isConnected).toBe(false);
+      expect(title.isConnected).toBe(true);
+      expect(document.activeElement).toBe(title);
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(title.isConnected).toBe(false);
+      expect(calendar.isConnected).toBe(true);
+      expect(document.activeElement).toBe(add);
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(calendar.isConnected).toBe(false);
+      expect(document.activeElement).toBe(opener);
+    },
+  );
 
-  it.each([
-    ["Settings", ","],
-    ["Search", "f"],
-  ])("keeps an agent submenu under %s and unwinds each layer", async (upperName, key) => {
-    listAgents.mockResolvedValue([agent("Manager")]);
-    listGroups.mockResolvedValue([
-      aGroup({ agentCount: 1 }),
-      aGroup({ id: "00000000-0000-4000-8000-000000000002", name: "Other" }),
-    ]);
-    render(<App />);
-    await waitFor(() => railRow("Manager"));
-    const row = railRow("Manager").closest("button") as HTMLButtonElement;
-    row.focus();
-    fireEvent.contextMenu(row);
-    const menu = screen.getByRole("menu", { name: "Manager" });
-    const move = screen.getByRole("button", { name: "Move to another group" });
-    fireEvent.pointerEnter(move.parentElement as HTMLElement);
-    const submenu = screen.getByRole("menu", { name: "Move to another group" });
-    fireEvent.keyDown(window, { key, ctrlKey: true });
-    const upper = await screen.findByRole("dialog", { name: upperName });
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(upper.isConnected).toBe(false);
-    expect(submenu.isConnected).toBe(true);
-    expect(document.activeElement).toBe(row);
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(submenu.isConnected).toBe(false);
-    expect(menu.isConnected).toBe(true);
-    expect(document.activeElement).toBe(row);
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(menu.isConnected).toBe(false);
-    expect(document.activeElement).toBe(row);
-  });
+  it.each([["Search", "f"]])(
+    "keeps an agent submenu under %s and unwinds each layer",
+    async (upperName, key) => {
+      listAgents.mockResolvedValue([agent("Manager")]);
+      listGroups.mockResolvedValue([
+        aGroup({ agentCount: 1 }),
+        aGroup({ id: "00000000-0000-4000-8000-000000000002", name: "Other" }),
+      ]);
+      render(<App />);
+      await waitFor(() => railRow("Manager"));
+      const row = railRow("Manager").closest("button") as HTMLButtonElement;
+      row.focus();
+      fireEvent.contextMenu(row);
+      const menu = screen.getByRole("menu", { name: "Manager" });
+      const move = screen.getByRole("button", { name: "Move to another group" });
+      fireEvent.pointerEnter(move.parentElement as HTMLElement);
+      const submenu = screen.getByRole("menu", { name: "Move to another group" });
+      fireEvent.keyDown(window, { key, ctrlKey: true });
+      const upper = await screen.findByRole("dialog", { name: upperName });
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(upper.isConnected).toBe(false);
+      expect(submenu.isConnected).toBe(true);
+      expect(document.activeElement).toBe(row);
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(submenu.isConnected).toBe(false);
+      expect(menu.isConnected).toBe(true);
+      expect(document.activeElement).toBe(row);
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(menu.isConnected).toBe(false);
+      expect(document.activeElement).toBe(row);
+    },
+  );
 
   it.each(["New agent", "New group"])(
     "restores the menu opener after %s replaces the menu",
@@ -447,9 +533,7 @@ describe("App", () => {
   );
 
   it.each([
-    ["New agent", "Settings", ","],
     ["New agent", "Search", "f"],
-    ["New group", "Settings", ","],
     ["New group", "Search", "f"],
   ])("keeps %s open under %s", async (name, upperName, key) => {
     render(<App />);

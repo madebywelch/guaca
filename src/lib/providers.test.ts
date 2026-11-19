@@ -17,9 +17,9 @@ function rustConst(name: string): string {
 }
 
 function endpointPlaceholder(): string {
-  const source = read("src/components/SettingsDialog.tsx");
+  const source = read("src/components/SettingsPage.tsx");
   const match = source.match(/Inference endpoint[\s\S]{0,400}?placeholder="([^"]+)"/);
-  if (!match) throw new Error("could not find the endpoint field in SettingsDialog.tsx");
+  if (!match) throw new Error("could not find the endpoint field in SettingsPage.tsx");
   return match[1]!;
 }
 

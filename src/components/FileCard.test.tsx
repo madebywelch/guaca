@@ -7,7 +7,6 @@ import { DEFAULT_PREFS } from "../lib/prefs";
 import { type Attachment, errorMessage } from "../lib/types";
 import { FileCard } from "./FileCard";
 import { Search } from "./Search";
-import { SettingsDialog } from "./SettingsDialog";
 
 const saveFile = vi.fn(async (_digest: string, _name: string) => "/Users/robert/Downloads/x");
 const setBanner = vi.fn();
@@ -63,11 +62,10 @@ const made: string[] = [];
 const revoked: string[] = [];
 
 function Workspace() {
-  const [overlay, setOverlay] = useState<"search" | "settings" | null>(null);
+  const [overlay, setOverlay] = useState<"search" | null>(null);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.ctrlKey && event.key === "k") setOverlay("search");
-      if (event.ctrlKey && event.key === ",") setOverlay("settings");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -86,7 +84,6 @@ function Workspace() {
           onOpenSettings={() => {}}
         />
       )}
-      {overlay === "settings" && <SettingsDialog onClose={() => setOverlay(null)} />}
     </>
   );
 }
@@ -227,26 +224,6 @@ describe("FileCard", () => {
 
     fireEvent.keyDown(window, { key: "Escape" });
     expect(search.isConnected).toBe(false);
-    expect(preview.isConnected).toBe(true);
-    expect(document.activeElement).toBe(close);
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(preview.isConnected).toBe(false);
-    expect(document.activeElement).toBe(opener);
-  });
-
-  it("dismisses settings above a file preview and restores focus through both", async () => {
-    render(<Workspace />);
-    const opener = screen.getByRole("button", { name: "archive.zip" });
-    opener.focus();
-    fireEvent.click(opener);
-    const preview = screen.getByRole("dialog", { name: "archive.zip" });
-    const close = within(preview).getByRole("button", { name: "Close" });
-    close.focus();
-    fireEvent.keyDown(window, { key: ",", ctrlKey: true });
-    const settings = await screen.findByRole("dialog", { name: "Settings" });
-    expect(document.activeElement).toBe(settings);
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(settings.isConnected).toBe(false);
     expect(preview.isConnected).toBe(true);
     expect(document.activeElement).toBe(close);
     fireEvent.keyDown(window, { key: "Escape" });

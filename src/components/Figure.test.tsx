@@ -19,7 +19,6 @@ vi.mock("../lib/ipc", () => ({
 const { Markdown } = await import("./Markdown");
 const { Answering, answerMessage } = await import("./HtmlArtifact");
 const { Search } = await import("./Search");
-const { SettingsDialog } = await import("./SettingsDialog");
 
 const fence = (language: string, body: unknown) =>
   `\`\`\`${language}\n${typeof body === "string" ? body : JSON.stringify(body)}\n\`\`\``;
@@ -33,11 +32,10 @@ const BARS = JSON.stringify({
 });
 
 function Workspace({ page }: { page: string }) {
-  const [overlay, setOverlay] = useState<"search" | "settings" | null>(null);
+  const [overlay, setOverlay] = useState<"search" | null>(null);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.ctrlKey && event.key === "k") setOverlay("search");
-      if (event.ctrlKey && event.key === ",") setOverlay("settings");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -56,7 +54,6 @@ function Workspace({ page }: { page: string }) {
           onOpenSettings={() => {}}
         />
       )}
-      {overlay === "settings" && <SettingsDialog onClose={() => setOverlay(null)} />}
     </>
   );
 }
@@ -167,30 +164,30 @@ describe("a page in a message", () => {
     expect(screen.getByTitle("Page")).toBe(frame);
   });
 
-  it.each([
-    ["Search", "k"],
-    ["Settings", ","],
-  ])("dismisses %s above an expanded page and restores focus", async (name, key) => {
-    render(<Workspace page={PAGE} />);
-    await waitFor(() => expect(screen.getByTitle("Page")).toBeTruthy());
-    const open = screen.getByRole("button", { name: "Open" });
-    open.focus();
-    fireEvent.click(open);
-    const page = screen.getByRole("dialog", { name: "Page" });
-    const close = within(page).getByRole("button", { name: "Close" });
-    close.focus();
-    fireEvent.keyDown(window, { key, ctrlKey: true });
-    const overlay = await screen.findByRole("dialog", { name });
-    expect(page.isConnected).toBe(true);
-    expect(overlay.contains(document.activeElement)).toBe(true);
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(overlay.isConnected).toBe(false);
-    expect(page.isConnected).toBe(true);
-    expect(document.activeElement).toBe(close);
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(page.isConnected).toBe(false);
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Open" }));
-  });
+  it.each([["Search", "k"]])(
+    "dismisses %s above an expanded page and restores focus",
+    async (name, key) => {
+      render(<Workspace page={PAGE} />);
+      await waitFor(() => expect(screen.getByTitle("Page")).toBeTruthy());
+      const open = screen.getByRole("button", { name: "Open" });
+      open.focus();
+      fireEvent.click(open);
+      const page = screen.getByRole("dialog", { name: "Page" });
+      const close = within(page).getByRole("button", { name: "Close" });
+      close.focus();
+      fireEvent.keyDown(window, { key, ctrlKey: true });
+      const overlay = await screen.findByRole("dialog", { name });
+      expect(page.isConnected).toBe(true);
+      expect(overlay.contains(document.activeElement)).toBe(true);
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(overlay.isConnected).toBe(false);
+      expect(page.isConnected).toBe(true);
+      expect(document.activeElement).toBe(close);
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(page.isConnected).toBe(false);
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Open" }));
+    },
+  );
 
   it.each(["Escape", "Close"])("returns focus to Open after %s", async (how) => {
     render(<Markdown>{fence("html", PAGE)}</Markdown>);
