@@ -7,11 +7,11 @@ export function describeQuick(action: QuickAction, nameOf: (id: AgentId) => stri
   const place = does.place;
   switch (place.kind) {
     case "channel":
-      return `Opens the channel with ${nameOf(place.agentId)}`;
+      return `Opens the conversation with ${nameOf(place.agentId)}`;
     case "calendar":
       return "Opens the calendar";
     case "forYou":
-      return "Opens For You";
+      return "Opens For you";
     case "settings": {
       const pane = paneName(place.section);
       return pane ? `Opens Settings on ${pane}` : "Opens Settings";

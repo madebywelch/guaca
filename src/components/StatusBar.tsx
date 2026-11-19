@@ -5,6 +5,7 @@ import { COMMIT, VERSION } from "../lib/build";
 import { artifactUrl } from "../lib/files";
 import { hostLabel, hostPlace } from "../lib/host";
 import { api } from "../lib/ipc";
+import { questions } from "../lib/questions";
 import { quickTitle } from "../lib/quick";
 import { skew } from "../lib/releases";
 import { forYouCount, useStore } from "../lib/store";
@@ -176,11 +177,11 @@ export function StatusBar({ onOpen, onMessage }: Props) {
           <button
             type="button"
             className="statusbar__place"
-            aria-label={waiting > 0 ? `For you, ${waiting} waiting` : "For you"}
+            aria-label={waiting > 0 ? `For you, ${questions(waiting)}` : "For you"}
             onClick={() => onOpen({ kind: "forYou" })}
           >
             For you
-            {waiting > 0 && <b className="statusbar__count">{waiting}</b>}
+            {waiting > 0 && <b className="statusbar__count">{questions(waiting)}</b>}
           </button>
         )}
       </nav>
@@ -457,15 +458,15 @@ function QuickActionForm({ onAdded }: { onAdded: () => void }) {
           onChange={(event) => setKind(event.target.value as Kind)}
         >
           <option value="message">Send a message</option>
-          <option value="channel">Open a channel</option>
+          <option value="channel">Open a conversation</option>
           <option value="calendar">Open the calendar</option>
-          <option value="forYou">Open For You</option>
+          <option value="forYou">Open For you</option>
           <option value="settings">Open Settings</option>
         </select>
       </label>
       {needsAgent && (
         <label className="field">
-          <span className="field__label">{kind === "message" ? "To" : "Whose channel"}</span>
+          <span className="field__label">{kind === "message" ? "To" : "Whose conversation"}</span>
           <select
             className="select"
             value={agentId}

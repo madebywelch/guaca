@@ -108,7 +108,7 @@ async fn a_reminder_due_with_no_window_open_is_delivered_once_when_one_connects(
     assert_eq!(waiting.len(), 1, "{waiting:#?}");
     assert_eq!(waiting[0].kind, Kind::Reminder);
     assert_eq!(waiting[0].title, "For you");
-    assert_eq!(waiting[0].body, "1 decision needs a review. Open For you to answer or follow up.");
+    assert_eq!(waiting[0].body, "1 question in For you. Open it to answer or follow up.");
     assert_eq!(waiting[0].target, Target::ForYou);
 
     assert!(h.runtime.claim_delivery(&waiting[0].id, None).unwrap(), "the first window shows it");

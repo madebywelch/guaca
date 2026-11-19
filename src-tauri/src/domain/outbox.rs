@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use super::decision::questions;
 use super::ids::{AgentId, ApprovalId, EscalationId, GroupId, RunId};
 use super::outcome::{Outcome, Status as Ended};
 use super::view::Presence;
@@ -175,7 +176,7 @@ pub fn for_request(
         run_id: Some(run),
         ref_id: Some(approval.to_string()),
         title,
-        body: "Its turn is parked until you answer, and gives up after ten minutes.".into(),
+        body: "It waits for your answer for up to ten minutes.".into(),
         target: Target::Channel { agent_id: agent },
     }
 }
@@ -202,7 +203,6 @@ pub fn for_escalation(
 }
 
 pub fn for_reminder(count: usize, slot: i64) -> Draft {
-    let needs = if count == 1 { "decision needs" } else { "decisions need" };
     Draft {
         kind: Kind::Reminder,
         dedup_key: format!("reminder:{slot}"),
@@ -211,7 +211,7 @@ pub fn for_reminder(count: usize, slot: i64) -> Draft {
         run_id: None,
         ref_id: None,
         title: "For you".into(),
-        body: format!("{count} {needs} a review. Open For you to answer or follow up."),
+        body: format!("{} in For you. Open it to answer or follow up.", questions(count)),
         target: Target::ForYou,
     }
 }
@@ -495,6 +495,7 @@ mod tests {
         let question = for_request(id, true, agent, group, run, "Pip");
         assert_eq!(permission.title, "Pip needs your permission");
         assert_eq!(question.title, "Pip has a question");
+        assert_eq!(question.body, "It waits for your answer for up to ten minutes.");
         assert_eq!(question.ref_id, Some(id.to_string()));
         assert_eq!(question.dedup_key, format!("approval:{id}"));
     }
@@ -515,11 +516,11 @@ mod tests {
     fn a_reminder_says_how_many_and_nothing_anyone_wrote() {
         assert_eq!(
             for_reminder(1, NOW).body,
-            "1 decision needs a review. Open For you to answer or follow up."
+            "1 question in For you. Open it to answer or follow up."
         );
         assert_eq!(
             for_reminder(3, NOW).body,
-            "3 decisions need a review. Open For you to answer or follow up."
+            "3 questions in For you. Open it to answer or follow up."
         );
         assert_eq!(for_reminder(3, NOW).target, Target::ForYou);
         assert_eq!(for_reminder(3, NOW).dedup_key, format!("reminder:{NOW}"));

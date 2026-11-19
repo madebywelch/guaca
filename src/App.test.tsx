@@ -1165,14 +1165,14 @@ describe("the command menu's shortcut", () => {
     render(<App />);
     const field = await screen.findByRole("textbox", { name: "What do you need?" });
     const send = vi.fn(async () => {});
-    act(() => useHeld.getState().hold("req-1", "Allowed Manager's request.", send));
+    act(() => useHeld.getState().hold("req-1", "Allowed what Manager asked.", send));
     fireEvent.change(field, { target: { value: "half a sentence" } });
     fireEvent.keyDown(field, { key: "z", metaKey: true });
     expect(useHeld.getState().held?.id).toBe("req-1");
     fireEvent.change(field, { target: { value: "" } });
     fireEvent.click(await screen.findByRole("button", { name: /^Undo/ }));
     expect(useHeld.getState().held).toBeNull();
-    act(() => useHeld.getState().hold("req-2", "Allowed Manager's request.", send));
+    act(() => useHeld.getState().hold("req-2", "Allowed what Manager asked.", send));
     fireEvent.keyDown(document.body, { key: "z", metaKey: true });
     expect(useHeld.getState().held).toBeNull();
     expect(screen.queryByRole("status", { name: "" })).toBeNull();

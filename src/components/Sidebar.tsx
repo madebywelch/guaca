@@ -6,6 +6,7 @@ import { doing } from "../lib/doing";
 import { FIND_KEY, IS_MAC } from "../lib/keybinds";
 import { prefersReducedMotion } from "../lib/motion";
 import { newestByAgent } from "../lib/outcomes";
+import { questions } from "../lib/questions";
 import { type DropTarget, railOrder } from "../lib/rail";
 import { forYouCount, useLiveAgents, useStore } from "../lib/store";
 import { useNow } from "../lib/time";
@@ -477,7 +478,7 @@ export function Sidebar({
           <button
             type="button"
             className="rail__place"
-            aria-label={waiting > 0 ? `For you, ${waiting} waiting` : "For you"}
+            aria-label={waiting > 0 ? `For you, ${questions(waiting)}` : "For you"}
             onClick={() => showForYou(true)}
           >
             <span>For you</span>

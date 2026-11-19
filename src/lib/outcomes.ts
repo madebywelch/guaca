@@ -1,3 +1,4 @@
+import { whoIsWaiting } from "./questions";
 import { relativeTime } from "./time";
 import type { AgentId, Group, GroupId, Outcome, OutcomeStatus } from "./types";
 
@@ -93,8 +94,8 @@ export function moreLine(total: number, shown: number): string | null {
   return rest > 0 ? `And ${rest} more in For you` : null;
 }
 
-export function forYouSummary(needs: number, unseen: number): string {
-  if (needs > 0) return `${needs} ${needs === 1 ? "item needs" : "items need"} your attention.`;
+export function forYouSummary(waiting: string[], unseen: number): string {
+  if (waiting.length > 0) return `${whoIsWaiting(waiting)}.`;
   if (unseen > 0) return `Nothing needs your answer. ${unseen} finished since you last looked.`;
   return "Nothing needs your answer right now.";
 }

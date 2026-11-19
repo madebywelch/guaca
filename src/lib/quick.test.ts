@@ -25,13 +25,13 @@ describe("a quick action, in words", () => {
       addedBy: "the operator",
     });
     expect(describeQuick(open({ kind: "open", place: { kind: "forYou" } }), names)).toBe(
-      "Opens For You",
+      "Opens For you",
     );
     const limits = open({ kind: "open", place: { kind: "settings", section: "limits" } });
     expect(quickTitle(limits, names)).toBe("Opens Settings on Limits");
     const host = open({ kind: "open", place: { kind: "settings", section: "workspace" } });
     expect(quickTitle(host, names)).toBe("Opens Settings on Host");
     const gone = open({ kind: "open", place: { kind: "channel", agentId: "zz" } });
-    expect(describeQuick(gone, names)).toBe("Opens the channel with a deleted agent");
+    expect(describeQuick(gone, names)).toBe("Opens the conversation with a deleted agent");
   });
 });

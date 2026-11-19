@@ -38,6 +38,7 @@ vi.mock("./HostUpdates", () => ({
 }));
 vi.mock("../lib/build", () => ({ VERSION: "0.1.0", COMMIT: "aaaaaaa" }));
 
+import { aDecision, anAgent, anApproval } from "../test-fixtures";
 import { refusalRead, StatusBar } from "./StatusBar";
 
 function card(id: string, name: string): AgentCard {
@@ -134,6 +135,44 @@ describe("StatusBar", () => {
     expect(onOpen).toHaveBeenLastCalledWith({ kind: "forYou" });
     fireEvent.click(within(places).getByRole("button", { name: "Artifacts" }));
     expect(useStore.getState().artifactsOpen).toEqual({ id: null });
+  });
+
+  it("counts what waits in For you as questions", () => {
+    seed([]);
+    useStore.setState({
+      pending: [anApproval({ agentId: "Scout" })],
+      stuck: [],
+      decisions: [aDecision(), aDecision({ id: "decision-2" })],
+    });
+    render(<StatusBar onOpen={onOpen} onMessage={onMessage} />);
+    const places = screen.getByRole("navigation", { name: "Places" });
+    const forYou = within(places).getByRole("button", { name: "For you, 3 questions" });
+    expect(forYou.textContent).toBe("For you3 questions");
+    act(() => useStore.setState({ decisions: [] }));
+    expect(within(places).getByRole("button", { name: "For you, 1 question" })).toBeTruthy();
+    act(() => useStore.setState({ pending: [] }));
+    expect(within(places).getByRole("button", { name: "For you" }).textContent).toBe("For you");
+  });
+
+  it("offers to open an agent's conversation, never a channel", async () => {
+    seed([]);
+    useStore.setState({ agents: [anAgent("scout", { name: "Scout" })] });
+    render(<StatusBar onOpen={onOpen} onMessage={onMessage} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add a quick action" }));
+    const kind = await screen.findByRole("combobox", { name: "When pressed" });
+    expect(
+      within(kind)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual([
+      "Send a message",
+      "Open a conversation",
+      "Open the calendar",
+      "Open For you",
+      "Open Settings",
+    ]);
+    fireEvent.change(kind, { target: { value: "channel" } });
+    expect(screen.getByRole("combobox", { name: "Whose conversation" })).toBeTruthy();
   });
 
   it("draws a place once when a quick action already opens it", () => {

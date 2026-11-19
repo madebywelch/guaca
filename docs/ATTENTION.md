@@ -12,9 +12,11 @@ The **For you** entry counts unanswered decisions, interrupted
 follow-through, live approval requests and operational blockers. Snoozing a
 decision does not remove it from the count. Opening the entry shows three views:
 
-- **Needs you:** live permissions first, operational blockers, then decisions
+- **Waiting on you:** live permissions first, operational blockers, then decisions
   ordered by deadline and age. Snoozed decisions remain under **Set aside**.
-- **Following through:** answers delivered to agents without completion receipts.
+- **Answered:** answers delivered to agents without completion receipts. While
+  any are in progress the summary line says so ("1 in progress after your
+  answer"), and says nothing when none are.
 - **History:** the latest 100 completed or withdrawn decisions. A receipt carries
   the original question, answer and outcome; it is the decision record itself,
   not a second copy of the transcript.
@@ -62,7 +64,7 @@ choices, a source reference and an optional real deadline. Source references
 are plain text, never executable links. A custom answer is available even when
 choices were offered. Only unresolved items get an answer or snooze control.
 
-The **Team activity** disclosure reports the last time an agent worked. It is
+The **When each agent last worked** disclosure reports the last time an agent worked. It is
 explicitly not proof that any particular inbox was checked. This change does
 not add an automatic email monitor or infer coverage from a successful turn.
 
@@ -209,7 +211,7 @@ before a known deadline. A newly filed decision due within an hour is
 immediately eligible. A decision past its deadline stays answerable and joins
 the next briefing rather than disappearing.
 
-The row says how many decisions need a review and nothing an agent wrote. It
+The row says how many questions are in For you and nothing an agent wrote. It
 waits in the outbox until a window claims it, so a batch due while every window
 is closed, including one due the moment the host boots, is shown when a window
 next connects rather than spent on nobody. The one-hour snooze changes the next
@@ -400,7 +402,7 @@ escalation so the agent knows it already reported the wall. The report is histor
 an uncleared row is not evidence that a tool is still unavailable. Current tool
 definitions and call results determine whether the work can continue.
 
-**Open channel** is the primary action because that is where the operator can
+**Open conversation** is the primary action because that is where the operator can
 unblock the agent. **Clear** only removes the report. The agent cannot withdraw
 its escalation. Deleted agents lose their escalation; decision rows are hidden
 while their owner is deleted and become available when restored.

@@ -1794,6 +1794,9 @@ describe("notifications", () => {
       FAILURES,
       "Finished work while you are away",
     ]);
+    expect(rows[0]?.textContent).toContain(
+      "A question, permission included, an agent that is stuck, and reminders about open questions in For you.",
+    );
     for (const row of rows) {
       expect(row.querySelector("button")?.getAttribute("aria-checked")).toBe("true");
     }

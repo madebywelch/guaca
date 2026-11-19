@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::approval::Approval;
+use crate::domain::decision::{questions, results};
 use crate::domain::escalation::Escalation;
 use crate::domain::ids::{AgentId, GroupId};
 use crate::domain::usage::Tokens;
@@ -95,24 +96,28 @@ impl Presence {
 
         let title = (waiting > 0).then(|| waiting.to_string());
 
-        let state = if !self.decisions.is_empty() {
-            format!("{waiting} items need your attention in For you")
-        } else if waiting == 1 {
-            let (who, crew) = match self.waiting.first() {
-                Some(approval) => {
-                    (self.name_of(approval.agent_id), self.crew_named(approval.group_id))
-                }
-                None => {
-                    let stuck = &self.stuck[0];
-                    (self.name_of(stuck.agent_id), self.crew_named(stuck.group_id))
-                }
-            };
-            match crew {
+        let mut askers: Vec<(AgentId, GroupId)> = Vec::new();
+        for asker in self
+            .waiting
+            .iter()
+            .map(|approval| (approval.agent_id, approval.group_id))
+            .chain(self.stuck.iter().map(|stuck| (stuck.agent_id, stuck.group_id)))
+            .chain(self.decisions.iter().map(|decision| (decision.agent_id, decision.group_id)))
+        {
+            if !askers.iter().any(|(agent, _)| *agent == asker.0) {
+                askers.push(asker);
+            }
+        }
+
+        let state = if let [(agent, group)] = askers.as_slice() {
+            let who = self.name_of(*agent);
+            match self.crew_named(*group) {
                 Some(crew) => format!("{who} in {} is waiting on you", crew.name),
                 None => format!("{who} is waiting on you"),
             }
-        } else if waiting > 1 {
-            format!("{waiting} agents are waiting on you")
+        } else if !askers.is_empty() {
+            let names: Vec<&str> = askers.iter().map(|(agent, _)| self.name_of(*agent)).collect();
+            who_is_waiting(&names)
         } else if busy.is_empty() {
             "nothing running".to_string()
         } else {
@@ -130,9 +135,10 @@ impl Presence {
 
         let state = match (waiting, self.finished) {
             (_, 0) => state,
-            (0, finished) => format!("{state}, {finished} finished in For you"),
-            (1, finished) => format!("1 needs you, {finished} finished in For you"),
-            (waiting, finished) => format!("{waiting} need you, {finished} finished in For you"),
+            (0, finished) => format!("{state}, {} in For you", results(finished)),
+            (waiting, finished) => {
+                format!("{} and {} in For you", questions(waiting), results(finished))
+            }
         };
 
         let mut tooltip = format!("Guaca · {state}");
@@ -142,6 +148,25 @@ impl Presence {
             tooltip.push_str(" this session");
         }
         Look { glyph, title, tooltip }
+    }
+}
+
+const NAMED: usize = 3;
+
+fn who_is_waiting(names: &[&str]) -> String {
+    let others = names.len().saturating_sub(NAMED - 1);
+    let mut shown: Vec<String> = if names.len() <= NAMED {
+        names.iter().map(|name| name.to_string()).collect()
+    } else {
+        names[..NAMED - 1].iter().map(|name| name.to_string()).collect()
+    };
+    if names.len() > NAMED {
+        shown.push(if others == 1 { "1 other".to_string() } else { format!("{others} others") });
+    }
+    match shown.split_last() {
+        Some((last, [])) => format!("{last} is waiting on you"),
+        Some((last, rest)) => format!("{} and {last} are waiting on you", rest.join(", ")),
+        None => "nobody is waiting on you".to_string(),
     }
 }
 
@@ -398,7 +423,52 @@ mod tests {
         presence.stuck.push(escalation(scout, "the tooling is down", 2));
 
         assert_eq!(presence.look().title.as_deref(), Some("2"));
-        assert_eq!(presence.look().tooltip, "Guaca · 2 agents are waiting on you");
+        assert_eq!(presence.look().tooltip, "Guaca · Scout is waiting on you");
+    }
+
+    fn filed(agent: AgentId, group: GroupId) -> crate::domain::decision::WorkDecision {
+        serde_json::from_value(serde_json::json!({
+            "id": crate::domain::ids::DecisionId::new(),
+            "agentId": agent,
+            "groupId": group,
+            "topic": "renewal",
+            "request": { "question": "Renew the lease?" },
+            "status": "pending",
+            "answer": null,
+            "outcome": null,
+            "createdAt": 1,
+            "updatedAt": 1,
+            "dueAt": null,
+            "remindAt": 2,
+            "snoozedUntil": null,
+            "deliveryRun": null,
+            "interrupted": false,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn the_tooltip_names_who_is_waiting_and_counts_questions_never_items() {
+        let (mut presence, scout) = quiet();
+        let group = presence.crews[0].id;
+        presence.decisions.push(filed(scout, group));
+        assert_eq!(presence.look().tooltip, "Guaca · Scout is waiting on you");
+
+        let pip = hire(&mut presence, "Pip");
+        presence.waiting.push(approval(pip, ProtectedAction::CreateAgent, "wants an agent"));
+        assert_eq!(presence.look().tooltip, "Guaca · Pip and Scout are waiting on you");
+
+        let ada = hire(&mut presence, "Ada");
+        presence.stuck.push(escalation(ada, "no key", 1));
+        assert_eq!(presence.look().tooltip, "Guaca · Pip, Ada and Scout are waiting on you");
+
+        let lee = hire(&mut presence, "Lee");
+        presence.waiting.push(approval(lee, ProtectedAction::CreateAgent, "wants an agent"));
+        assert_eq!(presence.look().tooltip, "Guaca · Pip, Lee and 2 others are waiting on you");
+        assert_eq!(presence.look().title.as_deref(), Some("4"));
+
+        presence.finished = 1;
+        assert_eq!(presence.look().tooltip, "Guaca · 4 questions and 1 result in For you");
     }
 
     #[test]
@@ -465,7 +535,7 @@ mod tests {
         let look = presence.look();
         assert_eq!(look.glyph, Glyph::Idle);
         assert_eq!(look.title, None, "finished work takes no width in the menu bar");
-        assert_eq!(look.tooltip, "Guaca · nothing running, 4 finished in For you");
+        assert_eq!(look.tooltip, "Guaca · nothing running, 4 results in For you");
     }
 
     #[test]
@@ -476,7 +546,7 @@ mod tests {
 
         let look = presence.look();
         assert_eq!(look.glyph, Glyph::Working);
-        assert_eq!(look.tooltip, "Guaca · 1 agent working, 1 finished in For you");
+        assert_eq!(look.tooltip, "Guaca · 1 agent working, 1 result in For you");
     }
 
     #[test]
@@ -489,10 +559,10 @@ mod tests {
         let look = presence.look();
         assert_eq!(look.glyph, Glyph::Attention);
         assert_eq!(look.title.as_deref(), Some("1"), "the count is still requests only");
-        assert_eq!(look.tooltip, "Guaca · 1 needs you, 4 finished in For you");
+        assert_eq!(look.tooltip, "Guaca · 1 question and 4 results in For you");
 
         presence.stuck.push(escalation(scout, "no key", 1));
-        assert_eq!(presence.look().tooltip, "Guaca · 2 need you, 4 finished in For you");
+        assert_eq!(presence.look().tooltip, "Guaca · 2 questions and 4 results in For you");
         assert_eq!(presence.look().title.as_deref(), Some("2"));
     }
 

@@ -117,7 +117,7 @@ const ATTENTION_ROWS: { key: keyof Attention; label: string; hint: string }[] = 
   {
     key: "needsYou",
     label: "Things that need you",
-    hint: "A permission request, a question, an agent that is stuck, and reminders about decisions in For you.",
+    hint: "A question, permission included, an agent that is stuck, and reminders about open questions in For you.",
   },
   {
     key: "failures",

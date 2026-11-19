@@ -1,5 +1,6 @@
 import { needsAnswer } from "./decisions";
 import { finished } from "./outcomes";
+import { questions } from "./questions";
 import type { State, StreamBuffer } from "./store";
 import type { Activity, AgentCard, AgentId, Envelope, Presence } from "./types";
 
@@ -74,7 +75,7 @@ export function panelOrder(
 }
 
 export function headline(waiting: number, working: number): string {
-  if (waiting > 0) return `${waiting} waiting on you`;
+  if (waiting > 0) return `${questions(waiting)} waiting on you`;
   if (working > 0) return `${working} working`;
   return "Nothing running";
 }

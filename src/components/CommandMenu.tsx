@@ -107,7 +107,7 @@ export function CommandMenu({ onClose, onPlace, onSection }: Props) {
       case "decide":
         hold(
           action.request.id,
-          `${action.decision === "deny" ? "Denied" : "Allowed"} ${nameOf(action.request.agentId)}'s request.`,
+          `${action.decision === "deny" ? "Denied" : "Allowed"} what ${nameOf(action.request.agentId)} asked.`,
           () => decide(action.request.id, action.decision),
         );
         return;

@@ -395,7 +395,7 @@ LOOK_SCREENS = ("Today", "a conversation", "Settings", "New agent", "the Groups 
 AGENT_TABS = ("Now", "Memory", "Notebook", "Routines", "Profile")
 SETTINGS_TABS = ("Host", "Provider", "Limits", "Permissions", "Machines", "Account", "Appearance",
                  "Notifications", "Shortcuts", "Skills", "Compost", "About")
-PLACES = ("Artifacts", "Calendar", "For you, 1 waiting")
+PLACES = ("Artifacts", "Calendar", "For you, 1 question")
 
 
 def show(w: World, screen: str) -> None:
@@ -1176,7 +1176,7 @@ def lapse_into_for_you(w: World, waiting: int) -> None:
     w.wait("the request is shown in the conversation", lambda: ui.find("button", "Allow"))
     w.wait("the unanswered request lapses into For you",
            lambda: [d for d in decisions(w) if d["status"] == "pending"], timeout=120)
-    label = f"For you, {waiting} waiting"
+    label = f"For you, {waiting} question" if waiting == 1 else f"For you, {waiting} questions"
     w.wait("For you counts the waiting decision", lambda: ui.find("button", label))
     ui.click("button", label)
     w.wait("For you opens on the decision", lambda: ui.find("dialog", "For you") and ui.find("button", "Allow"))

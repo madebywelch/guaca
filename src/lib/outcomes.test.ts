@@ -98,10 +98,12 @@ describe("the words", () => {
   });
 
   it("leads For you with what needs the operator, and names finished work only alone", () => {
-    expect(forYouSummary(0, 0)).toBe("Nothing needs your answer right now.");
-    expect(forYouSummary(2, 4)).toBe("2 items need your attention.");
-    expect(forYouSummary(1, 0)).toBe("1 item needs your attention.");
-    expect(forYouSummary(0, 4)).toBe(
+    expect(forYouSummary([], 0)).toBe("Nothing needs your answer right now.");
+    expect(forYouSummary(["Ada", "Pip"], 4)).toBe("Ada and Pip are waiting on you.");
+    expect(forYouSummary(["Executive Assistant"], 0)).toBe(
+      "Executive Assistant is waiting on you.",
+    );
+    expect(forYouSummary([], 4)).toBe(
       "Nothing needs your answer. 4 finished since you last looked.",
     );
   });

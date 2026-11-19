@@ -16,6 +16,7 @@ import {
   shelves,
   statusWord,
 } from "../lib/outcomes";
+import { questions } from "../lib/questions";
 import { useStore } from "../lib/store";
 import { relativeTime, useNow } from "../lib/time";
 import { type AgentCard, errorMessage, type Outcome, type WorkDecision } from "../lib/types";
@@ -87,6 +88,9 @@ export function ForYou({ onClose }: { onClose: () => void }) {
   const due = open.filter((item) => !snoozed.includes(item));
   const shown = view === "needs" ? due : view === "following" ? following : history;
   const count = open.length + pending.length + stuck.length;
+  const waiting = [...pending, ...stuck, ...open].map(
+    (one) => agents.find((agent) => agent.id === one.agentId)?.name ?? "A deleted agent",
+  );
   return (
     <div className="scrim">
       <button type="button" className="scrim__close" aria-label="Close For you" onClick={onClose} />
@@ -120,25 +124,23 @@ export function ForYou({ onClose }: { onClose: () => void }) {
       >
         <header className="for-you__head">
           <div className="for-you__title">
-            <h2>
-              For you <span>{count}</span>
-            </h2>
+            <h2>For you {count > 0 && <span>{questions(count)}</span>}</h2>
             <button type="button" className="btn btn--quiet" onClick={onClose}>
               Close
             </button>
           </div>
           <p>
-            {forYouSummary(count, news.length)}{" "}
-            {following.length > 0 ? `${following.length} awaiting follow-through.` : ""}
+            {forYouSummary(waiting, news.length)}{" "}
+            {following.length > 0 ? `${following.length} in progress after your answer.` : ""}
           </p>
-          <nav className="for-you__tabs" aria-label="Decision views">
+          <nav className="for-you__tabs" aria-label="For you views">
             <button
               type="button"
               className="btn"
               aria-pressed={view === "needs"}
               onClick={() => setView("needs")}
             >
-              Needs you
+              Waiting on you
             </button>
             <button
               type="button"
@@ -146,7 +148,7 @@ export function ForYou({ onClose }: { onClose: () => void }) {
               aria-pressed={view === "following"}
               onClick={() => setView("following")}
             >
-              Following through {following.length}
+              Answered
             </button>
             <button
               type="button"
@@ -173,7 +175,7 @@ export function ForYou({ onClose }: { onClose: () => void }) {
           )}
           {error && (
             <p role="alert">
-              Could not refresh decisions: {error}{" "}
+              Could not refresh questions: {error}{" "}
               <button type="button" className="btn btn--compact" onClick={() => void refresh()}>
                 Retry
               </button>
@@ -186,6 +188,7 @@ export function ForYou({ onClose }: { onClose: () => void }) {
           )}
           {view === "needs" && (
             <Desk
+              title={null}
               onOpenChannel={(agent) => {
                 void select(agent);
                 onClose();
@@ -224,8 +227,8 @@ export function ForYou({ onClose }: { onClose: () => void }) {
           {shown.length === 0 && view !== "needs" && (
             <p className="for-you__empty">
               {view === "history"
-                ? "Completed and withdrawn decisions will appear here."
-                : "No answered decisions awaiting action."}
+                ? "Completed and withdrawn questions will appear here."
+                : "Nothing you answered is still in progress."}
             </p>
           )}
           {view === "needs" && news.length > 0 && (
@@ -254,7 +257,7 @@ export function ForYou({ onClose }: { onClose: () => void }) {
           )}
           {view === "needs" && (
             <details className="for-you__later">
-              <summary>Team activity</summary>
+              <summary>When each agent last worked</summary>
               <p className="for-you__meta">
                 Last activity shows when an agent worked. It does not confirm that a particular
                 inbox was checked.
@@ -273,8 +276,8 @@ export function ForYou({ onClose }: { onClose: () => void }) {
           )}
         </div>
         <footer className="for-you__foot">
-          Decision reminders at 9 AM and 4 PM, plus one hour before deadlines, in the workspace’s
-          timezone. Notification preferences apply.
+          Reminders about open questions at 9 AM and 4 PM, plus one hour before deadlines, in the
+          workspace’s timezone. Notification preferences apply.
         </footer>
       </div>
     </div>
@@ -373,7 +376,7 @@ function DecisionCard({
   const answer = (text: string) =>
     void act(
       () => api.answerDecision(item.id, text, item.updatedAt),
-      `Answer saved for ${agent?.name ?? "the agent"}. Follow-through is tracked separately.`,
+      `Answer saved for ${agent?.name ?? "the agent"}. Its progress is under Answered.`,
     );
   const waiting = item.status === "pending";
   return (
@@ -410,7 +413,7 @@ function DecisionCard({
       {item.status === "answered" && (
         <p className="for-you__meta">
           {item.interrupted
-            ? "Follow-through was interrupted. Review previous actions before resuming."
+            ? "Work after your answer was interrupted. Review what was already done before resuming."
             : "Answer delivered. Awaiting a completion receipt from the agent."}
         </p>
       )}
@@ -460,11 +463,11 @@ function DecisionCard({
             onClick={() =>
               void act(
                 () => api.resumeDecision(item.id),
-                "Follow-through resumed. The agent will check previous actions before continuing.",
+                "Resumed. The agent checks what was already done before going on.",
               )
             }
           >
-            Resume follow-through
+            Resume work
           </button>
         )}
         {needsAnswer(item) && (
@@ -475,7 +478,7 @@ function DecisionCard({
             onClick={() =>
               void act(
                 () => api.snoozeDecision(item.id, Date.now() + 60 * 60 * 1000),
-                "Set aside for one hour. The decision still needs your attention.",
+                "Set aside for one hour. The question still needs your answer.",
               )
             }
           >

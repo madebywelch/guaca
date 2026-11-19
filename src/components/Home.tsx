@@ -7,6 +7,7 @@ import { useHeld } from "../lib/held";
 import { api } from "../lib/ipc";
 import { drawnThrough, finished, statusWord } from "../lib/outcomes";
 import { groupNamed } from "../lib/presence";
+import { questions } from "../lib/questions";
 import { colleaguesOn, runningNote } from "../lib/running";
 import { useStore } from "../lib/store";
 import { clockLabel, elapsed, useNow } from "../lib/time";
@@ -303,7 +304,7 @@ function Quiet({ working, decisions, now }: { working: string[]; decisions: numb
       {(decisions > 0 || (today ?? 0) > 0) && (
         <button type="button" className="home__more" onClick={() => showForYou(true)}>
           {decisions > 0
-            ? `${decisions === 1 ? "1 decision" : `${decisions} decisions`} set aside in For you`
+            ? `${questions(decisions)} set aside in For you`
             : `Today, ${today} finished`}
         </button>
       )}

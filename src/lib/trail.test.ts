@@ -238,6 +238,14 @@ describe("credentials a command spent", () => {
 });
 
 describe("folding a turn's work", () => {
+  it("calls an agent's work on what it asked a question, live and folded", () => {
+    expect(callInFlight("decision", {})).toBe("Working on a question");
+    const groups = foldTrail(
+      steps(call("decision", { action: "list" }), call("decision", { action: "list" })),
+    );
+    expect(groups.map((group) => group.label)).toEqual(["Worked on its questions 2 times"]);
+  });
+
   it("keeps each ruled call visible with the rule as written", () => {
     const ruled = { ...call("run_command", { command: "ls" }), ruled: "Allow reports" };
     const groups = foldTrail(steps(call("run_command", {}), ruled, ruled, call("run_command", {})));
@@ -493,11 +501,11 @@ describe("the tools the runtime offers, in a person's words", () => {
   it("names the six that used to reach the row as their wire names", () => {
     expect(said("ask_operator", { question: "Ship it on Friday?" })).toBe("Asked you");
     expect(said("decision", { action: "request", question: "10 or 11?" })).toBe(
-      "Left a decision for you",
+      "Left a question for you",
     );
-    expect(said("decision", { action: "list" })).toBe("Checked its decisions");
+    expect(said("decision", { action: "list" })).toBe("Checked its questions");
     expect(said("decision", { action: "complete", id: "d", outcome: "shipped" })).toBe(
-      "Closed a decision",
+      "Closed a question",
     );
     expect(said("decision", { action: "withdraw", id: "d", outcome: "not needed" })).toBe(
       "Withdrew a question",

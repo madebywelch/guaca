@@ -1661,8 +1661,8 @@ input[type="file"]::file-selector-button {
   line-height: var(--badge);
   text-align: center;
   border-radius: var(--radius-control);
-  background: var(--danger-fill);
-  color: var(--on-danger-fill);
+  background: var(--attention-fill);
+  color: var(--on-attention-fill);
   box-shadow: 0 0 0 2px var(--grail-ground);
 }
 
@@ -8937,7 +8937,7 @@ button.artifacts__version[aria-pressed="true"] {
 }
 
 .home__count {
-  color: var(--muted);
+  color: var(--attention);
   font-weight: var(--weight-regular);
   margin-left: var(--space-3);
 }

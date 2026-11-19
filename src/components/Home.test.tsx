@@ -103,7 +103,7 @@ describe("the quiet screen", () => {
     });
     draw({ decisions: [later] });
     expect(screen.getByText("Nothing needs you.")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "1 decision set aside in For you" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "1 question set aside in For you" })).toBeTruthy();
   });
 });
 
@@ -425,7 +425,7 @@ describe("Needs you as a keyboard queue", () => {
     expect(decide).not.toHaveBeenCalled();
     expect(screen.queryByRole("article", { name: /^Dara asks/ })).toBeNull();
     expect(document.activeElement).toBe(card(/^Noor asks/));
-    expect(useHeld.getState().notice?.text).toBe("Allowed Dara's request.");
+    expect(useHeld.getState().notice?.text).toBe("Allowed what Dara asked.");
     act(() => vi.advanceTimersByTime(HOLD_MS));
     expect(decide).toHaveBeenCalledExactlyOnceWith(permission.id, "allow");
   });

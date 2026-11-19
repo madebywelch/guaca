@@ -1003,3 +1003,22 @@ describe("the new window's surfaces", () => {
     expect(ruleOf(css, ".intake__menu")).not.toMatch(/\d+rem/);
   });
 });
+
+describe("the waiting count", () => {
+  it.each([
+    ".orb__waiting",
+    ".home__count",
+    ".statusbar__count",
+    ".for-you h2 span",
+    ".menubar__decisions",
+  ])(
+    "draws %s in amber, which means needs you, and never in red, which means failed",
+    (selector) => {
+      const own = declarations().filter((d) => d.selector === selector);
+      const ink = own.filter((d) => d.property === "color");
+      expect(ink.length, selector).toBeGreaterThan(0);
+      for (const d of ink) expect(d.value, selector).toMatch(/^var\(--(on-)?attention(-fill)?\)$/);
+      expect(own.filter((d) => d.value.includes("danger"))).toEqual([]);
+    },
+  );
+});

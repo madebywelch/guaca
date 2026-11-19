@@ -2722,8 +2722,10 @@ banners sit on a neutral wash. Primary and send buttons use the action fill
 and its paired text color. `styles.test.ts` fails a focus rule or an on-state
 spelled from the attention color, a fill or an edge in the system color outside
 a focus rule or a drop target, and a fill whose text is not its own on-color.
-The groups' waiting count is still red, and that is on purpose: it is drawn to match the menu bar's attention glyph,
-which is the macOS convention for "needs you" and not this app's to repaint.
+The groups' waiting count is amber like every other mark that means needs you,
+and so is the menu bar's attention glyph: one color for a waiting question on
+every surface, and red only for something that failed. `styles.test.ts` fails a
+waiting count drawn in anything but the attention tokens.
 
 The theme reaches the document as a second pair of token blocks, `:root` and
 `:root[data-surface="dark"]`, in one `<style>` after the stylesheet. Not as
@@ -2911,7 +2913,7 @@ menu bar is a fact about the window: the desktop app showing a box still has
 one, and a browser showing anything does not.
 
 **What it shows is the window's, smaller.** The desk from For you, card for card,
-with "Open channel" bringing the window back at that channel. Under it, For
+with "Open conversation" bringing the window back at that conversation. Under it, For
 you's Finished lines, five of them and then one line that says how many more and
 opens For you; a line brings the window back at its agent's channel and marks the
 run seen. The rail's rows,

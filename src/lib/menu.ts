@@ -117,7 +117,12 @@ const ACTIONS: { place: Place; title: string; icon: IconName; words: string; key
     words: "find history look up",
     key: formatCombo({ key: "f", mod: true }),
   },
-  { place: "forYou", title: "Open For you", icon: "for-you", words: "inbox decisions requests" },
+  {
+    place: "forYou",
+    title: "Open For you",
+    icon: "for-you",
+    words: "inbox questions results decisions requests",
+  },
   { place: "calendar", title: "Open the calendar", icon: "calendar", words: "dates schedule" },
   { place: "artifacts", title: "Open artifacts", icon: "artifact", words: "pages documents" },
   { place: "groups", title: "Groups and agents", icon: "group", words: "sheet manage list" },

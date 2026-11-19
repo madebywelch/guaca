@@ -206,7 +206,7 @@ describe("the panel's list", () => {
 
 describe("the panel's headline", () => {
   it("says what is waiting before it says what is working", () => {
-    expect(headline(2, 5)).toBe("2 waiting on you");
+    expect(headline(2, 5)).toBe("2 questions waiting on you");
     expect(headline(0, 3)).toBe("3 working");
     expect(headline(0, 0)).toBe("Nothing running");
   });
