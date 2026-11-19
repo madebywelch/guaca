@@ -137,6 +137,7 @@ export interface State {
   showForYou: (open: boolean) => void;
   settingsPage: { section: Section | null } | null;
   settingsDraft: SettingsDraft | null;
+  settingsGoneBack: boolean;
   openSettings: (section?: Section) => void;
   closeSettings: () => void;
   artifactsOpen: { id: ArtifactId | null } | null;
@@ -306,8 +307,10 @@ export const useStore = create<State>((set, get) => ({
   showArtifacts: (open) => set({ artifactsOpen: open }),
   settingsPage: null,
   settingsDraft: null,
-  openSettings: (section) => set({ settingsPage: { section: section ?? null } }),
-  closeSettings: () => set({ settingsPage: null }),
+  settingsGoneBack: false,
+  openSettings: (section) =>
+    set({ settingsPage: { section: section ?? null }, settingsGoneBack: false }),
+  closeSettings: () => set({ settingsPage: null, settingsGoneBack: true }),
   async refreshDecisions(valid = () => true) {
     const read = ++decisionRead;
     try {

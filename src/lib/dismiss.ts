@@ -59,14 +59,16 @@ function giveBack(previous: HTMLElement | null) {
   }
 }
 
-export function useReturnFocus() {
+export function useReturnFocus(returning: () => boolean) {
   const previous = useRef<HTMLElement | null>(null);
+  const latest = useRef(returning);
+  latest.current = returning;
   useLayoutEffect(() => {
     previous.current = takeOpener();
   }, []);
   useEffect(
     () => () => {
-      if (stack.length === 0) giveBack(previous.current);
+      if (stack.length === 0 && latest.current()) giveBack(previous.current);
     },
     [],
   );

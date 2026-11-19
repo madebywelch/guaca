@@ -335,6 +335,22 @@ describe("the window's columns", () => {
     },
   );
 
+  it("keeps the window still while Today scrolls in its own column, inside the view that Settings hides", () => {
+    const app = nest("app");
+    const main = document.createElement("main");
+    const view = document.createElement("div");
+    const home = document.createElement("div");
+    view.className = "app__view";
+    home.className = "home";
+    view.append(home);
+    main.append(view);
+    app.append(main);
+    expect(getComputedStyle(main).overflow).toBe("hidden");
+    expect(getComputedStyle(view).display).toBe("contents");
+    view.hidden = true;
+    expect(getComputedStyle(view).display).toBe("none");
+  });
+
   it("breaks a path in the agent panel rather than cutting it off", () => {
     expect(getComputedStyle(nest("agent-panel")).overflowWrap).toBe("break-word");
   });

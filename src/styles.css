@@ -122,6 +122,7 @@
   --ribbon-aside: 0.42;
   --column-edge: var(--space-7);
   --column-w: 46rem;
+  --settings-nav-w: calc(11rem + var(--scrollbar-size));
   --tabs-meta-share: 40%;
   --page: var(--sunken);
 
@@ -7210,7 +7211,7 @@ button.artifacts__version[aria-pressed="true"] {
 
 .settings__nav {
   flex: none;
-  width: calc(11rem + var(--scrollbar-size));
+  width: var(--settings-nav-w);
   padding: var(--space-4) var(--space-4);
   border-right: 1px solid var(--rule);
   display: flex;
@@ -7222,7 +7223,7 @@ button.artifacts__version[aria-pressed="true"] {
 .settings {
   flex: 1;
   min-height: 0;
-  width: min(calc(11rem + var(--scrollbar-size) + var(--column-w)), 100%);
+  width: min(calc(var(--settings-nav-w) + var(--column-w)), 100%);
   margin: 0 auto;
   display: flex;
   flex-direction: column;
@@ -8174,6 +8175,14 @@ button.artifacts__version[aria-pressed="true"] {
     white-space: nowrap;
   }
 
+  .settings > .settings__head {
+    padding: var(--space-5);
+  }
+
+  .settings__main > .banner {
+    margin: var(--space-4) var(--space-5) 0;
+  }
+
   .settings__head,
   .settings__pane,
   .settings__foot,
@@ -8755,7 +8764,7 @@ button.artifacts__version[aria-pressed="true"] {
   flex: 1;
 }
 
-.app > main:has(> .home) {
+.app > main:has(> .app__view > .home) {
   overflow: hidden;
 }
 

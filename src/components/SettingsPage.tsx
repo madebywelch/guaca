@@ -576,7 +576,7 @@ export function SettingsPage({ request, onSection }: Props) {
 
   const closeSettings = useStore((s) => s.closeSettings);
   const titleId = useId();
-  useReturnFocus();
+  useReturnFocus(() => useStore.getState().settingsGoneBack);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.isComposing || event.defaultPrevented || dismissing())

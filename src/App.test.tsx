@@ -318,6 +318,61 @@ describe("App", () => {
     expect(await screen.findByRole("navigation", { name: "Manager's page" })).toBeTruthy();
   });
 
+  it.each(["openMessage", "leaveChannel"] as const)(
+    "leaves the page on %s, keeping the draft and not pulling the focus back to the gear",
+    async (how) => {
+      listAgents.mockResolvedValue([agent("Manager")]);
+      render(<App />);
+      await waitFor(() => expect(useStore.getState().agents).toHaveLength(1));
+      const id = useStore.getState().agents[0]!.id;
+      if (how === "leaveChannel") await act(async () => useStore.getState().select(id));
+      const gear = within(screen.getByRole("navigation", { name: "Window" })).getByRole("button", {
+        name: "App settings",
+      });
+      gear.focus();
+      fireEvent.click(gear);
+      await screen.findByRole("region", { name: "Settings" });
+      fireEvent.change(screen.getByLabelText(/^Your name/), { target: { value: "Draft name" } });
+      const elsewhere = within(screen.getByRole("navigation", { name: "Window" })).getByRole(
+        "button",
+        { name: "Search" },
+      );
+      elsewhere.focus();
+      await act(async () => {
+        if (how === "openMessage") await useStore.getState().openMessage(id, "m1");
+        else useStore.getState().leaveChannel();
+      });
+      expect(screen.queryByRole("region", { name: "Settings" })).toBeNull();
+      if (how === "openMessage")
+        expect(screen.getByRole("navigation", { name: "Manager's page" })).toBeTruthy();
+      else expect(screen.getByRole("region", { name: "Today" })).toBeTruthy();
+      await act(async () => {});
+      expect(document.activeElement).not.toBe(gear);
+      fireEvent.click(gear);
+      await screen.findByRole("region", { name: "Settings" });
+      expect((screen.getByLabelText(/^Your name/) as HTMLInputElement).value).toBe("Draft name");
+    },
+  );
+
+  it("leaves the focus where the person put it when they open the agent the page was over", async () => {
+    listAgents.mockResolvedValue([agent("Manager")]);
+    render(<App />);
+    await waitFor(() => expect(useStore.getState().agents).toHaveLength(1));
+    const id = useStore.getState().agents[0]!.id;
+    await act(async () => useStore.getState().select(id));
+    const bar = screen.getByRole("navigation", { name: "Window" });
+    const gear = within(bar).getByRole("button", { name: "App settings" });
+    gear.focus();
+    fireEvent.click(gear);
+    await screen.findByRole("region", { name: "Settings" });
+    const elsewhere = within(bar).getByRole("button", { name: "Search" });
+    elsewhere.focus();
+    await act(async () => useStore.getState().select(id));
+    expect(screen.queryByRole("region", { name: "Settings" })).toBeNull();
+    await act(async () => {});
+    expect(document.activeElement).toBe(elsewhere);
+  });
+
   it("turns to the section the command menu names while the page is open", async () => {
     render(<App />);
     await screen.findByRole("heading", { name: "What would you like help with?" });
