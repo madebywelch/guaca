@@ -138,7 +138,7 @@ LAYOUT = """
   const boxes = [];
   const scrollers = [];
   for (const el of document.body.querySelectorAll('*')) {
-    if (el.closest('svg, .ribbon, .home__run, .working') || !seen(el)) continue;
+    if (el.closest('svg, .ribbon, .home__run, .working, .topbar__day') || !seen(el)) continue;
     const r = el.getBoundingClientRect();
     boxes.push([named(el), Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)]);
     const s = getComputedStyle(el);
@@ -152,7 +152,36 @@ LAYOUT = """
     tops.set(top, (tops.get(top) || 0) + 1);
   }
   const rows = [...tops.entries()].sort((a, b) => a[0] - b[0]).map(([, count]) => count);
-  return { boxes, scrollers, rows };
+  const dialog = document.querySelector('.dialog--form, .dialog--settings');
+  const rect = dialog?.getBoundingClientRect();
+  const scrim = dialog?.parentElement;
+  const horizontal = rect && {
+    left: Math.round(rect.left),
+    right: Math.round(innerWidth - rect.right),
+    center: Math.round(rect.left + rect.width / 2),
+    viewportCenter: Math.round(innerWidth / 2),
+    scrimGutter: scrim.offsetWidth - scrim.clientWidth,
+  };
+  return { boxes, scrollers, rows, horizontal };
+})()
+"""
+
+SETTINGS_CONTROLS = """
+(() => {
+  const edges = (selector) => {
+    const rect = document.querySelector(selector).getBoundingClientRect();
+    return [Math.round(rect.left), Math.round(rect.right)];
+  };
+  const gutter = (selector) => {
+    const node = document.querySelector(selector);
+    return node.offsetWidth - node.clientWidth - node.clientLeft -
+      parseFloat(getComputedStyle(node).borderRightWidth);
+  };
+  return {
+    general: edges('#settings-tab-general'),
+    yourName: edges('#settings-pane input[placeholder="Unnamed"]'),
+    gutters: [gutter('.settings__nav'), gutter('.settings__pane')],
+  };
 })()
 """
 

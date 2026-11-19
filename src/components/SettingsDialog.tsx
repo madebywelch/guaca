@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useId, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { ACCENTS, DEFAULT_ACCENT } from "../avatars/catalog";
@@ -264,6 +264,8 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
   const [pushReport, setPushReport] = useState<PushReport | null>(null);
   const [pushTest, setPushTest] = useState<{ ok: boolean; text: string } | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const navRef = useRef<HTMLDivElement>(null);
+  const paneRef = useRef<HTMLDivElement>(null);
   const pending = useRef<SettingsPatch | null>(null);
 
   const base = useRef(initial?.baseline ?? settings);
@@ -313,6 +315,24 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
 
   useEffect(() => {
     panelRef.current?.focus();
+  }, []);
+
+  useLayoutEffect(() => {
+    const regions = [navRef.current, paneRef.current].filter((node) => node !== null);
+    const measure = () => {
+      for (const node of regions) {
+        const gutter =
+          node.offsetWidth -
+          node.clientWidth -
+          node.clientLeft -
+          parseFloat(getComputedStyle(node).borderRightWidth);
+        node.style.setProperty("--settings-gutter", `${Math.max(0, gutter)}px`);
+      }
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    for (const node of regions) observer.observe(node);
+    return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
@@ -790,6 +810,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
         <div className="settings__body">
           <div
             className="settings__nav"
+            ref={navRef}
             role="tablist"
             aria-orientation="vertical"
             aria-label="Settings sections"
@@ -814,6 +835,7 @@ export function SettingsDialog({ onClose, section: opening, onSection }: Props) 
 
           <div
             className="settings__pane"
+            ref={paneRef}
             id="settings-pane"
             role="tabpanel"
             aria-labelledby={`settings-tab-${section}`}
