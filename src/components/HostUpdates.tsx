@@ -49,6 +49,7 @@ import {
 import { errorMessage } from "../lib/types";
 import { hostProgress, type Progress, rebuildProgress } from "../lib/updating";
 import { HostChoice } from "./HostSetup";
+import { Icon } from "./Icon";
 
 interface UpdateState {
   health: Health | null;
@@ -737,8 +738,11 @@ export function HostUpdatePanel() {
         </p>
       )}
       {operation && !updating && (
-        <details>
-          <summary>Last host update</summary>
+        <details className="disclosure">
+          <summary>
+            <Icon name="chevron-right" size={16} />
+            Last host update
+          </summary>
           <p>{operation.stage}</p>
           {operation.backup && (
             <p>

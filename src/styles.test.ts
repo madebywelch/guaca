@@ -150,6 +150,25 @@ describe("the control family", () => {
     });
   });
 
+  it("draws a disclosure as a compact control with its own triangle, not the browser's", () => {
+    const rule = (selector: string) =>
+      Object.fromEntries(
+        declarations()
+          .filter((d) => d.selector === selector)
+          .map((d) => [d.property, d.value]),
+      );
+    expect(rule(".disclosure > summary")).toMatchObject({
+      "min-height": "var(--control-h-sm)",
+      "border-radius": "var(--radius-control)",
+      "list-style": "none",
+    });
+    expect(rule(".disclosure > summary::-webkit-details-marker")).toMatchObject({
+      display: "none",
+    });
+    expect(rule(".disclosure > summary:hover")).toMatchObject({ "text-decoration": "none" });
+    expect(rule(".disclosure[open] > summary > .icon").transform).toBeTruthy();
+  });
+
   it("gives a button a pressed, a disabled and a pending state as well as a hover", () => {
     const selectors = declarations().map((d) => d.selector);
     for (const state of [":hover", ":active", ":disabled", '[aria-busy="true"]']) {

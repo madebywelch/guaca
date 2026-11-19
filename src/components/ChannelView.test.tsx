@@ -8,7 +8,6 @@ import type { LiveCall } from "../lib/trail";
 import type { Activity, AgentCard, Envelope, MessageId, Part, ToolOutcome } from "../lib/types";
 import { ChannelView } from "./ChannelView";
 import { Search } from "./Search";
-import { SettingsDialog } from "./SettingsDialog";
 
 const pairMessages = vi.fn<() => Promise<Envelope[]>>(async () => []);
 const sendMessage = vi.fn(async (..._args: unknown[]) => ({ messageId: "message", runId: "run" }));
@@ -97,12 +96,11 @@ function record(part: Part): Envelope {
 }
 
 function Workspace() {
-  const [overlay, setOverlay] = useState<"search" | "settings" | null>(null);
+  const [overlay, setOverlay] = useState<"search" | null>(null);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (!event.ctrlKey) return;
       if (event.key === "k") setOverlay("search");
-      if (event.key === ",") setOverlay("settings");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -121,7 +119,6 @@ function Workspace() {
           onOpenSettings={() => {}}
         />
       )}
-      {overlay === "settings" && <SettingsDialog onClose={() => setOverlay(null)} />}
     </>
   );
 }
@@ -216,28 +213,30 @@ describe("peer traffic in a channel", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: /Message from Baker/ }));
   });
 
-  it.each([
-    ["Search", "k"],
-    ["Settings", ","],
-  ])("dismisses %s above the pair thread before closing the thread", async (name, key) => {
-    open([fromPeer("hi")], true);
-    const opener = screen.getByRole("button", { name: /Message from Chef/ });
-    opener.focus();
-    fireEvent.click(opener);
-    await screen.findByText(/view-only/);
-    const close = screen.getByRole("button", { name: "Close chat" });
-    close.focus();
-    fireEvent.keyDown(window, { key, ctrlKey: true });
-    const dialog = await screen.findByRole("dialog", { name });
-    expect(dialog.contains(document.activeElement)).toBe(true);
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(dialog.isConnected).toBe(false);
-    expect(screen.getByRole("button", { name: "Close chat" })).toBe(close);
-    expect(document.activeElement).toBe(close);
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.queryByRole("button", { name: "Close chat" })).toBeNull();
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: /Message from Chef/ }));
-  });
+  it.each([["Search", "k"]])(
+    "dismisses %s above the pair thread before closing the thread",
+    async (name, key) => {
+      open([fromPeer("hi")], true);
+      const opener = screen.getByRole("button", { name: /Message from Chef/ });
+      opener.focus();
+      fireEvent.click(opener);
+      await screen.findByText(/view-only/);
+      const close = screen.getByRole("button", { name: "Close chat" });
+      close.focus();
+      fireEvent.keyDown(window, { key, ctrlKey: true });
+      const dialog = await screen.findByRole("dialog", { name });
+      expect(dialog.contains(document.activeElement)).toBe(true);
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(dialog.isConnected).toBe(false);
+      expect(screen.getByRole("button", { name: "Close chat" })).toBe(close);
+      expect(document.activeElement).toBe(close);
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(screen.queryByRole("button", { name: "Close chat" })).toBeNull();
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: /Message from Chef/ }),
+      );
+    },
+  );
   it("shows one line for a burst, not one per message", () => {
     open([
       envelope({}),

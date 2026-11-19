@@ -7,7 +7,6 @@ import { useStore } from "../lib/store";
 import type { PeerSummary, WirePeer } from "../lib/transcript";
 import type { RunId } from "../lib/types";
 import { Search } from "./Search";
-import { SettingsDialog } from "./SettingsDialog";
 import { HandoffRow, NoticeRow, RefusedRow, WritingRow, why } from "./WireRow";
 
 vi.mock("../lib/ipc", async (original) => {
@@ -177,11 +176,11 @@ describe("a hand-off", () => {
 });
 
 function Workspace() {
-  const [upper, setUpper] = useState<"settings" | "search" | null>(null);
+  const [upper, setUpper] = useState<"search" | null>(null);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const binding = bindingFor(event);
-      if (binding?.id === "settings" || binding?.id === "search") {
+      if (binding?.id === "search") {
         event.preventDefault();
         setUpper(binding.id);
       }
@@ -193,7 +192,6 @@ function Workspace() {
   return (
     <>
       <RefusedRow peer={GOV} at={0} body="The message" reason="Refused: no" />
-      {upper === "settings" && <SettingsDialog onClose={close} />}
       {upper === "search" && (
         <Search
           onClose={close}
@@ -211,26 +209,30 @@ function Workspace() {
 }
 
 describe("a wire detail under a workspace dialog", () => {
-  it.each([
-    ["Settings", ","],
-    ["Search", "f"],
-  ])("dismisses %s before the wire detail and restores focus", async (name, key) => {
-    render(<Workspace />);
-    const opener = screen.getByRole("button", { name: /Not delivered to Government Procurement/ });
-    opener.focus();
-    fireEvent.click(opener);
-    const detail = screen.getByRole("dialog", { name: "Not delivered to Government Procurement" });
-    const close = within(detail).getByRole("button", { name: "Close" });
-    close.focus();
-    fireEvent.keyDown(window, { key, ctrlKey: true });
-    const upper = await screen.findByRole("dialog", { name });
-    await waitFor(() => expect(detail.contains(document.activeElement)).toBe(false));
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(upper.isConnected).toBe(false);
-    expect(detail.isConnected).toBe(true);
-    expect(document.activeElement).toBe(close);
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(detail.isConnected).toBe(false);
-    expect(document.activeElement).toBe(opener);
-  });
+  it.each([["Search", "f"]])(
+    "dismisses %s before the wire detail and restores focus",
+    async (name, key) => {
+      render(<Workspace />);
+      const opener = screen.getByRole("button", {
+        name: /Not delivered to Government Procurement/,
+      });
+      opener.focus();
+      fireEvent.click(opener);
+      const detail = screen.getByRole("dialog", {
+        name: "Not delivered to Government Procurement",
+      });
+      const close = within(detail).getByRole("button", { name: "Close" });
+      close.focus();
+      fireEvent.keyDown(window, { key, ctrlKey: true });
+      const upper = await screen.findByRole("dialog", { name });
+      await waitFor(() => expect(detail.contains(document.activeElement)).toBe(false));
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(upper.isConnected).toBe(false);
+      expect(detail.isConnected).toBe(true);
+      expect(document.activeElement).toBe(close);
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(detail.isConnected).toBe(false);
+      expect(document.activeElement).toBe(opener);
+    },
+  );
 });

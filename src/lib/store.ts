@@ -5,6 +5,7 @@ import { api } from "./ipc";
 import { forgetRestart, type Link, restarting } from "./link";
 import { loadPrefs, type Prefs, savePrefs } from "./prefs";
 import { type DropTarget, landsBefore, railOrder } from "./rail";
+import type { Section } from "./sections";
 import { hosted, isUnreachable, openExternal, PAGE_ID } from "./transport";
 
 let decisionRead = 0;
@@ -42,9 +43,12 @@ import type {
   Group,
   GroupId,
   GroupUsage,
+  GuardLimits,
   MessageId,
   Outcome,
   Participant,
+  Provider,
+  ReasoningEffort,
   RoutineId,
   RunId,
   Running,
@@ -56,6 +60,21 @@ import type {
 import { asSentence, errorMessage, skillScopeKey } from "./types";
 
 export type ChannelKey = AgentId;
+
+export interface SettingsDraft {
+  baseline: Settings | null;
+  operatorName: string;
+  provider: Provider;
+  baseUrl: string;
+  model: string;
+  reasoningEffort: ReasoningEffort;
+  subscriptionModel: string;
+  idleMinutes: string;
+  browserIdleMinutes: string;
+  stealth: boolean;
+  timeout: string;
+  limits: GuardLimits;
+}
 
 export interface StreamBuffer {
   channelId: AgentId;
@@ -116,6 +135,10 @@ export interface State {
   forYou: boolean;
   forYouAsked: number;
   showForYou: (open: boolean) => void;
+  settingsPage: { section: Section | null } | null;
+  settingsDraft: SettingsDraft | null;
+  openSettings: (section?: Section) => void;
+  closeSettings: () => void;
   artifactsOpen: { id: ArtifactId | null } | null;
   showArtifacts: (open: { id: ArtifactId | null } | null) => void;
   refreshDecisions: (valid?: () => boolean) => Promise<void>;
@@ -281,6 +304,10 @@ export const useStore = create<State>((set, get) => ({
     ),
   artifactsOpen: null,
   showArtifacts: (open) => set({ artifactsOpen: open }),
+  settingsPage: null,
+  settingsDraft: null,
+  openSettings: (section) => set({ settingsPage: { section: section ?? null } }),
+  closeSettings: () => set({ settingsPage: null }),
   async refreshDecisions(valid = () => true) {
     const read = ++decisionRead;
     try {
@@ -410,6 +437,7 @@ export const useStore = create<State>((set, get) => ({
       selected: key,
       focused: null,
       openingRoutine: null,
+      settingsPage: null,
       railGroup: keptFocus(state, key),
     }));
     diagnostic("select.committed", get().selected);
@@ -422,7 +450,7 @@ export const useStore = create<State>((set, get) => ({
   },
 
   leaveChannel() {
-    set({ selected: null, focused: null });
+    set({ selected: null, focused: null, settingsPage: null });
   },
 
   async moveAgent(id, at) {
@@ -491,6 +519,7 @@ export const useStore = create<State>((set, get) => ({
     set((state) => ({
       selected: channel,
       focused: message,
+      settingsPage: null,
       railGroup: keptFocus(state, channel),
     }));
     await get().loadChannel(channel, message);
