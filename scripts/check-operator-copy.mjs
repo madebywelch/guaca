@@ -40,10 +40,21 @@ const RETIRED = [
   [/\bfollow(ing)?[ -]through\b/i, "say \"In progress after your answer\""],
   [/\bteam activity\b/i, "say \"When each agent last worked\""],
   [/\bFor You\b/, "the place is \"For you\""],
-  [/\b(open|whose) (a |the )?channel\b|\bthe channel with\b/i, "an agent's page is its conversation"],
+  [/\b(open|view|whose) (a |the )?channel\b|\bthe channel with\b/i, "an agent's page is its conversation"],
+  [
+    /\b(this|selected|first|next|previous|each) (requests?|decisions?)\b|\w's (request|decision)\b|\brequests? for help\b|\bdecision views?\b|\b(refresh|pending|open|answered|unanswered|completed|withdrawn) (requests|decisions)\b/i,
+    "a waiting request is a question",
+  ],
 ];
+const NOT_COPY = /^(className|key|id|role|type|value|htmlFor|name|data-.*|aria-controls|aria-describedby|aria-labelledby)$/;
+
+export const AGENT_FACING = new Set([
+  "Give this decision a stable topic of 1 to 200 characters, such as an email thread reference.",
+  "You already have 100 open decisions. Review and withdraw obsolete items before adding another.",
+]);
 
 export function retiredWords(text) {
+  if (AGENT_FACING.has(text.trim())) return [];
   const found = RETIRED.filter(([pattern]) => pattern.test(text)).map(([, fix]) => fix);
   if (NOUN.test(text) && WAITING.test(text)) found.push("a waiting request is a question, finished work is a result");
   return [...new Set(found)];
@@ -67,10 +78,12 @@ export function frontendCopy(source, path) {
       visit(node.declaration, unit);
       return;
     }
+    if (node.type === "JSXAttribute" && NOT_COPY.test(node.name?.name ?? "")) return;
     let inside = unit;
-    const opens = node.type === "JSXElement" || node.type === "JSXFragment" || (node.type === "TemplateLiteral" && !unit?.template);
+    const joins = node.type === "TemplateLiteral" || (node.type === "BinaryExpression" && node.operator === "+");
+    const opens = node.type === "JSXElement" || node.type === "JSXFragment" || (joins && !unit?.template);
     if (opens) {
-      inside = { line: lineAt(source, node.start), parts: [], template: unit?.template || node.type === "TemplateLiteral" };
+      inside = { line: lineAt(source, node.start), parts: [], template: unit?.template || joins };
       units.push(inside);
     }
     const text =

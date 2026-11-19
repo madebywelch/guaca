@@ -1,6 +1,8 @@
+import { useMemo } from "react";
 import { create } from "zustand";
 
-import type { AgentId } from "./types";
+import { forYouCount, useStore } from "./store";
+import type { Activity, AgentId, Approval, Escalation } from "./types";
 
 export const HOLD_MS = 5000;
 
@@ -67,6 +69,50 @@ export const useHeld = create<HeldState>((set, get) => ({
     set({ notice: null });
   },
 }));
+
+export interface Shown {
+  pending: Approval[];
+  stuck: Escalation[];
+  activity: Record<string, Activity>;
+  sending: AgentId | null;
+}
+
+export function shown(
+  pending: Approval[],
+  stuck: Escalation[],
+  activity: Record<string, Activity>,
+  heldId: string | undefined,
+): Shown {
+  const open = pending.filter((one) => one.id !== heldId);
+  const sending = pending.find((one) => one.id === heldId)?.agentId ?? null;
+  const still = sending !== null && open.some((one) => one.agentId === sending);
+  const answered = sending !== null && !still && activity[sending]?.state === "awaitingApproval";
+  return {
+    pending: open,
+    stuck: stuck.filter((one) => one.id !== heldId),
+    activity: answered ? { ...activity, [sending]: { state: "thinking" } } : activity,
+    sending: answered ? sending : null,
+  };
+}
+
+export function useShown(): Shown {
+  const heldId = useHeld((s) => s.held?.id);
+  const pending = useStore((s) => s.pending);
+  const stuck = useStore((s) => s.stuck);
+  const activity = useStore((s) => s.activity);
+  return useMemo(() => shown(pending, stuck, activity, heldId), [pending, stuck, activity, heldId]);
+}
+
+export function useForYouCount(): number {
+  const heldId = useHeld((s) => s.held?.id);
+  return useStore((state) => {
+    const held =
+      heldId !== undefined &&
+      (state.pending.some((one) => one.id === heldId) ||
+        state.stuck.some((one) => one.id === heldId));
+    return forYouCount(state) - (held ? 1 : 0);
+  });
+}
 
 if (typeof window !== "undefined") {
   window.addEventListener("pagehide", () => useHeld.getState().release());

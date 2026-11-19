@@ -1007,7 +1007,7 @@ describe("the new window's surfaces", () => {
 describe("the waiting count", () => {
   it.each([
     ".orb__waiting",
-    ".home__count",
+    ".home__count[data-waiting]",
     ".statusbar__count",
     ".for-you h2 span",
     ".menubar__decisions",
@@ -1021,4 +1021,18 @@ describe("the waiting count", () => {
       expect(own.filter((d) => d.value.includes("danger"))).toEqual([]);
     },
   );
+
+  it("keeps the counts beside it that wait on nobody out of amber", () => {
+    const counts = declarations().filter(
+      (d) => d.selector === ".home__count" && d.property === "color",
+    );
+    expect(counts.map((d) => d.value)).toEqual(["var(--muted)"]);
+  });
+
+  it("edges a stuck agent's card in amber, since it waits on a person rather than failing", () => {
+    const edge = declarations().find(
+      (d) => d.selector === '.desk__card[data-kind="stuck"]' && d.property === "border-left",
+    );
+    expect(edge?.value).toBe("2px solid var(--attention)");
+  });
 });

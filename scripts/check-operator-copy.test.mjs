@@ -61,6 +61,13 @@ const RETIRED_COPY = [
   "Open a channel",
   "Whose channel",
   "Opens the channel with Pip",
+  "This request is no longer live.",
+  "Cleared Pip's request for help.",
+  "Select the next or the previous request",
+  "Could not refresh decisions: offline",
+  "Decision views",
+  "2 pending decisions",
+  "View channel",
 ];
 
 const CURRENT_COPY = [
@@ -75,6 +82,10 @@ const CURRENT_COPY = [
   "Answered in For you",
   "Research a decision",
   "Giving it one is a decision only you can make.",
+  "The request did not complete.",
+  "Testing makes a small model request that may be billed.",
+  "a request for an access token when an agent uses a connector",
+  "Review the pull request",
 ];
 
 test("retires every word the waiting request was once called, and only those", () => {
@@ -87,9 +98,11 @@ test("reads a sentence split across a template, its branches and JSX as one piec
     "const a = `${n} ${n === 1 ? \"item needs\" : \"items need\"} your attention.`;",
     "const b = <p>{n} {n === 1 ? \"turn\" : \"turns\"} waiting on you</p>;",
     "import { x } from \"./decisions\";",
+    "const d = n + \" \" + w + (n === 1 ? \" item needs\" : \" items need\") + \" your attention\";",
+    "const e = <p className=\"decision__answer\" title={\"Answered\"}>Waiting on you</p>;",
   ].join("\n");
   const copy = frontendCopy(source, "sample.tsx");
-  assert.deepEqual(copy.filter((one) => retiredWords(one.text).length > 0).map((one) => one.line), [1, 2]);
+  assert.deepEqual(copy.filter((one) => retiredWords(one.text).length > 0).map((one) => one.line), [1, 2, 4]);
 });
 
 test("reads Rust string literals and skips comment lines", () => {

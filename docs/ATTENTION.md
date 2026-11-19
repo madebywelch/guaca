@@ -8,9 +8,11 @@ every group.
 
 ## Three tiers over one queue
 
-The **For you** entry counts unanswered decisions, interrupted
-follow-through, live approval requests and operational blockers. Snoozing a
-decision does not remove it from the count. Opening the entry shows three views:
+The **For you** entry counts questions: unanswered ones, answers whose work was
+interrupted, live permissions and agents that are stuck, and says "N
+questions". Snoozing a question does not remove it from the count. An answer
+held behind Undo already counts as answered. Opening the entry shows three
+views:
 
 - **Waiting on you:** live permissions first, operational blockers, then decisions
   ordered by deadline and age. Snoozed decisions remain under **Set aside**.
@@ -64,8 +66,8 @@ choices, a source reference and an optional real deadline. Source references
 are plain text, never executable links. A custom answer is available even when
 choices were offered. Only unresolved items get an answer or snooze control.
 
-The **When each agent last worked** disclosure reports the last time an agent worked. It is
-explicitly not proof that any particular inbox was checked. This change does
+The **When each agent last worked** disclosure reports the last time an agent
+worked. It is explicitly not proof that any particular inbox was checked. This change does
 not add an automatic email monitor or infer coverage from a successful turn.
 
 ## The queue is read, not accumulated
@@ -194,7 +196,7 @@ remain visible and continue to receive review reminders.
 
 On restart, an answered record becomes interrupted only when the run delivering
 its answer was still unsettled, so follow-through that had finished can still be
-completed afterward. The operator's **Resume follow-through** re-delivers the
+completed afterward. The operator's **Resume work** re-delivers the
 saved answer with instructions to inspect prior actions before continuing. Try
 again on that delivery goes through the same Resume and records the new run as
 the delivery, so the answer is not delivered twice. Nothing silently replays an

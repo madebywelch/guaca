@@ -88,7 +88,7 @@ export const BINDINGS: Binding[] = [
   },
   {
     id: "menu-allow",
-    what: "Allow the request the selected row belongs to",
+    what: "Allow the question the selected row belongs to",
     combo: { key: "Enter", mod: true },
     where: "The command menu",
     fixed: true,
@@ -109,14 +109,14 @@ export const BINDINGS: Binding[] = [
   },
   {
     id: "queue",
-    what: "Leave the field on Today and select the first request",
+    what: "Leave the field on Today and select the first question",
     combo: { key: "Escape" },
     where: "Needs you",
     fixed: true,
   },
   {
     id: "queue-move",
-    what: "Select the next or the previous request",
+    what: "Select the next or the previous question",
     combo: { key: "j" },
     to: { combo: { key: "k" }, joint: "either" },
     where: "Needs you",
@@ -124,14 +124,14 @@ export const BINDINGS: Binding[] = [
   },
   {
     id: "queue-allow",
-    what: "Allow, or the selected request's first button",
+    what: "Allow, or the selected question's first button",
     combo: { key: "Enter", mod: true },
     where: "Needs you",
     fixed: true,
   },
   {
     id: "queue-deny",
-    what: "Deny, or clear the selected request",
+    what: "Deny, or clear the selected question",
     combo: { key: "Backspace", mod: true },
     where: "Needs you",
     fixed: true,

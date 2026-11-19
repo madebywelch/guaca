@@ -3,12 +3,13 @@ import { AgentAvatar, type Look } from "../avatars/AgentAvatar";
 import { FLIGHT_MS, roleOf, usePulseChoreography } from "../lib/choreography";
 import { useDismiss } from "../lib/dismiss";
 import { doing } from "../lib/doing";
+import { useForYouCount, useShown } from "../lib/held";
 import { FIND_KEY, IS_MAC } from "../lib/keybinds";
 import { prefersReducedMotion } from "../lib/motion";
 import { newestByAgent } from "../lib/outcomes";
 import { questions } from "../lib/questions";
 import { type DropTarget, railOrder } from "../lib/rail";
-import { forYouCount, useLiveAgents, useStore } from "../lib/store";
+import { useLiveAgents, useStore } from "../lib/store";
 import { useNow } from "../lib/time";
 import { desktop } from "../lib/transport";
 import type { AgentCard, AgentId, Group, GroupId } from "../lib/types";
@@ -61,9 +62,7 @@ export function Sidebar({
 }: Props) {
   const agents = useLiveAgents();
   const groups = useStore((s) => s.groups);
-  const activity = useStore((s) => s.activity);
-  const stuck = useStore((s) => s.stuck);
-  const pending = useStore((s) => s.pending);
+  const { activity, stuck, pending } = useShown();
   const showForYou = useStore((s) => s.showForYou);
   const trail = useStore((s) => s.trail);
   const finishedAt = useStore((s) => s.finishedAt);
@@ -326,7 +325,7 @@ export function Sidebar({
   const inHand = drag?.held;
   const heldAgent = inHand?.kind === "agent" ? agents.find((a) => a.id === inHand.id) : undefined;
 
-  const waiting = useStore(forYouCount);
+  const waiting = useForYouCount();
 
   return (
     <>

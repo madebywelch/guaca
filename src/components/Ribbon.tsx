@@ -7,6 +7,7 @@ import {
   useState,
 } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
+import { useShown } from "../lib/held";
 import type { Ribbon as Layout } from "../lib/ribbon";
 import { useStore } from "../lib/store";
 import type { AgentId } from "../lib/types";
@@ -44,7 +45,7 @@ export function Ribbon({
   pending = false,
 }: Props) {
   const agents = useStore((s) => s.agents);
-  const activity = useStore((s) => s.activity);
+  const { activity } = useShown();
   const byId = new Map(agents.map((agent) => [agent.id, agent]));
 
   const stops = [

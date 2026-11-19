@@ -57,5 +57,8 @@ describe("runningNote", () => {
     expect(runningNote({ note: null }, { state: "queued", depth: 2 }, [])).toBe("Waiting its turn");
     expect(runningNote({ note: null }, { state: "thinking" }, [])).toBe("Working");
     expect(runningNote({ note: null }, undefined, [])).toBe("Working");
+    expect(runningNote({ note: "Drafting" }, { state: "thinking" }, ["Analyst"], true)).toBe(
+      "Sending your answer",
+    );
   });
 });

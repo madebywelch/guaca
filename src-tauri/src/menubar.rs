@@ -53,7 +53,7 @@ pub struct Presence {
 
 impl Presence {
     fn name_of(&self, id: AgentId) -> &str {
-        self.roster.get(&id).map(|member| member.name.as_str()).unwrap_or("A deleted agent")
+        self.roster.get(&id).map(|member| member.name.as_str()).unwrap_or(DELETED)
     }
 
     fn crew_named(&self, group: GroupId) -> Option<&Crew> {
@@ -153,13 +153,22 @@ impl Presence {
 
 const NAMED: usize = 3;
 
+const DELETED: &str = "A deleted agent";
+
 fn who_is_waiting(names: &[&str]) -> String {
     let others = names.len().saturating_sub(NAMED - 1);
-    let mut shown: Vec<String> = if names.len() <= NAMED {
-        names.iter().map(|name| name.to_string()).collect()
-    } else {
-        names[..NAMED - 1].iter().map(|name| name.to_string()).collect()
-    };
+    let named = if names.len() <= NAMED { names } else { &names[..NAMED - 1] };
+    let mut shown: Vec<String> = named
+        .iter()
+        .enumerate()
+        .map(|(at, name)| {
+            if at > 0 && *name == DELETED {
+                "a deleted agent".to_string()
+            } else {
+                name.to_string()
+            }
+        })
+        .collect();
     if names.len() > NAMED {
         shown.push(if others == 1 { "1 other".to_string() } else { format!("{others} others") });
     }
@@ -457,6 +466,13 @@ mod tests {
         let pip = hire(&mut presence, "Pip");
         presence.waiting.push(approval(pip, ProtectedAction::CreateAgent, "wants an agent"));
         assert_eq!(presence.look().tooltip, "Guaca · Pip and Scout are waiting on you");
+
+        let mut gone = presence.clone();
+        gone.waiting.push(approval(AgentId::new(), ProtectedAction::CreateAgent, "wants an agent"));
+        assert_eq!(
+            gone.look().tooltip,
+            "Guaca · Pip, a deleted agent and Scout are waiting on you"
+        );
 
         let ada = hire(&mut presence, "Ada");
         presence.stuck.push(escalation(ada, "no key", 1));

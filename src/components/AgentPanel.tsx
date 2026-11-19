@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
+import { useShown } from "../lib/held";
 import { runsOn } from "../lib/profile";
 import { useStore } from "../lib/store";
 import { useNow, whenLabel } from "../lib/time";
@@ -39,7 +40,7 @@ const activityWords: Record<Exclude<Activity["state"], "idle">, string> = {
 function Profile({ agent, onEdit }: { agent: AgentCard; onEdit: () => void }) {
   const group = useStore((state) => state.groups.find((entry) => entry.id === agent.groupId));
   const settings = useStore((state) => state.settings);
-  const activity = useStore((state) => state.activity[agent.id]);
+  const activity = useShown().activity[agent.id];
   const runs = runsOn(agent, group, settings);
   return (
     <div className="profile">
@@ -120,7 +121,7 @@ const doingWords: Record<"thinking" | "queued", string> = {
 };
 
 function Doing({ agent }: { agent: AgentCard }) {
-  const activity = useStore((state) => state.activity[agent.id]);
+  const activity = useShown().activity[agent.id];
   const trail = useStore((state) => state.trail[agent.id]);
   const messages = useStore((state) => state.messages[agent.id]);
   const run = useStore((state) => state.activeRun[agent.id]);

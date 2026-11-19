@@ -3,7 +3,7 @@ import { Fragment, type KeyboardEvent, useEffect, useMemo, useRef, useState } fr
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { useDismiss } from "../lib/dismiss";
 import { defaultTarget } from "../lib/field";
-import { useHeld } from "../lib/held";
+import { useHeld, useShown } from "../lib/held";
 import { api } from "../lib/ipc";
 import { formatCombo } from "../lib/keybinds";
 import {
@@ -36,7 +36,8 @@ const RETURN = formatCombo({ key: "Enter" });
 export function CommandMenu({ onClose, onPlace, onSection }: Props) {
   const agents = useStore((s) => s.agents);
   const groups = useStore((s) => s.groups);
-  const activity = useStore((s) => s.activity);
+  const shownNow = useShown();
+  const activity = shownNow.activity;
   const lastActive = useStore((s) => s.lastActive);
   const railGroup = useStore((s) => s.railGroup);
   const open = useStore((s) => s.selected);

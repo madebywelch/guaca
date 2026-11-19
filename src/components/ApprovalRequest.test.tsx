@@ -160,6 +160,12 @@ describe("a request for permission", () => {
     expect(screen.queryByRole("button", { name: "Allow" })).toBeNull();
   });
 
+  it("says a question answered elsewhere is no longer live", () => {
+    draw("answered");
+    expect(screen.queryByRole("button", { name: "Allow" })).toBeNull();
+    expect(screen.getByText(/This question is no longer live\./)).toBeTruthy();
+  });
+
   it("takes the server's answer when a decision is refused", async () => {
     decideApproval.mockRejectedValue({
       kind: "alreadyAnswered",

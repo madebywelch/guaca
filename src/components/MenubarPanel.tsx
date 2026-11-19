@@ -202,8 +202,8 @@ function Overview({ agents, onOpen }: { agents: AgentCard[]; onOpen: (id: AgentI
           className="menubar__decisions"
           onClick={() => void api.openWindow({ kind: "forYou" })}
         >
-          {questions(open)} waiting
-          <span className="menubar__decisions-go">Open For you</span>
+          {questions(open)} in For you
+          <span className="menubar__decisions-go">Open</span>
         </button>
       )}
 

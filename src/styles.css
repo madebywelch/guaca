@@ -573,7 +573,7 @@ input[type="file"]::file-selector-button {
 }
 
 .desk__card[data-kind="stuck"] {
-  border-left: 2px solid var(--danger);
+  border-left: 2px solid var(--attention);
 }
 
 .menubar {
@@ -8937,9 +8937,13 @@ button.artifacts__version[aria-pressed="true"] {
 }
 
 .home__count {
-  color: var(--attention);
+  color: var(--muted);
   font-weight: var(--weight-regular);
   margin-left: var(--space-3);
+}
+
+.home__count[data-waiting] {
+  color: var(--attention);
 }
 
 .home__list {

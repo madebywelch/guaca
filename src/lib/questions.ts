@@ -6,16 +6,22 @@ export function results(count: number): string {
   return count === 1 ? "1 result" : `${count} results`;
 }
 
+export const DELETED = "A deleted agent";
+
 const NAMED = 3;
 
 export function whoIsWaiting(names: string[]): string {
-  const unique = [...new Set(names)];
-  if (unique.length === 0) return "Nobody is waiting on you";
-  if (unique.length === 1) return `${unique[0]} is waiting on you`;
-  const others = unique.length - (NAMED - 1);
-  const shown =
-    unique.length <= NAMED
-      ? unique
-      : [...unique.slice(0, NAMED - 1), others === 1 ? "1 other" : `${others} others`];
+  if (names.length === 0) return "Nobody is waiting on you";
+  if (names.length === 1) return `${names[0]} is waiting on you`;
+  const others = names.length - (NAMED - 1);
+  const shown = (
+    names.length <= NAMED
+      ? names
+      : [...names.slice(0, NAMED - 1), others === 1 ? "1 other" : `${others} others`]
+  ).map((name, at) => (at > 0 && name === DELETED ? "a deleted agent" : name));
   return `${shown.slice(0, -1).join(", ")} and ${shown.at(-1)} are waiting on you`;
+}
+
+export function askers(items: { agentId: string }[], nameOf: (id: string) => string): string[] {
+  return [...new Set(items.map((one) => one.agentId))].map(nameOf);
 }

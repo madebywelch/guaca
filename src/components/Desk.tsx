@@ -12,7 +12,7 @@ import { AgentAvatar } from "../avatars/AgentAvatar";
 import { ABSENT_ACCENT } from "../avatars/catalog";
 import { useHeld } from "../lib/held";
 import { formatCombo, IS_MAC } from "../lib/keybinds";
-import { whoIsWaiting } from "../lib/questions";
+import { askers, whoIsWaiting } from "../lib/questions";
 import { useStore } from "../lib/store";
 import { clockLabel, relativeTime } from "../lib/time";
 import type { AgentCard, AgentId, Approval, Decision, Escalation } from "../lib/types";
@@ -83,7 +83,7 @@ export function Desk({
     );
 
   const clearHeld = (one: Escalation) =>
-    held(one.id, `Cleared ${nameOf(one.agentId)}'s request for help.`, () => clear(one.id));
+    held(one.id, `Cleared what ${nameOf(one.agentId)} asked.`, () => clear(one.id));
 
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (!queue || event.nativeEvent.isComposing || event.altKey) return;
@@ -147,9 +147,7 @@ export function Desk({
 
   return (
     <section className="for-you__requests" aria-label="Waiting on you" onKeyDown={onKeyDown}>
-      {title !== null && (
-        <h3>{title ?? whoIsWaiting([...pending, ...stuck].map((one) => nameOf(one.agentId)))}</h3>
-      )}
+      {title !== null && <h3>{title ?? whoIsWaiting(askers([...pending, ...stuck], nameOf))}</h3>}
       {pending.map((request) => (
         <DeskCard
           key={request.id}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-
+import { useShown } from "../lib/held";
 import { api } from "../lib/ipc";
 import { layoutRibbon, RIBBON_CHAR_PX, RIBBON_FACE_PX } from "../lib/ribbon";
 import { useStore } from "../lib/store";
@@ -19,9 +19,8 @@ const TODAY_RUNS = 100;
 export function Timeline({ onOpenAgent, onOpenGroups, openAgentId }: Props) {
   const agents = useStore((state) => state.agents);
   const groups = useStore((state) => state.groups);
-  const activity = useStore((state) => state.activity);
+  const { activity, pending } = useShown();
   const outcomes = useStore((state) => state.outcomes);
-  const pending = useStore((state) => state.pending);
   const routines = useStore((state) => state.routineVersion);
   const dates = useStore((state) => state.calendarVersion);
   const now = useNow(60_000);

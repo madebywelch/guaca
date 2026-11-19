@@ -322,7 +322,7 @@ describe("what the panel says at a glance", () => {
     render(<MenubarPanel ready />);
 
     expect(screen.getByText("2 questions waiting on you")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /2 questions waiting/ }));
+    fireEvent.click(screen.getByRole("button", { name: /2 questions in For you/ }));
     expect(mocks.openWindow).toHaveBeenCalledWith({ kind: "forYou" });
   });
 

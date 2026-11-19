@@ -4,6 +4,7 @@ import { AgentAvatar } from "../avatars/AgentAvatar";
 import { ABSENT_ACCENT } from "../avatars/catalog";
 import { decisionTime, needsAnswer, orderedDecisions } from "../lib/decisions";
 import { useDismiss } from "../lib/dismiss";
+import { useShown } from "../lib/held";
 import { api } from "../lib/ipc";
 import {
   drawnThrough,
@@ -16,7 +17,7 @@ import {
   shelves,
   statusWord,
 } from "../lib/outcomes";
-import { questions } from "../lib/questions";
+import { askers, DELETED, questions } from "../lib/questions";
 import { useStore } from "../lib/store";
 import { relativeTime, useNow } from "../lib/time";
 import { type AgentCard, errorMessage, type Outcome, type WorkDecision } from "../lib/types";
@@ -27,8 +28,7 @@ export function ForYou({ onClose }: { onClose: () => void }) {
   const refresh = useStore((state) => state.refreshDecisions);
   const error = useStore((state) => state.decisionError);
   const banner = useStore((state) => state.banner);
-  const pending = useStore((state) => state.pending);
-  const stuck = useStore((state) => state.stuck);
+  const { pending, stuck } = useShown();
   const agents = useStore((state) => state.agents);
   const groups = useStore((state) => state.groups);
   const lastActive = useStore((state) => state.lastActive);
@@ -88,8 +88,9 @@ export function ForYou({ onClose }: { onClose: () => void }) {
   const due = open.filter((item) => !snoozed.includes(item));
   const shown = view === "needs" ? due : view === "following" ? following : history;
   const count = open.length + pending.length + stuck.length;
-  const waiting = [...pending, ...stuck, ...open].map(
-    (one) => agents.find((agent) => agent.id === one.agentId)?.name ?? "A deleted agent",
+  const waiting = askers(
+    [...pending, ...stuck, ...open],
+    (id) => agents.find((agent) => agent.id === id)?.name ?? DELETED,
   );
   return (
     <div className="scrim">

@@ -3,12 +3,13 @@ import { prefersDark, resolveSurface, watchSystemSurface } from "../lib/appearan
 import { pageData } from "../lib/artifacts";
 import { COMMIT, VERSION } from "../lib/build";
 import { artifactUrl } from "../lib/files";
+import { useForYouCount } from "../lib/held";
 import { hostLabel, hostPlace } from "../lib/host";
 import { api } from "../lib/ipc";
 import { questions } from "../lib/questions";
 import { quickTitle } from "../lib/quick";
 import { skew } from "../lib/releases";
-import { forYouCount, useStore } from "../lib/store";
+import { useStore } from "../lib/store";
 import { desktop } from "../lib/transport";
 import {
   type AgentId,
@@ -36,7 +37,7 @@ export function StatusBar({ onOpen, onMessage }: Props) {
   const link = useStore((s) => s.link);
   const lastHeard = useStore((s) => s.lastHeard);
   const showArtifacts = useStore((s) => s.showArtifacts);
-  const waiting = useStore(forYouCount);
+  const waiting = useForYouCount();
   const host = useHostState();
   const look = useBarLook();
   const [editing, setEditing] = useState(false);
