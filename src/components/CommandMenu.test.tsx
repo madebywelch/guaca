@@ -50,7 +50,7 @@ const request = anApproval({ agentId: "agent-1", summary: "Change your name to R
 const decide = vi.fn(async () => {});
 const select = vi.fn(async () => {});
 
-function draw(pending = [request]) {
+function draw(pending = [request], agents = [dara, noor]) {
   const onClose = vi.fn();
   const onSection = vi.fn();
   const onPlace = vi.fn();
@@ -58,7 +58,7 @@ function draw(pending = [request]) {
   act(() => {
     useHeld.setState({ held: null, notice: null });
     useStore.setState({
-      agents: [dara, noor],
+      agents,
       groups: [group],
       pending,
       stuck: [],
@@ -129,11 +129,11 @@ describe("the command menu", () => {
   });
 
   it("keeps a short draft selected over incidental matches in an agent prompt", () => {
-    const { input, type, chosen } = draw([]);
+    const { input, type, chosen } = draw([], [dara]);
     type("on it");
-    expect(chosen()).toBe("Write to Noor");
+    expect(chosen()).toBe("Write to Dara");
     fireEvent.keyDown(input, { key: "Enter" });
-    expect(api.sendMessage).toHaveBeenCalledExactlyOnceWith("agent-2", "on it");
+    expect(api.sendMessage).toHaveBeenCalledExactlyOnceWith("agent-1", "on it");
     expect(select).not.toHaveBeenCalled();
   });
 
