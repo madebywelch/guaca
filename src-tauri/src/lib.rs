@@ -10,6 +10,7 @@ pub mod config;
 pub mod db;
 pub mod domain;
 pub mod e2b;
+pub mod engine;
 pub mod eval;
 pub mod files;
 pub mod host;

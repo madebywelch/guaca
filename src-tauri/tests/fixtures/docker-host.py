@@ -7,6 +7,8 @@ root = pathlib.Path(__file__).parent
 path = root / "docker-state.json"
 state = json.loads(path.read_text())
 args = sys.argv[1:]
+if args[:1] == ["--host"]:
+    args = args[2:]
 with (root / "docker-calls.jsonl").open("a") as output:
     output.write(json.dumps(args) + "\n")
 mode = state.get("failure", "")
@@ -24,7 +26,9 @@ def mount(destination):
 if args[0] == "context":
     print("unix:///fixture/docker.sock")
 elif args[0] == "info":
-    print("linux")
+    print("fixture-engine linux" if "{{.ID}}" in args[-1] else "linux")
+elif args[:2] == ["context", "show"]:
+    print("fixture")
 elif args[:2] == ["container", "ls"]:
     name = args[args.index("--filter") + 1].removeprefix("name=^/").removesuffix("$")
     if name in state.get("others", {}): print("other-id")

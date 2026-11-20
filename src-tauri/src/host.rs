@@ -7,6 +7,8 @@ use serde_json::Value;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 
+use crate::engine::{self, Engine, Kind, Named};
+
 pub const IMAGE: &str = match option_env!("GUACA_BACKEND_IMAGE") {
     Some(image) => image,
     None => concat!("ghcr.io/madebywelch/guaca/guacad:", env!("CARGO_PKG_VERSION")),
@@ -159,6 +161,49 @@ pub struct Status {
     pub host_zone: Option<String>,
     pub mac_zone: Option<String>,
     pub zone_differs: bool,
+    pub engine: Option<Named>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum Stall {
+    Engine { message: String, engines: Vec<Named> },
+    Choose { message: String, engines: Vec<Named> },
+    Missing { message: String },
+    Image { message: String },
+    Failed { message: String },
+}
+
+impl Stall {
+    pub fn message(&self) -> &str {
+        match self {
+            Stall::Engine { message, .. }
+            | Stall::Choose { message, .. }
+            | Stall::Missing { message }
+            | Stall::Image { message }
+            | Stall::Failed { message } => message,
+        }
+    }
+
+    fn down(engine: &Engine) -> Self {
+        let kind = engine.kind();
+        Stall::Engine {
+            message: format!("Your host runs in {}, which is not running.", kind.label()),
+            engines: vec![kind.named(&engine.context)],
+        }
+    }
+}
+
+impl From<String> for Stall {
+    fn from(message: String) -> Self {
+        Stall::Failed { message }
+    }
+}
+
+impl From<&str> for Stall {
+    fn from(message: &str) -> Self {
+        Stall::Failed { message: message.into() }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -183,6 +228,8 @@ pub struct LocalHost {
     journal: Option<PathBuf>,
     binary: PathBuf,
     zone: Option<String>,
+    record: Option<PathBuf>,
+    engine: parking_lot::Mutex<Option<Engine>>,
 }
 
 pub fn zone() -> Option<String> {
@@ -272,7 +319,201 @@ pub(crate) async fn run_docker(
 
 impl LocalHost {
     async fn docker(&self, args: &[&str], seconds: u64) -> Result<String, String> {
-        run_docker(&self.binary, args, seconds).await
+        let endpoint = self.recorded().map(|engine| engine.endpoint);
+        self.docker_at(endpoint.as_deref(), args, seconds).await
+    }
+
+    async fn docker_at(
+        &self,
+        endpoint: Option<&str>,
+        args: &[&str],
+        seconds: u64,
+    ) -> Result<String, String> {
+        match endpoint {
+            None => run_docker(&self.binary, args, seconds).await,
+            Some(endpoint) => {
+                let mut addressed = vec!["--host", endpoint];
+                addressed.extend_from_slice(args);
+                run_docker(&self.binary, &addressed, seconds).await
+            }
+        }
+    }
+
+    fn recorded(&self) -> Option<Engine> {
+        self.engine.lock().clone()
+    }
+
+    fn remember(&self, engine: Option<Engine>) -> Result<(), String> {
+        if let (Some(path), Some(engine)) = (&self.record, &engine) {
+            engine::write(path, engine)?;
+        }
+        *self.engine.lock() = engine;
+        Ok(())
+    }
+
+    pub fn with_engine_record(mut self, path: PathBuf) -> Self {
+        *self.engine.lock() = engine::read(&path);
+        self.record = Some(path);
+        self
+    }
+
+    async fn engine_id(&self, endpoint: &str) -> Result<String, String> {
+        let said =
+            self.docker_at(Some(endpoint), &["info", "--format", "{{.ID}} {{.OSType}}"], 10).await?;
+        match said.split_once(' ') {
+            Some((id, "linux")) if !id.is_empty() => Ok(id.to_string()),
+            Some((_, _)) => Err("Guaca needs Docker's Linux containers. Switch Docker to Linux containers and check again.".into()),
+            None => Err("Docker returned unreadable engine information.".into()),
+        }
+    }
+
+    async fn contexts(&self) -> Result<Vec<(String, String)>, String> {
+        let listed = self.docker_at(None, &["context", "ls", "--format", "{{json .}}"], 10).await?;
+        Ok(listed
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter_map(|context| {
+                let name = context["Name"].as_str()?.to_string();
+                let endpoint = context["DockerEndpoint"].as_str()?;
+                endpoint.starts_with("unix://").then(|| (name, engine::canonical(endpoint)))
+            })
+            .collect())
+    }
+
+    async fn holds(&self, endpoint: &str) -> bool {
+        matches!(
+            owned(&self.binary, Some(endpoint), &self.spec.name, (self.spec.owner, &self.spec.name))
+                .await,
+            Ok(Some(_))
+        )
+    }
+
+    async fn find(&self) -> Result<Engine, Stall> {
+        let mut found: Vec<Engine> = Vec::new();
+        let mut down: Vec<Named> = Vec::new();
+        let mut looked: Vec<String> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for (context, endpoint) in self.contexts().await? {
+            let kind = Kind::of(&context, &endpoint);
+            let Ok(id) = self.engine_id(&endpoint).await else {
+                if !down.iter().any(|named| named.label == kind.label()) {
+                    down.push(kind.named(&context));
+                }
+                continue;
+            };
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            looked.push(kind.label());
+            if self.holds(&endpoint).await {
+                found.push(Engine { context, endpoint, id });
+            }
+        }
+        if found.len() > 1 {
+            return Err(Stall::Choose {
+                message: "Guaca found a host in more than one Docker engine on this Mac. Choose the one your agents are in.".into(),
+                engines: found.iter().map(|engine| engine.kind().named(&engine.context)).collect(),
+            });
+        }
+        if let Some(engine) = found.pop() {
+            self.remember(Some(engine.clone()))?;
+            return Ok(engine);
+        }
+        if !down.is_empty() {
+            let names: Vec<String> = down.iter().map(|named| named.label.clone()).collect();
+            let verb = if names.len() == 1 { "is" } else { "are" };
+            return Err(Stall::Engine {
+                message: format!(
+                    "Guaca has not found your host yet. {} {verb} not running, so Guaca cannot look there.",
+                    names.join(" and ")
+                ),
+                engines: down,
+            });
+        }
+        Err(Stall::Missing {
+            message: if looked.is_empty() {
+                "Guaca found no Docker engine on this Mac to look for your host in.".into()
+            } else {
+                format!("Guaca looked for your host in {} and did not find it.", looked.join(" and "))
+            },
+        })
+    }
+
+    pub async fn resume(&self) -> Result<Connection, Stall> {
+        let _lock = self.lock.lock().await;
+        let _process_lock = self.process_lock()?;
+        let engine = match self.recorded() {
+            Some(engine) => engine,
+            None => self.find().await?,
+        };
+        let label = engine.kind().label();
+        match self.engine_id(&engine.endpoint).await {
+            Err(_) => return Err(Stall::down(&engine)),
+            Ok(id) if id != engine.id => {
+                return Err(Stall::Missing {
+                    message: format!("Your host was in {label}, and {label} now runs a different Docker engine, so the host is not there."),
+                })
+            }
+            Ok(_) => {}
+        }
+        self.settle().await?;
+        let Some(value) = self.inspect().await? else {
+            return Err(Stall::Missing {
+                message: format!("Your host is no longer in {label}. Guaca did not set up another one."),
+            });
+        };
+        if value["State"]["Running"] != true {
+            self.docker(&["start", &self.spec.name], 60).await?;
+        }
+        let value = self.inspect().await?.ok_or("The local host disappeared while starting.")?;
+        Ok(self.connection(&value).await?)
+    }
+
+    pub async fn choose(&self, context: &str) -> Result<Connection, Stall> {
+        {
+            let _lock = self.lock.lock().await;
+            let (context, endpoint) = self
+                .contexts()
+                .await?
+                .into_iter()
+                .find(|(name, _)| name == context)
+                .ok_or("That Docker engine is no longer listed on this Mac.")?;
+            let id = self.engine_id(&endpoint).await.map_err(|_| {
+                Stall::down(&Engine { context: context.clone(), endpoint: endpoint.clone(), id: String::new() })
+            })?;
+            if !self.holds(&endpoint).await {
+                return Err(Stall::Missing {
+                    message: format!("Your host is no longer in {}.", Kind::of(&context, &endpoint).label()),
+                });
+            }
+            self.remember(Some(Engine { context, endpoint, id }))?;
+        }
+        self.resume().await
+    }
+
+    pub async fn open_engine(&self, context: Option<&str>) -> Result<(), String> {
+        let kind = match context {
+            Some(context) => {
+                let (name, endpoint) = self
+                    .contexts()
+                    .await?
+                    .into_iter()
+                    .find(|(name, _)| name == context)
+                    .ok_or("That Docker engine is no longer listed on this Mac.")?;
+                Kind::of(&name, &endpoint)
+            }
+            None => self.recorded().map(|engine| engine.kind()).unwrap_or(Kind::DockerDesktop),
+        };
+        kind.open().await
+    }
+
+    async fn current(&self) -> Result<Engine, Stall> {
+        self.available().await.map_err(|message| Stall::Engine { message, engines: Vec::new() })?;
+        let endpoint = self.current_endpoint().await?;
+        let context = self.docker_at(None, &["context", "show"], 10).await.unwrap_or_default();
+        let endpoint = engine::canonical(&endpoint);
+        let id = self.engine_id(&endpoint).await?;
+        Ok(Engine { context, endpoint, id })
     }
 
     pub fn new(identifier: &str, image: &str) -> Self {
@@ -304,6 +545,8 @@ impl LocalHost {
             journal: None,
             binary: docker_binary(),
             zone: None,
+            record: None,
+            engine: parking_lot::Mutex::new(None),
         }
     }
 
@@ -320,22 +563,38 @@ impl LocalHost {
     }
 
     async fn inspect(&self) -> Result<Option<Value>, String> {
-        owned(&self.binary, &self.spec.name, (self.spec.owner, &self.spec.name)).await
+        let endpoint = self.recorded().map(|engine| engine.endpoint);
+        owned(&self.binary, endpoint.as_deref(), &self.spec.name, (self.spec.owner, &self.spec.name))
+            .await
     }
 
-    async fn available(&self) -> Result<(), String> {
+    async fn current_endpoint(&self) -> Result<String, String> {
         let endpoint = self
-            .docker(&["context", "inspect", "--format", "{{.Endpoints.docker.Host}}"], 10)
+            .docker_at(None, &["context", "inspect", "--format", "{{.Endpoints.docker.Host}}"], 10)
             .await?;
-        let endpoint = if std::env::var("DOCKER_CONTEXT").is_ok_and(|s| !s.is_empty()) {
+        Ok(if std::env::var("DOCKER_CONTEXT").is_ok_and(|s| !s.is_empty()) {
             endpoint
         } else {
             std::env::var("DOCKER_HOST").unwrap_or(endpoint)
-        };
+        })
+    }
+
+    async fn available(&self) -> Result<(), String> {
+        if let Some(engine) = self.recorded() {
+            return match self.engine_id(&engine.endpoint).await {
+                Ok(id) if id == engine.id => Ok(()),
+                Ok(_) => Err(format!(
+                    "{} now runs a different Docker engine from the one your host was in.",
+                    engine.kind().label()
+                )),
+                Err(_) => Err(Stall::down(&engine).message().to_string()),
+            };
+        }
+        let endpoint = self.current_endpoint().await?;
         if !endpoint.starts_with("unix://") && !endpoint.starts_with("npipe://") {
             return Err("Docker is connected to another computer. Select a local Docker context for On this Mac.".into());
         }
-        let os = self.docker(&["info", "--format", "{{.OSType}}"], 15).await
+        let os = self.docker_at(None, &["info", "--format", "{{.OSType}}"], 15).await
             .map_err(|_| "Docker is installed but is not ready. Open Docker Desktop, wait for it to start, then check again.".to_string())?;
         if os != "linux" {
             return Err("Guaca needs Docker's Linux containers. Switch Docker to Linux containers and check again.".into());
@@ -505,6 +764,7 @@ impl LocalHost {
             host_zone: None,
             mac_zone: self.zone.clone(),
             zone_differs: false,
+            engine: self.recorded().map(|engine| engine.kind().named(&engine.context)),
         };
         if let Err(message) = self.available().await {
             status.state =
@@ -539,7 +799,13 @@ impl LocalHost {
             }
             Ok(None) => {
                 status.state = "ready";
-                status.message = "Docker is ready. Guaca can set up your local host.".into();
+                status.message = match self.recorded() {
+                    Some(engine) => format!(
+                        "{} is running, and your host is not in it. Setting up here starts a new host.",
+                        engine.kind().label()
+                    ),
+                    None => "Docker is ready. Guaca can set up your local host.".into(),
+                };
             }
             Err(message) => {
                 status.message = message;
@@ -577,21 +843,79 @@ impl LocalHost {
         Ok(Some(ProcessLock(file)))
     }
 
-    pub async fn start(&self) -> Result<Connection, String> {
+    pub async fn start(&self) -> Result<Connection, Stall> {
         let _lock = self.lock.lock().await;
         let _process_lock = self.process_lock()?;
+        let before = self.recorded();
+        let engine = match &before {
+            Some(engine) => Engine {
+                id: self.engine_id(&engine.endpoint).await.map_err(|_| Stall::down(engine))?,
+                ..engine.clone()
+            },
+            None => self.current().await?,
+        };
+        *self.engine.lock() = Some(engine.clone());
+        let started = self.start_recorded().await;
+        match &started {
+            Ok(_) => self.remember(Some(engine))?,
+            Err(_) => *self.engine.lock() = before,
+        }
+        started
+    }
+
+    async fn start_recorded(&self) -> Result<Connection, Stall> {
         self.settle().await?;
-        self.start_unlocked(&self.image, None).await
+        if self.inspect().await?.is_none() {
+            self.image_ready(&self.image).await.map_err(|message| Stall::Image { message })?;
+        }
+        Ok(self.start_unlocked(&self.image, None).await?)
     }
 
     async fn image_ready(&self, image: &str) -> Result<(), String> {
-        if self.docker(&["image", "inspect", image], 15).await.is_err() {
-            self.docker(&["pull", image], 900).await.map_err(|error| {
-                tracing::warn!(%image, %error, "could not download the host image");
-                pull_failure(image, &error)
-            })?;
+        if self.docker(&["image", "inspect", image], 15).await.is_ok() {
+            return Ok(());
         }
+        if let Some(id) = self.same_build(image).await {
+            return self.docker(&["tag", &id, image], 15).await.map(drop);
+        }
+        if !fetchable(image) {
+            return Err(format!("Guaca's host image, {image}, is not on this Mac. It was made on this Mac rather than published, so there is nowhere to download it from."));
+        }
+        self.docker(&["pull", image], 900).await.map_err(|error| {
+            tracing::warn!(%image, %error, "could not download the host image");
+            pull_failure(image, &error)
+        })?;
         Ok(())
+    }
+
+    async fn same_build(&self, image: &str) -> Option<String> {
+        let revision = alias_revision(image)?;
+        let listed = self
+            .docker(
+                &["image", "ls", "--no-trunc", "--quiet", "--filter", "label=org.opencontainers.image.revision"],
+                15,
+            )
+            .await
+            .ok()?;
+        let mut ids: Vec<&str> = listed.lines().map(str::trim).filter(|id| !id.is_empty()).collect();
+        ids.dedup();
+        if ids.is_empty() {
+            return None;
+        }
+        let mut args = vec!["image", "inspect"];
+        args.extend(ids);
+        let images: Vec<Value> = serde_json::from_str(&self.docker(&args, 15).await.ok()?).ok()?;
+        images
+            .iter()
+            .find(|image| {
+                let labels = &image["Config"]["Labels"];
+                let built = labels["org.opencontainers.image.revision"].as_str().unwrap_or_default();
+                let version = labels["org.opencontainers.image.version"].as_str();
+                built.len() >= 7
+                    && (built.starts_with(revision) || revision.starts_with(built))
+                    && version == Some(env!("CARGO_PKG_VERSION"))
+            })
+            .and_then(|image| image["Id"].as_str().map(String::from))
     }
 
     pub async fn update(
@@ -1013,19 +1337,30 @@ impl LocalHost {
 
 pub(crate) async fn owned(
     binary: &Path,
+    endpoint: Option<&str>,
     name: &str,
     label: (&str, &str),
 ) -> Result<Option<Value>, String> {
-    let ids = run_docker(
-        binary,
-        &["container", "ls", "-a", "--filter", &format!("name=^/{name}$"), "--format", "{{.ID}}"],
-        15,
-    )
-    .await?;
+    let addressed = |args: &[&'static str]| -> Vec<String> {
+        endpoint
+            .map(|endpoint| vec!["--host".to_string(), endpoint.to_string()])
+            .unwrap_or_default()
+            .into_iter()
+            .chain(args.iter().map(|arg| arg.to_string()))
+            .collect()
+    };
+    let filter = format!("name=^/{name}$");
+    let mut listing = addressed(&["container", "ls", "-a", "--filter"]);
+    listing.extend([filter, "--format".into(), "{{.ID}}".into()]);
+    let listing: Vec<&str> = listing.iter().map(String::as_str).collect();
+    let ids = run_docker(binary, &listing, 15).await?;
     if ids.is_empty() {
         return Ok(None);
     }
-    let text = run_docker(binary, &["container", "inspect", name], 15).await?;
+    let mut inspecting = addressed(&["container", "inspect"]);
+    inspecting.push(name.to_string());
+    let inspecting: Vec<&str> = inspecting.iter().map(String::as_str).collect();
+    let text = run_docker(binary, &inspecting, 15).await?;
     let list: Vec<Value> = serde_json::from_str(&text)
         .map_err(|_| "Docker returned an unreadable container.".to_string())?;
     let value = list.into_iter().next().ok_or("Docker returned no container.")?;
@@ -1041,10 +1376,24 @@ fn pull_failure(image: &str, error: &str) -> String {
     let error = error.to_ascii_lowercase();
     if ["denied", "unauthorized", "manifest unknown", "not found"].iter().any(|s| error.contains(s))
     {
-        format!("The registry refused Guaca's host image, {image}. It may not be published yet. Source installs can build it with scripts/install.sh.")
+        format!("The registry refused Guaca's host image, {image}, so Guaca could not set up its host.")
     } else {
-        "The Guaca host could not be downloaded. Check your connection and try again. Source installs can build it with scripts/install.sh.".into()
+        "The Guaca host could not be downloaded. Check your connection and try again.".into()
     }
+}
+
+fn fetchable(image: &str) -> bool {
+    image.split_once('/').is_some_and(|(registry, _)| {
+        registry.contains('.') || registry.contains(':') || registry == "localhost"
+    })
+}
+
+fn alias_revision(image: &str) -> Option<&str> {
+    if image.contains('/') || image.contains('@') {
+        return None;
+    }
+    let (_, tag) = image.split_once(':')?;
+    (tag.len() >= 7 && tag.bytes().all(|c| c.is_ascii_hexdigit())).then_some(tag)
 }
 
 fn newer_than(value: &Value, version: &str) -> bool {
@@ -1408,6 +1757,7 @@ pub(crate) mod tests {
                 assert!(!calls(&dir).iter().any(|c| c.iter().any(|a| a == "sh")));
             }
             let restart_error = host.start().await.err().unwrap();
+            let restart_error = restart_error.message();
             assert!(restart_error.contains("could not be undone"), "{restart_error}");
             task.abort();
         }

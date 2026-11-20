@@ -336,7 +336,7 @@ async fn prune_images(docker: &Path, keep: &[&str]) {
 const MADE: (&str, &str) = (UPDATER_OWNER, UPDATER);
 
 async fn retire(docker: &Path) -> Result<(), String> {
-    if host::owned(docker, RETIRING, MADE).await?.is_some() {
+    if host::owned(docker, None, RETIRING, MADE).await?.is_some() {
         host::run_docker(docker, &["rm", "--force", "--volumes", RETIRING], 60).await?;
         tracing::info!("removed the updater this one replaced");
     }
@@ -344,7 +344,7 @@ async fn retire(docker: &Path) -> Result<(), String> {
 }
 
 async fn own_image(docker: &Path) -> Result<String, String> {
-    let value = host::owned(docker, UPDATER, MADE).await?.ok_or(
+    let value = host::owned(docker, None, UPDATER, MADE).await?.ok_or(
         "This updater is not the one guaca-updater install made. Install it with deploy/box/install.sh.",
     )?;
     Ok(value["Config"]["Image"].as_str().unwrap_or_default().into())
@@ -353,7 +353,7 @@ async fn own_image(docker: &Path) -> Result<String, String> {
 pub async fn install(docker: &Path, image: &str) -> Result<(), String> {
     Channel::from_env()?;
     retire(docker).await?;
-    let existing = host::owned(docker, UPDATER, MADE).await?.is_some();
+    let existing = host::owned(docker, None, UPDATER, MADE).await?.is_some();
     if existing {
         host::run_docker(docker, &["rename", UPDATER, RETIRING], 30).await?;
     }
