@@ -960,7 +960,9 @@ export interface CommandError {
     | "terminated"
     | "storage"
     | "config"
-    | "inference";
+    | "inference"
+    | "keyRejected"
+    | "endpointUnreachable";
   message: string;
   detail?: string;
 }

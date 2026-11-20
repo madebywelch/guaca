@@ -288,6 +288,93 @@ it("shows the endpoint and the model beside the key, with nothing to open first"
   expect(screen.queryByText("Advanced options")).toBeNull();
 });
 
+it("says in plain words that the host could not be reached during a test", async () => {
+  mocks.testConnection.mockRejectedValue({
+    kind: "unreachable",
+    message:
+      "could not reach this host at http://127.0.0.1:8787. Its agents keep working either way",
+  });
+  await draw();
+  key();
+  submit();
+  expect((await screen.findByRole("alert")).textContent).toBe(
+    "Guaca could not reach its host, so nothing was tested. Check that the host is running, then try again.",
+  );
+});
+
+it("says in plain words that the endpoint could not be reached, and gives the test button focus back", async () => {
+  mocks.testConnection.mockRejectedValue({
+    kind: "endpointUnreachable",
+    message:
+      "could not reach the inference endpoint at http://localhost:11434/v1/chat/completions: error sending request",
+  });
+  await draw();
+  fireEvent.change(screen.getByRole("combobox", { name: "API provider" }), {
+    target: { value: "custom" },
+  });
+  fireEvent.change(screen.getByRole("textbox", { name: "Inference endpoint" }), {
+    target: { value: "http://localhost:11434/v1" },
+  });
+  fireEvent.change(screen.getByRole("textbox", { name: "Default model" }), {
+    target: { value: "llama3" },
+  });
+  submit();
+  expect((await screen.findByRole("alert")).textContent).toBe(
+    "Guaca could not reach http://localhost:11434/v1. Check that the server there is running and the address is right, then test again.",
+  );
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Test and continue" }));
+});
+
+it("says a saved key was refused, and forgets it once another way to pay is chosen", async () => {
+  useStore.setState({ settings: stored({ apiKeySet: true }) });
+  mocks.testConnection.mockRejectedValue({ kind: "keyRejected", message: "rejected" });
+  await draw();
+  submit();
+  expect((await screen.findByRole("alert")).textContent).toBe(
+    "OpenRouter did not accept the saved key. Paste a new key, then test again.",
+  );
+  chatgpt();
+  fireEvent.click(screen.getByRole("button", { name: /^API key/ }));
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.getByLabelText(/^API key/).getAttribute("aria-invalid")).toBeNull();
+});
+
+it("puts focus on the first sign-in this Mac already has when it is offered", async () => {
+  mocks.existingSignins.mockResolvedValue([claudePickup, codexPickup]);
+  await draw();
+  const first = await screen.findByRole("button", { name: "Use Claude Code" });
+  expect(document.activeElement).toBe(first);
+});
+
+it("puts focus on the chosen way to pay first", async () => {
+  await draw();
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: /^API key/ }));
+});
+
+it("says a rejected key at the key field, in plain words, and clears it as the key is retyped", async () => {
+  mocks.testConnection.mockRejectedValue({
+    kind: "keyRejected",
+    message: "the inference endpoint rejected the API key (HTTP 401): Incorrect API key provided.",
+  });
+  await draw();
+  key("sk-wrong");
+  submit();
+  const alert = await screen.findByRole("alert");
+  const field = screen.getByLabelText(/^API key/);
+  expect(alert.textContent).toBe(
+    "OpenRouter did not accept that key. Check that you pasted all of it, or create a new key there, then test again.",
+  );
+  expect(alert.textContent).not.toContain("HTTP");
+  expect(field.getAttribute("aria-invalid")).toBe("true");
+  expect(field.getAttribute("aria-describedby")).toBe(alert.id);
+  expect(alert.closest(".onboarding-actions")).toBeNull();
+  expect(mocks.updateSettings).not.toHaveBeenCalled();
+  expect(document.activeElement).toBe(field);
+  key("sk-right");
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(field.getAttribute("aria-invalid")).toBeNull();
+});
+
 it("says why a test failed in the bar with the buttons, so it is never scrolled under them", async () => {
   mocks.testConnection.mockRejectedValue(new Error("the endpoint said no"));
   await draw();

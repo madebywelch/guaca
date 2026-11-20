@@ -4,8 +4,8 @@ import { HIREABLE, toDraft } from "../lib/cafeteria";
 import { api } from "../lib/ipc";
 import { FIRST_TASKS, type FirstTask, readFirstTask, saveFirstTask } from "../lib/onboarding";
 import { useStore } from "../lib/store";
-import { BEFORE_RELOAD, desktop } from "../lib/transport";
-import { errorMessage, type Group } from "../lib/types";
+import { BEFORE_RELOAD, desktop, isUnreachable } from "../lib/transport";
+import { asSentence, errorMessage, type Group } from "../lib/types";
 import { OnboardingProvider } from "./OnboardingProvider";
 
 interface Props {
@@ -28,7 +28,8 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
   const [unsaved, setUnsaved] = useState(false);
   const [checking, setChecking] = useState(false);
   const sending = useRef(false);
-  const heading = useRef<HTMLHeadingElement>(null);
+  const opening = useRef<HTMLButtonElement>(null);
+  const pane = useRef<HTMLElement>(null);
   const briefHint = useId();
   const continueHint = useId();
   const groupHeading = useId();
@@ -48,7 +49,8 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
   const name = hired?.name ?? lead;
 
   useEffect(() => {
-    heading.current?.focus();
+    if (pane.current) pane.current.scrollTop = 0;
+    opening.current?.focus({ preventScroll: true });
   }, [step, checking]);
 
   useEffect(() => {
@@ -64,6 +66,17 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
       window.removeEventListener(BEFORE_RELOAD, preserve);
     };
   }, [storageError, busy]);
+
+  const fail = (cause: unknown) =>
+    setError(
+      isUnreachable(cause)
+        ? "Guaca could not reach its host. Your brief is kept here. Check that the host is running, then try again."
+        : asSentence(errorMessage(cause)),
+    );
+
+  useEffect(() => {
+    if (error && !busy) opening.current?.focus({ preventScroll: true });
+  }, [error, busy]);
 
   const keep = (next: FirstTask) => {
     setDraft(next);
@@ -139,7 +152,7 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
       }
       await open(next.agentId!, true);
     } catch (cause) {
-      setError(errorMessage(cause));
+      fail(cause);
     } finally {
       sending.current = false;
       setBusy(false);
@@ -187,7 +200,7 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
     );
 
   return (
-    <section className="onboarding" aria-label="Get started with Guaca" aria-busy={busy}>
+    <section ref={pane} className="onboarding" aria-label="Get started with Guaca" aria-busy={busy}>
       <div className="onboarding-content">
         {warning}
         <ol className="onboarding-steps" aria-label="Getting started">
@@ -208,20 +221,19 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
           <>
             <div className="onboarding-intro">
               <p className="onboarding-eyebrow">A little help to get going</p>
-              <h1 ref={heading} tabIndex={-1}>
-                What would you like help with?
-              </h1>
+              <h1>What would you like help with?</h1>
               <p>
                 Pick a task and Guaca hires a group of three for it. They work it out between
                 themselves and come back with a result.
               </p>
             </div>
             <fieldset className="onboarding-options" aria-label="First task">
-              {FIRST_TASKS.map((entry) => (
+              {FIRST_TASKS.map((entry, index) => (
                 <button
                   type="button"
                   className="onboarding-choice"
                   key={entry.id}
+                  ref={index === 0 ? opening : undefined}
                   aria-pressed={draft.task === entry.id}
                   onClick={() =>
                     keep({
@@ -285,9 +297,7 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
         ) : step === "provider" ? (
           <>
             <div className="onboarding-intro">
-              <h1 ref={heading} tabIndex={-1}>
-                Connect your AI
-              </h1>
+              <h1>Connect your AI</h1>
               <p>Choose what powers your group. Your first brief is waiting for you.</p>
             </div>
             <OnboardingProvider
@@ -299,9 +309,7 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
           <>
             <div className="onboarding-intro">
               <p className="onboarding-eyebrow">One task. A group of three.</p>
-              <h1 ref={heading} tabIndex={-1}>
-                Ready when you are.
-              </h1>
+              <h1>Ready when you are.</h1>
               <p>
                 Review your brief. {name} takes it,{" "}
                 {task.brief
@@ -385,14 +393,13 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
                   type="button"
                   className="btn"
                   disabled={busy}
-                  onClick={() =>
-                    void open(draft.agentId!).catch((cause) => setError(errorMessage(cause)))
-                  }
+                  onClick={() => void open(draft.agentId!).catch(fail)}
                 >
                   Check conversation
                 </button>
               )}
               <button
+                ref={opening}
                 type="button"
                 className="btn btn--primary"
                 disabled={busy || !draft.brief.trim() || (!!draft.agentId && !hired)}

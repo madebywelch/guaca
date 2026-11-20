@@ -317,7 +317,7 @@ describe("guided first task", () => {
     mount();
     toReview();
     fireEvent.click(screen.getByRole("button", { name: "Start task" }));
-    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "Connection lost");
+    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "Connection lost.");
     expect(readFirstTask().agentId).toBe(agent.id);
     expect(done).not.toHaveBeenCalled();
     const brief = screen.getByRole("textbox", { name: "Your first brief" }) as HTMLTextAreaElement;
@@ -411,6 +411,33 @@ describe("guided first task", () => {
     expect(said.closest(".onboarding-actions")).toBe(
       screen.getByRole("button", { name: "Start task" }).closest(".onboarding-actions"),
     );
+  });
+
+  it("says in plain words that the host could not be reached, and gives Start task the focus back", async () => {
+    hire.mockRejectedValueOnce({
+      kind: "unreachable",
+      message:
+        "could not reach this host at http://127.0.0.1:8787. It may be starting up, or the connection to it is down. Its agents keep working either way",
+    });
+    mount();
+    toReview();
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe(
+      "Guaca could not reach its host. Your brief is kept here. Check that the host is running, then try again.",
+    );
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Start task" })),
+    );
+  });
+
+  it("puts focus on the first task, and on Start task at the last step", () => {
+    mount();
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: /^Research a decision/ }),
+    );
+    toReview();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Start task" }));
   });
 
   it("says nothing beside Start about saving when no Start was stopped by it", () => {

@@ -2101,8 +2101,26 @@ and a Start stopped because this device could not save the draft says so there
 too. A message placed above a bar held to the bottom of the pane lands under
 the bar once the step is taller than the pane: a failed Start task did, at 1280
 by 820, and looked like a button that did nothing. In a window 45rem tall or
-less the steps sit closer together, so the Start step's three colleagues and
-what each is for clear the bar at 900 by 700.
+less the steps sit closer together and the brief is three control heights
+tall, so the Start step's three colleagues, what each is for and the brief
+clear the bar at 900 by 700. The bar is painted with the page's own ground, so it reads as the
+foot of the step rather than a slab over it.
+
+While the first run is on screen, the window shows the steps and the top row
+only. The hour ruler and the status bar have nothing to say before there is an
+agent, so they are not drawn until the first run ends. Each step puts focus on
+the first control a person uses there: the first task, the chosen way to pay
+(or the first sign-in this Mac already has), and Start task.
+
+A rejected key is the one failure said at a field rather than in the bar: a
+401 from the endpoint comes back as `keyRejected` instead of `inference`, and
+the key field says in one sentence which provider refused it and what to do,
+marks itself invalid, takes the focus, and clears as soon as the key is
+retyped. A 403 stays `inference`, because it is as often a region or a
+permission as a key. An endpoint that does not answer comes back as
+`endpointUnreachable` and is named, with what to check. A Guaca host that
+cannot be reached is said as that, in plain words, at Test and continue and at
+Start task, rather than as the transport's address.
 
 `Onboarding.test.tsx` covers that handoff and recovery, `OnboardingProvider.test.tsx`
 covers connection failures, and `lib/onboarding.test.ts` holds the host boundary

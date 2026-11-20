@@ -328,6 +328,7 @@ export default function App() {
       (allAgents.length === 0 &&
         !groups[0]!.apiKeySet &&
         Object.values(groups[0]!.inference).every((value) => value === null)));
+  const welcoming = firstRun && !checkingFirstTask;
 
   const notices = (
     <>
@@ -383,7 +384,7 @@ export default function App() {
         onOpenCafeteria={() => setShowCafeteria(true)}
       />
 
-      {ready && (
+      {ready && !welcoming && (
         <Timeline
           onOpenAgent={(id) => void select(id)}
           onOpenGroups={() => setShowGroups(true)}
@@ -417,7 +418,7 @@ export default function App() {
             <div className="empty" style={{ margin: "auto" }}>
               <p className="empty__body">Starting up…</p>
             </div>
-          ) : firstRun && !checkingFirstTask ? null : agents.length === 0 ? (
+          ) : welcoming ? null : agents.length === 0 ? (
             <div className="empty" style={{ margin: "auto" }}>
               <span style={{ display: "inline-flex" }}>
                 <AgentAvatar avatar="orb" color="#5a7d99" size="lg" seed="empty-state" />
@@ -456,7 +457,7 @@ export default function App() {
           )}
         </div>
 
-        {ready && <StatusBar onOpen={openPlace} onMessage={sendFromBar} />}
+        {ready && !welcoming && <StatusBar onOpen={openPlace} onMessage={sendFromBar} />}
       </main>
 
       {menu && (

@@ -3,10 +3,12 @@ import { hostPlace } from "../lib/host";
 import { api, openExternal } from "../lib/ipc";
 import { PROVIDERS, planLabel, providerFor } from "../lib/providers";
 import { useStore } from "../lib/store";
+import { isUnreachable } from "../lib/transport";
 import {
   type ClaudeProgram,
   type DeviceCode,
   errorMessage,
+  isCommandError,
   type Pickup,
   type Provider,
   type SettingsPatch,
@@ -46,6 +48,12 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
   const [subscriptionModel, setSubscriptionModel] = useState(settings?.subscriptionModel ?? "");
   const [effort, setEffort] = useState(settings?.reasoningEffort ?? "auto");
   const [apiKey, setApiKey] = useState("");
+  const [keyError, setKeyError] = useState("");
+  const keyField = useId();
+  const keyProblem = useId();
+  const first = useRef<HTMLButtonElement>(null);
+  const keyInput = useRef<HTMLInputElement>(null);
+  const testButton = useRef<HTMLButtonElement>(null);
   const [subscription, setSubscription] = useState<SubscriptionStatus | null>(null);
   const [pendingCode, setPendingCode] = useState<DeviceCode | null>(null);
   const [claude, setClaude] = useState<ClaudeProgram | null | undefined>(undefined);
@@ -120,6 +128,16 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
     baseUrl !== (settings?.baseUrl ?? PROVIDERS[0]!.baseUrl);
   const offer = offerHere && unconfigured && !skipped && !touched && pickups.length > 0;
 
+  useEffect(() => {
+    first.current?.focus({ preventScroll: true });
+  }, [offer]);
+
+  useEffect(() => {
+    if (busy) return;
+    if (keyError) keyInput.current?.focus({ preventScroll: true });
+    else if (error) testButton.current?.focus({ preventScroll: true });
+  }, [busy, keyError, error]);
+
   const claudeBlurb = !capabilities.claudeProvider
     ? "This host does not offer the claude program, so a plan cannot pay for turns here."
     : claude?.installed === false
@@ -140,12 +158,14 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
     if (next !== "claude") setClaudeSignedIn(false);
     setProvider(next);
     setError("");
+    setKeyError("");
   };
 
   const changeEndpoint = (value: string) => {
     setBaseUrl(value);
     setApiKey("");
     setError("");
+    setKeyError("");
   };
 
   const abandon = () => {
@@ -176,6 +196,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
     const current = ++attempt.current;
     const live = () => attempt.current === current;
     setError("");
+    setKeyError("");
     try {
       if (pickup.program === "codex") {
         const account = await signInChatgpt(live);
@@ -263,9 +284,24 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
       setSettings(next);
       onConnected();
     } catch (failure) {
-      if (live())
+      if (!live()) return;
+      if (isCommandError(failure) && failure.kind === "keyRejected")
+        setKeyError(
+          savedKey && !apiKey.trim()
+            ? `${preset?.name ?? "This endpoint"} did not accept the saved key. Paste a new key, then test again.`
+            : `${preset?.name ?? "This endpoint"} did not accept that key. Check that you pasted all of it, or create a new key there, then test again.`,
+        );
+      else if (isCommandError(failure) && failure.kind === "endpointUnreachable")
         setError(
-          `${errorMessage(failure)} Check the endpoint, the key and the model above, then try again.`,
+          `Guaca could not reach ${baseUrl.trim()}. Check that the server there is running and the address is right, then test again.`,
+        );
+      else if (isUnreachable(failure))
+        setError(
+          "Guaca could not reach its host, so nothing was tested. Check that the host is running, then try again.",
+        );
+      else
+        setError(
+          `The test did not pass: ${errorMessage(failure).replace(/[.\s]+$/, "")}. Check the endpoint, the key and the model above, then try again.`,
         );
     } finally {
       if (live()) {
@@ -325,7 +361,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
           choose a provider yourself. Nothing changes until you choose.
         </p>
         <ul className="onboarding-pickups">
-          {pickups.map((pickup) => (
+          {pickups.map((pickup, index) => (
             <li className="onboarding-pickup" key={pickup.program}>
               <div className="onboarding-pickup__head">
                 <strong>{pickup.program === "claudeCode" ? "Claude Code" : "Codex"}</strong>
@@ -348,6 +384,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
                 </p>
               )}
               <button
+                ref={index === 0 ? first : undefined}
                 type="button"
                 className="btn btn--primary"
                 disabled={Boolean(busy)}
@@ -400,6 +437,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
         <button
           type="button"
           className="onboarding-choice"
+          ref={provider === "chatgpt" ? first : undefined}
           aria-pressed={provider === "chatgpt"}
           disabled={Boolean(busy)}
           onClick={() => choose("chatgpt")}
@@ -410,6 +448,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
         <button
           type="button"
           className="onboarding-choice"
+          ref={provider === "claude" ? first : undefined}
           aria-pressed={provider === "claude"}
           disabled={Boolean(busy) || !claudeReady}
           onClick={() => choose("claude")}
@@ -420,6 +459,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
         <button
           type="button"
           className="onboarding-choice"
+          ref={provider === "compatible" ? first : undefined}
           aria-pressed={provider === "compatible"}
           disabled={Boolean(busy)}
           onClick={() => choose("compatible")}
@@ -453,19 +493,33 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
               <option value="custom">Custom endpoint</option>
             </select>
           </label>
-          <label className="field">
-            <span className="field__label">API key</span>
+          <div className="field">
+            <label className="field__label" htmlFor={keyField}>
+              API key
+            </label>
             <input
+              ref={keyInput}
+              id={keyField}
               className="input"
               type="password"
               autoComplete="off"
               spellCheck={false}
               value={apiKey}
               disabled={Boolean(busy)}
+              aria-invalid={keyError ? true : undefined}
+              aria-describedby={keyError ? keyProblem : undefined}
               placeholder={savedKey ? "Saved key will be used" : "Paste your provider's API key"}
-              onChange={(event) => setApiKey(event.target.value)}
+              onChange={(event) => {
+                setApiKey(event.target.value);
+                setKeyError("");
+              }}
             />
-          </label>
+            {keyError && (
+              <p className="field__error" id={keyProblem} role="alert">
+                {keyError}
+              </p>
+            )}
+          </div>
           <label className="field">
             <span className="field__label">Inference endpoint</span>
             <input
@@ -565,6 +619,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
           </button>
         ) : (
           <button
+            ref={testButton}
             type="button"
             className="btn btn--primary"
             aria-describedby={blockedReason && !busy ? blockedHint : undefined}
