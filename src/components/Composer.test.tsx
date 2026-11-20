@@ -767,6 +767,52 @@ describe("the keyboard outside a composition", () => {
   });
 });
 
+describe("Escape from the box", () => {
+  async function draw(onLeave = vi.fn()) {
+    render(
+      <Composer
+        placeholder="Message Manager"
+        group={CREW}
+        onSend={vi.fn(async () => {})}
+        onLeave={onLeave}
+      />,
+    );
+    await waitFor(() => expect(dropped).not.toBeNull());
+    return onLeave;
+  }
+
+  it("leaves a box that holds words alone", async () => {
+    const onLeave = await draw();
+    await type("half a thought");
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+    expect(onLeave).not.toHaveBeenCalled();
+  });
+
+  it("closes the suggestions first, and only goes back from a box with nothing in it", async () => {
+    roster = [anAgent("Critic")];
+    const onLeave = await draw();
+    await type("@Crit");
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+    expect(suggestions()).toEqual([]);
+    expect(onLeave).not.toHaveBeenCalled();
+  });
+
+  it("goes back from an empty box, and says so under it", async () => {
+    const onLeave = await draw();
+    expect(screen.getByText(/Esc Today/)).toBeTruthy();
+    const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    fireEvent(screen.getByRole("combobox"), event);
+    expect(onLeave).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("does not go back on an Escape that cancels a character being composed", async () => {
+    const onLeave = await draw();
+    composing("Escape");
+    expect(onLeave).not.toHaveBeenCalled();
+  });
+});
+
 async function drop(paths: string[]) {
   await act(async () => {
     dropped?.(staging(paths));

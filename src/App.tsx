@@ -32,7 +32,7 @@ import { FEED_COALESCE_MS, presenceOf, presenceReporter, samePresence } from "./
 import { catchUp, deliver, land } from "./lib/notify";
 import { readFirstTask } from "./lib/onboarding";
 import { inferenceOf, providerFor } from "./lib/providers";
-import { numbered } from "./lib/rail";
+import { numbered, stepped } from "./lib/rail";
 import { useRuntime } from "./lib/runtime";
 import { asSection, type Section } from "./lib/sections";
 import { type Banner, useLiveAgents, useStore } from "./lib/store";
@@ -138,9 +138,31 @@ export default function App() {
   }, [openingRoutine]);
 
   useEffect(() => {
+    const onMove = (event: KeyboardEvent) => {
+      const id = bindingFor(event)?.id;
+      if (id !== "back" && id !== "step") return;
+      if (dismissing() && !menuOpen.current) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setShowMenu(false);
+      const state = useStore.getState();
+      if (id === "back") {
+        if (state.settingsPage) state.closeSettings();
+        else if (state.selected) state.leaveChannel();
+        return;
+      }
+      const next = stepped(
+        numbered(state.agents, state.groups),
+        state.selected,
+        event.shiftKey ? -1 : 1,
+      );
+      if (!next) return;
+      setAgentView("conversation");
+      void state.select(next.id);
+    };
     const onKey = (event: KeyboardEvent) => {
       const binding = bindingFor(event);
-      if (!binding) return;
+      if (!binding || binding.id === "back" || binding.id === "step") return;
       if (binding.id === "undo") {
         if (editingText(event.target) || !useHeld.getState().undo()) return;
         event.preventDefault();
@@ -169,8 +191,12 @@ export default function App() {
         else state.openSettings(binding.id === "shortcuts" ? "shortcuts" : undefined);
       }
     };
+    window.addEventListener("keydown", onMove, true);
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onMove, true);
+      window.removeEventListener("keydown", onKey);
+    };
   }, []);
 
   const {

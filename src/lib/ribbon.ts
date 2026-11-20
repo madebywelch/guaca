@@ -37,9 +37,10 @@ export interface RibbonFace {
   label: string;
   align: Align;
   room: number | null;
+  name: string;
 }
 
-export type CountKind = "working" | "needsYou";
+export type CountKind = "more" | "needsYou";
 
 export interface RibbonCount {
   key: string;
@@ -52,7 +53,7 @@ export interface RibbonCount {
 }
 
 function countText(kind: CountKind, n: number): string {
-  return kind === "working" ? `+${n} working` : `+${n} ${n === 1 ? "needs" : "need"} you`;
+  return kind === "more" ? `+${n} more` : `+${n} ${n === 1 ? "needs" : "need"} you`;
 }
 
 export interface RibbonScheduled {
@@ -90,6 +91,7 @@ export interface Knot {
 }
 
 export interface Ribbon {
+  axis: number;
   now: { at: number; x: number; label: string };
   band: { from: number; x: number; label: string | null } | null;
   counts: RibbonCount[];
@@ -127,6 +129,17 @@ const TICK_CLEAR_NOW = 0.05;
 const BAND_LABEL_SPAN = 0.14;
 const BAND_LABEL_LEAD_CHARS = 1;
 const PILL_PAD_CHARS = 2;
+const TRAY_GAP_CHARS = 2;
+const SHORT_WORD_LEAST = 3;
+const FUTURE_LEAST = 0.22;
+const FOLD_ORDER: readonly FaceState[] = [
+  "idle",
+  "rest",
+  "finished",
+  "working",
+  "failed",
+  "needsYou",
+];
 
 function dayStart(at: number, days: number): number {
   const day = new Date(midnight(at));
@@ -256,11 +269,9 @@ function span(from: number, to: number): string {
   return `${half(start) === half(end) ? start.replace(/\s\S+$/, "") : start} to ${end}`;
 }
 
-function placeFace(
-  agent: AgentCard,
-  input: RibbonInput,
-  today: number,
-): Omit<RibbonFace, "x" | "label" | "align" | "room"> | null {
+type Placed = Pick<RibbonFace, "agentId" | "state" | "at">;
+
+function placeFace(agent: AgentCard, input: RibbonInput, today: number): Placed | null {
   const asked = input.approvals
     .filter((one) => one.agentId === agent.id)
     .sort((a, b) => a.createdAt - b.createdAt)[0];
@@ -324,6 +335,7 @@ function hourTicks(
   now: number,
   bandX: number | null,
   wordsSpan: number,
+  axis: number,
 ): RibbonTick[] {
   const first = new Date(start);
   first.setMinutes(0, 0, 0);
@@ -336,16 +348,49 @@ function hourTicks(
     return hour % 12 === 0 ? 0 : hour % 6 === 0 ? 1 : hour % 3 === 0 ? 2 : 3;
   };
   const nowX = xAt(scale, now);
+  const tomorrowX = xAt(scale, dayStart(now, 1));
   const kept: RibbonTick[] = [];
   for (const at of candidates.sort((a, b) => rank(a) - rank(b) || a - b)) {
     const x = xAt(scale, at);
-    if (x > TODAY_END - TICK_GAP / 2) continue;
+    if (x > tomorrowX - TICK_GAP / 2) continue;
+    if (axis > 0 && x < axis + TICK_GAP / 2) continue;
     if (Math.abs(x - nowX) < TICK_CLEAR_NOW) continue;
     if (bandX !== null && x > bandX - TICK_CLEAR_NOW && x < bandX + wordsSpan) continue;
     if (kept.some((tick) => Math.abs(tick.x - x) < TICK_GAP)) continue;
     kept.push({ at, x, label: hourLabel(at), kind: "hour" });
   }
   return kept.sort((a, b) => a.at - b.at);
+}
+
+function shortNames(names: string[]): Map<string, string> {
+  const words = names.map((name) => name.trim().split(/\s+/));
+  return new Map(
+    names.map((name, i) => {
+      const own = words[i] as string[];
+      const told = own.find(
+        (word) =>
+          word.length >= SHORT_WORD_LEAST &&
+          words.every((other, j) => j === i || !other.includes(word)),
+      );
+      return [name, told ?? name];
+    }),
+  );
+}
+
+function pinned(base: Knot[], pins: Knot[]): Knot[] {
+  const all = [
+    ...base.map((knot) => ({ ...knot, pin: false })),
+    ...pins.map((knot) => ({ ...knot, pin: true })),
+  ].sort((a, b) => a.at - b.at || Number(b.pin) - Number(a.pin));
+  const out: Knot[] = [];
+  all.forEach((knot, i) => {
+    const last = out[out.length - 1];
+    if (last && (knot.at <= last.at || knot.x <= last.x)) return;
+    const nextPin = all.slice(i + 1).find((one) => one.pin);
+    if (!knot.pin && nextPin && knot.x >= nextPin.x) return;
+    out.push({ at: knot.at, x: knot.x });
+  });
+  return out;
 }
 
 export function layoutRibbon(given: RibbonInput): Ribbon {
@@ -360,7 +405,10 @@ export function layoutRibbon(given: RibbonInput): Ribbon {
   const weekEnd = dayStart(now, days + 1);
   const names = new Map(input.agents.map((agent) => [agent.id, agent.name]));
 
-  const placed = input.agents.map((agent) => ({ agent, face: placeFace(agent, input, today) }));
+  const placed = input.agents.map((agent) => ({
+    agent,
+    face: placeFace(agent, input, today),
+  }));
   const idle = numbered(
     placed.flatMap(({ agent, face }) => (face ? [] : [agent])),
     input.groups.map((id) => ({ id })),
@@ -370,7 +418,9 @@ export function layoutRibbon(given: RibbonInput): Ribbon {
   const band = bandFrom(input.outcomes);
   const earliest = Math.min(now - NEAR_BEFORE, band ?? now, ...wanted.map((face) => face.at));
   const start = Math.max(now - 24 * HOUR, Math.floor((earliest - LEAD) / HOUR) * HOUR);
-  const scale = buildScale(start, now, days);
+  const base = buildScale(start, now, days);
+  const baseNow = xAt(base, now);
+  const short = shortNames(input.agents.map((agent) => agent.name));
 
   const dayName = (at: number) =>
     at < dayStart(now, 1) ? "today" : new Date(at).toLocaleDateString([], { weekday: "short" });
@@ -417,166 +467,244 @@ export function layoutRibbon(given: RibbonInput): Ribbon {
   const longest = (...texts: string[]) => texts.reduce((a, b) => (b.length > a.length ? b : a), "");
   const charSpan = input.charSpan ?? 0;
   const halfOf = (text: string) => Math.max(input.faceSpan, text.length * charSpan) / 2;
-  type Count = { kind: CountKind; agentIds: AgentId[] };
+  const takes = (text: string) => 2 * halfOf(text) + charSpan;
+  const tightWidth = input.faceSpan + charSpan;
+  type Slot = { face: Placed; text: string; tight: boolean };
+  const slotOf = (face: Placed): Slot => ({
+    face,
+    text: names.get(face.agentId) ?? "",
+    tight: false,
+  });
+  let tray = idle.map((agent) => slotOf({ agentId: agent.id, state: "idle", at: start }));
+  let past = wanted.map(slotOf);
+  let more: Slot[] = [];
+  let asks: Slot[] = [];
+  const widthOf = (slot: Slot) => (slot.tight ? tightWidth : takes(slot.text));
+  const sum = (slots: Slot[]) => slots.reduce((total, slot) => total + widthOf(slot), 0);
+  const chip = (kind: CountKind, slots: Slot[]) =>
+    slots.length ? takes(countText(kind, slots.length)) : 0;
+  const trayWidth = () => sum(tray) + chip("more", more);
+  const pastWidth = () => sum(past) + chip("needsYou", asks);
+  const gap = TRAY_GAP_CHARS * charSpan;
+  const most = 1 - FUTURE_LEAST;
+  const need = () => (trayWidth() > 0 ? trayWidth() + gap : 0) + pastWidth() + charSpan / 2;
+  const fits = () => need() <= most + 1e-9;
+  const rank = (slot: Slot) => FOLD_ORDER.indexOf(slot.face.state);
+
+  for (;;) {
+    if (fits()) break;
+    const next = [...tray, ...past]
+      .filter(
+        (slot) => !slot.tight && (short.get(slot.text) ?? slot.text).length < slot.text.length,
+      )
+      .sort((a, b) => b.text.length - a.text.length || rank(a) - rank(b))[0];
+    if (!next) break;
+    next.text = short.get(next.text) ?? next.text;
+  }
+  for (;;) {
+    if (fits()) break;
+    const next = [...tray, ...past]
+      .filter(
+        (slot) =>
+          !slot.tight && slot.face.state !== "needsYou" && widthOf(slot) > tightWidth + 1e-9,
+      )
+      .sort((a, b) => rank(a) - rank(b) || widthOf(b) - widthOf(a))[0];
+    if (!next) break;
+    next.tight = true;
+  }
+  const others = [...tray]
+    .reverse()
+    .concat(
+      [...past]
+        .filter((slot) => slot.face.state !== "needsYou")
+        .sort((a, b) => rank(a) - rank(b) || a.face.at - b.face.at),
+    );
+  for (const slot of others) {
+    if (fits()) break;
+    more = [...more, slot];
+    tray = tray.filter((one) => one !== slot);
+    past = past.filter((one) => one !== slot);
+  }
+  const questions = past
+    .filter((slot) => slot.face.state === "needsYou")
+    .sort((a, b) => b.face.at - a.face.at);
+  for (const slot of questions.slice(0, -1)) {
+    if (fits()) break;
+    asks = [...asks, slot];
+    past = past.filter((one) => one !== slot);
+  }
+
+  const axis = trayWidth() > 0 ? trayWidth() + gap : 0;
+  const nowX = Math.min(
+    most,
+    Math.max(axis + baseNow * (1 - axis), axis + pastWidth() + charSpan / 2),
+  );
+  const remap = (x: number) =>
+    x <= baseNow
+      ? axis + (baseNow > 0 ? (x / baseNow) * (nowX - axis) : 0)
+      : nowX + ((x - baseNow) / (1 - baseNow)) * (1 - nowX);
+  const bent = [...base, { at: now, x: baseNow }]
+    .sort((a, b) => a.at - b.at)
+    .filter((knot, i, all) => i === 0 || knot.at > (all[i - 1] as Knot).at)
+    .map((knot) => ({ at: knot.at, x: remap(knot.x) }));
+
   type Row = {
-    face: Omit<RibbonFace, "x" | "label" | "align" | "room"> | null;
+    slot: Slot | null;
+    count: { kind: CountKind; slots: Slot[] } | null;
     item: (typeof runs)[number] | null;
-    count: Count | null;
     at: number;
     x: number;
     text: string;
     half: number;
     width: number;
-    tight: boolean;
   };
-  const takes = (text: string) => 2 * halfOf(text) + charSpan;
-  const faceRow = (face: Omit<RibbonFace, "x" | "label" | "align" | "room">, x: number): Row => {
-    const text = names.get(face.agentId) ?? "";
+  const slotRow = (slot: Slot, x: number): Row => ({
+    slot,
+    count: null,
+    item: null,
+    at: slot.face.at,
+    x,
+    text: slot.text,
+    half: slot.tight ? input.faceSpan / 2 : halfOf(slot.text),
+    width: widthOf(slot),
+  });
+  const countRow = (kind: CountKind, slots: Slot[], at: number, x: number): Row => {
+    const text = countText(kind, slots.length);
     return {
-      face,
+      slot: null,
+      count: { kind, slots },
       item: null,
-      count: null,
-      at: face.at,
+      at,
       x,
       text,
       half: halfOf(text),
       width: takes(text),
-      tight: false,
     };
   };
-  const idleRows: Row[] = idle.map((agent) =>
-    faceRow({ agentId: agent.id, state: "idle", at: start }, 0),
-  );
-  const faceRows: Row[] = [
-    ...idleRows,
-    ...wanted.map((face) => faceRow(face, xAt(scale, face.at))),
+
+  const trayRows: Row[] = [
+    ...tray.map((slot) => slotRow(slot, 0)),
+    ...(more.length ? [countRow("more", more, start, 0)] : []),
   ];
+  let cursor = 0;
+  const trayXs = trayRows.map((row) => {
+    const x = cursor + row.width / 2;
+    cursor += row.width;
+    return x;
+  });
+
+  const lastAsk = asks[0];
+  const pastRows: Row[] = [
+    ...past.map((slot) => slotRow(slot, xAt(bent, slot.face.at))),
+    ...(lastAsk ? [countRow("needsYou", asks, lastAsk.face.at, xAt(bent, lastAsk.face.at))] : []),
+  ].sort((a, b) => a.x - b.x || a.at - b.at);
+  const pastXs = pastRows.length
+    ? spread(
+        pastRows.map((row) => row.x),
+        pastRows.map((row) => row.width),
+        axis,
+        nowX - charSpan / 2,
+      )
+    : [];
+
+  const pins: Knot[] = [];
+  pastRows.forEach((row, i) => {
+    const prev = pins[pins.length - 1];
+    pins.push({
+      at: prev ? Math.max(row.at, prev.at + 1) : row.at,
+      x: pastXs[i] as number,
+    });
+  });
+  for (let i = pins.length - 1; i >= 0; i--) {
+    const pin = pins[i] as Knot;
+    pin.at = Math.min(pin.at, (pins[i + 1]?.at ?? now) - 1);
+  }
+  const scale = pinned(bent, pins);
+
   const itemRows: Row[] = [...runs, ...occasions].map((item) => {
     const text = longest(item.what, item.when);
     return {
-      face: null,
-      item,
+      slot: null,
       count: null,
+      item,
       at: item.at,
       x: xAt(scale, item.at),
       text,
       half: halfOf(text),
       width: input.faceSpan,
-      tight: false,
     };
   });
-  const tighten = (one: Row): Row =>
-    one.face && one.face.state !== "needsYou"
-      ? {
-          ...one,
-          half: input.faceSpan / 2,
-          width: input.faceSpan + charSpan,
-          tight: true,
-        }
-      : one;
-  const byX = (a: Row, b: Row) => a.x - b.x || a.at - b.at;
-  const total = (rows: Row[]) => rows.reduce((sum, one) => sum + one.width, 0);
-
-  const nowX = xAt(scale, now);
-  const after = (one: Row) => (one.face ? one.face.state === "working" : one.at > now);
-  const beforeHi = (rows: Row[]) => {
-    const last = rows[rows.length - 1] as Row;
-    return nowX - last.half - charSpan + last.width / 2;
-  };
   const laterLo = (rows: Row[]) => {
     const first = rows[0] as Row;
     return nowX + first.half + charSpan - first.width / 2;
   };
-  const fitsBefore = (rows: Row[]) => rows.length === 0 || total(rows) <= beforeHi(rows) + 1e-9;
-  const fitsLater = (rows: Row[]) => rows.length === 0 || total(rows) <= 1 - laterLo(rows) + 1e-9;
-
-  const fold = (rows: Row[], kind: CountKind, fits: (rows: Row[]) => boolean): Row[] => {
-    const ofKind = rows.filter((one) => one.face?.state === kind).sort((x, y) => x.at - y.at);
-    if (fits(rows) || ofKind.length < 2) return rows;
-    for (let keep = ofKind.length - 1; keep >= 0; keep--) {
-      const folded = ofKind.slice(keep);
-      const at = Math.max(...folded.map((one) => one.at));
-      const text = countText(kind, folded.length);
-      const count: Row = {
-        face: null,
-        item: null,
-        count: { kind, agentIds: folded.flatMap((one) => (one.face ? [one.face.agentId] : [])) },
-        at,
-        x: Math.max(...folded.map((one) => one.x)),
-        text,
-        half: halfOf(text),
-        width: takes(text),
-        tight: false,
-      };
-      const next = [...rows.filter((one) => !folded.includes(one)), count].sort(byX);
-      if (fits(next) || keep === 0) return next;
-    }
-    return rows;
-  };
-
-  const pending = faceRows.filter((one) => !after(one)).sort(byX);
-  const before = fold(fitsBefore(pending) ? pending : pending.map(tighten), "needsYou", fitsBefore);
-
-  const liveFaces = faceRows.filter(after);
-  const withItems = [...liveFaces, ...itemRows].sort(byX);
-  const later = fitsLater(withItems) ? withItems : fold(liveFaces.sort(byX), "working", fitsLater);
-  const ordered = [...before, ...later];
-  const xs = [
-    ...(before.length
-      ? spread(
-          before.map((one) => one.x),
-          before.map((one) => one.width),
-          0,
-          beforeHi(before),
-        )
-      : []),
-    ...(later.length
-      ? spread(
-          later.map((one) => one.x),
-          later.map((one) => one.width),
-          laterLo(later),
-          1,
-        )
-      : []),
-  ];
+  const total = (rows: Row[]) => rows.reduce((all, row) => all + row.width, 0);
+  const sorted = itemRows.sort((a, b) => a.x - b.x || a.at - b.at);
+  const later = sorted.length && total(sorted) <= 1 - laterLo(sorted) + 1e-9 ? sorted : [];
+  const laterXs = later.length
+    ? spread(
+        later.map((row) => row.x),
+        later.map((row) => row.width),
+        laterLo(later),
+        1,
+      )
+    : [];
 
   const align = (x: number, half: number): Align =>
     x - half < 0 ? "start" : x + half > 1 ? "end" : "center";
   const faces: RibbonFace[] = [];
   const scheduled: RibbonScheduled[] = [];
   const counts: RibbonCount[] = [];
-  ordered.forEach((one, i) => {
-    const x = xs[i] as number;
-    const gap = Math.min(
-      i > 0 ? x - (xs[i - 1] as number) : 1,
-      i < xs.length - 1 ? (xs[i + 1] as number) - x : 1,
-    );
-    if (one.count) {
-      const who = one.count.agentIds.map((id) => names.get(id) ?? "").join(", ");
-      counts.push({
-        key: `count:${one.count.kind}`,
-        kind: one.count.kind,
-        agentIds: one.count.agentIds,
+  const emit = (rows: Row[], xs: number[]) =>
+    rows.forEach((one, i) => {
+      const x = xs[i] as number;
+      const gapBeside = Math.min(
+        i > 0 ? x - (xs[i - 1] as number) : 1,
+        i < xs.length - 1 ? (xs[i + 1] as number) - x : 1,
+      );
+      if (one.count) {
+        const agentIds = one.count.slots.map((slot) => slot.face.agentId);
+        const who = agentIds.map((id) => names.get(id) ?? "").join(", ");
+        counts.push({
+          key: `count:${one.count.kind}`,
+          kind: one.count.kind,
+          agentIds,
+          x,
+          text: one.text,
+          label: `${one.text}: ${who}`,
+          align: align(x, one.half),
+        });
+        return;
+      }
+      if (one.slot) {
+        const { face, tight, text } = one.slot;
+        const paused = input.activity[face.agentId]?.state === "paused";
+        const label = faceLabel(names.get(face.agentId) ?? "", face.state, face.at, now, paused);
+        const room = tight ? Math.max(0, Math.min(2 * one.half, gapBeside - charSpan)) : null;
+        faces.push({
+          ...face,
+          x,
+          label,
+          align: align(x, one.half),
+          room,
+          name: text,
+        });
+        return;
+      }
+      if (!one.item) return;
+      const words = gapBeside >= WORDS_SPANS * input.faceSpan;
+      const shown = words ? one.text : one.item.when;
+      scheduled.push({
+        ...one.item,
         x,
-        text: one.text,
-        label: `${one.text}: ${who}`,
-        align: align(x, one.half),
+        room: gapBeside,
+        words,
+        align: align(x, halfOf(shown)),
       });
-      return;
-    }
-    if (one.face) {
-      const paused = input.activity[one.face.agentId]?.state === "paused";
-      const name = names.get(one.face.agentId) ?? "";
-      const label = faceLabel(name, one.face.state, one.face.at, now, paused);
-      const room = one.tight ? Math.max(0, Math.min(2 * one.half, gap - charSpan)) : null;
-      faces.push({ ...one.face, x, label, align: align(x, one.half), room });
-      return;
-    }
-    if (!one.item) return;
-    const words = gap >= WORDS_SPANS * input.faceSpan;
-    const shown = words ? one.text : one.item.when;
-    scheduled.push({ ...one.item, x, room: gap, words, align: align(x, halfOf(shown)) });
-  });
+    });
+  emit(trayRows, trayXs);
+  emit(pastRows, pastXs);
+  emit(later, laterXs);
 
   const lapses = input.approvals.flatMap((one) => {
     const name = names.get(one.agentId);
@@ -599,7 +727,7 @@ export function layoutRibbon(given: RibbonInput): Ribbon {
     const at = dayStart(now, i + 1);
     return {
       at,
-      x: TODAY_END + width * i,
+      x: remap(TODAY_END + width * i),
       label: new Date(at).toLocaleDateString([], { weekday: "short" }),
       kind: "day",
     };
@@ -607,7 +735,7 @@ export function layoutRibbon(given: RibbonInput): Ribbon {
 
   const bandAt = band;
   const bandX = Math.max(
-    0,
+    axis,
     Math.min(
       bandAt === null ? nowX : xAt(scale, bandAt),
       ...faces
@@ -623,13 +751,17 @@ export function layoutRibbon(given: RibbonInput): Ribbon {
   const bandLabel = nowX - pillHalf - bandX >= wordsSpan ? BAND_LABEL : null;
 
   return {
-    now: { at: now, x: xAt(scale, now), label: nowLabel },
+    axis,
+    now: { at: now, x: nowX, label: nowLabel },
     band: bandAt === null ? null : { from: bandAt, x: bandX, label: bandLabel },
     faces,
     counts,
     scheduled,
     lapses,
-    ticks: [...hourTicks(scale, start, now, bandLabel ? bandX : null, wordsSpan), ...dayTicks],
+    ticks: [
+      ...hourTicks(scale, start, now, bandLabel ? bandX : null, wordsSpan, axis),
+      ...dayTicks,
+    ],
     scale,
   };
 }

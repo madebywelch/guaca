@@ -488,7 +488,7 @@ class Browser:
                  "Tab": ("Tab", 9, None), "ArrowDown": ("ArrowDown", 40, None),
                  "ArrowUp": ("ArrowUp", 38, None), "Home": ("Home", 36, None),
                  "End": ("End", 35, None), "Backspace": ("Backspace", 8, None),
-                 ",": ("Comma", 188, ",")}
+                 ",": ("Comma", 188, ","), "[": ("BracketLeft", 219, "[")}
         if key in named:
             code, keycode, text = named[key]
         elif len(key) == 1 and key.isdigit():

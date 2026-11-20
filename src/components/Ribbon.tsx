@@ -194,7 +194,7 @@ export function Ribbon({
                   </span>
                 )}
               </span>
-              <span className="ribbon__name">{agent.name}</span>
+              <span className="ribbon__name">{face.name}</span>
             </button>
           </li>
         ),
@@ -236,7 +236,11 @@ export function Ribbon({
       data-open={marked ? "some" : undefined}
     >
       <div className="ribbon__inner">
-        <div className="ribbon__line" aria-hidden="true" />
+        <div
+          className="ribbon__line"
+          aria-hidden="true"
+          style={ribbon.axis > 0 ? at(ribbon.axis) : undefined}
+        />
         <div className="ribbon__track" ref={track} aria-hidden="true">
           {!pending && ribbon.band && (
             <div

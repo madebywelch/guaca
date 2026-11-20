@@ -18,7 +18,7 @@ import {
 import { fileUrl, previewKind, readableSize } from "../lib/files";
 import { focusWriting } from "../lib/focus";
 import { api, onFileDrop } from "../lib/ipc";
-import { FIND_KEY } from "../lib/keybinds";
+import { FIND_KEY, keyOf } from "../lib/keybinds";
 import { applyMention, matchMentions, mentionAt, splitMentions } from "../lib/mentions";
 import { useLiveAgents, useStore } from "../lib/store";
 import { BEFORE_RELOAD, workspaceOrigin } from "../lib/transport";
@@ -97,6 +97,7 @@ interface Props {
   recipient?: { id: string; name: string };
   onRecipientChange?: (id: string) => void;
   waiting?: { asker: string; answer: () => void };
+  onLeave?: () => void;
   group: GroupId | null;
   disabled?: boolean;
   disabledReason?: string;
@@ -113,6 +114,7 @@ export function Composer({
   recipient,
   onRecipientChange,
   waiting,
+  onLeave,
 }: Props) {
   const storageKey = `guaca.draft:${workspaceOrigin()}:${draftKey ?? group ?? "composer"}`;
   const owner = useMemo(() => ownerFor(storageKey, !!draftKey), [storageKey, draftKey]);
@@ -297,7 +299,14 @@ export function Composer({
       }
     }
 
-    if (event.key === "Tab" && !event.shiftKey && waiting && !text && files.length === 0) {
+    const empty = !text && files.length === 0;
+    if (event.key === "Escape" && onLeave && empty) {
+      event.preventDefault();
+      onLeave();
+      return;
+    }
+
+    if (event.key === "Tab" && !event.shiftKey && waiting && empty) {
       event.preventDefault();
       waiting.answer();
       return;
@@ -608,7 +617,10 @@ export function Composer({
             </>
           )}
         </span>
-        <span className="composer__keys">{FIND_KEY} search</span>
+        <span className="composer__keys">
+          {onLeave && !text && files.length === 0 && `${keyOf("leave")} Today · `}
+          {keyOf("step")} next agent · {FIND_KEY} search
+        </span>
       </div>
     </div>
   );

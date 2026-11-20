@@ -23,7 +23,12 @@ function row(table: Binding[], id: string): Binding {
 }
 
 function signature(combo: Combo): string {
-  return [combo.mod ? "mod" : "", combo.shift ? "shift" : "", combo.key].join("+");
+  return [
+    combo.mod ? "mod" : "",
+    combo.ctrl ? "ctrl" : "",
+    combo.shift ? "shift" : "",
+    combo.key,
+  ].join("+");
 }
 
 async function loadedOn(platform: string): Promise<typeof import("./keybinds")> {
@@ -231,6 +236,7 @@ describe("the table", () => {
     for (const binding of global) {
       const event = press(binding.combo.key, {
         metaKey: Boolean(binding.combo.mod),
+        ctrlKey: Boolean(binding.combo.ctrl),
         shiftKey: Boolean(binding.combo.shift),
       });
       expect(bindingFor(event)?.id).toBe(binding.id);
@@ -238,7 +244,16 @@ describe("the table", () => {
   });
 
   it("offers the one global handler exactly the ids it dispatches", () => {
-    expect(GLOBAL).toEqual(["menu", "agent", "search", "settings", "shortcuts", "undo"]);
+    expect(GLOBAL).toEqual([
+      "menu",
+      "agent",
+      "search",
+      "settings",
+      "shortcuts",
+      "back",
+      "step",
+      "undo",
+    ]);
     for (const id of GLOBAL) {
       expect(row(BINDINGS, id).where).toBe("Anywhere");
     }
@@ -287,6 +302,40 @@ describe("the keys that name an agent and take an answer back", () => {
         "Deny, or clear the selected question",
       ]),
     );
+  });
+});
+
+describe("the keys that go back and to the next agent", () => {
+  it("hears Command or Control [ as back, and nothing shifted or bare", () => {
+    expect(bindingFor(press("[", { metaKey: true }))?.id).toBe("back");
+    expect(bindingFor(press("[", { ctrlKey: true }))?.id).toBe("back");
+    expect(bindingFor(press("{", { metaKey: true, shiftKey: true }))).toBeUndefined();
+    expect(bindingFor(press("["))).toBeUndefined();
+    expect(bindingFor(press("[", { metaKey: true, altKey: true }))).toBeUndefined();
+  });
+
+  it("hears Control Tab and Control Shift Tab, and never Command Tab, which the Mac keeps", () => {
+    expect(bindingFor(press("Tab", { ctrlKey: true }))?.id).toBe("step");
+    expect(bindingFor(press("Tab", { ctrlKey: true, shiftKey: true }))?.id).toBe("step");
+    expect(bindingFor(press("Tab", { metaKey: true }))).toBeUndefined();
+    expect(bindingFor(press("Tab", { metaKey: true, ctrlKey: true }))).toBeUndefined();
+    expect(bindingFor(press("Tab", { ctrlKey: true, altKey: true }))).toBeUndefined();
+    expect(bindingFor(press("Tab"))).toBeUndefined();
+    expect(bindingFor(press("Tab", { shiftKey: true }))).toBeUndefined();
+  });
+
+  it("writes Control as the Mac draws it, and as Ctrl elsewhere", async () => {
+    const mac = await loadedOn("MacIntel");
+    expect(mac.comboLabel(row(mac.BINDINGS, "step"))).toBe("⌃Tab / ⌃⇧Tab");
+    expect(mac.comboLabel(row(mac.BINDINGS, "back"))).toBe("⌘[");
+    expect(mac.keyOf("leave")).toBe("Esc");
+    const linux = await loadedOn("Linux x86_64");
+    expect(linux.comboLabel(row(linux.BINDINGS, "step"))).toBe("Ctrl+Tab / Ctrl+Shift+Tab");
+    expect(linux.comboLabel(row(linux.BINDINGS, "back"))).toBe("Ctrl+[");
+  });
+
+  it("lists Escape from an empty box under the conversation", () => {
+    expect(row(BINDINGS, "leave")).toMatchObject({ where: "A conversation", fixed: true });
   });
 });
 

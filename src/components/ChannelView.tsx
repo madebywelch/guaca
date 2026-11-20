@@ -77,6 +77,7 @@ export function ChannelView({
   const focused = useStore((s) => s.focused);
   const clearFocus = useStore((s) => s.clearFocus);
   const select = useStore((s) => s.select);
+  const leaveChannel = useStore((s) => s.leaveChannel);
 
   const [reading, setReading] = useState<AgentId | null>(null);
   const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(() => new Set());
@@ -292,6 +293,7 @@ export function ChannelView({
           draftKey={channel}
           recipient={agent ? { id: agent.id, name: agent.name } : undefined}
           onRecipientChange={(id) => void select(id)}
+          onLeave={leaveChannel}
           waiting={
             agent && question
               ? {

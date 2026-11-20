@@ -110,8 +110,8 @@ describe("what a screen reader hears", () => {
       charSpan: 8 / 375,
     });
     const list = draw(ribbon);
-    const count = within(list).getByRole("button", { name: /^\+\d+ working: / });
-    expect(count.textContent).toMatch(/^\+\d+ working$/);
+    const count = within(list).getByRole("button", { name: /^\+\d+ more: / });
+    expect(count.textContent).toMatch(/^\+\d+ more$/);
     fireEvent.click(count);
     expect(openGroups).toHaveBeenCalledTimes(1);
   });

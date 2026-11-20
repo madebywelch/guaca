@@ -1,6 +1,7 @@
 export interface Combo {
   key: string;
   mod?: boolean;
+  ctrl?: boolean;
   shift?: boolean;
 }
 
@@ -55,6 +56,19 @@ export const BINDINGS: Binding[] = [
     id: "shortcuts",
     what: "Open this list",
     combo: { key: "/", mod: true },
+    where: "Anywhere",
+  },
+  {
+    id: "back",
+    what: "Go back: from an agent to Today, or out of settings",
+    combo: { key: "[", mod: true },
+    where: "Anywhere",
+  },
+  {
+    id: "step",
+    what: "Open the next agent, or the previous one, in the order of their numbers",
+    combo: { key: "Tab", ctrl: true, shift: false },
+    to: { combo: { key: "Tab", ctrl: true, shift: true }, joint: "either" },
     where: "Anywhere",
   },
   {
@@ -159,6 +173,13 @@ export const BINDINGS: Binding[] = [
     fixed: true,
   },
   {
+    id: "leave",
+    what: "From an empty box, go back to Today",
+    combo: { key: "Escape" },
+    where: "A conversation",
+    fixed: true,
+  },
+  {
     id: "send",
     what: "Send the message",
     combo: { key: "Enter" },
@@ -218,7 +239,9 @@ export function matches(event: KeyboardEvent, combo: Combo): boolean {
   const key = combo.key.length === 1 ? event.key.toLowerCase() : event.key;
   if (key !== combo.key) return false;
   if (event.altKey) return false;
-  if (Boolean(combo.mod) !== (event.metaKey || event.ctrlKey)) return false;
+  if (combo.ctrl) {
+    if (!event.ctrlKey || event.metaKey) return false;
+  } else if (Boolean(combo.mod) !== (event.metaKey || event.ctrlKey)) return false;
   if (combo.shift !== undefined && combo.shift !== event.shiftKey) return false;
   return true;
 }
@@ -252,6 +275,7 @@ const NAMED: Record<string, string> = {
 
 export function formatCombo(combo: Combo): string {
   const parts: string[] = [];
+  if (combo.ctrl) parts.push(IS_MAC ? "⌃" : "Ctrl");
   if (combo.mod) parts.push(IS_MAC ? "⌘" : "Ctrl");
   if (combo.shift) parts.push(IS_MAC ? "⇧" : "Shift");
   parts.push(NAMED[combo.key] ?? combo.key.toUpperCase());

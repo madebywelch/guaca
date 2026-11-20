@@ -1119,19 +1119,35 @@ Each agent is one face, placed by the first of these that holds:
    finished or failed.
 4. It did anything today. The face sits at the last of it, unmarked.
 
-An agent none of those hold for is idle, and it gets a face like any other, at
-the left edge in the order the Groups sheet lists it: group by group, pinned
-first, then as the operator arranged them. Its drawing is faded to gray and its
-name is not, and it is named "Dara, idle", or "Dara, paused" when it is paused,
-as the Groups sheet says. Faces that would
-overlap are spread as one cluster centered on where they wanted to be, because
-pushing each one right of the last would drag a crowd past the moment it belongs
-to. When the stretch before now cannot hold every name, the names there are cut
-to the room each face has rather than any agent leaving the strip, and a crowd
-too large even for that is spaced evenly along the stretch. Requests or working
-faces that still do not fit fold into one count, such as "+3 working", which
-opens the Groups sheet. While an agent's page is open the other faces step
-back: their drawings fade and their names stay at full contrast.
+An agent none of those hold for is idle, and it gets a face like any other, in a
+tray at the left edge, in the order the Groups sheet lists it: group by group,
+pinned first, then as the operator arranged them. The tray is not part of the
+hours: the line starts after it and no hour is labeled over it, because an idle
+face drawn under 8 AM says it did something at 8 AM. Its drawing is faded to
+gray and its name is not, and it is named "Dara, idle", or "Dara, paused" when
+it is paused, as the Groups sheet says.
+
+Every other face sits at or before now, working ones included, ending at the now
+line, since the right of it is what has not happened yet. Faces that would
+overlap are spread as one cluster centered on where they wanted to be, and the
+scale is then bent through every face, so each face sits at its own moment and an
+hour label always falls between the faces before and after that hour. A crowd
+pushed left of its moment takes the hours with it rather than standing under a
+time it never had.
+
+**A name is cut last.** When the faces need more room than the stretch before
+now has, the now line moves right, giving up hours ahead until the coming days
+keep about a fifth of the strip. When even that is not enough, names drop,
+longest first, to the one word that tells them apart from every other agent's
+words ("Researcher" for Market Researcher beside a Market Analyst, "Chief" for
+Chief of Staff), and only then are names cut to the face's width, lowest first:
+idle, resting, finished, working, failed. A question's name is never cut. With
+the starter group and one more, every name is whole at 1280 wide and at 900; nine
+agents at 900 keep a word each. Faces that still do not fit fold, in the same
+order, into one count in the tray, such as "+3 more", which opens the Groups
+sheet; questions fold last, into "+2 need you", and only once every face without
+a question has folded. While an agent's page is open the other faces step back:
+their drawings fade and their names stay at full contrast.
 
 A band labeled "Since you last looked" runs from the latest `seenAt` of any
 finished run to now, or from where the oldest unseen run began when that is
@@ -3059,8 +3075,23 @@ The fixed ones are listed as fixed, and the ones listed under *Anywhere* are
 matched from the same table the pane draws, so a key listed there is a key that
 works: Command K opens the command menu, Command 1 to 9 open the agents the menu
 numbers, Command F opens search, Command comma opens settings, Command slash
-opens the list itself, and Command Z takes back an answer while it still offers
-Undo. The keys of the command menu and of Needs you are listed under those two
+opens the list itself, Command Z takes back an answer while it still offers
+Undo, Command [ goes back (from an agent to Today, or out of settings), and
+Control Tab and Control Shift Tab open the next and the previous agent in the
+order of their numbers, wrapping at either end and starting from the first or the
+last on Today. From an agent's empty box, Escape goes back to Today too; with
+words in the box it does nothing, so a draft is never one key from gone.
+
+Control Tab is Control on a Mac as well, not Command: Command Tab is the Mac's own
+app switcher and never reaches the window, and Control Tab is what Safari,
+Finder and Terminal use for the next tab. Command [ is the Mac's back, as in
+Safari and Finder. Neither is claimed by a text field or the webview. Both keys
+are heard before any field or menu sees them, so the box's Tab never answers a
+question on the way, and they do nothing while a sheet or a dialog is open; from
+the command menu they close it and go. After a move the focus is where it is after
+any other: the field on Today, the box on an agent's page. The command menu lists
+Back to Today, Next agent and Previous agent with their keys, and the line under
+the box names Escape and Control Tab. The keys of the command menu and of Needs you are listed under those two
 surfaces, from the same table, and `keybinds.test.ts` holds that each is there.
 
 `mod` means Command or Control on every platform, both accepted. Only the label

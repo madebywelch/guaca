@@ -1,6 +1,7 @@
 import type { IconName } from "../components/Icon";
-import { formatCombo } from "./keybinds";
+import { formatCombo, keyOf } from "./keybinds";
 import type { Prefs, SurfaceMode, Typeface } from "./prefs";
+import { stepped } from "./rail";
 import { SECTION_LABELS, SECTIONS, type Section } from "./sections";
 import type { Activity, AgentCard, AgentId, Approval, Decision, Escalation } from "./types";
 
@@ -228,9 +229,27 @@ function actionRows(input: MenuInput): MenuRow[] {
       section: "Actions",
       title: "Back to Today",
       icon: "chevron-left",
+      key: keyOf("back"),
       words: "home today back",
       action: { do: "place", place: "today" },
     });
+  for (const [by, title, words] of [
+    [1, "Next agent", "next agent switch forward"],
+    [-1, "Previous agent", "previous agent switch back"],
+  ] as const) {
+    const to = stepped(input.agents, input.open, by);
+    if (to && to.id !== input.open)
+      rows.push({
+        id: `step:${by}`,
+        section: "Actions",
+        title,
+        detail: to.name,
+        icon: by > 0 ? "chevron-right" : "chevron-left",
+        key: formatCombo({ key: "Tab", ctrl: true, shift: by < 0 }),
+        words,
+        action: { do: "open", agentId: to.id },
+      });
+  }
   for (const action of ACTIONS)
     rows.push({
       id: `place:${action.place}`,

@@ -1,8 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import { anAgent, anApproval, anOutcome } from "../test-fixtures";
-import { BAND_LABEL, layoutRibbon, type RibbonFace, type RibbonInput, spread, xAt } from "./ribbon";
-import type { Occasion, UpcomingRun } from "./types";
+import {
+  BAND_LABEL,
+  layoutRibbon,
+  type Ribbon,
+  type RibbonFace,
+  type RibbonInput,
+  spread,
+  xAt,
+} from "./ribbon";
+import type { AgentCard, Occasion, UpcomingRun } from "./types";
 
 const at = (day: number, hour: number, minute = 0) =>
   new Date(2026, 10, day, hour, minute).getTime();
@@ -366,6 +374,16 @@ describe("crowding", () => {
     "Reviewer",
     "Builder",
   ];
+  const NAMES_9 = NAMES_12.slice(0, 9);
+  const FOUR = ["Chief of Staff", "Market Researcher", "Financial Analyst", "Travel Planner"];
+  const NINE = [
+    ...FOUR,
+    "Market Analyst",
+    "Head of Sales",
+    "Research Librarian",
+    "Customer Support Lead",
+    "Executive Assistant",
+  ];
 
   function crowd(names: string[], width: number) {
     const agents = names.map((name) => anAgent(name.toLowerCase(), { name }));
@@ -391,42 +409,93 @@ describe("crowding", () => {
     return { ribbon: layoutRibbon(input), agents, faceSpan, charSpan };
   }
 
-  const drawnHalf = (face: RibbonFace, name: string, faceSpan: number, charSpan: number) =>
-    face.room === null ? Math.max(faceSpan, name.length * charSpan) / 2 : face.room / 2;
+  const drawnHalf = (face: RibbonFace, faceSpan: number, charSpan: number) =>
+    face.room === null ? Math.max(faceSpan, face.name.length * charSpan) / 2 : face.room / 2;
 
-  for (const [names, width, roomy] of [
-    [NAMES, 1280, true],
-    [NAMES, 900, false],
-    [NAMES, 375, false],
-    [NAMES_12, 1280, false],
-    [NAMES_12, 900, false],
-    [NAMES_12, 375, false],
+  function shown(ribbon: Ribbon, faceSpan: number, charSpan: number) {
+    return [
+      ...ribbon.faces.map((face) => ({ x: face.x, half: drawnHalf(face, faceSpan, charSpan) })),
+      ...ribbon.counts.map((one) => ({
+        x: one.x,
+        half: Math.max(faceSpan, one.text.length * charSpan) / 2,
+      })),
+    ].sort((a, b) => a.x - b.x);
+  }
+
+  function apart(ribbon: Ribbon, faceSpan: number, charSpan: number) {
+    const drawn = shown(ribbon, faceSpan, charSpan);
+    for (let i = 1; i < drawn.length; i++) {
+      const a = drawn[i - 1] as (typeof drawn)[number];
+      const b = drawn[i] as (typeof drawn)[number];
+      expect(b.x - a.x).toBeGreaterThanOrEqual(a.half + b.half - 1e-9);
+    }
+    for (const one of drawn) {
+      expect(one.x - one.half).toBeGreaterThanOrEqual(-1e-9);
+      expect(one.x + one.half).toBeLessThanOrEqual(ribbon.now.x + 1e-9);
+    }
+  }
+
+  function everyoneOnce(ribbon: Ribbon, agents: AgentCard[]) {
+    const counted = ribbon.counts.flatMap((one) => one.agentIds);
+    expect([...ribbon.faces.map((face) => face.agentId), ...counted].sort()).toEqual(
+      agents.map((agent) => agent.id).sort(),
+    );
+  }
+
+  for (const [names, width] of [
+    [NAMES, 1280],
+    [NAMES, 900],
+    [NAMES_9, 1280],
+    [NAMES_12, 1280],
   ] as const) {
-    it(`names all ${names.length} agents and lets no two names touch at ${width} wide`, () => {
+    it(`draws all ${names.length} names whole and lets no two touch at ${width} wide`, () => {
       const { ribbon, agents, faceSpan, charSpan } = crowd([...names], width);
-      const name = new Map(agents.map((agent) => [agent.id, agent.name]));
-      const half = (face: RibbonFace) =>
-        drawnHalf(face, name.get(face.agentId) ?? "", faceSpan, charSpan);
-      const faces = [...ribbon.faces].sort((a, b) => a.x - b.x);
-      expect(faces.map((face) => face.agentId).sort()).toEqual(
-        agents.map((agent) => agent.id).sort(),
-      );
-      for (let i = 1; i < faces.length; i++) {
-        const a = faces[i - 1] as RibbonFace;
-        const b = faces[i] as RibbonFace;
-        expect(b.x - a.x).toBeGreaterThanOrEqual(half(a) + half(b) - 1e-9);
+      everyoneOnce(ribbon, agents);
+      expect(ribbon.counts).toEqual([]);
+      for (const face of ribbon.faces) {
+        expect(face.room).toBeNull();
+        expect(face.name).toBe(agents.find((agent) => agent.id === face.agentId)?.name);
       }
-      for (const face of faces) {
-        expect(face.x).toBeGreaterThanOrEqual(faceSpan / 2 - 1e-9);
-        expect(face.x).toBeLessThanOrEqual(1 - faceSpan / 2 + 1e-9);
-        expect(Math.abs(face.x - ribbon.now.x)).toBeGreaterThanOrEqual(half(face) - 1e-9);
-      }
-      expect(faces.every((face) => face.room === null)).toBe(roomy);
+      apart(ribbon, faceSpan, charSpan);
     });
   }
 
-  it("cuts a name to the room it has rather than letting it run into the next", () => {
-    const { ribbon, faceSpan, charSpan } = crowd(NAMES, 900);
+  for (const [names, width] of [
+    [NAMES, 375],
+    [NAMES_9, 900],
+    [NAMES_12, 900],
+    [NAMES_12, 375],
+  ] as const) {
+    it(`counts every one of ${names.length} agents once and lets nothing touch at ${width} wide`, () => {
+      const { ribbon, agents, faceSpan, charSpan } = crowd([...names], width);
+      everyoneOnce(ribbon, agents);
+      apart(ribbon, faceSpan, charSpan);
+    });
+  }
+
+  it("keeps four agents' whole names at 1280 and at 900 wide", () => {
+    for (const width of [1280, 900]) {
+      const { ribbon } = crowd(FOUR, width);
+      expect(ribbon.faces.map((face) => face.name).sort()).toEqual([...FOUR].sort());
+      expect(ribbon.faces.every((face) => face.room === null)).toBe(true);
+    }
+  });
+
+  it("drops a name to the one word that tells it apart before cutting any", () => {
+    const { ribbon, faceSpan, charSpan } = crowd(NINE, 900);
+    expect(ribbon.counts).toEqual([]);
+    expect(ribbon.faces.every((face) => face.room === null)).toBe(true);
+    const names = ribbon.faces.map((face) => face.name);
+    expect(new Set(names).size).toBe(NINE.length);
+    expect(names).toContain("Chief");
+    expect(names).toContain("Researcher");
+    expect(names).toContain("Market Analyst");
+    expect(names.some((name) => NINE.includes(name))).toBe(true);
+    apart(ribbon, faceSpan, charSpan);
+  });
+
+  it("cuts a name to the room it has only once every name is as short as its words go", () => {
+    const { ribbon, faceSpan, charSpan } = crowd(NAMES, 480);
     const cut = ribbon.faces.filter((face) => face.room !== null);
     expect(cut.length).toBeGreaterThan(0);
     for (const face of cut) expect(face.room).toBeLessThanOrEqual(faceSpan + 1e-9);
@@ -439,12 +508,15 @@ describe("crowding", () => {
     }
   });
 
-  it("spreads a crowd that cannot fit evenly along its stretch, none stacked on another", () => {
-    const { ribbon } = crowd(NAMES_12, 375);
+  it("folds a crowd too large for its stretch into a count rather than stacking faces", () => {
+    const { ribbon, agents } = crowd(NAMES_12, 375);
+    expect(ribbon.counts.map((one) => one.text)).toEqual([
+      `+${agents.length - ribbon.faces.length} more`,
+    ]);
     const xs = ribbon.faces.map((face) => face.x).sort((a, b) => a - b);
-    expect(new Set(xs.map((x) => x.toFixed(6))).size).toBe(xs.length);
-    const steps = xs.slice(1).map((x, i) => x - (xs[i] as number));
-    for (const step of steps) expect(step).toBeCloseTo(steps[0] as number);
+    for (let i = 1; i < xs.length; i++) {
+      expect((xs[i] as number) - (xs[i - 1] as number)).toBeGreaterThanOrEqual(52 / 375 - 1e-9);
+    }
   });
 
   function live(kind: "working" | "needsYou", count: number, width: number) {
@@ -484,29 +556,24 @@ describe("crowding", () => {
     for (const width of [1280, 900, 375]) {
       it(`never lets ${count} ${kind} faces or their names touch at ${width} wide`, () => {
         const { ribbon, agents, faceSpan, charSpan } = live(kind, count, width);
-        const name = new Map(agents.map((agent) => [agent.id, agent.name]));
-        const drawn = [
-          ...ribbon.faces.map((face) => ({ x: face.x, text: name.get(face.agentId) ?? "" })),
-          ...ribbon.counts.map((one) => ({ x: one.x, text: one.text })),
-        ].sort((a, b) => a.x - b.x);
-        const half = (text: string) => Math.max(faceSpan, text.length * charSpan) / 2;
+        const drawn = shown(ribbon, faceSpan, charSpan);
         for (let i = 1; i < drawn.length; i++) {
           const a = drawn[i - 1] as (typeof drawn)[number];
           const b = drawn[i] as (typeof drawn)[number];
-          expect(b.x - a.x).toBeGreaterThanOrEqual(half(a.text) + half(b.text) + charSpan - 1e-9);
+          expect(b.x - a.x).toBeGreaterThanOrEqual(a.half + b.half + charSpan - 1e-9);
         }
-        const counted = ribbon.counts.flatMap((one) => one.agentIds);
-        expect([...ribbon.faces.map((face) => face.agentId), ...counted].sort()).toEqual(
-          agents.map((agent) => agent.id).sort(),
-        );
-        for (const one of ribbon.counts) expect(one.kind).toBe(kind);
+        everyoneOnce(ribbon, agents);
+        for (const one of ribbon.counts) expect(one.kind).toBe(kind === "working" ? "more" : kind);
+        if (kind === "needsYou") {
+          for (const face of ribbon.faces) expect(face.room).toBeNull();
+        }
       });
     }
   }
 
-  it("says how many more are working or need you, by name, in one counted item", () => {
+  it("says how many more there are, or how many more need you, by name, in one counted item", () => {
     const working = live("working", 8, 375).ribbon.counts[0];
-    expect(working?.text).toMatch(/^\+\d+ working$/);
+    expect(working?.text).toMatch(/^\+\d+ more$/);
     expect(working?.label.startsWith(`${working?.text}: `)).toBe(true);
     const asking = live("needsYou", 8, 375).ribbon.counts[0];
     expect(asking?.text).toMatch(/^\+\d+ needs? you$/);
@@ -573,6 +640,147 @@ describe("crowding", () => {
     const xs = spread([0, 0, 0], 0.1);
     expect(xs[0]).toBeCloseTo(0.05);
     expect(xs[2]).toBeCloseTo(0.25);
+  });
+});
+
+describe("what a face's place says", () => {
+  const WIDTH = 1280;
+  function crowdedMorning() {
+    const agents = [
+      ...AGENTS,
+      ...["Researcher", "Critic", "Manager", "Scribe"].map((name) =>
+        anAgent(name.toLowerCase(), { name }),
+      ),
+    ];
+    const outcomes = agents
+      .filter((agent) => !["dara", "marlow", "kit", "wren", "pip"].includes(agent.id))
+      .map((agent, i) =>
+        anOutcome({ agentId: agent.id, startedAt: NOW - 900_000, finishedAt: NOW - i * 60_000 }),
+      );
+    return morning({
+      agents,
+      outcomes,
+      approvals: [anApproval({ agentId: "dara", createdAt: at(16, 7, 50) })],
+      faceSpan: 52 / WIDTH,
+      charSpan: 8 / WIDTH,
+    });
+  }
+
+  it("never draws an hour label beside a face that happened at another hour", () => {
+    let checked = 0;
+    for (const input of [
+      morning({ faceSpan: 52 / WIDTH, charSpan: 8 / WIDTH }),
+      crowdedMorning(),
+    ]) {
+      const ribbon = layoutRibbon(input);
+      const hours = ribbon.ticks.filter((tick) => tick.kind === "hour");
+      for (const one of ribbon.faces.filter((face) => face.state !== "idle")) {
+        for (const tick of hours) {
+          checked += 1;
+          expect(one.x < tick.x, `${one.label} against ${tick.label}`).toBe(one.at < tick.at);
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("puts agents with nothing today in a tray left of the hours, where no hour is labeled", () => {
+    const input = crowdedMorning();
+    const ribbon = layoutRibbon(input);
+    const idle = ribbon.faces.filter((face) => face.state === "idle");
+    expect(idle.map((face) => face.agentId)).toEqual(["kit", "wren", "pip"]);
+    expect(ribbon.axis).toBeGreaterThan(0);
+    for (const face of idle) {
+      expect(face.x + Math.max(52, face.name.length * 8) / WIDTH / 2).toBeLessThanOrEqual(
+        ribbon.axis,
+      );
+    }
+    for (const face of ribbon.faces.filter((one) => one.state !== "idle")) {
+      expect(face.x).toBeGreaterThan(ribbon.axis);
+    }
+    for (const tick of ribbon.ticks) expect(tick.x).toBeGreaterThanOrEqual(ribbon.axis);
+    expect(ribbon.band?.x ?? ribbon.axis).toBeGreaterThanOrEqual(ribbon.axis);
+  });
+
+  it("has no tray and starts the hours at the left edge when every agent did something today", () => {
+    const outcomes = AGENTS.map((agent, i) =>
+      anOutcome({ agentId: agent.id, startedAt: at(16, 1 + i), finishedAt: at(16, 1 + i, 10) }),
+    );
+    expect(layoutRibbon(morning({ outcomes })).axis).toBe(0);
+  });
+
+  it("gives up hours ahead before it shortens a name, and keeps the coming days on the strip", () => {
+    const roomy = layoutRibbon(morning({ faceSpan: 52 / WIDTH, charSpan: 8 / WIDTH }));
+    const crowded = layoutRibbon(crowdedMorning());
+    expect(crowded.now.x).toBeGreaterThan(roomy.now.x);
+    expect(crowded.faces.every((face) => face.room === null)).toBe(true);
+    const days = crowded.ticks.filter((tick) => tick.kind === "day");
+    expect(days).toHaveLength(4);
+    for (const day of days) expect(day.x).toBeGreaterThan(crowded.now.x);
+  });
+});
+
+describe("what folds when the strip is full", () => {
+  function mixed(width: number) {
+    const agents = [
+      "Idle One",
+      "Idle Two",
+      "Resting",
+      "Finisher",
+      "Worker",
+      "Failing",
+      "First Asker",
+      "Second Asker",
+    ].map((name) => anAgent(name.toLowerCase().replace(" ", "-"), { name }));
+    const input = morning({
+      agents,
+      activity: { worker: { state: "thinking" } },
+      outcomes: [
+        anOutcome({ agentId: "resting", finishedAt: at(16, 8), seenAt: at(16, 8, 5) }),
+        anOutcome({ agentId: "finisher", finishedAt: at(16, 8, 30) }),
+        anOutcome({ agentId: "failing", status: "failed", finishedAt: at(16, 8, 40) }),
+      ],
+      approvals: [
+        anApproval({ id: "a1", agentId: "first-asker", createdAt: at(16, 9) }),
+        anApproval({ id: "a2", agentId: "second-asker", createdAt: at(16, 9, 5) }),
+      ],
+      upcoming: [],
+      occasions: [],
+      faceSpan: 52 / width,
+      charSpan: 8 / width,
+    });
+    return layoutRibbon(input);
+  }
+
+  it("folds idle agents first, then what is resting, finished, working and failed, and questions last", () => {
+    const order = ["idle", "rest", "finished", "working", "failed", "needsYou"];
+    let folded = 0;
+    for (const width of [900, 640, 480, 375, 320, 240]) {
+      const ribbon = mixed(width);
+      const more = new Set(ribbon.counts.find((one) => one.kind === "more")?.agentIds ?? []);
+      folded = Math.max(folded, more.size);
+      const shown = ribbon.faces.map((face) => order.indexOf(face.state));
+      const lowestShown = Math.min(...shown);
+      for (const id of more) {
+        const state = mixed(2000).faces.find((face) => face.agentId === id)?.state ?? "idle";
+        expect(order.indexOf(state), `${id} folded at ${width}`).toBeLessThanOrEqual(lowestShown);
+      }
+    }
+    expect(folded).toBeGreaterThan(0);
+  });
+
+  it("never folds a question while an agent without one keeps a face, at any width", () => {
+    for (let width = 1280; width >= 200; width -= 20) {
+      const ribbon = mixed(width);
+      const asking = ribbon.counts.find((one) => one.kind === "needsYou");
+      if (!asking) continue;
+      expect(
+        ribbon.faces.every((face) => face.state === "needsYou"),
+        `at ${width}`,
+      ).toBe(true);
+    }
+    expect(mixed(900).faces.filter((face) => face.state === "needsYou")).toHaveLength(2);
+    expect(mixed(375).faces.filter((face) => face.state === "needsYou")).toHaveLength(2);
   });
 });
 
@@ -656,9 +864,8 @@ describe("what is scheduled", () => {
   it("gives way to the faces on a strip too narrow for both", () => {
     const ribbon = layoutRibbon(morning({ faceSpan: 0.2 }));
     const drawn = ribbon.faces.map((one) => one.agentId);
-    for (const one of layoutRibbon(morning()).faces) {
-      expect(drawn.includes(one.agentId)).toBe(true);
-    }
+    const counted = ribbon.counts.flatMap((one) => one.agentIds);
+    expect([...drawn, ...counted].sort()).toEqual(AGENTS.map((one) => one.id).sort());
     expect(drawn).toContain("dara");
     expect(drawn).toContain("marlow");
     const xs = ribbon.faces.map((one) => one.x).sort((a, b) => a - b);
@@ -704,7 +911,7 @@ describe("labels", () => {
   const CHAR = 0.01;
   const half = (text: string) => Math.max(SPAN, text.length * CHAR) / 2;
 
-  it("keeps every name and every coming item off the now line", () => {
+  it("keeps every name and every coming item off the now line, and every face left of it", () => {
     const input = morning({ charSpan: CHAR });
     const ribbon = layoutRibbon(input);
     const name = (id: string) => AGENTS.find((one) => one.id === id)?.name ?? "";
@@ -715,8 +922,8 @@ describe("labels", () => {
       const text = one.what.length > one.when.length ? one.what : one.when;
       expect(Math.abs(one.x - ribbon.now.x)).toBeGreaterThanOrEqual(half(text));
     }
-    expect(face(input, "marlow")?.x).toBeGreaterThan(ribbon.now.x);
-    expect(face(input, "dara")?.x).toBeLessThan(ribbon.now.x);
+    for (const one of ribbon.faces) expect(one.x).toBeLessThan(ribbon.now.x);
+    expect(face(input, "marlow")?.x).toBeGreaterThan(face(input, "dara")?.x ?? 1);
   });
 
   it("keeps a label near either end of the strip inside it", () => {

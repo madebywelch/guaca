@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { landsBefore, numbered, railOrder } from "./rail";
+import { landsBefore, numbered, railOrder, stepped } from "./rail";
 import type { Activity, AgentCard, AgentId } from "./types";
 
 function agent(name: string, over: Partial<AgentCard> = {}): AgentCard {
@@ -192,5 +192,24 @@ describe("the numbers Command 1 to 9 open", () => {
       "Scribe",
       "Lost",
     ]);
+  });
+});
+
+describe("the next and the previous agent", () => {
+  it("steps along the order and wraps at either end", () => {
+    const rows = crew();
+    expect(stepped(rows, "Manager", 1)?.name).toBe("Cook");
+    expect(stepped(rows, "Scribe", 1)?.name).toBe("Manager");
+    expect(stepped(rows, "Manager", -1)?.name).toBe("Scribe");
+  });
+
+  it("starts at the first going forward and the last going back when nobody is open", () => {
+    expect(stepped(crew(), null, 1)?.name).toBe("Manager");
+    expect(stepped(crew(), null, -1)?.name).toBe("Scribe");
+    expect(stepped(crew(), "deleted", 1)?.name).toBe("Manager");
+  });
+
+  it("has nowhere to go with nobody there", () => {
+    expect(stepped([], null, 1)).toBeUndefined();
   });
 });

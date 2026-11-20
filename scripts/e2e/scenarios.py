@@ -75,6 +75,8 @@ def new_agent(w: World, name: str, instructions: str) -> None:
 def open_agent(w: World, name: str) -> None:
     if w.ui.find("log", f"Conversation with {name}"):
         return
+    if not w.ui.find("list", "Today's timeline") and w.ui.find("button", "Today"):
+        w.ui.click("button", "Today")
     face = w.wait(f"{name} has a face on today's timeline", lambda: [
         n for n in w.ui.within("list", "Today's timeline", "button") if label(n).startswith(f"{name}, ")])
     w.ui.press(face[0])
@@ -2037,6 +2039,208 @@ def scenario_menu(w: World) -> None:
     no_unscripted(w)
 
 
+HALF_THOUGHT = "Half a thought"
+PRODUCT = "Product Manager"
+RIBBON_READ = """(() => {
+  const box = (e) => e.getBoundingClientRect();
+  const mid = (e) => { const r = box(e); return (r.left + r.right) / 2; };
+  const line = document.querySelector('.ribbon__line');
+  const now = document.querySelector('.ribbon__now');
+  return {
+    faces: [...document.querySelectorAll('.ribbon__face')].map((f) => {
+      const n = f.querySelector('.ribbon__name');
+      return { label: f.querySelector('button').getAttribute('aria-label'), name: n.textContent,
+               cut: n.scrollWidth > n.clientWidth + 0.5, state: f.dataset.state,
+               x: mid(f.querySelector('.ribbon__portrait')), left: box(n).left, right: box(n).right,
+               portraitRight: box(f.querySelector('.ribbon__portrait')).right };
+    }),
+    counts: [...document.querySelectorAll('.ribbon__count')].map((c) => c.textContent),
+    hours: [...document.querySelectorAll('.ribbon__tick--hour')].map((t) => ({ label: t.textContent, x: mid(t), left: box(t).left })),
+    lineLeft: line ? box(line).left : null,
+    nowX: now ? mid(now) : null,
+    clock: Date.now(),
+  };
+})()"""
+
+
+def ribbon_read(w: World) -> dict:
+    return w.ui.evaluate(RIBBON_READ)
+
+
+def face_time(label_text: str, clock_ms: int) -> float | None:
+    if label_text.endswith("working now"):
+        return clock_ms / 1000
+    found = re.search(r"(yesterday )?(\d{1,2}):(\d{2}) (AM|PM)$", label_text)
+    if not found:
+        return None
+    hour = int(found.group(2)) % 12 + (12 if found.group(4) == "PM" else 0)
+    day = clock_ms / 1000 // 86400 * 86400 - (86400 if found.group(1) else 0)
+    return day + hour * 3600 + int(found.group(3)) * 60
+
+
+def tick_time(label_text: str, clock_ms: int) -> float:
+    hour = {"Noon": 12, "Midnight": 0}.get(label_text)
+    if hour is None:
+        number, half = label_text.split(" ")
+        hour = int(number) % 12 + (12 if half == "PM" else 0)
+    at = clock_ms / 1000 // 86400 * 86400 + hour * 3600
+    return at if at <= clock_ms / 1000 else at - 86400
+
+
+def untrue_places(read: dict) -> list[str]:
+    wrong = []
+    for face in read["faces"]:
+        when = face_time(face["label"], read["clock"])
+        if when is None:
+            continue
+        for tick in read["hours"]:
+            if read["nowX"] is not None and tick["x"] >= read["nowX"]:
+                continue
+            if (face["x"] < tick["x"]) != (when < tick_time(tick["label"], read["clock"])):
+                wrong.append(f"{face['label']} beside {tick['label']}")
+    return wrong
+
+
+def scenario_glance(w: World) -> None:
+
+    def script(c: Call) -> Reply | None:
+        if c.speaker == AGENT and c.last_user.endswith(CALL_ME):
+            return ask_name(c, "Robin")
+        if c.speaker == MARKET and c.last_user.endswith(BOOK_FLIGHT):
+            results = c.tool_results()
+            if not results:
+                return call("ask_operator", question=WHICH, options=["Early", "Late"])
+            return say(f"Booked: {results[-1][:80]}")
+        return hello(c)
+
+    w.model.script = script
+    w.start()
+    w.ui.viewport(*WINDOW)
+    first_run(w)
+    settled(w, 1)
+    ui = w.ui
+    new_agent(w, TRAVEL, "Wait to be asked.")
+    write(w, AGENT, CALL_ME)
+    w.wait("the permission request is pending", lambda: len(approvals(w)) == 1)
+    open_agent(w, MARKET)
+    write(w, MARKET, BOOK_FLIGHT)
+    w.wait("the question is pending too", lambda: len(approvals(w)) == 2)
+    four = sorted((AGENT, MARKET, PRODUCT, TRAVEL))
+
+    def faces_settled() -> dict | None:
+        read = ribbon_read(w)
+        return read if len(read["faces"]) + sum(int(c.split(" ")[0][1:]) for c in read["counts"]) == 4 else None
+
+    readings = {}
+    for width, height in ((1280, 820), (900, 700)):
+        ui.viewport(width, height)
+        if ui.find("button", "Today"):
+            ui.click("button", "Today")
+        w.wait("Today is shown", lambda: ui.find("region", "Today"))
+        w.wait("the timeline has finished moving", lambda: ui.evaluate(look.SETTLED))
+        readings[width] = w.wait(f"four agents are on the timeline at {width} wide", faces_settled)
+        w.capture(f"four agents on the timeline at {width}x{height}")
+    wide, narrow = readings[1280], readings[900]
+
+    w.check("at 1280x820 every one of four agents' names is drawn whole, none cut",
+            sorted(f["name"] for f in wide["faces"]) == four and not any(f["cut"] for f in wide["faces"]),
+            observed=sorted(f["name"] for f in wide["faces"]), detail=wide)
+    w.check("at 900x700 every agent has a face with a name of its own that is not cut",
+            len(narrow["faces"]) == 4 and len({f["name"] for f in narrow["faces"]}) == 4
+            and not any(f["cut"] for f in narrow["faces"])
+            and all(f["label"].startswith(f["name"]) for f in narrow["faces"]),
+            observed=sorted(f["name"] for f in narrow["faces"]), detail=narrow)
+    asking = {r: sorted(f["name"] for f in readings[r]["faces"] if f["state"] == "needsYou") for r in readings}
+    w.check("both agents with a question keep their faces at 1280 and at 900, and nothing is folded",
+            all(len(a) == 2 for a in asking.values()) and not wide["counts"] and not narrow["counts"],
+            observed=asking)
+    idle_right = {r: max((f["portraitRight"] for f in readings[r]["faces"] if f["state"] == "idle"), default=None)
+                  for r in readings}
+    w.check("idle faces sit left of the hours, and no hour is labeled over them",
+            all(readings[r]["lineLeft"] is not None and idle_right[r] is not None
+                and idle_right[r] <= readings[r]["lineLeft"]
+                and all(t["left"] >= readings[r]["lineLeft"] for t in readings[r]["hours"]) for r in readings),
+            observed={r: sorted(f["name"] for f in readings[r]["faces"] if f["state"] == "idle") for r in readings},
+            detail={"idleRight": idle_right, "lineLeft": {r: readings[r]["lineLeft"] for r in readings}})
+    wrong = {r: untrue_places(readings[r]) for r in readings}
+    w.check("no face sits beside an hour label at a time it did not happen",
+            not any(wrong.values()), observed=wrong,
+            detail={r: {"hours": readings[r]["hours"], "faces": readings[r]["faces"]} for r in readings})
+
+    w.wait("the field takes the focus", lambda: ui.focused() == ("textbox", "What do you need?"))
+    ui.key("Tab", mod=True)
+    first = w.wait("Control Tab opens an agent", lambda: next(
+        (n for n in four if ui.find("log", f"Conversation with {n}")), None))
+    ui.key("Tab", mod=True)
+    second = w.wait("Control Tab again opens another", lambda: next(
+        (n for n in four if n != first and ui.find("log", f"Conversation with {n}")), None))
+    ui.key("Tab", mod=True, shift=True)
+    w.wait("Control Shift Tab goes back", lambda: ui.find("log", f"Conversation with {first}"))
+    back_focus = w.wait("the composer takes the focus", lambda: ui.focused() == ("combobox", f"Write to {first}"))
+    ui.key("Escape")
+    escaped = w.wait("Escape from the empty box goes to Today", lambda: ui.find("region", "Today"))
+    field = w.wait("the field takes the focus", lambda: ui.focused() == ("textbox", "What do you need?"))
+    ui.key("1", mod=True)
+    numbered_first = w.wait("Command 1 opens the first agent", lambda: next(
+        (n for n in four if ui.find("log", f"Conversation with {n}")), None))
+    w.check("Control Tab and Control Shift Tab step through the agents in the order of their numbers, "
+            "and Escape from an empty box goes back to Today with the focus in the field",
+            first == numbered_first and second != first and bool(back_focus) and bool(escaped) and bool(field),
+            observed={"first": first == numbered_first, "second": second != first, "escaped": bool(escaped),
+                      "field": bool(field)}, detail={"first": first, "second": second}, shot=True)
+
+    ui.type("combobox", f"Write to {first}", HALF_THOUGHT)
+    ui.key("Escape")
+    kept = ui.find("log", f"Conversation with {first}") and ui.value("combobox", f"Write to {first}") == HALF_THOUGHT
+    ui.key("[", mod=True)
+    home = w.wait("Command [ goes to Today", lambda: ui.find("region", "Today"))
+    home_focus = w.wait("the field takes the focus", lambda: ui.focused() == ("textbox", "What do you need?"))
+    ui.key("1", mod=True)
+    w.wait("the agent opens again", lambda: ui.find("log", f"Conversation with {first}"))
+    draft = ui.value("combobox", f"Write to {first}")
+    w.check("Escape leaves a box with words in it alone, and Command [ goes back to Today and keeps the draft",
+            bool(kept) and bool(home) and bool(home_focus) and draft == HALF_THOUGHT,
+            observed={"kept": bool(kept), "home": bool(home), "focus": bool(home_focus), "draft": draft == HALF_THOUGHT})
+    hint = ui.evaluate("(document.querySelector('.composer__keys') || {}).textContent || ''")
+    ui.fill("combobox", f"Write to {first}", "")
+    empty_hint = ui.evaluate("(document.querySelector('.composer__keys') || {}).textContent || ''")
+
+    ui.key("k", mod=True)
+    w.wait("the command menu opens", lambda: ui.find("dialog", "Command menu"))
+    rows = ui.evaluate("Array.from(document.querySelectorAll('.palette__row, [role=option]'))"
+                       ".map(e => e.innerText.replace(/\\s+/g, ' ').trim())")
+    ui.key("Tab", mod=True)
+    moved = w.wait("Control Tab from the menu closes it and opens the next agent", lambda: not ui.find(
+        "dialog", "Command menu") and next((n for n in four if n != first and ui.find("log", f"Conversation with {n}")), None))
+    listed = [r for r in rows if r.startswith(("Back to Today", "Next agent", "Previous agent"))]
+    w.check("the command menu lists Back to Today, Next agent and Previous agent with their keys, the box "
+            "names them, and Control Tab works from the menu",
+            any("Back to Today" in r and "Ctrl+[" in r for r in listed)
+            and any("Next agent" in r and "Ctrl+Tab" in r for r in listed)
+            and any("Previous agent" in r and "Ctrl+Shift+Tab" in r for r in listed)
+            and "Ctrl+Tab next agent" in hint and "Esc Today" in empty_hint and "Esc" not in hint and bool(moved),
+            observed={"listed": [re.sub(r" [A-Z][a-z]+ [A-Z][a-z]+(?= Ctrl)", "", r) for r in listed],
+                      "hint": hint, "emptyHint": empty_hint}, detail=rows)
+
+    ui.click("button", "Groups and agents" if ui.find("button", "Groups and agents") else "Agents")
+    w.wait("the Groups sheet opens", lambda: ui.find("dialog", "Groups and agents"))
+    ui.key("Tab", mod=True)
+    ui.key("[", mod=True)
+    stayed = ui.find("log", f"Conversation with {moved}") and ui.find("dialog", "Groups and agents")
+    ui.key("Escape")
+    w.wait("the sheet closes", lambda: not ui.find("dialog", "Groups and agents"))
+    w.check("with a sheet open, Control Tab and Command [ do nothing",
+            bool(stayed), observed=bool(stayed))
+
+    ui.viewport(900, 700)
+    w.wait("the timeline steps aside on an agent's page at 900x700",
+           lambda: not ui.find("list", "Today's timeline"))
+    open_agent(w, TRAVEL)
+    w.check("opening an agent by its face works from another agent's page at 900x700",
+            bool(ui.find("log", f"Conversation with {TRAVEL}")), observed=TRAVEL)
+    no_unscripted(w)
+
+
 def selected_card(w: World) -> str:
     return w.ui.evaluate(
         "(document.querySelector('.desk__card[data-selected]') || {}).innerText || ''") or ""
@@ -2557,6 +2761,27 @@ SCENARIOS: dict[str, Scenario] = {
         "Escape closes the menu with a sentence in it, sends nothing and gives the field back",
         "three words or more and Return write to the agent, and its reply arrives",
         "Command 1 opens the first agent with the focus in its composer",
+        "every model call was one the scenario scripted",
+    )),
+    "glance": Scenario(scenario_glance, "With the starter group and one more agent, two of them asking, every name is whole at 1280 by 820 "
+                       "and every agent has an uncut name of its own at 900 by 700; both questions keep their "
+                       "faces, idle faces sit left of the hours, and no face sits at an hour it did not happen at; "
+                       "Control Tab and Control Shift Tab step through the agents, Escape from an empty box and "
+                       "Command [ go back to Today, and the command menu and the box name those keys; Escape with "
+                       "words in the box and both keys under a sheet do nothing.",
+    (
+        "at 1280x820 every one of four agents' names is drawn whole, none cut",
+        "at 900x700 every agent has a face with a name of its own that is not cut",
+        "both agents with a question keep their faces at 1280 and at 900, and nothing is folded",
+        "idle faces sit left of the hours, and no hour is labeled over them",
+        "no face sits beside an hour label at a time it did not happen",
+        "Control Tab and Control Shift Tab step through the agents in the order of their numbers, "
+        "and Escape from an empty box goes back to Today with the focus in the field",
+        "Escape leaves a box with words in it alone, and Command [ goes back to Today and keeps the draft",
+        "the command menu lists Back to Today, Next agent and Previous agent with their keys, the box "
+        "names them, and Control Tab works from the menu",
+        "with a sheet open, Control Tab and Command [ do nothing",
+        "opening an agent by its face works from another agent's page at 900x700",
         "every model call was one the scenario scripted",
     )),
     "queue": Scenario(scenario_queue, "Two agents wait on a person, who answers both from Today by keyboard: "

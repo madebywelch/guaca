@@ -8459,6 +8459,9 @@ button.artifacts__version[aria-pressed="true"] {
   right: 0;
   border-top: 1px solid var(--rule-hard);
 }
+.ribbon__line[style] {
+  left: calc(var(--ribbon-lead) + var(--ribbon-x) * (100% - var(--ribbon-lead)));
+}
 
 .ribbon__track {
   position: absolute;
