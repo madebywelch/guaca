@@ -63,6 +63,13 @@ vi.mock("./lib/ipc", () => ({
       })),
     reportPresence: async () => {},
     reportHost: async () => {},
+    subscriptionStatus: async () => ({
+      signedIn: false,
+      email: "",
+      plan: "",
+      includesCodex: false,
+    }),
+    claudeSigninStatus: async () => ({ signedIn: false }),
     reportView: async () => {},
     capabilities: async () => ({
       loopbackEndpoints: true,
@@ -846,6 +853,22 @@ describe("App", () => {
       expect(screen.queryByText(/Add an API key/i) !== null).toBe(banner);
     },
   );
+
+  it("names the Provider section on the no-key banner once Settings is open", async () => {
+    getSettings.mockResolvedValue({
+      ...(await getSettings()),
+      provider: "compatible",
+      apiKeySet: false,
+    });
+    const first = aGroup({ apiKeySet: false });
+    listGroups.mockResolvedValue([first]);
+    listAgents.mockResolvedValue([agent("Manager")]);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Open settings" }));
+    expect(await screen.findByRole("button", { name: "Go to Provider" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open settings" })).toBeNull();
+    act(() => useStore.getState().closeSettings());
+  });
 
   it.each([
     { provider: "compatible" as const, apiKeySet: true },

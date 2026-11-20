@@ -335,7 +335,7 @@ export default function App() {
         <div className="banner">
           <span>Add an API key before your agents can reply.</span>
           <button type="button" className="btn" onClick={() => openSettings("provider")}>
-            Open settings
+            {overlay === "settings" ? "Go to Provider" : "Open settings"}
           </button>
         </div>
       )}
