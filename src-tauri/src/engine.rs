@@ -89,7 +89,7 @@ impl Kind {
                 if !profile.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
                     return Err("Guaca could not tell which Colima profile to start.".into());
                 }
-                let mut child = tokio::process::Command::new("colima")
+                let mut child = tokio::process::Command::new(colima())
                     .args(["start", "--profile", profile])
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
@@ -132,6 +132,18 @@ impl Kind {
             }
         }
     }
+}
+
+fn colima() -> std::path::PathBuf {
+    std::env::var_os("PATH")
+        .and_then(|p| std::env::split_paths(&p).map(|p| p.join("colima")).find(|p| p.is_file()))
+        .or_else(|| {
+            ["/opt/homebrew/bin/colima", "/usr/local/bin/colima"]
+                .into_iter()
+                .map(std::path::PathBuf::from)
+                .find(|p| p.is_file())
+        })
+        .unwrap_or_else(|| "colima".into())
 }
 
 pub fn canonical(endpoint: &str) -> String {

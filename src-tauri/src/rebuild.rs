@@ -133,7 +133,7 @@ impl Rebuild {
         status
     }
 
-    pub fn start(&self) -> Result<(), String> {
+    pub fn start(&self, docker_host: Option<&str>) -> Result<(), String> {
         let mut child = self.child.lock();
         if let Some(running) = child.as_mut() {
             if matches!(running.try_wait(), Ok(None)) {
@@ -162,6 +162,9 @@ impl Rebuild {
             .stdin(Stdio::null())
             .stdout(log)
             .stderr(errors);
+        if let Some(endpoint) = docker_host {
+            command.env("DOCKER_HOST", endpoint).env_remove("DOCKER_CONTEXT");
+        }
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -273,7 +276,7 @@ mod tests {
             (Origin { checkout: Some(dir.path().join("gone")), ..origin.clone() }, "no longer at"),
         ] {
             let rebuild = Rebuild::new(origin, log.clone());
-            let refused = rebuild.start().unwrap_err();
+            let refused = rebuild.start(None).unwrap_err();
             assert!(refused.contains(said), "{refused}");
             let status = rebuild.status().await;
             assert!(status.unavailable.unwrap().contains(said));
@@ -288,23 +291,36 @@ mod tests {
         let (dir, origin) = checkout(script);
         let dest = origin.dest.clone().unwrap();
         let rebuild = Rebuild::new(origin, dir.path().join("logs/rebuild.log"));
-        rebuild.start().unwrap();
+        rebuild.start(None).unwrap();
         let status = settled(&rebuild).await;
         let failure = status.failure.unwrap();
         assert!(failure.ends_with("cargo is not on PATH"), "{failure}");
         assert!(failure.contains(&dest.display().to_string()), "installs where this app is");
         assert!(!failure.contains("line 1\n"), "only the end: {failure}");
-        rebuild.start().unwrap();
+        rebuild.start(None).unwrap();
         assert!(rebuild.failure.lock().is_none(), "a new attempt clears the last failure");
         settled(&rebuild).await;
+    }
+
+    #[tokio::test]
+    async fn a_rebuild_builds_into_the_engine_the_host_is_in() {
+        let (dir, origin) = checkout("echo \"$DOCKER_HOST\" > \"$GUACA_DEST/engine\"\n");
+        let engine = origin.dest.clone().unwrap().join("engine");
+        let rebuild = Rebuild::new(origin, dir.path().join("rebuild.log"));
+        rebuild.start(Some("unix:///Users/me/.colima/default/docker.sock")).unwrap();
+        settled(&rebuild).await;
+        assert_eq!(
+            std::fs::read_to_string(engine).unwrap().trim(),
+            "unix:///Users/me/.colima/default/docker.sock"
+        );
     }
 
     #[tokio::test]
     async fn a_second_rebuild_is_refused_while_one_runs() {
         let (dir, origin) = checkout("exec sleep 30\n");
         let rebuild = Rebuild::new(origin, dir.path().join("rebuild.log"));
-        rebuild.start().unwrap();
-        let refused = rebuild.start().unwrap_err();
+        rebuild.start(None).unwrap();
+        let refused = rebuild.start(None).unwrap_err();
         assert!(refused.contains("already being rebuilt"), "{refused}");
         assert!(rebuild.status().await.running);
         rebuild.child.lock().as_mut().unwrap().kill().unwrap();
@@ -323,7 +339,7 @@ exec sleep 30
         let announced = origin.dest.clone().unwrap().join("announced");
         let rebuild = Rebuild::new(origin, dir.path().join("rebuild.log"));
         assert_eq!(rebuild.status().await.stage, None, "nothing is running");
-        rebuild.start().unwrap();
+        rebuild.start(None).unwrap();
         for _ in 0..200 {
             if announced.exists() {
                 break;

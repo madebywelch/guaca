@@ -168,7 +168,6 @@ function LocalReconnect({ onReady }: { onReady: () => void }) {
           {stall?.kind === "missing" && saved && (
             <p className="field__hint">Guaca last reached it at {saved.origin}.</p>
           )}
-          {stall?.kind === "image" && <ImageRecovery />}
           {opening && <p role="alert">{opening}</p>}
           <div className="access__row">
             {stall?.kind === "engine" &&

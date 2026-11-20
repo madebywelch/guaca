@@ -49,8 +49,11 @@ async fn app_source(
     Ok(state.status().await)
 }
 #[tauri::command]
-async fn rebuild_app(state: tauri::State<'_, crate::rebuild::Rebuild>) -> Result<(), String> {
-    state.start()
+async fn rebuild_app(
+    state: tauri::State<'_, crate::rebuild::Rebuild>,
+    host: tauri::State<'_, LocalHost>,
+) -> Result<(), String> {
+    state.start(host.engine_endpoint().as_deref())
 }
 #[tauri::command]
 async fn open_docker(

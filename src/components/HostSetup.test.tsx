@@ -298,13 +298,11 @@ describe("a Mac whose host is already set up", () => {
     expect(start).not.toHaveBeenCalled();
   });
   it("offers a rebuild, not a script, when a source build's image cannot be had", async () => {
-    resume.mockRejectedValue({
-      kind: "image",
-      message: "The registry refused Guaca's host image.",
-    });
+    start.mockRejectedValue({ kind: "image", message: "The registry refused Guaca's host image." });
     source.mockResolvedValue({ checkout: "/Users/me/guaca", unavailable: null, running: false });
     rebuild.mockResolvedValue(undefined);
-    savedLocalHost();
+    render(<HostChoice />);
+    fireEvent.click(await screen.findByRole("button", { name: "Use this Mac" }));
     fireEvent.click(await screen.findByRole("button", { name: "Rebuild Guaca" }));
     await waitFor(() => expect(rebuild).toHaveBeenCalled());
     expect(document.body.textContent).not.toContain("scripts/");
