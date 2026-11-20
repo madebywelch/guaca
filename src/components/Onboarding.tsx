@@ -25,6 +25,7 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [storageError, setStorageError] = useState(false);
+  const [unsaved, setUnsaved] = useState(false);
   const [checking, setChecking] = useState(false);
   const sending = useRef(false);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -100,10 +101,11 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
   const start = async () => {
     if (sending.current || !draft.brief.trim()) return;
     let next = { ...draft, key: draft.key ?? crypto.randomUUID() };
-    if (!keep(next)) return;
+    setError("");
+    setUnsaved(false);
+    if (!keep(next)) return setUnsaved(true);
     sending.current = true;
     setBusy(true);
-    setError("");
     onStarting();
     try {
       if (next.agentId && !hired)
@@ -128,12 +130,12 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
         useStore.setState((state) => ({
           agents: [...state.agents.filter((agent) => !ids.has(agent.id)), ...created],
         }));
-        if (!saved) return;
+        if (!saved) return setUnsaved(true);
       }
       if (!next.sent) {
         await api.sendMessage(next.agentId!, next.brief.trim(), [], next.key);
         next = { ...next, sent: true };
-        if (!keep(next)) return;
+        if (!keep(next)) return setUnsaved(true);
       }
       await open(next.agentId!, true);
     } catch (cause) {
@@ -353,11 +355,6 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
                 icon opens a panel of what is waiting on you and who is working.
               </p>
             )}
-            {error && (
-              <div className="banner banner--error" role="alert">
-                {error}
-              </div>
-            )}
             <div className="onboarding-actions">
               {!draft.agentId && !draft.key && (
                 <button
@@ -409,6 +406,18 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
                       ? "Send brief again"
                       : "Start task"}
               </button>
+              {error ? (
+                <p className="onboarding-notice" role="alert">
+                  {error}
+                </p>
+              ) : (
+                unsaved && (
+                  <p className="onboarding-notice" role="status">
+                    This device could not save your progress, so nothing more was started. The
+                    message at the top of this page says how to fix it.
+                  </p>
+                )
+              )}
             </div>
           </>
         )}

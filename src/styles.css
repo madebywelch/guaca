@@ -5346,6 +5346,25 @@ input[type="file"]:disabled {
   min-width: 0;
 }
 
+@media (max-height: 45rem) {
+  .onboarding {
+    padding-top: var(--space-6);
+  }
+
+  .onboarding-steps,
+  .onboarding-intro {
+    margin-bottom: var(--space-6);
+  }
+
+  .onboarding-group {
+    padding-block: var(--space-5);
+  }
+
+  .onboarding-group h2 {
+    margin-bottom: var(--space-4);
+  }
+}
+
 .empty__title {
   font-family: var(--font-ui);
   font-size: var(--type-title);

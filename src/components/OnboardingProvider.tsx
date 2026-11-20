@@ -360,9 +360,8 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
             </li>
           ))}
         </ul>
-        {saying}
-        {code}
         <div className="onboarding-actions">
+          {code}
           <button
             type="button"
             className="btn"
@@ -389,6 +388,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
               Skip and choose a provider
             </button>
           )}
+          {saying}
         </div>
       </section>
     );
