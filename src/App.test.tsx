@@ -239,6 +239,37 @@ describe("App", () => {
     expect(await screen.findByRole("region", { name: "Settings" })).toBeTruthy();
   });
 
+  it("shows the window's notices inside Settings, after its section list", async () => {
+    getSettings.mockResolvedValue({
+      ...(await getSettings()),
+      provider: "compatible",
+      apiKeySet: false,
+    });
+    listGroups.mockResolvedValue([aGroup({ apiKeySet: false })]);
+    listAgents.mockResolvedValue([agent("Manager")]);
+    render(<App />);
+    await screen.findByText(/Add an API key/i);
+    act(() =>
+      useStore.setState({
+        handoff: "https://example.test/sign-in",
+        banner: { tone: "error", text: "The host stopped answering." },
+      }),
+    );
+    const row = await screen.findByRole("navigation", { name: "Window" });
+    fireEvent.click(within(row).getByRole("button", { name: "App settings" }));
+    const page = await screen.findByRole("region", { name: "Settings" });
+    const list = within(page).getByRole("tablist", { name: "Settings sections" });
+    for (const text of [
+      /Add an API key/i,
+      /A sign-in is waiting/i,
+      /The host stopped answering/i,
+    ]) {
+      const notice = screen.getByText(text);
+      expect(page.contains(notice)).toBe(true);
+      expect(list.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+  });
+
   it("offers a way in when there are no agents", async () => {
     render(<App />);
     expect(await screen.findByRole("button", { name: /open the cafeteria/i })).toBeTruthy();
