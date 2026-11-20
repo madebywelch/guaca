@@ -7262,6 +7262,10 @@ button.artifacts__version[aria-pressed="true"] {
   min-height: var(--control-h-sm);
 }
 
+.settings .settings__tab[aria-selected="true"] {
+  background: var(--raised);
+}
+
 .settings__main {
   flex: 1;
   min-width: 0;

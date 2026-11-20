@@ -329,6 +329,38 @@ export default function App() {
         !groups[0]!.apiKeySet &&
         Object.values(groups[0]!.inference).every((value) => value === null)));
 
+  const notices = (
+    <>
+      {needsKey && !firstRun && (
+        <div className="banner">
+          <span>Add an API key before your agents can reply.</span>
+          <button type="button" className="btn" onClick={() => openSettings("provider")}>
+            Open settings
+          </button>
+        </div>
+      )}
+
+      <HostUpdateNotice onReview={() => openSettings("workspace")} />
+
+      {handoff && (
+        <div className="banner" role="status">
+          <span>
+            A sign-in is waiting in the tab that just opened. If none did,{" "}
+            <a href={handoff} target="_blank" rel="noopener noreferrer">
+              open it here
+            </a>
+            .
+          </span>
+          <button type="button" className="btn" onClick={() => setHandoff(null)}>
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {banner && <FailureBanner banner={banner} onSettings={openSettings} />}
+    </>
+  );
+
   return (
     <div
       className="app"
@@ -360,35 +392,11 @@ export default function App() {
       )}
 
       <main>
-        {needsKey && !firstRun && (
-          <div className="banner">
-            <span>Add an API key before your agents can reply.</span>
-            <button type="button" className="btn" onClick={() => openSettings("provider")}>
-              Open settings
-            </button>
-          </div>
+        {settingsPage ? (
+          <SettingsPage request={settingsPage} onSection={setOpenSection} notices={notices} />
+        ) : (
+          notices
         )}
-
-        <HostUpdateNotice onReview={() => openSettings("workspace")} />
-
-        {handoff && (
-          <div className="banner" role="status">
-            <span>
-              A sign-in is waiting in the tab that just opened. If none did,{" "}
-              <a href={handoff} target="_blank" rel="noopener noreferrer">
-                open it here
-              </a>
-              .
-            </span>
-            <button type="button" className="btn" onClick={() => setHandoff(null)}>
-              Dismiss
-            </button>
-          </div>
-        )}
-
-        {banner && <FailureBanner banner={banner} onSettings={openSettings} />}
-
-        {settingsPage && <SettingsPage request={settingsPage} onSection={setOpenSection} />}
 
         <div className="app__view" hidden={settingsPage !== null}>
           {firstRun && (

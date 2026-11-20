@@ -74,6 +74,7 @@ import { SkillList } from "./SkillList";
 interface Props {
   request: { section: Section | null };
   onSection?: (section: Section) => void;
+  notices?: ReactNode;
 }
 
 const SURFACE_LABELS: Record<SurfaceMode, string> = {
@@ -178,7 +179,7 @@ export function pushLine(
 const differs = (text: string, stored: number | undefined) =>
   text.trim() !== "" && Number(text) !== stored;
 
-export function SettingsPage({ request, onSection }: Props) {
+export function SettingsPage({ request, onSection, notices }: Props) {
   const opening = useRef(request).current.section ?? undefined;
   const initial = useRef(useStore.getState().settingsDraft).current;
   const settings = useStore((s) => s.settings);
@@ -829,6 +830,7 @@ export function SettingsPage({ request, onSection }: Props) {
         </div>
 
         <div className="settings__main">
+          {notices}
           <div
             className="settings__pane"
             ref={paneRef}
