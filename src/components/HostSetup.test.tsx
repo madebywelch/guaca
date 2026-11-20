@@ -16,7 +16,17 @@ const {
   savedMode,
   mode,
   current,
+  resume,
+  choose,
+  openDocker,
+  source,
+  rebuild,
 } = vi.hoisted(() => ({
+  resume: vi.fn(),
+  choose: vi.fn(),
+  openDocker: vi.fn(),
+  source: vi.fn(),
+  rebuild: vi.fn(),
   mode: vi.fn(),
   current: vi.fn(),
   savedMode: vi.fn(),
@@ -32,8 +42,10 @@ const {
   persist: vi.fn(),
   restart: vi.fn(),
 }));
-vi.mock("../lib/host", () => ({
-  localHost: { status, start, update, existing, connect, openDocker: vi.fn() },
+vi.mock("../lib/host", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/host")>()),
+  localHost: { status, start, update, existing, connect, openDocker, resume, choose },
+  thisApp: { source, rebuild },
   hostMode: mode,
   rememberMode: savedMode,
 }));
@@ -169,7 +181,157 @@ beforeEach(() => {
   existing.mockResolvedValue([]);
   status.mockResolvedValue({ state: "ready", message: "Docker is ready.", updateAvailable: false });
   probe.mockResolvedValue({});
+  openDocker.mockResolvedValue(undefined);
+  source.mockResolvedValue({ checkout: null, unavailable: "release", running: false });
 });
+
+const LOCAL = { origin: "http://127.0.0.1:54321", token: "private" };
+const COLIMA = { context: "colima", label: "Colima", action: "Start Colima" };
+const colimaDown = {
+  kind: "engine",
+  message: "Your host runs in Colima, which is not running.",
+  engines: [COLIMA],
+};
+function savedLocalHost() {
+  mode.mockReturnValue("local");
+  current.mockReturnValue(LOCAL);
+  return render(
+    <HostSetup>
+      <div>Workspace mounted</div>
+    </HostSetup>,
+  );
+}
+
+describe("a Mac whose host is already set up", () => {
+  it("waits for the host's own engine instead of offering setup, and reconnects when it starts", async () => {
+    vi.useFakeTimers();
+    try {
+      resume
+        .mockRejectedValueOnce(colimaDown)
+        .mockRejectedValueOnce(colimaDown)
+        .mockResolvedValue(LOCAL);
+      savedLocalHost();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByRole("heading").textContent).toBe("Your host is not running");
+      expect(screen.getByRole("status").textContent).toBe(colimaDown.message);
+      expect(screen.getByText("Guaca reconnects by itself as soon as it starts.")).toBeTruthy();
+      expect(screen.queryByText("Where should your agents work?")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Use this Mac" })).toBeNull();
+      expect(start).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Start Colima" }));
+      expect(openDocker).toHaveBeenCalledWith("colima");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_000);
+      });
+      expect(screen.queryByText("Workspace mounted")).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_000);
+      });
+      expect(screen.getByText("Workspace mounted")).toBeTruthy();
+      expect(resume).toHaveBeenCalledTimes(3);
+      expect(probe).toHaveBeenCalledWith(LOCAL);
+      expect(activate).toHaveBeenCalledWith(LOCAL);
+      expect(start).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("stops waiting after a bounded number of checks and offers to try again", async () => {
+    vi.useFakeTimers();
+    try {
+      resume.mockRejectedValue(colimaDown);
+      savedLocalHost();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(100 * 3_000);
+      });
+      expect(
+        screen.getByText("Guaca stopped waiting after five minutes. Start it, then try again."),
+      ).toBeTruthy();
+      expect(resume).toHaveBeenCalledTimes(101);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(resume).toHaveBeenCalledTimes(101);
+      resume.mockResolvedValue(LOCAL);
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByText("Workspace mounted")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("asks which host is the person's when one is found in two engines", async () => {
+    resume.mockRejectedValue({
+      kind: "choose",
+      message: "Guaca found a host in more than one Docker engine on this Mac.",
+      engines: [
+        COLIMA,
+        { context: "desktop-linux", label: "Docker Desktop", action: "Open Docker Desktop" },
+      ],
+    });
+    choose.mockResolvedValue(LOCAL);
+    savedLocalHost();
+    fireEvent.click(await screen.findByRole("button", { name: "Use the host in Colima" }));
+    await screen.findByText("Workspace mounted");
+    expect(choose).toHaveBeenCalledWith("colima");
+    expect(start).not.toHaveBeenCalled();
+  });
+  it("says a host it cannot find is missing and keeps a new one behind an explicit choice", async () => {
+    resume.mockRejectedValue({
+      kind: "missing",
+      message: "Guaca looked for your host in Colima and Docker Desktop and did not find it.",
+    });
+    savedLocalHost();
+    expect((await screen.findByRole("alert")).textContent).toContain("did not find it");
+    expect(screen.getByRole("heading").textContent).toBe("Guaca can't find your host");
+    expect(screen.getByText(`Guaca last reached it at ${LOCAL.origin}.`)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Use this Mac" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Set up a new host" }));
+    expect(
+      screen.getByText("A new host starts without the agents of the host Guaca can't find."),
+    ).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Use this Mac" })).toBeTruthy();
+    expect(start).not.toHaveBeenCalled();
+  });
+  it("offers a rebuild, not a script, when a source build's image cannot be had", async () => {
+    resume.mockRejectedValue({
+      kind: "image",
+      message: "The registry refused Guaca's host image.",
+    });
+    source.mockResolvedValue({ checkout: "/Users/me/guaca", unavailable: null, running: false });
+    rebuild.mockResolvedValue(undefined);
+    savedLocalHost();
+    fireEvent.click(await screen.findByRole("button", { name: "Rebuild Guaca" }));
+    await waitFor(() => expect(rebuild).toHaveBeenCalled());
+    expect(document.body.textContent).not.toContain("scripts/");
+  });
+  it("offers the download, not a script, when a release's image is refused at setup", async () => {
+    start.mockRejectedValue({ kind: "image", message: "The registry refused Guaca's host image." });
+    render(<HostChoice />);
+    fireEvent.click(await screen.findByRole("button", { name: "Use this Mac" }));
+    const download = await screen.findByRole("link", { name: "Download Guaca" });
+    expect(download.getAttribute("href")).toContain("/releases");
+    expect(screen.queryByRole("button", { name: "Rebuild Guaca" })).toBeNull();
+    expect(document.body.textContent).not.toContain("scripts/");
+  });
+  it("opens the engine the host is in, not Docker Desktop", async () => {
+    status.mockResolvedValue({
+      state: "unavailable",
+      message: colimaDown.message,
+      updateAvailable: false,
+      engine: COLIMA,
+    });
+    render(<HostChoice />);
+    fireEvent.click(await screen.findByRole("button", { name: "Start Colima" }));
+    expect(openDocker).toHaveBeenCalledWith("colima");
+    expect(screen.queryByRole("button", { name: "Open Docker" })).toBeNull();
+  });
+});
+
 describe("desktop host setup", () => {
   it("lets the operator choose another host while a saved host is connecting", async () => {
     const connection = { origin: "https://k1-guaca.tailnet.test", token: "private" };

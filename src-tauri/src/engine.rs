@@ -95,7 +95,9 @@ impl Kind {
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
                     .spawn()
-                    .map_err(|_| "Guaca could not find Colima on this Mac, so it cannot start it.")?;
+                    .map_err(|_| {
+                        "Guaca could not find Colima on this Mac, so it cannot start it."
+                    })?;
                 tokio::spawn(async move {
                     match child.wait().await {
                         Ok(status) if status.success() => {}
@@ -105,7 +107,9 @@ impl Kind {
                 });
                 Ok(())
             }
-            Kind::Other(_) => Err(format!("Start {} yourself, then Guaca reconnects.", self.label())),
+            Kind::Other(_) => {
+                Err(format!("Start {} yourself, then Guaca reconnects.", self.label()))
+            }
             application => {
                 let name = match application {
                     Kind::DockerDesktop => "Docker",
@@ -120,7 +124,10 @@ impl Kind {
                 if opened {
                     Ok(())
                 } else {
-                    Err(format!("Open {} from your applications, then Guaca reconnects.", self.label()))
+                    Err(format!(
+                        "Open {} from your applications, then Guaca reconnects.",
+                        self.label()
+                    ))
                 }
             }
         }
@@ -166,12 +173,42 @@ mod tests {
     #[test]
     fn each_engine_is_named_by_where_its_socket_is() {
         let cases = [
-            ("colima", "unix:///Users/r/.colima/default/docker.sock", "Colima", Some("Start Colima")),
-            ("colima-work", "unix:///Users/r/.colima/work/docker.sock", "Colima (work)", Some("Start Colima (work)")),
-            ("desktop-linux", "unix:///Users/r/.docker/run/docker.sock", "Docker Desktop", Some("Open Docker Desktop")),
-            ("default", "unix:///Users/r/.docker/run/docker.sock", "Docker Desktop", Some("Open Docker Desktop")),
-            ("orbstack", "unix:///Users/r/.orbstack/run/docker.sock", "OrbStack", Some("Open OrbStack")),
-            ("rancher-desktop", "unix:///Users/r/.rd/docker.sock", "Rancher Desktop", Some("Open Rancher Desktop")),
+            (
+                "colima",
+                "unix:///Users/r/.colima/default/docker.sock",
+                "Colima",
+                Some("Start Colima"),
+            ),
+            (
+                "colima-work",
+                "unix:///Users/r/.colima/work/docker.sock",
+                "Colima (work)",
+                Some("Start Colima (work)"),
+            ),
+            (
+                "desktop-linux",
+                "unix:///Users/r/.docker/run/docker.sock",
+                "Docker Desktop",
+                Some("Open Docker Desktop"),
+            ),
+            (
+                "default",
+                "unix:///Users/r/.docker/run/docker.sock",
+                "Docker Desktop",
+                Some("Open Docker Desktop"),
+            ),
+            (
+                "orbstack",
+                "unix:///Users/r/.orbstack/run/docker.sock",
+                "OrbStack",
+                Some("Open OrbStack"),
+            ),
+            (
+                "rancher-desktop",
+                "unix:///Users/r/.rd/docker.sock",
+                "Rancher Desktop",
+                Some("Open Rancher Desktop"),
+            ),
             ("lab", "unix:///var/run/lab.sock", "Docker context \"lab\"", None),
         ];
         for (context, endpoint, label, action) in cases {

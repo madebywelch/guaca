@@ -862,18 +862,41 @@ not the migration flow in the app.
 `./scripts/install.sh` builds and installs the native macOS application. It
 fast-forwards the current branch when possible; `--no-pull` uses the checkout
 as it stands. It preserves the original workspace. When Docker is ready, it
-also builds a backend image tagged with the source commit and embeds that
-image reference in the app. It does not start a backend during installation.
-Without Docker, installation still produces a client for remote hosts.
+embeds the host image for that commit in the app: the main channel's digest
+when the commit is published, which any Docker can download, or else a local
+build tagged `guacad:<commit>`, which only exists on the Mac that built it. It
+does not start a backend during installation. Without Docker, installation
+still produces a client for remote hosts.
 
 On first launch choose **On this Mac** or **Remote host**. Local setup detects
-Docker and, while Docker cannot be used, offers installation, Open Docker and
-retry actions. Guaca creates
+Docker and, while Docker cannot be used, offers installation, an action that
+opens or starts the engine, and retry. Guaca creates
 an unprivileged container, binds a free loopback port, generates an access key
 and connects without exposing the key. The named volume survives app and
 container restarts. Existing containers are reused rather than silently
 replaced while work is running. Preview bundle IDs use separate containers
 and volumes. A remote Docker context is refused for On this Mac.
+
+A Mac can run more than one Docker engine (Docker Desktop, Colima, OrbStack,
+Rancher Desktop), and the `docker` command talks to whichever one its current
+context names. Other programs change that context: starting Docker Desktop
+switches it to `desktop-linux`. So the app records which engine its host is in
+(the context's name, its socket, and the engine's ID) in `host-engine.json`
+in its data directory, and addresses that socket on every Docker command from
+then on. A host set up before the record existed is looked for once across the
+local contexts, and recorded where it is found; found in two engines, the
+person chooses. While the recorded engine is down, opening the app says which
+engine it is waiting for, offers to start or open that engine, and reconnects
+by itself when it answers, starting the host container if it is stopped.
+Reconnecting never pulls an image or creates a container or volume. A volume
+without its container is not a host, and a host Guaca cannot find is reported
+as missing, with a new host offered only as an explicit choice.
+
+Setup looks for the pinned host image on this Mac first, then for the same
+build under another name (a local `guacad:<commit>` alias matched by its
+revision label), and downloads only a name that carries a registry. A refused
+download offers a rebuild to an app built from a checkout, and the downloads
+page to a release.
 
 For downloadable releases, `GUACA_BACKEND_IMAGE` must name the published image
 for that build, ideally by digest. The fallback is the versioned GHCR image;

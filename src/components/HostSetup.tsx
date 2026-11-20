@@ -1,5 +1,14 @@
 import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
-import { type DockerStatus, type ExistingHost, hostMode, localHost } from "../lib/host";
+import {
+  type AppSource,
+  asStall,
+  type DockerStatus,
+  type ExistingHost,
+  hostMode,
+  localHost,
+  type Stall,
+  thisApp,
+} from "../lib/host";
 import { INSTRUCTIONS, RELEASES } from "../lib/releases";
 import {
   activateRemote,
@@ -16,8 +25,254 @@ import {
 import { errorMessage } from "../lib/types";
 import { LegacyGroups } from "./GroupTransfer";
 
+const PROBE_DEADLINE_MS = 15_000;
+const ENGINE_POLL_MS = 3_000;
+const ENGINE_POLLS = 100;
+
+function within<T>(work: Promise<T>, message: string): Promise<T> {
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    work,
+    new Promise<never>((_, reject) => {
+      deadline = setTimeout(() => reject(new Error(message)), PROBE_DEADLINE_MS);
+    }),
+  ]).finally(() => clearTimeout(deadline));
+}
+
 export function HostSetup({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(!desktop);
+  const done = useCallback(() => setReady(true), []);
+  if (ready) return children;
+  if (attached() && hostMode() === "local") return <LocalReconnect onReady={done} />;
+  return <HostPicker onReady={done} />;
+}
+
+type Reconnect =
+  | { kind: "connecting" }
+  | { kind: "stalled"; stall: Stall }
+  | { kind: "gaveUp"; stall: Stall };
+
+const TITLES: Record<Stall["kind"] | "connecting" | "gaveUp", string> = {
+  connecting: "Connecting to your host",
+  engine: "Your host is not running",
+  gaveUp: "Your host is not running",
+  choose: "Which host is yours?",
+  missing: "Guaca can't find your host",
+  image: "Your host could not start",
+  failed: "Your host could not start",
+};
+
+function LocalReconnect({ onReady }: { onReady: () => void }) {
+  const saved = attached();
+  const [state, setState] = useState<Reconnect>({ kind: "connecting" });
+  const [attempt, setAttempt] = useState(0);
+  const [chosen, setChosen] = useState<string | null>(null);
+  const [choosing, setChoosing] = useState<"another" | "new" | null>(null);
+  const [opening, setOpening] = useState("");
+  useEffect(() => {
+    let disposed = false;
+    let pause: ReturnType<typeof setTimeout> | undefined;
+    const waited = () =>
+      new Promise<void>((resolve) => {
+        pause = setTimeout(resolve, ENGINE_POLL_MS);
+      });
+    const reach = async () => {
+      for (let polls = 0; !disposed; polls++) {
+        try {
+          const connection = await (chosen ? localHost.choose(chosen) : localHost.resume());
+          await within(
+            probe(connection),
+            `Couldn't connect to your host at ${connection.origin}. Check Docker's Guaca container, then try again.`,
+          );
+          if (disposed) return;
+          activateRemote(connection);
+          onReady();
+          return;
+        } catch (cause) {
+          if (disposed) return;
+          const stall: Stall = asStall(cause) ?? {
+            kind: "failed",
+            message: errorMessage(cause),
+          };
+          if (stall.kind !== "engine") return setState({ kind: "stalled", stall });
+          if (polls >= ENGINE_POLLS) return setState({ kind: "gaveUp", stall });
+          setState({ kind: "stalled", stall });
+          await waited();
+        }
+      }
+    };
+    void reach();
+    return () => {
+      disposed = true;
+      clearTimeout(pause);
+    };
+  }, [attempt, chosen, onReady]);
+  const retry = () => {
+    setChoosing(null);
+    setOpening("");
+    setState({ kind: "connecting" });
+    setAttempt((n) => n + 1);
+  };
+  if (choosing)
+    return (
+      <main className="threshold">
+        <section className="host-setup">
+          <h1 className="empty__title">Where should your agents work?</h1>
+          {choosing === "new" && (
+            <p className="field__hint">
+              A new host starts without the agents of the host Guaca can't find.
+            </p>
+          )}
+          <div className="access__row">
+            <button className="btn btn--quiet" type="button" onClick={retry}>
+              Back to your host
+            </button>
+          </div>
+          <HostChoice onConnected={onReady} />
+          <LegacyGroups />
+        </section>
+      </main>
+    );
+  const stall = state.kind === "connecting" ? null : state.stall;
+  const title =
+    TITLES[
+      state.kind === "connecting"
+        ? "connecting"
+        : state.kind === "gaveUp"
+          ? "gaveUp"
+          : state.stall.kind
+    ];
+  const open = (context: string) => {
+    setOpening("");
+    void localHost.openDocker(context).catch((cause) => setOpening(errorMessage(cause)));
+  };
+  return (
+    <main className="threshold">
+      <section className="host-setup">
+        <h1 className="empty__title">{title}</h1>
+        <div className="host-choice">
+          {!stall ? (
+            <p role="status">Connecting to your host on this Mac…</p>
+          ) : stall.kind === "engine" ? (
+            <>
+              <p role="status">{stall.message}</p>
+              <p className="field__hint">
+                {state.kind === "gaveUp"
+                  ? "Guaca stopped waiting after five minutes. Start it, then try again."
+                  : "Guaca reconnects by itself as soon as it starts."}
+              </p>
+            </>
+          ) : (
+            <p role={stall.kind === "choose" ? "status" : "alert"}>{stall.message}</p>
+          )}
+          {stall?.kind === "missing" && saved && (
+            <p className="field__hint">Guaca last reached it at {saved.origin}.</p>
+          )}
+          {stall?.kind === "image" && <ImageRecovery />}
+          {opening && <p role="alert">{opening}</p>}
+          <div className="access__row">
+            {stall?.kind === "engine" &&
+              stall.engines
+                .filter((engine) => engine.action)
+                .map((engine) => (
+                  <button
+                    key={engine.context}
+                    className="btn btn--compact"
+                    type="button"
+                    onClick={() => open(engine.context)}
+                  >
+                    {engine.action}
+                  </button>
+                ))}
+            {stall?.kind === "choose" &&
+              stall.engines.map((engine) => (
+                <button
+                  key={engine.context}
+                  className="btn btn--compact"
+                  type="button"
+                  onClick={() => {
+                    setState({ kind: "connecting" });
+                    setChosen(engine.context);
+                  }}
+                >
+                  Use the host in {engine.label}
+                </button>
+              ))}
+            {stall &&
+              (state.kind === "gaveUp" || stall.kind !== "engine") &&
+              stall.kind !== "choose" && (
+                <button className="btn btn--compact" type="button" onClick={retry}>
+                  Try again
+                </button>
+              )}
+            {stall?.kind === "missing" ? (
+              <button className="btn btn--quiet" type="button" onClick={() => setChoosing("new")}>
+                Set up a new host
+              </button>
+            ) : (
+              <button
+                className="btn btn--quiet"
+                type="button"
+                onClick={() => setChoosing("another")}
+              >
+                Choose another host
+              </button>
+            )}
+          </div>
+        </div>
+        <LegacyGroups />
+      </section>
+    </main>
+  );
+}
+
+export function ImageRecovery() {
+  const [source, setSource] = useState<AppSource | null>(null);
+  const [said, setSaid] = useState("");
+  useEffect(() => {
+    void thisApp
+      .source()
+      .then(setSource)
+      .catch(() => setSource(null));
+  }, []);
+  if (source?.checkout && !source.unavailable)
+    return (
+      <div className="field">
+        <p className="field__hint">
+          Rebuilding Guaca from {source.checkout} fetches or builds the host image it needs, then
+          reopens Guaca.
+        </p>
+        <div className="access__row">
+          <button
+            className="btn btn--compact"
+            type="button"
+            disabled={source.running}
+            onClick={() =>
+              void thisApp
+                .rebuild()
+                .then(() =>
+                  setSaid("Guaca is rebuilding. It closes and reopens when the build finishes."),
+                )
+                .catch((cause) => setSaid(errorMessage(cause)))
+            }
+          >
+            Rebuild Guaca
+          </button>
+        </div>
+        {said && <p role="status">{said}</p>}
+      </div>
+    );
+  return (
+    <p className="field__hint">
+      The current Guaca brings a host image the registry serves.{" "}
+      <a href={RELEASES} target="_blank" rel="noopener noreferrer">
+        Download Guaca
+      </a>
+    </p>
+  );
+}
+
+function HostPicker({ onReady }: { onReady: () => void }) {
   const [checking, setChecking] = useState(desktop && !!attached());
   const [error, setError] = useState("");
   const [chooser, setChooser] = useState(false);
@@ -25,33 +280,20 @@ export function HostSetup({ children }: { children: ReactNode }) {
   const choosing = useRef(false);
   const saved = attached();
   const origin = saved?.origin;
-  const name =
-    hostMode() === "local" ? "On this Mac" : saved ? hostName(saved.origin) : "your host";
+  const name = saved ? hostName(saved.origin) : "your host";
   useEffect(() => {
     if (!desktop || !attached()) return;
     let disposed = false;
-    let deadline: ReturnType<typeof setTimeout> | undefined;
     const connect = async () => {
       try {
-        const connection = hostMode() === "local" ? await localHost.start() : attached()!;
-        if (disposed) return;
-        await Promise.race([
+        const connection = attached()!;
+        await within(
           probe(connection),
-          new Promise<never>((_, reject) => {
-            deadline = setTimeout(
-              () =>
-                reject(
-                  new Error(
-                    `Couldn't connect to ${name} at ${connection.origin}. It may be off or offline.`,
-                  ),
-                ),
-              15_000,
-            );
-          }),
-        ]);
+          `Couldn't connect to ${name} at ${connection.origin}. It may be off or offline.`,
+        );
         if (!disposed && !choosing.current) {
           activateRemote(connection);
-          setReady(true);
+          onReady();
         }
       } catch (cause) {
         if (!disposed) {
@@ -65,17 +307,14 @@ export function HostSetup({ children }: { children: ReactNode }) {
           setChooser(true);
         }
       } finally {
-        clearTimeout(deadline);
         if (!disposed) setChecking(false);
       }
     };
     void connect();
     return () => {
       disposed = true;
-      clearTimeout(deadline);
     };
-  }, [attempt, name, origin]);
-  if (ready) return children;
+  }, [attempt, name, origin, onReady]);
   return (
     <main className="threshold">
       <section className="host-setup">
@@ -122,10 +361,10 @@ export function HostSetup({ children }: { children: ReactNode }) {
             {!chooser && (
               <p className="field__hint">Choosing another host does not move this host's groups.</p>
             )}
-            {chooser && <HostChoice onConnected={() => setReady(true)} />}
+            {chooser && <HostChoice onConnected={onReady} />}
           </div>
         ) : (
-          <HostChoice onConnected={() => setReady(true)} />
+          <HostChoice onConnected={onReady} />
         )}
         <LegacyGroups />
       </section>
@@ -163,12 +402,17 @@ export function HostChoice({
   const [existing, setExisting] = useState<ExistingHost[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(initialError);
+  const [imageFailed, setImageFailed] = useState(false);
   const refresh = useCallback(async () => {
     try {
       setDocker(await localHost.status());
       setExisting(await localHost.existing().catch(() => []));
     } catch (cause) {
-      setDocker({ state: "unavailable", message: errorMessage(cause), updateAvailable: false });
+      setDocker({
+        state: "unavailable",
+        message: errorMessage(cause),
+        updateAvailable: false,
+      });
     }
   }, []);
   useEffect(() => {
@@ -215,6 +459,7 @@ export function HostChoice({
   const connect = async (update = false) => {
     setBusy(true);
     setError("");
+    setImageFailed(false);
     try {
       let connection: Remote;
       if (mode === "local")
@@ -245,6 +490,7 @@ export function HostChoice({
       }
     } catch (cause) {
       setError(errorMessage(cause));
+      setImageFailed(asStall(cause)?.kind === "image");
       if (mode === "local") void refresh();
     } finally {
       setBusy(false);
@@ -336,12 +582,12 @@ export function HostChoice({
                     disabled={busy}
                     onClick={() =>
                       void localHost
-                        .openDocker()
+                        .openDocker(docker.engine?.context)
                         .then(refresh)
                         .catch((cause) => setError(errorMessage(cause)))
                     }
                   >
-                    Open Docker
+                    {docker.engine?.action ?? "Open Docker"}
                   </button>
                 )}
                 <button
@@ -420,6 +666,7 @@ export function HostChoice({
           {error}
         </div>
       )}
+      {imageFailed && <ImageRecovery />}
       {error && error === initialError && (
         <p className="field__hint">
           <a href={INSTRUCTIONS} target="_blank" rel="noopener noreferrer">
