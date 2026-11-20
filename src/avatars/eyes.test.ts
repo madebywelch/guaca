@@ -22,12 +22,15 @@ describe("gaze integration", () => {
         const mass: Mass = { gaze: [0, 0], vel: [0, 0] };
         settle(mass, target, 0);
         expect(mass).toEqual({ gaze: [0, 0], vel: [0, 0] });
+        let finite = true;
+        let farthest = 0;
         for (let frame = 0; frame < Math.ceil(2 / (ms / 1000)); frame++) {
           settle(mass, target, ms / 1000);
-          expect(mass.gaze.every(Number.isFinite)).toBe(true);
-          expect(mass.vel.every(Number.isFinite)).toBe(true);
-          expect(Math.hypot(...mass.gaze)).toBeLessThanOrEqual(0.300000001);
+          finite &&= [...mass.gaze, ...mass.vel].every(Number.isFinite);
+          farthest = Math.max(farthest, Math.hypot(...mass.gaze));
         }
+        expect(finite).toBe(true);
+        expect(farthest).toBeLessThanOrEqual(0.300000001);
         expect(mass.gaze[0]).toBeCloseTo(target[0], 5);
         expect(mass.gaze[1]).toBeCloseTo(target[1], 5);
       }
