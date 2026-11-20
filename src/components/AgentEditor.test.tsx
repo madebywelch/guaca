@@ -1,7 +1,8 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useStore } from "../lib/store";
-import type { AgentCard, Group, Settings } from "../lib/types";
+import type { AgentCard, AgentDraft, Group, Settings } from "../lib/types";
 import { aGroup } from "../test-fixtures";
 import { AgentEditor } from "./AgentEditor";
 
@@ -321,4 +322,171 @@ it("offers no errands switch while the agent is still being created", async () =
   await waitFor(() => expect(api.subscriptionModels).toHaveBeenCalled());
   await act(async () => {});
   expect(screen.queryByRole("checkbox", { name: /^Errands/ })).toBeNull();
+});
+
+function Sheet() {
+  const [shown, setShown] = useState(true);
+  return shown ? <AgentEditor onClose={() => setShown(false)} /> : null;
+}
+
+describe("crossing New agent from the keyboard", () => {
+  const name = () => screen.getByRole("textbox", { name: /^Name/ });
+  const field = () => {
+    const box = document.createElement("textarea");
+    box.dataset.field = "";
+    document.body.append(box);
+    return box;
+  };
+
+  afterEach(() => {
+    for (const box of document.querySelectorAll("[data-field]")) box.remove();
+  });
+
+  it("creates nothing on Return while the name is blank", () => {
+    open();
+    fireEvent.keyDown(name(), { key: "Enter" });
+    expect(api.createAgent).not.toHaveBeenCalled();
+  });
+
+  it("lets Return write a new line in Instructions, and creates nothing", () => {
+    open();
+    fireEvent.change(name(), { target: { value: "Travel Planner" } });
+    const instructions = screen.getByRole("textbox", { name: /^Instructions/ });
+    expect(fireEvent.keyDown(instructions, { key: "Enter" })).toBe(true);
+    expect(api.createAgent).not.toHaveBeenCalled();
+  });
+
+  it("creates once when Return is pressed again while the first create is in flight", async () => {
+    let finish!: (card: { id: string }) => void;
+    api.createAgent.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    open();
+    fireEvent.change(name(), { target: { value: "Travel Planner" } });
+    fireEvent.keyDown(name(), { key: "Enter" });
+    fireEvent.keyDown(name(), { key: "Enter" });
+    await act(async () => finish({ id: "new-agent" }));
+    expect(api.createAgent).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the dialog and the focus in Name when the create fails, and moves it once one succeeds", async () => {
+    api.createAgent.mockRejectedValueOnce(new Error("The host is restarting."));
+    const box = field();
+    open();
+    cleanup();
+    render(<Sheet />);
+    fireEvent.change(name(), { target: { value: "Travel Planner" } });
+    name().focus();
+    fireEvent.keyDown(name(), { key: "Enter" });
+    expect(await screen.findByText("The host is restarting.")).toBeTruthy();
+    await new Promise((settle) => requestAnimationFrame(settle));
+    expect(screen.getByRole("dialog", { name: "New agent" })).toBeTruthy();
+    expect(document.activeElement).toBe(name());
+    fireEvent.keyDown(name(), { key: "Enter" });
+    await waitFor(() => expect(document.activeElement).toBe(box));
+    expect(api.createAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it("creates nothing on the Return that confirms an input method's conversion", () => {
+    open();
+    fireEvent.change(name(), { target: { value: "旅行" } });
+    fireEvent.keyDown(name(), { key: "Enter", isComposing: true });
+    fireEvent.keyDown(name(), { key: "Enter", keyCode: 229 });
+    expect(api.createAgent).not.toHaveBeenCalled();
+  });
+
+  it("leaves Command Return on a button to that button, so it never saves instead of deleting", () => {
+    open(card());
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.keyDown(screen.getByRole("button", { name: /^Delete Counsel/ }), {
+      key: "Enter",
+      metaKey: true,
+    });
+    expect(api.updateAgent).not.toHaveBeenCalled();
+  });
+
+  it("saves an edited agent on Return in Name", async () => {
+    open(card());
+    fireEvent.change(name(), { target: { value: "Counsel Two" } });
+    fireEvent.keyDown(name(), { key: "Enter" });
+    await waitFor(() =>
+      expect(api.updateAgent).toHaveBeenCalledWith(
+        "agent-1",
+        expect.objectContaining({ name: "Counsel Two" }),
+      ),
+    );
+    expect(api.createAgent).not.toHaveBeenCalled();
+  });
+
+  it("creates on Return in Name and puts the focus in the new agent's composer", async () => {
+    const box = field();
+    open();
+    cleanup();
+    render(<Sheet />);
+    fireEvent.change(name(), { target: { value: "Travel Planner" } });
+    fireEvent.keyDown(name(), { key: "Enter" });
+    await waitFor(() =>
+      expect(api.createAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "Travel Planner" }),
+      ),
+    );
+    await waitFor(() => expect(document.activeElement).toBe(box));
+  });
+
+  it("creates on Command Return or Control Return from any field", async () => {
+    open();
+    fireEvent.change(name(), { target: { value: "Travel Planner" } });
+    const skills = screen.getByRole("textbox", { name: /^Skills/ });
+    fireEvent.keyDown(skills, { key: "Enter", metaKey: true });
+    await waitFor(() => expect(api.createAgent).toHaveBeenCalledOnce());
+    vi.clearAllMocks();
+    open();
+    fireEvent.change(screen.getAllByRole("textbox", { name: /^Name/ }).at(-1)!, {
+      target: { value: "Chef" },
+    });
+    fireEvent.keyDown(screen.getAllByRole("textbox", { name: /^Instructions/ }).at(-1)!, {
+      key: "Enter",
+      ctrlKey: true,
+    });
+    await waitFor(() =>
+      expect(api.createAgent).toHaveBeenCalledWith(expect.objectContaining({ name: "Chef" })),
+    );
+  });
+
+  it("keeps the optional parts folded for a new agent and open for one being edited", () => {
+    const view = open();
+    const more = () =>
+      screen.getByText("Instructions, skills and model").closest("details") as HTMLDetailsElement;
+    expect(more().open).toBe(false);
+    expect(more().contains(screen.getByRole("textbox", { name: /^Instructions/ }))).toBe(true);
+    expect(more().contains(name())).toBe(false);
+    view.unmount();
+    open(card());
+    expect(more().open).toBe(true);
+  });
+
+  it("offers Color and Character as one choice each, saved with the agent", async () => {
+    open();
+    const colors = screen.getAllByRole("radio").filter((radio) => radio.closest(".swatches"));
+    const characters = screen.getAllByRole("radio").filter((radio) => radio.closest(".picker"));
+    expect(new Set(colors.map((radio) => (radio as HTMLInputElement).name)).size).toBe(1);
+    expect(new Set(characters.map((radio) => (radio as HTMLInputElement).name)).size).toBe(1);
+    expect(colors[0]!.getAttribute("name")).not.toBe(characters[0]!.getAttribute("name"));
+    expect(colors.filter((radio) => (radio as HTMLInputElement).checked)).toHaveLength(1);
+    expect(characters.filter((radio) => (radio as HTMLInputElement).checked)).toHaveLength(1);
+    fireEvent.click(colors.at(-1)!);
+    fireEvent.click(characters.at(-1)!);
+    fireEvent.change(name(), { target: { value: "Travel Planner" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create agent" }));
+    await waitFor(() => expect(api.createAgent).toHaveBeenCalledOnce());
+    const sent = (api.createAgent.mock.calls[0] as unknown[])[0] as AgentDraft;
+    expect(sent.color).toBe(
+      (colors.at(-1)!.closest(".swatch") as HTMLElement).style.getPropertyValue("--swatch"),
+    );
+    expect(sent.avatar).not.toBe("");
+    expect((characters.at(-1) as HTMLInputElement).checked).toBe(true);
+  });
 });

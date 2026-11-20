@@ -4976,7 +4976,38 @@ input[type="file"]:disabled {
   line-height: var(--lead-read);
 }
 
+.field--choices {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.field--choices > legend {
+  padding: 0;
+}
+
+.swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.pick__input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.swatch:has(.pick__input:focus-visible),
+.picker__item:has(.pick__input:focus-visible) {
+  outline: var(--focus-outline) solid var(--focus);
+  outline-offset: var(--focus-outline);
+}
+
 .swatch {
+  position: relative;
   width: 1.7rem;
   height: 1.7rem;
   border-radius: var(--radius-control);
@@ -4985,7 +5016,7 @@ input[type="file"]:disabled {
   padding: 0;
 }
 
-.swatch[aria-pressed="true"] {
+.swatch:has(.pick__input:checked) {
   border-color: var(--text);
   box-shadow: 0 0 0 2px var(--raised) inset;
 }
@@ -4997,6 +5028,7 @@ input[type="file"]:disabled {
 }
 
 .picker__item {
+  position: relative;
   aspect-ratio: 1;
   display: grid;
   place-items: center;
@@ -5010,7 +5042,7 @@ input[type="file"]:disabled {
   background: var(--sunken);
 }
 
-.picker__item[aria-pressed="true"] {
+.picker__item:has(.pick__input:checked) {
   border-color: var(--accent, var(--text));
   background: color-mix(in oklab, var(--accent, var(--text)) 14%, var(--ground));
 }

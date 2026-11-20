@@ -1,13 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { ACCENTS, CHARACTERS, suggestAccent, suggestCharacter } from "../avatars/catalog";
 import { useDismiss } from "../lib/dismiss";
+import { focusWriting } from "../lib/focus";
 import { api } from "../lib/ipc";
 import { onOpenRouter, providerFor } from "../lib/providers";
 import { useStore } from "../lib/store";
 import { type AgentCard, type AgentDraft, errorMessage } from "../lib/types";
 import { GrantList } from "./GrantList";
+import { Icon } from "./Icon";
 import { ModelSuggestions } from "./ModelSuggestions";
 import { SubscriptionModel } from "./ProviderFields";
 import { SigninList } from "./SigninList";
@@ -16,6 +18,8 @@ interface Props {
   agent?: AgentCard;
   onClose: () => void;
 }
+
+const IME_KEY = 229;
 
 const PROMPT_PLACEHOLDER =
   "What this agent is for, and how it should behave. For example: You coordinate the other agents. Delegate rather than doing work yourself, and keep replies to two sentences.";
@@ -42,13 +46,23 @@ export function AgentEditor({ agent, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [more, setMore] = useState(agent !== undefined);
   const nameRef = useRef<HTMLInputElement>(null);
+  const saving = useRef(false);
+  const created = useRef(false);
 
   useEffect(() => {
     nameRef.current?.focus();
   }, []);
 
   useDismiss(onClose);
+
+  useEffect(
+    () => () => {
+      if (created.current) focusWriting();
+    },
+    [],
+  );
 
   const patch = (fields: Partial<AgentDraft>) => setDraft((current) => ({ ...current, ...fields }));
 
@@ -73,6 +87,8 @@ export function AgentEditor({ agent, onClose }: Props) {
   const inherit = `Use group default${inheritedModel ? ` · ${inheritedModel}` : ""}`;
 
   const save = async () => {
+    if (saving.current || draft.name.trim().length === 0) return;
+    saving.current = true;
     setBusy(true);
     setError(null);
     const payload: AgentDraft = { ...draft, skills };
@@ -80,17 +96,30 @@ export function AgentEditor({ agent, onClose }: Props) {
       if (agent) {
         await api.updateAgent(agent.id, payload);
       } else {
-        const created = await api.createAgent(payload);
+        const made = await api.createAgent(payload);
         await refreshAgents();
-        await select(created.id);
+        await select(made.id);
+        created.current = true;
       }
       onClose();
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
+      saving.current = false;
       setBusy(false);
     }
   };
+
+  const submitOnReturn = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+    if (event.nativeEvent.keyCode === IME_KEY || event.target instanceof HTMLButtonElement) return;
+    if (event.target !== nameRef.current && !event.metaKey && !event.ctrlKey) return;
+    event.preventDefault();
+    void save();
+  };
+
+  const colorGroup = useId();
+  const characterGroup = useId();
 
   const remove = async () => {
     if (!agent) return;
@@ -112,6 +141,7 @@ export function AgentEditor({ agent, onClose }: Props) {
         role="dialog"
         aria-modal="true"
         aria-label={agent ? "Edit agent" : "New agent"}
+        onKeyDown={submitOnReturn}
       >
         <div className="dialog__body">
           <div
@@ -147,43 +177,52 @@ export function AgentEditor({ agent, onClose }: Props) {
             />
           </label>
 
-          <div className="field">
-            <span className="field__label">Color</span>
-            <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap" }}>
+          <fieldset className="field field--choices">
+            <legend className="field__label">Color</legend>
+            <div className="swatches">
               {ACCENTS.map((accent) => (
-                <button
+                <label
                   key={accent.value}
-                  type="button"
                   className="swatch"
                   title={accent.name}
-                  aria-label={accent.name}
-                  aria-pressed={draft.color.toLowerCase() === accent.value}
                   style={{ "--swatch": accent.value } as React.CSSProperties}
-                  onClick={() => patch({ color: accent.value })}
-                />
+                >
+                  <input
+                    type="radio"
+                    className="pick__input"
+                    name={colorGroup}
+                    aria-label={accent.name}
+                    checked={draft.color.toLowerCase() === accent.value}
+                    onChange={() => patch({ color: accent.value })}
+                  />
+                </label>
               ))}
             </div>
-          </div>
+          </fieldset>
 
-          <div className="field">
-            <span className="field__label">Character</span>
+          <fieldset className="field field--choices">
+            <legend className="field__label">Character</legend>
             <div className="picker">
               {CHARACTERS.map((entry) => (
-                <button
+                <label
                   key={entry.key}
-                  type="button"
                   className="picker__item"
                   title={entry.label}
-                  aria-label={entry.label}
-                  aria-pressed={draft.avatar === entry.key}
                   style={{ "--accent": draft.color } as React.CSSProperties}
-                  onClick={() => patch({ avatar: entry.key })}
                 >
+                  <input
+                    type="radio"
+                    className="pick__input"
+                    name={characterGroup}
+                    aria-label={entry.label}
+                    checked={draft.avatar === entry.key}
+                    onChange={() => patch({ avatar: entry.key })}
+                  />
                   <AgentAvatar avatar={entry.key} color={draft.color} size="sm" seed={entry.key} />
-                </button>
+                </label>
               ))}
             </div>
-          </div>
+          </fieldset>
 
           {groups.length > 1 && (
             <label className="field">
@@ -207,102 +246,113 @@ export function AgentEditor({ agent, onClose }: Props) {
             </label>
           )}
 
-          <div className="field">
-            <span className="field__label">Provider · {providerName}</span>
-            <span className="field__hint">Set in {crew?.name ?? "the group"}'s settings.</span>
-          </div>
+          <details
+            className="disclosure agent-editor__more"
+            open={more}
+            onToggle={(event) => setMore(event.currentTarget.open)}
+          >
+            <summary>
+              <Icon name="chevron-right" size={16} />
+              Instructions, skills and model
+            </summary>
 
-          {provider === "chatgpt" ? (
-            <SubscriptionModel
-              value={draft.subscriptionModel ?? ""}
-              effort={draft.reasoningEffort ?? null}
-              onEffortChange={(reasoningEffort) => patch({ reasoningEffort })}
-              inheritedModel={inheritedModel}
-              inheritedEffort={
-                crew?.inference.reasoningEffort ?? settings?.reasoningEffort ?? "auto"
-              }
-              effortInherit="Use group default"
-              models={settings?.subscriptionModels ?? []}
-              inherit={inherit}
-              onChange={(subscriptionModel) => patch({ subscriptionModel })}
-              hint="From your signed-in account."
-            />
-          ) : provider === "claude" ? (
             <div className="field">
-              <span className="field__label">Model</span>
-              <span
-                className="field__hint"
-                title="A per-agent model is not used with this provider. A saved one is kept for when you switch back."
-              >
-                Claude controls which model runs.
-              </span>
+              <span className="field__label">Provider · {providerName}</span>
+              <span className="field__hint">Set in {crew?.name ?? "the group"}'s settings.</span>
             </div>
-          ) : (
-            <>
-              <label className="field">
+
+            {provider === "chatgpt" ? (
+              <SubscriptionModel
+                value={draft.subscriptionModel ?? ""}
+                effort={draft.reasoningEffort ?? null}
+                onEffortChange={(reasoningEffort) => patch({ reasoningEffort })}
+                inheritedModel={inheritedModel}
+                inheritedEffort={
+                  crew?.inference.reasoningEffort ?? settings?.reasoningEffort ?? "auto"
+                }
+                effortInherit="Use group default"
+                models={settings?.subscriptionModels ?? []}
+                inherit={inherit}
+                onChange={(subscriptionModel) => patch({ subscriptionModel })}
+                hint="From your signed-in account."
+              />
+            ) : provider === "claude" ? (
+              <div className="field">
                 <span className="field__label">Model</span>
-                <input
-                  className="input"
-                  value={draft.model}
-                  placeholder={inherit}
-                  title={`A model ID ${providerName} accepts. Blank uses the group default.`}
-                  onChange={(event) => patch({ model: event.target.value })}
-                />
-              </label>
-              {draft.model && (
-                <div className="field">
-                  <button
-                    type="button"
-                    className="btn btn--compact"
-                    onClick={() => patch({ model: "" })}
-                  >
-                    Use group default
-                  </button>
-                </div>
-              )}
-            </>
-          )}
+                <span
+                  className="field__hint"
+                  title="A per-agent model is not used with this provider. A saved one is kept for when you switch back."
+                >
+                  Claude controls which model runs.
+                </span>
+              </div>
+            ) : (
+              <>
+                <label className="field">
+                  <span className="field__label">Model</span>
+                  <input
+                    className="input"
+                    value={draft.model}
+                    placeholder={inherit}
+                    title={`A model ID ${providerName} accepts. Blank uses the group default.`}
+                    onChange={(event) => patch({ model: event.target.value })}
+                  />
+                </label>
+                {draft.model && (
+                  <div className="field">
+                    <button
+                      type="button"
+                      className="btn btn--compact"
+                      onClick={() => patch({ model: "" })}
+                    >
+                      Use group default
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
 
-          <ModelSuggestions
-            name={draft.name}
-            skills={skills}
-            instructions={draft.systemPrompt}
-            model={draft.model}
-            active={onOpenRouter(crew, settings)}
-            onChoose={(model) => patch({ model })}
-          />
-
-          <label className="field">
-            <span
-              className="field__label"
-              title="What other agents read when deciding who to ask. Comma separated."
-            >
-              Skills
-            </span>
-            <input
-              className="input"
-              value={skillText}
-              placeholder="scheduling, delegation"
-              onChange={(event) => setSkillText(event.target.value)}
+            <ModelSuggestions
+              name={draft.name}
+              skills={skills}
+              instructions={draft.systemPrompt}
+              model={draft.model}
+              active={onOpenRouter(crew, settings)}
+              onChoose={(model) => patch({ model })}
             />
-          </label>
 
-          {agent && <SigninList agent={agent} />}
+            <label className="field">
+              <span
+                className="field__label"
+                title="What other agents read when deciding who to ask. Comma separated."
+              >
+                Skills
+              </span>
+              <input
+                className="input"
+                value={skillText}
+                placeholder="scheduling, delegation"
+                onChange={(event) => setSkillText(event.target.value)}
+              />
+            </label>
 
-          {agent && <GrantList agent={agent} />}
+            {agent && <SigninList agent={agent} />}
 
-          {agent && <ErrandSwitch agent={agent} />}
+            {agent && <GrantList agent={agent} />}
 
-          <label className="field">
-            <span className="field__label">Instructions</span>
-            <textarea
-              className="textarea"
-              value={draft.systemPrompt}
-              rows={5}
-              placeholder={PROMPT_PLACEHOLDER}
-              onChange={(event) => patch({ systemPrompt: event.target.value })}
-            />
-          </label>
+            {agent && <ErrandSwitch agent={agent} />}
+
+            <label className="field">
+              <span className="field__label">Instructions</span>
+              <textarea
+                className="textarea"
+                value={draft.systemPrompt}
+                rows={5}
+                placeholder={PROMPT_PLACEHOLDER}
+                onChange={(event) => patch({ systemPrompt: event.target.value })}
+              />
+            </label>
+          </details>
         </div>
 
         <div className="dialog__foot">

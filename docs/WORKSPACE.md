@@ -1307,6 +1307,31 @@ per section would leave each one a page with one thing on it.
 The transcript is hidden rather than unmounted while another tab is drawn, so
 the composer keeps its draft and the transcript its place.
 
+The line beside the tabs names the model once, by the name a person reads
+(`modelName` in `lib/profile.ts` turns `anthropic/claude-sonnet-4.5` into Claude
+Sonnet 4.5). The id itself is on the profile, where someone copying it into a
+setting looks, and in the Model field of the agent's sheet. The composer's foot
+used to repeat the id under every message, which put the same fact on screen
+twice in two spellings.
+
+An empty tab says what will appear there and what puts it there, naming the
+agent: Memory says the agent keeps there what it should remember between
+conversations and that Edit starts it, the Notebook that the agent opens a file
+there on its own when something is worth keeping. "Nothing yet." and "Empty."
+were true and taught nothing on the day a person first meets these colleagues.
+
+New agent is crossed from the keyboard. Return in Name creates the agent, since
+a name has no second line, and Command Return creates from any field, the
+Instructions box included, where a plain Return still writes a new line. Color
+and Character are each one group of native radios, one Tab stop with the arrow
+keys inside it, where they used to be 34 buttons and 34 stops. Instructions,
+skills and model are optional and folded under one disclosure for a new agent,
+so from Name the path is five Tabs: Color, Character, the disclosure, Cancel,
+Create agent. Editing an agent opens with them unfolded, because changing them
+is why the sheet was opened. After Create, the sheet's own unmount puts the focus
+in the new agent's composer, as Command 2 does; the opener the dialog would
+otherwise give it back to is the menu that is already gone.
+
 **Opening an agent lands on Conversation, by every route.** A face on the
 timeline, the Groups sheet, Command 1 to 9, the command menu, search, a
 notification, the menu bar and Start task on first run all open the
@@ -2089,6 +2114,13 @@ most likely to already have it. A host without the Claude program is a sentence
 on that card rather than a card that is not there: `claude_program` is asked when
 the step mounts, and the card says either that the program is missing and how to
 install it, or that this deployment does not offer it.
+
+Start task names the group it hires into for the task, before hiring: Research,
+Planning or Writing, and My group for a task in the person's own words. The
+group a fresh workspace holds is the one the migrations seed, called Everyone,
+and every header said Everyone about a group of three hired for one decision.
+Only a group with nobody in it is renamed, and a rename that fails stops Start
+before anyone is hired, so a retry renames and hires in the same order.
 
 Opening Advanced options makes that step taller than the pane, and the actions
 are the last thing in it, so they were at y=1001 in a 900px window — reachable

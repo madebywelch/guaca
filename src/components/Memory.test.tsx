@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { memoryDraft } from "../lib/memoryDraft";
 import { useStore } from "../lib/store";
+import { anAgent } from "../test-fixtures";
 import { arrived, CAP, crowding, Memory, type MemoryState, memoryReducer } from "./Memory";
 
 const agentMemory = vi.fn<(id: string) => Promise<string>>();
@@ -130,7 +131,7 @@ describe("Memory", () => {
       }),
     );
     render(<Memory agentId="a1" />);
-    await screen.findByText("Nothing yet.");
+    await screen.findByText(/what it should remember between conversations/);
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     type("first");
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -159,7 +160,7 @@ describe("Memory", () => {
     agentMemory.mockRejectedValue(new Error("read failed"));
     render(<Memory agentId="a1" />);
     await screen.findByText(/read failed/);
-    expect(screen.queryByText("Nothing yet.")).toBeNull();
+    expect(screen.queryByText(/what it should remember between conversations/)).toBeNull();
     expect((screen.getByRole("button", { name: "Edit" }) as HTMLButtonElement).disabled).toBe(true);
     agentMemory.mockResolvedValue("restored");
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -260,9 +261,13 @@ describe("Memory", () => {
     await waitFor(() => expect(box().value).toBe("# Style\nTerse. No preamble."));
   });
 
-  it("says there is nothing in one line, and explains itself in the title", async () => {
+  it("says what will appear when empty, who writes it and how to start it", async () => {
     render(<Memory agentId="a1" />);
-    expect(await screen.findByText("Nothing yet.")).toBeTruthy();
+    expect(
+      (await screen.findByText(/what it should remember between conversations/)).textContent,
+    ).toBe(
+      "This agent keeps what it should remember between conversations here, and reads it before every reply. It adds to this as it learns, or you can start it with Edit.",
+    );
     expect(screen.queryByText(/update_memory/)).toBeNull();
     expect(screen.getByRole("heading", { name: "Memory" }).getAttribute("title")).toMatch(
       /across conversations/,
@@ -270,7 +275,17 @@ describe("Memory", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     type("Smith handles verification.");
-    expect(screen.queryByText("Nothing yet.")).toBeNull();
+    expect(screen.queryByText(/what it should remember between conversations/)).toBeNull();
+  });
+
+  it("names the agent in the empty page and in the box you start it from", async () => {
+    useStore.setState({ agents: [anAgent("a1", { name: "Financial Analyst" })] });
+    render(<Memory agentId="a1" />);
+    expect(
+      (await screen.findByText(/what it should remember between conversations/)).textContent,
+    ).toMatch(/^Financial Analyst keeps what/);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(box().placeholder).toBe("What should Financial Analyst always remember?");
   });
 
   it("offers nothing to press until something has actually changed", async () => {

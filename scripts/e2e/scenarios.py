@@ -64,6 +64,7 @@ def new_agent(w: World, name: str, instructions: str) -> None:
     ui.click("menuitem", "New agent", exact=False)
     w.wait("the New agent dialog", lambda: ui.find("dialog", "New agent"))
     ui.fill("textbox", "Name", name)
+    ui.click("DisclosureTriangle", "Instructions, skills and model")
     ui.fill("textbox", "Instructions", instructions)
     ui.click("button", "Create agent")
     w.wait(f"{name} exists", lambda: w.host.scalar(
@@ -1562,6 +1563,7 @@ def scenario_update(w: World) -> None:
 
 WINDOW = (1280, 820)
 TRAVEL = "Travel Planner"
+CHEF = "Chef"
 
 
 def hello(c: Call) -> Reply | None:
@@ -1579,6 +1581,7 @@ def scenario_newagent(w: World) -> None:
     first_run(w)
     settled(w, 1)
     ui = w.ui
+    chosen = "document.querySelector('.swatches input:checked')?.closest('label')?.style.getPropertyValue('--swatch')"
 
     ui.click("button", "Make something new")
     ui.click("menuitem", "New agent", exact=False)
@@ -1589,16 +1592,27 @@ def scenario_newagent(w: World) -> None:
                       "onScreen": bool(ui.find("button", "Create agent")) and ui.on_screen("button", "Create agent")},
             shot=True)
 
+    opened_on = ui.focused()
+    ui.key("Enter")
     ui.click("button", "Create agent")
-    w.check("with no name, a press on Create agent creates nothing and keeps the dialog",
-            ui.property("button", "Create agent", "disabled") and bool(ui.find("dialog", "New agent"))
-            and w.host.scalar("SELECT count(*) FROM agents") == 3,
-            observed={"disabled": ui.property("button", "Create agent", "disabled"),
+    w.check("with no name, Return in Name and a press on Create agent create nothing and keep the dialog",
+            opened_on == ("textbox", "Name") and ui.property("button", "Create agent", "disabled")
+            and bool(ui.find("dialog", "New agent")) and w.host.scalar("SELECT count(*) FROM agents") == 3,
+            observed={"focus": list(opened_on), "disabled": ui.property("button", "Create agent", "disabled"),
                       "dialog": bool(ui.find("dialog", "New agent")),
                       "agents": w.host.scalar("SELECT count(*) FROM agents")})
 
     ui.fill("textbox", "Name", TRAVEL)
-    ui.send("DOM.focus", {"backendNodeId": ui.one("button", "Create agent")["backendDOMNodeId"]})
+    stops: list[str] = []
+    while ui.focused() != ("button", "Create agent") and len(stops) < 40:
+        ui.key("Tab")
+        stops.append(ui.focused()[0])
+    w.check("from Name, Create agent is five Tabs away, one stop each for Color, Character and the options",
+            stops == ["radio", "radio", "DisclosureTriangle", "button", "button"]
+            and not ui.find("textbox", "Instructions"),
+            observed={"stops": stops, "instructionsInTabPath": bool(ui.find("textbox", "Instructions"))},
+            detail={"names": ui.names("radio")[:3]}, shot=True)
+
     ui.key("Enter")
     w.wait(f"{TRAVEL} exists", lambda: w.host.scalar(
         "SELECT count(*) FROM agents WHERE name = ? AND lifecycle != 'terminated'", TRAVEL))
@@ -1609,6 +1623,36 @@ def scenario_newagent(w: World) -> None:
             observed={"dialog": bool(ui.find("dialog", "New agent")),
                       "created": w.host.scalar("SELECT count(*) FROM agents WHERE name = ?", TRAVEL)},
             shot=True)
+    landed = w.wait(f"the focus lands in {TRAVEL}'s composer", lambda: (
+        lambda f: f if f[1].startswith(f"Write to {TRAVEL}") else None)(ui.focused()))
+    w.check("after Create, the focus is in the new agent's composer",
+            landed[0] == "combobox" and bool(ui.find("log", f"Conversation with {TRAVEL}")),
+            observed={"role": landed[0], "composer": landed[1].startswith(f"Write to {TRAVEL}")}, shot=True)
+
+    ui.click("button", "Make something new")
+    ui.click("menuitem", "New agent", exact=False)
+    w.wait("the New agent dialog", lambda: ui.find("dialog", "New agent"))
+    ui.fill("textbox", "Name", CHEF)
+    ui.key("Tab")
+    before = ui.evaluate(chosen)
+    ui.key("ArrowDown")
+    after = ui.evaluate(chosen)
+    moved_within = ui.focused()[0] == "radio"
+    ui.key("Tab", shift=True)
+    ui.key("Enter")
+    w.wait(f"{CHEF} exists", lambda: w.host.scalar(
+        "SELECT count(*) FROM agents WHERE name = ? AND lifecycle != 'terminated'", CHEF))
+    w.wait("the dialog closes", lambda: not ui.find("dialog", "New agent"))
+    w.check("an arrow key changes the color inside its one stop, and Return in Name creates the agent with it",
+            moved_within and before != after
+            and w.host.scalar("SELECT color FROM agents WHERE name = ?", CHEF) == after,
+            observed={"withinGroup": moved_within, "changed": before != after,
+                      "saved": w.host.scalar("SELECT color FROM agents WHERE name = ?", CHEF) == after},
+            detail={"before": before, "after": after})
+    landed = w.wait(f"the focus lands in {CHEF}'s composer", lambda: (
+        lambda f: f if f[1].startswith(f"Write to {CHEF}") else None)(ui.focused()))
+    w.check("after Return in Name, the focus is in that agent's composer",
+            landed[0] == "combobox", observed={"role": landed[0]}, shot=True)
     no_unscripted(w)
 
 
@@ -2197,6 +2241,12 @@ def scenario_firstgroup(w: World) -> None:
     hired = sorted(r["name"] for r in w.host.rows("SELECT name FROM agents"))
     w.check("Start hires the group of three exactly once",
             hired == sorted([LEAD, MARKET, FINANCE]), observed=hired)
+    groups = sorted(r["name"] for r in w.host.rows("SELECT name FROM groups"))
+    w.wait("the coordinator's page names its group", lambda: "Research" in (ui.evaluate(
+        "document.querySelector('.pane__about')?.innerText") or ""))
+    w.check("the starter group is named for the task it was hired for, on the agent's page",
+            groups == ["Research"], observed={"groups": groups,
+                                             "about": ui.evaluate("document.querySelector('.pane__about')?.innerText")})
     w.wait("the coordinator's hand-off is live", lambda: card_text(w).count(CAR_Q) == 2)
     faces = ui.evaluate("document.querySelectorAll('.handoff__card .avatar').length")
     talk = between(w)
@@ -2383,7 +2433,8 @@ SCENARIOS: dict[str, Scenario] = {
     ), updater=True),
     "firstgroup": Scenario(scenario_firstgroup, "A person picks a suggested first task; the Start step names the "
                            "three agents it will hire and what each is for, clear of the pinned bar; a Start that cannot reach the Host "
-                           "says why beside Start, on screen, and hires nobody; Start then hires the three exactly once and opens the coordinator's "
+                           "says why beside Start, on screen, and hires nobody; Start then hires the three exactly once into a group "
+                           "named for the task and opens the coordinator's "
                            "conversation, where the coordinator asks both colleagues at once, the live hand-off "
                            "card and status line show it, Today shows it running, and one result comes back.",
     (
@@ -2397,19 +2448,25 @@ SCENARIOS: dict[str, Scenario] = {
         "a Start that fails hires nobody and sends nothing, and keeps the brief",
         "a Start that fails says why beside Start, on screen without scrolling at 900x700 and 1280x820",
         "Start hires the group of three exactly once",
+        "the starter group is named for the task it was hired for, on the agent's page",
         "the coordinator asks both colleagues on its first turn, in one message, and the person sees the card",
         "under the coordinator a status line names both colleagues it waits for",
         "behind the conversation, Today shows the group's work as running",
         "the coordinator comes back with one result after both answered, and the run ends there",
         "every model call was one the scenario scripted",
     )),
-    "newagent": Scenario(scenario_newagent, "A person opens New agent in a 1280 by 820 window and creates an agent "
-                         "with a keyboard press on its one Create agent button, which is on screen without "
-                         "scrolling; a press with no name creates nothing.",
+    "newagent": Scenario(scenario_newagent, "A person opens New agent in a 1280 by 820 window, reaches its one "
+                         "Create agent button in five Tabs from Name with the optional parts folded, and creates "
+                         "agents with a press on it and with Return in Name, landing in the new agent's composer "
+                         "each time; Return or a press with no name creates nothing.",
     (
         "Create agent is one button, on screen without scrolling",
-        "with no name, a press on Create agent creates nothing and keeps the dialog",
+        "with no name, Return in Name and a press on Create agent create nothing and keep the dialog",
+        "from Name, Create agent is five Tabs away, one stop each for Color, Character and the options",
         "a keyboard press on Create agent creates the agent and closes the dialog",
+        "after Create, the focus is in the new agent's composer",
+        "an arrow key changes the color inside its one stop, and Return in Name creates the agent with it",
+        "after Return in Name, the focus is in that agent's composer",
         "every model call was one the scenario scripted",
     )),
     "answer": Scenario(scenario_answer, "An agent asks a question while its conversation is open, and Tab from "

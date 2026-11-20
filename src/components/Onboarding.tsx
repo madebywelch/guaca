@@ -126,6 +126,8 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
           `${name} is no longer available. Choose another task below; your brief is kept here.`,
         );
       if (!next.agentId) {
+        if (group.agentCount === 0 && group.name !== task.groupName)
+          await api.updateGroup(group.id, { name: task.groupName });
         const created = await api.hireAgents(
           group.id,
           members.map((member) => toDraft(member.preset)),
