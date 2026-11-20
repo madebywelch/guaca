@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { useLayoutEffect } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 
 import { type Ribbon as Layout, layoutRibbon } from "../lib/ribbon";
 import { useStore } from "../lib/store";
@@ -256,24 +256,31 @@ describe("a coming item", () => {
   });
 });
 
+function MeasuredPage({
+  reported,
+  beforePaint,
+}: {
+  reported: Mock<(px: number) => void>;
+  beforePaint: number[];
+}) {
+  useLayoutEffect(() => {
+    beforePaint.push(reported.mock.calls.length);
+  }, [reported, beforePaint]);
+  return (
+    <Ribbon
+      ribbon={morning()}
+      onOpenAgent={openAgent}
+      onOpenGroups={openGroups}
+      onTrackWidth={reported}
+    />
+  );
+}
+
 describe("its width", () => {
   it("is reported before the first paint, so the faces never slide in from no width", () => {
     const reported = vi.fn<(px: number) => void>();
     const beforePaint: number[] = [];
-    function Page() {
-      useLayoutEffect(() => {
-        beforePaint.push(reported.mock.calls.length);
-      }, []);
-      return (
-        <Ribbon
-          ribbon={morning()}
-          onOpenAgent={openAgent}
-          onOpenGroups={openGroups}
-          onTrackWidth={reported}
-        />
-      );
-    }
-    render(<Page />);
+    render(<MeasuredPage reported={reported} beforePaint={beforePaint} />);
     expect(beforePaint).toEqual([1]);
   });
 });
