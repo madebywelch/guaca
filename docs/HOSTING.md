@@ -892,6 +892,18 @@ Reconnecting never pulls an image or creates a container or volume. A volume
 without its container is not a host, and a host Guaca cannot find is reported
 as missing, with a new host offered only as an explicit choice.
 
+When the recorded engine is gone for good, a person is not left with a remote
+host as the only way out. Under Choose another host, and once the wait gives up,
+the screen offers a new host in another Docker engine that is running. It is
+never offered while the wait is still going. It names the engine the current
+host is recorded in, says its agents and conversations are not moved and that
+it and its data are left untouched, says so when the other engine already holds
+Guaca data of the same name, and needs a ticked confirmation before it does
+anything. Setting it up never addresses the old engine. Afterwards the record
+points at the new engine and keeps the old one as `previous`; once that engine
+answers with the host still in it, Host settings offer to go back to it, which
+moves nothing and deletes nothing.
+
 Setup looks for the pinned host image on this Mac first, then for the same
 build under another name (a local `guacad:<commit>` alias matched by its
 revision label), and downloads only a name that carries a registry. A refused

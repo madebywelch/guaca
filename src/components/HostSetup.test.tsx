@@ -18,12 +18,16 @@ const {
   current,
   resume,
   choose,
+  elsewhere,
+  startElsewhere,
   openDocker,
   source,
   rebuild,
 } = vi.hoisted(() => ({
   resume: vi.fn(),
   choose: vi.fn(),
+  elsewhere: vi.fn(),
+  startElsewhere: vi.fn(),
   openDocker: vi.fn(),
   source: vi.fn(),
   rebuild: vi.fn(),
@@ -44,7 +48,18 @@ const {
 }));
 vi.mock("../lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/host")>()),
-  localHost: { status, start, update, existing, connect, openDocker, resume, choose },
+  localHost: {
+    status,
+    start,
+    update,
+    existing,
+    connect,
+    openDocker,
+    resume,
+    choose,
+    elsewhere,
+    startElsewhere,
+  },
   thisApp: { source, rebuild },
   hostMode: mode,
   rememberMode: savedMode,
@@ -182,6 +197,7 @@ beforeEach(() => {
   status.mockResolvedValue({ state: "ready", message: "Docker is ready.", updateAvailable: false });
   probe.mockResolvedValue({});
   openDocker.mockResolvedValue(undefined);
+  elsewhere.mockResolvedValue({ from: null, to: null, data: false });
   source.mockResolvedValue({ checkout: null, unavailable: "release", running: false });
 });
 
@@ -327,6 +343,121 @@ describe("a Mac whose host is already set up", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Start Colima" }));
     expect(openDocker).toHaveBeenCalledWith("colima");
     expect(screen.queryByRole("button", { name: "Open Docker" })).toBeNull();
+  });
+});
+
+describe("a host whose engine is gone for good", () => {
+  const DESKTOP = {
+    context: "desktop-linux",
+    label: "Docker Desktop",
+    action: "Open Docker Desktop",
+  };
+  const plan = { from: COLIMA, to: DESKTOP, data: false };
+  const way = { name: "Set up a new host in Docker Desktop" };
+  async function giveUp() {
+    resume.mockRejectedValue(colimaDown);
+    savedLocalHost();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100 * 3_000);
+    });
+  }
+  it("is not offered a new host while its engine may still be starting", async () => {
+    vi.useFakeTimers();
+    try {
+      elsewhere.mockResolvedValue(plan);
+      resume.mockRejectedValue(colimaDown);
+      savedLocalHost();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(screen.getByRole("heading").textContent).toBe("Waiting for your host");
+      expect(screen.queryByRole("button", way)).toBeNull();
+      expect(elsewhere).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("cancelling the new host changes nothing", async () => {
+    vi.useFakeTimers();
+    try {
+      elsewhere.mockResolvedValue(plan);
+      await giveUp();
+      fireEvent.click(screen.getByRole("button", way));
+      fireEvent.click(screen.getByRole("checkbox"));
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(screen.getByRole("button", way)).toBeTruthy();
+      expect(startElsewhere).not.toHaveBeenCalled();
+      expect(persist).not.toHaveBeenCalled();
+      expect(start).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("sets up a new host elsewhere only after a deliberate confirmation that names what stays behind", async () => {
+    vi.useFakeTimers();
+    try {
+      elsewhere.mockResolvedValue({ ...plan, data: true });
+      startElsewhere.mockResolvedValue(LOCAL);
+      await giveUp();
+      fireEvent.click(screen.getByRole("button", way));
+      const confirm = screen.getByRole("button", { name: "Set up the new host" });
+      expect(confirm.hasAttribute("disabled")).toBe(true);
+      expect(
+        screen.getByText(
+          "Your current host is recorded in Colima. Its agents and conversations are not moved, and they will not appear in the new host.",
+        ),
+      ).toBeTruthy();
+      expect(
+        screen.getByText(
+          "The host in Colima and its data are left untouched. Once Colima runs again, Host settings offer to go back to it.",
+        ),
+      ).toBeTruthy();
+      expect(screen.getByText(/already holds Guaca data from an earlier host/)).toBeTruthy();
+      fireEvent.click(confirm);
+      expect(startElsewhere).not.toHaveBeenCalled();
+      fireEvent.click(
+        screen.getByRole("checkbox", { name: /my agents stay with the host in Colima/ }),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Set up the new host" }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(startElsewhere).toHaveBeenCalledWith("desktop-linux");
+      expect(persist).toHaveBeenCalledWith(LOCAL, "local");
+      expect(screen.getByText("Workspace mounted")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("is offered a new host when the person chooses another host while waiting", async () => {
+    elsewhere.mockResolvedValue(plan);
+    resume.mockRejectedValue(colimaDown);
+    savedLocalHost();
+    fireEvent.click(await screen.findByRole("button", { name: "Choose another host" }));
+    expect(await screen.findByRole("button", way)).toBeTruthy();
+  });
+  it("says so when no other engine is running", async () => {
+    elsewhere.mockResolvedValue({ from: COLIMA, to: null, data: false });
+    resume.mockRejectedValue(colimaDown);
+    savedLocalHost();
+    fireEvent.click(await screen.findByRole("button", { name: "Choose another host" }));
+    expect(await screen.findByText(/No other Docker engine is running on this Mac/)).toBeTruthy();
+    expect(screen.queryByRole("button", way)).toBeNull();
+  });
+  it("offers the way back to the earlier host once its engine runs again", async () => {
+    status.mockResolvedValue({
+      state: "running",
+      message: "Docker is running. Your local host is available.",
+      updateAvailable: false,
+      engine: DESKTOP,
+      previous: COLIMA,
+    });
+    choose.mockResolvedValue(LOCAL);
+    render(<HostChoice />);
+    fireEvent.click(await screen.findByRole("button", { name: "Go back to the host in Colima" }));
+    await waitFor(() => expect(restart).toHaveBeenCalled());
+    expect(choose).toHaveBeenCalledWith("colima");
+    expect(persist).toHaveBeenCalledWith(LOCAL, "local");
   });
 });
 
