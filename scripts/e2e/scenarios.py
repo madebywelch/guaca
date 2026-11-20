@@ -1225,7 +1225,9 @@ def scenario_handoff(w: World) -> None:
     write(w, AGENT, ASK_AGAIN)
     w.wait("the second hand-off is live", lambda: card_text(w).count(LEASE_Q) == 2 and R_SAYS in card_text(w))
     w.wait("the status line offers Stop", lambda: ui.find("button", "Stop"))
+    w.wait("the ongoing hand-off has a start mark", lambda: started_marks(w))
     ui.click("button", "Stop")
+    w.wait("the host records Stop before the held answer can come back", lambda: not started_marks(w))
     never.set()
     ended = settled(w, 3, "the stopped conversation settles")
     w.wait("the stopped hand-off folds", lambda: ui.find(
@@ -2156,6 +2158,8 @@ def scenario_firstgroup(w: World) -> None:
             return say("pong")
         if c.speaker == LEAD:
             if c.last_user.endswith("Check the mileage assumption."):
+                if not c.tool_results():
+                    return call("note_progress", note="Checking the mileage assumption")
                 return held(followup, say("The estimate assumes twelve thousand miles a year."))
             if ANALYST_SAYS in c.last_user:
                 return say(CAR_RESULT)
@@ -2291,7 +2295,7 @@ def scenario_firstgroup(w: World) -> None:
     ui.fill("textbox", "What do you need?", "Check the mileage assumption.")
     ui.click("button", "Send")
     w.wait("the follow-up model call starts", lambda: asked(w, "Check the mileage assumption.") == 1)
-    w.wait("the next task is running", lambda: LEAD in running_text(w))
+    w.wait("Today shows the follow-up running", lambda: "Checking the mileage assumption" in running_text(w))
     lead = ui.evaluate(LARGEST_ON_TODAY)["text"]
     w.check("working stays the lead on Today when an older result is unread",
             lead == f"{LEAD} is working." and ui.evaluate(TODAY_RESULT)["headline"] == row["headline"],

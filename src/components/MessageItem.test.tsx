@@ -750,16 +750,31 @@ describe("your brief once it is sent", () => {
     );
     const folded = container.querySelector(".msg__brief");
     expect(folded?.getAttribute("data-folded")).toBe("true");
-    expect(folded?.hasAttribute("inert")).toBe(true);
     const more = screen.getByRole("button", { name: "Show all" });
     expect(more.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(more);
-    expect(folded?.hasAttribute("inert")).toBe(false);
     expect(folded?.hasAttribute("data-folded")).toBe(false);
     expect(screen.getByRole("button", { name: "Show less" }).getAttribute("aria-expanded")).toBe(
       "true",
     );
     expect(folded?.textContent).toBe(brief.trim());
+  });
+
+  it("keeps brief text readable while links wait for expansion", () => {
+    overflowing(80);
+    render(
+      <MessageItem
+        message={envelope({
+          parts: [{ type: "text", text: "[Read the research](https://example.com)" }],
+        })}
+        lookups={lookups}
+        continued={false}
+      />,
+    );
+    expect(screen.getByText("Read the research")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Read the research" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show all" }));
+    expect(screen.getByRole("link", { name: "Read the research" })).toBeTruthy();
   });
 
   it("never folds what an agent wrote", () => {

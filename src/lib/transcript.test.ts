@@ -500,6 +500,16 @@ describe("the result a conversation ends in", () => {
     expect(filler?.kind).toBe("message");
   });
 
+  it("does not promote partial text recorded after a stop notice", () => {
+    const stopped = envelope({
+      from: { kind: "system" },
+      to: { kind: "agent", id: "manager" },
+      parts: [{ type: "notice", kind: "guardStop", text: "You stopped this conversation." }],
+    });
+    const rows = transcriptRows([envelope({}), stopped, reply("I was about to")], lookups);
+    expect(withResults(rows, new Set()).some((row) => row.kind === "result")).toBe(false);
+  });
+
   it("carries the hand-off that led to it, which leaves its earlier place", () => {
     const shown = withResults(transcriptRows(conversation(), lookups), new Set());
     expect(shown.map((row) => row.kind)).toEqual(["message", "message", "result"]);

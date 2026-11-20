@@ -274,15 +274,23 @@ function answers(row: Extract<Row, { kind: "message" }>): boolean {
 
 export function withResults(rows: Row[], running: ReadonlySet<RunId>): Row[] {
   const last = new Map<RunId, Extract<Row, { kind: "message" }>>();
+  const cutShort = new Set<RunId>();
   for (const row of rows) {
+    if (row.kind !== "message") continue;
+    const { runId, parts } = row.message;
     if (
-      row.kind === "message" &&
-      row.message.parts.some((part) => part.type === "notice" && part.kind !== "lifecycle")
+      parts.some(
+        (part) =>
+          part.type === "notice" && (part.kind === "guardStop" || part.kind === "interrupted"),
+      )
     ) {
-      last.delete(row.message.runId);
-      continue;
+      cutShort.add(runId);
     }
-    if (toPerson(row) && !running.has(row.message.runId)) last.set(row.message.runId, row);
+    if (parts.some((part) => part.type === "notice" && part.kind !== "lifecycle")) {
+      last.delete(runId);
+    } else if (toPerson(row) && !running.has(runId) && !cutShort.has(runId)) {
+      last.set(runId, row);
+    }
   }
   const results = new Map<RunId, string>();
   for (const [run, row] of last) {

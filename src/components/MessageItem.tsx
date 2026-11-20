@@ -287,9 +287,13 @@ function ChatBubble({
 
         {isOperator ? (
           <Brief>
-            {texts.map(({ part, key }) => (
-              <Markdown key={key}>{part.text}</Markdown>
-            ))}
+            {(interactive) =>
+              texts.map(({ part, key }) => (
+                <Markdown key={key} interactive={interactive}>
+                  {part.text}
+                </Markdown>
+              ))
+            }
           </Brief>
         ) : (
           texts.map(({ part, key }) => <Markdown key={key}>{part.text}</Markdown>)
@@ -303,7 +307,7 @@ function ChatBubble({
   );
 }
 
-function Brief({ children }: { children: React.ReactNode }) {
+function Brief({ children }: { children: (interactive: boolean) => React.ReactNode }) {
   const body = useRef<HTMLDivElement>(null);
   const region = useId();
   const [open, setOpen] = useState(false);
@@ -321,14 +325,8 @@ function Brief({ children }: { children: React.ReactNode }) {
 
   return (
     <>
-      <div
-        ref={body}
-        id={region}
-        className="msg__brief"
-        data-folded={open ? undefined : "true"}
-        inert={long && !open}
-      >
-        {children}
+      <div ref={body} id={region} className="msg__brief" data-folded={open ? undefined : "true"}>
+        {children(open || !long)}
       </div>
       {(long || open) && (
         <button

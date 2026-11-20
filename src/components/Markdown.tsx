@@ -10,50 +10,65 @@ import { Figure } from "./Figure";
 
 export const Roster = createContext<string[]>([]);
 
-export function Markdown({ children, live = false }: { children: string; live?: boolean }) {
+export function Markdown({
+  children,
+  live = false,
+  interactive = true,
+}: {
+  children: string;
+  live?: boolean;
+  interactive?: boolean;
+}) {
   const names = useContext(Roster);
   const plugins = useMemo(() => [remarkGfm, remarkCallouts, remarkMentions(names)], [names]);
   const components = useMemo<NonNullable<ComponentProps<typeof ReactMarkdown>["components"]>>(
     () => ({
-      a: ({ href, children }) => (
-        <a
-          href={href}
-          onClick={(event) => {
-            event.preventDefault();
-            if (href) void openExternal(href);
-          }}
-        >
-          {children}
-        </a>
-      ),
-      img: ({ src, alt }) => (
-        <a
-          href={typeof src === "string" ? src : undefined}
-          onClick={(event) => {
-            event.preventDefault();
-            if (typeof src === "string") void openExternal(src);
-          }}
-        >
-          {alt || "image"}
-        </a>
-      ),
+      a: ({ href, children }) =>
+        interactive ? (
+          <a
+            href={href}
+            onClick={(event) => {
+              event.preventDefault();
+              if (href) void openExternal(href);
+            }}
+          >
+            {children}
+          </a>
+        ) : (
+          <span>{children}</span>
+        ),
+      img: ({ src, alt }) =>
+        interactive ? (
+          <a
+            href={typeof src === "string" ? src : undefined}
+            onClick={(event) => {
+              event.preventDefault();
+              if (typeof src === "string") void openExternal(src);
+            }}
+          >
+            {alt || "image"}
+          </a>
+        ) : (
+          <span>{alt || "image"}</span>
+        ),
       pre: ({ children }) => {
         const fenced = asFence(children);
         if (fenced) {
           const figure = readFigure(fenced.language, fenced.source, live);
           if (figure.kind !== "source") {
-            return <Figure figure={figure} source={fenced.source} />;
+            const content = <Figure figure={figure} source={fenced.source} />;
+            return interactive ? content : <div inert>{content}</div>;
           }
         }
         return <pre className="md__pre">{children}</pre>;
       },
       table: ({ children }) => (
-        <div className="md__scroll">
+        <div className="md__scroll" tabIndex={interactive ? undefined : -1}>
           <table>{children}</table>
         </div>
       ),
     }),
-    [live],
+    [live, interactive],
   );
 
   return (
