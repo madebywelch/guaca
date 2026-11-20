@@ -118,7 +118,11 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
         );
         if (created.length !== members.length)
           throw new Error("The host did not return the whole group. Try again.");
-        next = { ...next, agentId: created[0]!.id };
+        const brief = created.reduce(
+          (text, card, index) => text.replaceAll(members[index]!.preset.name, card.name),
+          next.brief,
+        );
+        next = { ...next, agentId: created[0]!.id, brief };
         const saved = keep(next);
         const ids = new Set(created.map((agent) => agent.id));
         useStore.setState((state) => ({
@@ -297,8 +301,11 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
                 Ready when you are.
               </h1>
               <p>
-                Review your brief. {name} takes it, asks {first} and {second} at the same time, and
-                comes back with a result, or with one question if it cannot go on without you.
+                Review your brief. {name} takes it,{" "}
+                {task.brief
+                  ? `asks ${first} and ${second} at the same time,`
+                  : `decides what to hand ${first} and ${second},`}{" "}
+                and comes back with a result, or with one question if it cannot go on without you.
               </p>
             </div>
             <section className="onboarding-group" aria-labelledby={groupHeading}>
@@ -338,7 +345,7 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
                   ? "Your group is already hired. If a connection failed, check the conversation before sending again."
                   : draft.key
                     ? "Your previous start may have hired this group. Retry with the same brief to continue safely."
-                    : `Start task hires these three and sends your brief to ${name}, using the provider you just connected. A group task takes at least five model calls where one agent's first reply takes one, and it stays inside your group's limits.`}
+                    : `Start task hires these three and sends your brief to ${name}, using the provider you just connected. A group task uses more model calls than one agent would, at least five instead of one, and it stays inside your group's limits.`}
             </p>
             {desktop && (
               <p className="onboarding-notice">

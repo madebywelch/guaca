@@ -79,7 +79,7 @@ export function readFirstTask(): FirstTask {
   const empty: FirstTask = { task: "own", brief: "", agentId: null, sent: false };
   try {
     const value = JSON.parse(
-      localStorage.getItem(`guaca.firstTask.${workspaceOrigin()}`) ?? "null",
+      localStorage.getItem(`guaca.firstGroup.${workspaceOrigin()}`) ?? "null",
     );
     if (
       !value ||
@@ -100,7 +100,7 @@ export function readFirstTask(): FirstTask {
 }
 
 export function saveFirstTask(value: FirstTask | null): void {
-  const key = `guaca.firstTask.${workspaceOrigin()}`;
+  const key = `guaca.firstGroup.${workspaceOrigin()}`;
   if (value) localStorage.setItem(key, JSON.stringify(value));
   else localStorage.removeItem(key);
 }

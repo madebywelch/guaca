@@ -181,7 +181,37 @@ describe("guided first task", () => {
     expect(
       screen.getByText(/asks Product Manager and QA Tester at the same time/).textContent,
     ).toContain("one question if it cannot go on without you");
+    expect(screen.getByText(/at least five instead of one/).textContent).toContain(
+      "stays inside your group's limits",
+    );
     expect(hire).not.toHaveBeenCalled();
+  });
+
+  it("writes the names the host gave the colleagues into the brief it sends", async () => {
+    hire.mockResolvedValueOnce([group[0], group[1], { ...group[2]!, name: "QA Tester 2" }]);
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: /Plan a project/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Connect test provider" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    await waitFor(() => expect(done).toHaveBeenCalledOnce());
+    const sent = send.mock.calls[0]![1] as string;
+    expect(sent).toContain("Ask Product Manager and QA Tester 2 at the same time");
+    expect(sent).not.toMatch(/QA Tester(?! 2)/);
+  });
+
+  it("does not promise a split it cannot see in a brief the person wrote", () => {
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: /Something else/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Your first brief" }), {
+      target: { value: "Plan a small team offsite." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Connect test provider" }));
+    expect(
+      screen.getByText(/decides what to hand Market Researcher and Product Manager/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/at the same time/)).toBeNull();
   });
 
   it("hires the task's group of three in one keyed request and sends only after the explicit Start action", async () => {

@@ -18,7 +18,7 @@ describe("the first task", () => {
       '{"task":"missing","brief":"Hello"}',
       '{"task":"plan","brief":7}',
     ]) {
-      localStorage.setItem("guaca.firstTask.https://first.example", value);
+      localStorage.setItem("guaca.firstGroup.https://first.example", value);
       expect(readFirstTask()).toEqual({ task: "own", brief: "", agentId: null, sent: false });
     }
   });
@@ -38,6 +38,20 @@ describe("the first task", () => {
     origin.mockReturnValue("https://first.example");
     saveFirstTask(null);
     expect(readFirstTask().agentId).toBeNull();
+  });
+
+  it("ignores a checkpoint left by the single-agent first task, which a group cannot continue", () => {
+    localStorage.setItem(
+      "guaca.firstTask.https://first.example",
+      JSON.stringify({
+        task: "plan",
+        brief: "Old brief",
+        agentId: null,
+        sent: false,
+        key: "old-key",
+      }),
+    );
+    expect(readFirstTask()).toEqual({ task: "own", brief: "", agentId: null, sent: false });
   });
 
   it("reads checkpoints written before task keys existed", () => {
