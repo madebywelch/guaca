@@ -21,6 +21,7 @@ BOT_USER = "UGUACA"
 BOT_ID = "BGUACA"
 DM = "D0GUACA"
 APP_METHODS = {"apps.connections.open"}
+READ_METHODS = {"conversations.history", "conversations.replies"}
 
 
 @dataclass
@@ -126,10 +127,16 @@ class Slack:
             def do_POST(self) -> None:
                 length = int(self.headers.get("content-length", 0))
                 body = self.rfile.read(length)
-                method = self.path.removeprefix("/api/").split("?")[0]
-                bearer = self.headers.get("authorization", "").removeprefix("Bearer ").strip()
+                method = urllib.parse.urlsplit(self.path).path.removeprefix("/api/")
                 fields = fields_of(body, self.headers.get("content-type", ""))
-                status, answer, headers = slack.answer(method, bearer, fields)
+                self.reply(method, fields)
+
+            def reply(self, method: str, fields: dict) -> None:
+                bearer = self.headers.get("authorization", "").removeprefix("Bearer ").strip()
+                if (self.command == "GET") != (method in READ_METHODS):
+                    status, answer, headers = 200, {"ok": False, "error": "method_not_supported"}, {}
+                else:
+                    status, answer, headers = slack.answer(method, bearer, fields)
                 data = json.dumps(answer).encode() if status == 200 else b""
                 self.send_response(status)
                 for name, value in headers.items():
@@ -140,6 +147,10 @@ class Slack:
                 self.wfile.write(data)
 
             def do_GET(self) -> None:
+                target = urllib.parse.urlsplit(self.path)
+                if target.path.startswith("/api/"):
+                    self.reply(target.path.removeprefix("/api/"), fields_of(target.query.encode(), ""))
+                    return
                 key = self.headers.get("sec-websocket-key")
                 if self.path != "/link" or not key:
                     self.send_response(404)
@@ -216,17 +227,21 @@ class Slack:
             oldest = ts_order(str(fields.get("oldest", "0")))
             messages = [m for m in self.history.get(channel, [])
                         if "thread_ts" not in m or m["thread_ts"] == m["ts"]]
-            messages = [m for m in messages if ts_order(m["ts"]) > oldest]
+            messages = [m for m in messages if self.in_window(m, oldest, fields)]
             return {"ok": True, "messages": self.shown(sorted(messages, key=lambda m: ts_order(m["ts"]), reverse=True), fields),
                     "response_metadata": {"next_cursor": ""}}
         if method == "conversations.replies":
             root = str(fields.get("ts", ""))
             oldest = ts_order(str(fields.get("oldest", "0")))
             messages = [m for m in self.history.get(channel, []) if m["ts"] == root or m.get("thread_ts") == root]
-            messages = [m for m in messages if m["ts"] == root or ts_order(m["ts"]) > oldest]
+            messages = [m for m in messages if m["ts"] == root or self.in_window(m, oldest, fields)]
             return {"ok": True, "messages": self.shown(sorted(messages, key=lambda m: ts_order(m["ts"])), fields),
                     "response_metadata": {"next_cursor": ""}}
         return {"ok": True}
+
+    def in_window(self, message: dict, oldest: tuple[int, int], fields: dict) -> bool:
+        order = ts_order(message["ts"])
+        return order > oldest or (order == oldest and fields.get("inclusive") == "true")
 
     def shown(self, messages: list[dict], fields: dict) -> list[dict]:
         if str(fields.get("include_all_metadata", "")).lower() == "true":
