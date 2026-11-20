@@ -326,7 +326,10 @@ keeps a walk of the tree to a fraction of a second.
 The screen scenarios press system UI found by accessibility role and name, only
 inside the group whose text names the test build, and only while nobody has
 touched the keyboard or pointer for five seconds; otherwise the run is
-reported as not run rather than forced. They need Accessibility (and, for
+reported as not run rather than forced. A notification banner is pressed only
+once its frame lies wholly on the main display and is unchanged since the
+previous read, so a banner still sliding in is never pressed, and a press that
+fails is not repeated. These scenarios need Accessibility (and, for
 `capture`, Screen Recording) for the app that runs the command, and fail with
 that reason until it has them. macOS grants both to the responsible process:
 the terminal a person runs the command in, or the agent or service that

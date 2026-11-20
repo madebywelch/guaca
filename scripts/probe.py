@@ -989,16 +989,34 @@ def notification_center() -> int:
     return int(found[0])
 
 
+def on_screen(frame: dict, screen: dict) -> bool:
+    return (screen["x"] <= frame["x"] and frame["x"] + frame["width"] <= screen["x"] + screen["width"]
+            and screen["y"] <= frame["y"] and frame["y"] + frame["height"] <= screen["y"] + screen["height"])
+
+
 def press_when_shown(what: str, *press: str) -> Any:
     center = str(notification_center())
     last = ""
+    seen: list[dict] = []
+    pressed = False
 
     def attempt() -> Any:
-        nonlocal last
+        nonlocal last, pressed
         try:
+            if press[0] == "press-group":
+                placed = helper("group-frame", center, press[-1])
+                frame = {key: placed["frame"][key] for key in ("x", "y", "width", "height")}
+                settled = bool(seen) and seen[-1] == frame and on_screen(frame, placed["screen"])
+                seen.append(frame)
+                if not settled:
+                    last = f"the banner is not yet still and whole on screen: {frame}"
+                    return None
+                pressed = True
             return helper(press[0], center, *press[1:])
         except Failed as why:
             last = str(why)
+            if pressed:
+                raise
             return None
 
     try:

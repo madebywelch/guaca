@@ -183,6 +183,15 @@ case "press", "press-group":
     let result = AXUIElementPerformAction(target, action as CFString)
     if result != .success { refuse("the press was refused (AXError \(result.rawValue))") }
     emit(["pressed": text(target), "action": actionName(action)])
+case "group-frame":
+    trusted()
+    let rest = Array(args.dropFirst())
+    guard rest.count == 2, let pid = Int32(rest[0]) else { refuse("group-frame needs a pid and a scope") }
+    let groups = scoped(AXUIElementCreateApplication(pid), rest[1])
+    guard groups.count == 1 else { refuse("\(groups.count) groups on screen name \(rest[1])") }
+    let screen = CGDisplayBounds(CGMainDisplayID())
+    emit(["frame": frame(groups[0]),
+          "screen": ["x": screen.minX, "y": screen.minY, "width": screen.width, "height": screen.height]])
 case "describe":
     trusted()
     let rest = Array(args.dropFirst())
@@ -324,5 +333,5 @@ case "capture":
     }
     emit(["files": files])
 default:
-    refuse("usage: system access|front|watch-front|idle|windows|owner-windows|press|press-group|press-one|find|describe|capture|click-icon|escape|key|size|status-item")
+    refuse("usage: system access|front|watch-front|idle|windows|owner-windows|press|press-group|press-one|find|group-frame|describe|capture|click-icon|escape|key|size|status-item")
 }

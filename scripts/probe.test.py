@@ -831,5 +831,73 @@ class CrowdedSettingsTests(unittest.TestCase):
         self.assertEqual(probe.crowded_faults("dark", self.laid()), [])
 
 
+class BannerPressTests(unittest.TestCase):
+    SCREEN = {"x": 0, "y": 0, "width": 1920, "height": 1080}
+
+    def press(self, frames, refuse=False, how="press-group", absent=0):
+        calls = []
+        placed = iter(frames)
+
+        def helper(*args):
+            calls.append(args[0])
+            if args[0] == "group-frame":
+                return {"frame": {**next(placed), "name": "x"}, "screen": self.SCREEN}
+            if calls.count(args[0]) <= absent:
+                raise probe.Failed("nothing on screen names Guaca Probe")
+            if refuse:
+                raise probe.Failed("the press was refused (AXError -25204)")
+            return {"pressed": "banner"}
+
+        def polls(what, check, *_, **__):
+            for _ in frames:
+                value = check()
+                if value:
+                    return value
+            raise probe.Failed(what)
+
+        with patch.object(probe, "helper", side_effect=helper), \
+             patch.object(probe, "notification_center", return_value=7), \
+             patch.object(probe, "wait_until", side_effect=polls):
+            try:
+                return probe.press_when_shown("clicking the banner", how, "Guaca probe"), calls
+            except probe.Failed as why:
+                return why, calls
+
+    def test_a_banner_still_sliding_in_is_never_pressed(self):
+        sliding = [{"x": 2100 - 60 * n, "y": 142, "width": 344, "height": 74} for n in range(4)]
+        result, calls = self.press(sliding)
+        self.assertIsInstance(result, probe.Failed)
+        self.assertNotIn("press-group", calls)
+
+    def test_a_banner_moving_on_screen_is_never_pressed(self):
+        moving = [{"x": 1560 - 60 * n, "y": 142, "width": 344, "height": 74} for n in range(4)]
+        result, calls = self.press(moving)
+        self.assertIsInstance(result, probe.Failed)
+        self.assertNotIn("press-group", calls)
+
+    def test_a_banner_half_off_screen_is_never_pressed_even_when_still(self):
+        result, calls = self.press([{"x": 1786, "y": 142, "width": 344, "height": 74}] * 3)
+        self.assertIsInstance(result, probe.Failed)
+        self.assertNotIn("press-group", calls)
+
+    def test_a_prompt_not_yet_on_screen_is_looked_for_again(self):
+        result, calls = self.press([{}] * 4, how="press", absent=2)
+        self.assertEqual(result, {"pressed": "banner"})
+        self.assertEqual(calls, ["press", "press", "press"])
+
+    def test_a_press_that_fails_is_never_repeated(self):
+        still = {"x": 1560, "y": 142, "width": 344, "height": 74}
+        result, calls = self.press([still] * 4, refuse=True)
+        self.assertIsInstance(result, probe.Failed)
+        self.assertEqual(calls.count("press-group"), 1)
+
+    def test_a_settled_banner_is_pressed_once(self):
+        moving = {"x": 1700, "y": 142, "width": 344, "height": 74}
+        still = {"x": 1560, "y": 142, "width": 344, "height": 74}
+        result, calls = self.press([moving, still, still, still])
+        self.assertEqual(result, {"pressed": "banner"})
+        self.assertEqual(calls.count("press-group"), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
