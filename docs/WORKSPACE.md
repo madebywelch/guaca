@@ -1310,9 +1310,10 @@ needs you." under it and the Running list after: the largest words on the
 screen describe what is happening, not what is not.
 
 A Finished row names who produced the result and who helped ("Chief of Staff,
-with Market Researcher and Financial Analyst"), from the outcome's colleagues,
-and ends in Open. Its headline is cut by the host on a sentence or a word, with
-an ellipsis when cut mid-sentence. That is the
+with Market Researcher and Financial Analyst"), when the host provides the
+colleagues. Open keeps nearby messages and the hand-off with the result. The
+host shortens the preview at a sentence or word boundary and marks the cut
+with an ellipsis. That is the
 screen seen most, and it is the one that has to be calm.
 
 The line above the composer carries the same clock for the conversation the

@@ -478,8 +478,8 @@ describe("the result a conversation ends in", () => {
 
   it("is never a line said on the way when the conversation then ended in a failure", () => {
     const failed = envelope({
-      from: { kind: "agent", id: "manager" },
-      to: { kind: "human" },
+      from: { kind: "system" },
+      to: { kind: "agent", id: "manager" },
       parts: [{ type: "notice", kind: "upstreamError", text: "The model did not answer." }],
     });
     const rows = transcriptRows([envelope({}), reply("I asked them both."), failed], lookups);
@@ -505,19 +505,52 @@ describe("the result a conversation ends in", () => {
     expect(shown.map((row) => row.kind)).toEqual(["message", "message", "result"]);
     const result = shown.at(-1);
     if (result?.kind !== "result") throw new Error("no result");
-    expect(result.handoff?.peers.map((one) => [one.peer.name, one.sent, one.received])).toEqual([
-      ["Chef", 1, 1],
-      ["Scribe", 1, 1],
+    expect(result.handoffs[0]?.peers.map((one) => [one.peer.name, one.sent, one.received])).toEqual(
+      [
+        ["Chef", 1, 1],
+        ["Scribe", 1, 1],
+      ],
+    );
+    expect(rowStandsFor(result)).toEqual([
+      result.message.id,
+      ...(result.handoffs[0]?.folded ?? []),
     ]);
-    expect(rowStandsFor(result)).toEqual([result.message.id, ...(result.handoff?.folded ?? [])]);
     expect(rowStandsFor(result)).toHaveLength(3);
+  });
+
+  it("keeps separate exchanges with the same colleague tied to their own answers", () => {
+    const first = send(["Chef"], ok);
+    const second = { ...first, arguments: { to: ["Chef"], text: "What about Saturday?" } };
+    const shown = withResults(
+      transcriptRows(
+        [
+          envelope({}),
+          record(first),
+          inbound("chef", "Friday works."),
+          reply("Checking Saturday too."),
+          record(second),
+          inbound("chef", "Saturday is booked."),
+          reply("Let's plan for Friday."),
+        ],
+        lookups,
+      ),
+      new Set(),
+    );
+    const result = shown.at(-1);
+    if (result?.kind !== "result") throw new Error("no result");
+    expect(
+      result.handoffs.map((one) => one.peers.map((peer) => [peer.asked, peer.answer])),
+    ).toEqual([
+      [["the briefing", "Friday works."]],
+      [["What about Saturday?", "Saturday is booked."]],
+    ]);
   });
 
   it("stands alone when one agent answered without asking anyone", () => {
     const shown = withResults(transcriptRows([envelope({}), reply("Hello.")], lookups), new Set());
     expect(shapes(shown)).toEqual(["message:1", "result"]);
     const result = shown.at(-1);
-    expect(result?.kind === "result" && result.handoff).toBeNull();
+    expect(result?.kind === "result" && result.handoffs).toEqual([]);
   });
 
   it("is one per conversation, and an earlier conversation keeps its own", () => {

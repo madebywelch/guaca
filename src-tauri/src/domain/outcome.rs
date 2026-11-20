@@ -155,7 +155,7 @@ fn shorten(line: &str) -> String {
         return line.to_string();
     }
     if let Some(end) = sentence_end(line) {
-        return line[..end].to_string();
+        return format!("{}{ELLIPSIS}", &line[..end]);
     }
     let mut chars = 0;
     let mut end = 0;
@@ -173,7 +173,7 @@ fn sentence_end(line: &str) -> Option<usize> {
     let mut last = None;
     let mut chars = line.char_indices().enumerate().peekable();
     while let Some((count, (at, c))) = chars.next() {
-        if count >= HEADLINE_MAX {
+        if count >= HEADLINE_MAX - 1 {
             break;
         }
         let closes = match c {
@@ -475,8 +475,9 @@ mod tests {
         let line = "Lease, if you replace the car within three years and keep it under twelve thousand miles a year. Market Researcher and Financial Analyst agree on the three-year cost and disagree on resale, which matters only past year four.";
         assert!(line.chars().count() > HEADLINE_MAX);
         let cut = headline(line).unwrap();
-        assert!(cut.ends_with("a year."), "{cut:?}");
-        assert!(line.starts_with(&cut));
+        let kept = cut.strip_suffix(ELLIPSIS).unwrap();
+        assert!(kept.ends_with("a year."), "{cut:?}");
+        assert!(line.starts_with(kept));
     }
 
     #[test]
@@ -506,7 +507,8 @@ mod tests {
     fn a_language_without_spaces_is_cut_on_a_sentence_or_a_unicode_word_boundary() {
         let sentences = "毎朝のダイジェストを十二人に送信しました。".repeat(12);
         let cut = headline(&sentences).unwrap();
-        assert!(cut.ends_with('。') && sentences.starts_with(&cut), "{cut:?}");
+        let kept = cut.strip_suffix(ELLIPSIS).unwrap();
+        assert!(kept.ends_with('。') && sentences.starts_with(kept), "{cut:?}");
         let line = "毎朝のダイジェストを十二人に送信しました".repeat(12);
         let cut = headline(&line).unwrap();
         let kept = cut.strip_suffix(ELLIPSIS).unwrap();

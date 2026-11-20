@@ -159,7 +159,7 @@ export function Home({ onSearch, onManageGroups }: Props) {
                   const agent = agents.find((one) => one.id === outcome.agentId);
                   const group = groupNamed(groups, outcome.groupId);
                   const word = statusWord(outcome.status);
-                  const helped = outcome.colleagues.flatMap(
+                  const helped = (outcome.colleagues ?? []).flatMap(
                     (id) => agents.find((one) => one.id === id)?.name ?? [],
                   );
                   return (

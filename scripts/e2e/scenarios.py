@@ -2290,6 +2290,7 @@ def scenario_firstgroup(w: World) -> None:
                       "open": row["open"]}, shot=True)
     ui.fill("textbox", "What do you need?", "Check the mileage assumption.")
     ui.click("button", "Send")
+    w.wait("the follow-up model call starts", lambda: asked(w, "Check the mileage assumption.") == 1)
     w.wait("the next task is running", lambda: LEAD in running_text(w))
     lead = ui.evaluate(LARGEST_ON_TODAY)["text"]
     w.check("working stays the lead on Today when an older result is unread",

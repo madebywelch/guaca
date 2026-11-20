@@ -231,6 +231,13 @@ describe("a result on Today", () => {
       ...over,
     });
 
+  it("still opens a result from a host that does not send colleagues", () => {
+    const older = result({});
+    delete older.colleagues;
+    draw({ outcomes: [older] });
+    expect(screen.getByRole("button", { name: /Lease, if you replace/ })).toBeTruthy();
+  });
+
   it("names who produced it and who helped", () => {
     draw({ outcomes: [result({ colleagues: [noor.id] })] });
     act(() => useStore.setState({ agents: [dara, noor] }));

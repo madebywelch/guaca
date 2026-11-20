@@ -577,8 +577,8 @@ holds:
 - **The headline** is the first line with words in it of the owner's newest note
   to the operator, its Markdown taken off. A line over 160 characters is cut
   after its last whole sentence when that keeps at least half of it, and
-  otherwise on a word with an ellipsis, so a cut headline never stops mid-word
-  and never reads as complete when it is not. A failure takes the first
+  otherwise at a Unicode word boundary. The ellipsis marks either cut, so a
+  shortened headline never reads as complete. A failure takes the first
   sentence of its notice instead.
 - **The colleagues** are the agents who answered the owner inside the run, in
   the order they first did, read from the run's messages each time the row is

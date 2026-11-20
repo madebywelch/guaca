@@ -60,7 +60,7 @@ export type Row =
       kind: "result";
       key: string;
       message: Envelope;
-      handoff: Extract<Row, { kind: "peers" }> | null;
+      handoffs: Extract<Row, { kind: "peers" }>[];
     };
 
 const CONTINUATION_MS = 4 * 60 * 1000;
@@ -272,36 +272,16 @@ function answers(row: Extract<Row, { kind: "message" }>): boolean {
   return parts.length > 0 && parts.every((part) => part.type === "text" || part.type === "file");
 }
 
-function joined(bursts: Extract<Row, { kind: "peers" }>[]): Extract<Row, { kind: "peers" }> | null {
-  const [first, ...rest] = bursts;
-  if (!first) return null;
-  const peers = first.peers.map((one) => ({ ...one }));
-  for (const burst of rest) {
-    for (const one of burst.peers) {
-      const held = peers.find((entry) => entry.peer.id === one.peer.id);
-      if (!held) {
-        peers.push({ ...one });
-        continue;
-      }
-      held.sent += one.sent;
-      held.received += one.received;
-      held.gist ??= one.gist;
-      if (held.asked === null) {
-        held.asked = one.asked;
-        held.askedAt = one.askedAt;
-      }
-      if (one.answer !== null) {
-        held.answer = one.answer;
-        held.answeredAt = one.answeredAt;
-      }
-    }
-  }
-  return { ...first, peers, folded: bursts.flatMap((burst) => burst.folded) };
-}
-
 export function withResults(rows: Row[], running: ReadonlySet<RunId>): Row[] {
   const last = new Map<RunId, Extract<Row, { kind: "message" }>>();
   for (const row of rows) {
+    if (
+      row.kind === "message" &&
+      row.message.parts.some((part) => part.type === "notice" && part.kind !== "lifecycle")
+    ) {
+      last.delete(row.message.runId);
+      continue;
+    }
     if (toPerson(row) && !running.has(row.message.runId)) last.set(row.message.runId, row);
   }
   const results = new Map<RunId, string>();
@@ -322,7 +302,7 @@ export function withResults(rows: Row[], running: ReadonlySet<RunId>): Row[] {
         kind: "result",
         key: row.key,
         message: row.message,
-        handoff: joined(held.get(row.message.runId) ?? []),
+        handoffs: held.get(row.message.runId) ?? [],
       });
       results.delete(row.message.runId);
       held.delete(row.message.runId);
@@ -335,7 +315,7 @@ export function withResults(rows: Row[], running: ReadonlySet<RunId>): Row[] {
 
 export function rowStandsFor(row: Row): MessageId[] {
   if (row.kind === "peers") return row.folded;
-  if (row.kind === "result") return [row.message.id, ...(row.handoff?.folded ?? [])];
+  if (row.kind === "result") return [row.message.id, ...row.handoffs.flatMap((one) => one.folded)];
   if (row.kind === "refused" || row.kind === "when") return [];
   return [row.message.id];
 }

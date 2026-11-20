@@ -750,9 +750,11 @@ describe("your brief once it is sent", () => {
     );
     const folded = container.querySelector(".msg__brief");
     expect(folded?.getAttribute("data-folded")).toBe("true");
+    expect(folded?.hasAttribute("inert")).toBe(true);
     const more = screen.getByRole("button", { name: "Show all" });
     expect(more.getAttribute("aria-expanded")).toBe("false");
     fireEvent.click(more);
+    expect(folded?.hasAttribute("inert")).toBe(false);
     expect(folded?.hasAttribute("data-folded")).toBe(false);
     expect(screen.getByRole("button", { name: "Show less" }).getAttribute("aria-expanded")).toBe(
       "true",
@@ -811,7 +813,7 @@ describe("the result a conversation ends in", () => {
         row={row}
         lookups={lookups}
         channel="manager"
-        open={false}
+        open={new Set()}
         onToggle={onToggle}
         onOpen={vi.fn()}
       />,
@@ -819,7 +821,7 @@ describe("the result a conversation ends in", () => {
   }
 
   it("is its own card, named for the agent that produced it", () => {
-    const { container } = draw({ kind: "result", key: "m9", message, handoff: null });
+    const { container } = draw({ kind: "result", key: "m9", message, handoffs: [] });
     const result = screen.getByRole("article", { name: /^Result from Manager, / });
     expect(result.querySelector(".result")).toBeTruthy();
     expect(result.querySelector(".msg__name")?.textContent).toBe("Manager");
@@ -827,7 +829,7 @@ describe("the result a conversation ends in", () => {
   });
 
   it("keeps the agent's words exactly as written", () => {
-    draw({ kind: "result", key: "m9", message, handoff: null });
+    draw({ kind: "result", key: "m9", message, handoffs: [] });
     const result = screen.getByRole("article", { name: /^Result from/ });
     expect(result.querySelector(".result__body")?.textContent).toBe(
       "Lease, if you replace the car within three years.",
@@ -837,7 +839,10 @@ describe("the result a conversation ends in", () => {
 
   it("carries the hand-off above it as a record that says who answered, and opens it", () => {
     const onToggle = vi.fn();
-    const { container } = draw({ kind: "result", key: "m9", message, handoff }, onToggle);
+    const { container } = draw(
+      { kind: "result", key: "m9", message, handoffs: [handoff] },
+      onToggle,
+    );
     const record = screen.getByRole("button", { name: /Asked Chef, answered/ });
     const card = container.querySelector(".result");
     expect(

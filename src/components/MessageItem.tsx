@@ -321,7 +321,13 @@ function Brief({ children }: { children: React.ReactNode }) {
 
   return (
     <>
-      <div ref={body} id={region} className="msg__brief" data-folded={open ? undefined : "true"}>
+      <div
+        ref={body}
+        id={region}
+        className="msg__brief"
+        data-folded={open ? undefined : "true"}
+        inert={long && !open}
+      >
         {children}
       </div>
       {(long || open) && (
@@ -350,26 +356,27 @@ export function ResultItem({
   row: Extract<Row, { kind: "result" }>;
   lookups: Lookups;
   channel: string;
-  open: boolean;
-  onToggle: () => void;
+  open: ReadonlySet<string>;
+  onToggle: (key: string) => void;
   onOpen: (peer: AgentId) => void;
 }) {
-  const { message, handoff } = row;
+  const { message, handoffs } = row;
   const author = identity(message.from, lookups.byId);
   const parts = keyed(message);
   return (
     <>
-      {handoff && (
+      {handoffs.map((handoff) => (
         <HandoffRecord
+          key={handoff.key}
           peers={handoff.peers}
           runId={handoff.runId}
           channel={channel}
           rowKey={handoff.key}
-          open={open}
-          onToggle={onToggle}
+          open={open.has(handoff.key)}
+          onToggle={() => onToggle(handoff.key)}
           onOpen={onOpen}
         />
-      )}
+      ))}
       <article
         className="msg msg--result"
         aria-label={`Result from ${author.name}, ${clockTime(message.createdAt)}`}

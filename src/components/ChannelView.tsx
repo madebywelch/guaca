@@ -272,8 +272,8 @@ export function ChannelView({
                         row={row}
                         lookups={lookups}
                         channel={channel}
-                        open={row.handoff !== null && unfolded.has(row.handoff.key)}
-                        onToggle={() => row.handoff && toggle(row.handoff.key)}
+                        open={unfolded}
+                        onToggle={toggle}
                         onOpen={setReading}
                       />
                     ) : row.kind === "refused" ? (
