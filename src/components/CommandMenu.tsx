@@ -4,7 +4,7 @@ import { AgentAvatar } from "../avatars/AgentAvatar";
 import { useDismiss } from "../lib/dismiss";
 import { defaultTarget } from "../lib/field";
 import { useHeld, useShown } from "../lib/held";
-import { api } from "../lib/ipc";
+import { api, openExternal } from "../lib/ipc";
 import { formatCombo } from "../lib/keybinds";
 import {
   type Asking,
@@ -18,23 +18,37 @@ import {
   requestAt,
 } from "../lib/menu";
 import { numbered } from "../lib/rail";
+import { searchResults } from "../lib/search";
 import type { Section } from "../lib/sections";
 import { useStore } from "../lib/store";
-import { type AgentId, errorMessage } from "../lib/types";
+import { useNow } from "../lib/time";
+import { type AgentCard, type AgentId, errorMessage, type Group } from "../lib/types";
+import { useSearchHits } from "../lib/useSearchHits";
 import { Icon } from "./Icon";
 
 interface Props {
   onClose: () => void;
   onOpenAgent?: (agentId: AgentId) => void;
-  onPlace: (place: Place, query?: string) => void;
+  onPlace: (place: Place) => void;
   onSection: (section: Section) => void;
+  onEditAgent?: (agent: AgentCard) => void;
+  onEditGroup?: (group: Group) => void;
+  onNavigate?: () => void;
 }
 
 const ALLOW = formatCombo({ key: "Enter", mod: true });
 const DENY = formatCombo({ key: "Backspace", mod: true });
 const RETURN = formatCombo({ key: "Enter" });
 
-export function CommandMenu({ onClose, onOpenAgent, onPlace, onSection }: Props) {
+export function CommandMenu({
+  onClose,
+  onOpenAgent,
+  onPlace,
+  onSection,
+  onEditAgent,
+  onEditGroup,
+  onNavigate,
+}: Props) {
   const agents = useStore((s) => s.agents);
   const groups = useStore((s) => s.groups);
   const shownNow = useShown();
@@ -44,6 +58,8 @@ export function CommandMenu({ onClose, onOpenAgent, onPlace, onSection }: Props)
   const open = useStore((s) => s.selected);
   const prefs = useStore((s) => s.prefs);
   const select = useStore((s) => s.select);
+  const openMessage = useStore((s) => s.openMessage);
+  const showArtifacts = useStore((s) => s.showArtifacts);
   const setPrefs = useStore((s) => s.setPrefs);
   const decide = useStore((s) => s.decideApproval);
   const answer = useStore((s) => s.answerQuestion);
@@ -53,6 +69,10 @@ export function CommandMenu({ onClose, onOpenAgent, onPlace, onSection }: Props)
 
   const ordered = useMemo(() => numbered(agents, groups), [agents, groups]);
   const [query, setQuery] = useState("");
+  const searchQuery = query.trim();
+  const lookup = useSearchHits(searchQuery || null);
+  const hits = lookup?.kind === "ready" ? lookup.hits : null;
+  const now = useNow(30_000);
   const [picked, setPicked] = useState<AgentId | null>(null);
   const [chosen, setChosen] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -67,16 +87,27 @@ export function CommandMenu({ onClose, onOpenAgent, onPlace, onSection }: Props)
     ordered.find((agent) => agent.id === open) ??
     defaultTarget(ordered, lastActive, railGroup);
 
-  const rows = menuRows({
-    query,
-    recipient,
-    agents: ordered,
-    activity,
-    pending: shownNow.pending,
-    stuck: shownNow.stuck,
-    open,
-    prefs,
-  });
+  const results = useMemo(
+    () =>
+      searchQuery
+        ? searchResults({ query: searchQuery, agents, groups, hits, lastActive, now })
+        : [],
+    [searchQuery, agents, groups, hits, lastActive, now],
+  );
+  const rows = menuRows(
+    {
+      query,
+      recipient,
+      agents: ordered,
+      activity,
+      pending: shownNow.pending,
+      stuck: shownNow.stuck,
+      open,
+      prefs,
+      groupCount: groups.length,
+    },
+    results,
+  );
   const selected = rows.some((row) => row.id === chosen) ? chosen : firstChoice(rows, query);
   const current = requestAt(rows, selected);
 
@@ -115,18 +146,49 @@ export function CommandMenu({ onClose, onOpenAgent, onPlace, onSection }: Props)
         );
         return;
       case "open":
+        onNavigate?.();
         if (onOpenAgent) onOpenAgent(action.agentId);
         else void select(action.agentId);
         return;
       case "place":
-        onPlace(action.place, action.query);
+        onPlace(action.place);
         return;
       case "section":
+        onNavigate?.();
         onSection(action.section);
         return;
       case "look":
         setPrefs(action.patch);
         return;
+      case "result": {
+        const result = action.action;
+        switch (result.do) {
+          case "openChannel":
+            onNavigate?.();
+            void select(result.agentId).catch(showFailure);
+            return;
+          case "openMessage":
+            onNavigate?.();
+            void openMessage(result.channelId, result.messageId).catch(showFailure);
+            return;
+          case "openLink":
+            void openExternal(result.url).catch(showFailure);
+            return;
+          case "openArtifact":
+            showArtifacts({ id: result.artifactId });
+            return;
+          case "editAgent": {
+            const agent = agents.find((a) => a.id === result.agentId);
+            if (agent) onEditAgent?.(agent);
+            return;
+          }
+          case "editGroup": {
+            const group = groups.find((g) => g.id === result.groupId);
+            if (group) onEditGroup?.(group);
+            return;
+          }
+        }
+      }
     }
   };
 
@@ -173,7 +235,7 @@ export function CommandMenu({ onClose, onOpenAgent, onPlace, onSection }: Props)
 
   const sections: MenuRow["section"][] = [null, ...MENU_SECTIONS];
   return (
-    <div className="scrim scrim--palette">
+    <div className="scrim">
       <button
         type="button"
         className="scrim__close"
@@ -205,7 +267,7 @@ export function CommandMenu({ onClose, onOpenAgent, onPlace, onSection }: Props)
             type="text"
             value={query}
             spellCheck={false}
-            placeholder="Write, or find an agent, an answer, an action or a setting"
+            placeholder="Write, search, or run a command"
             aria-label="Command menu"
             aria-describedby="command-menu-to"
             onChange={(event) => {
@@ -259,6 +321,9 @@ export function CommandMenu({ onClose, onOpenAgent, onPlace, onSection }: Props)
                 </div>
               );
             })
+          )}
+          {lookup?.kind === "failed" && (
+            <p className="palette__empty">Could not search saved content.</p>
           )}
         </div>
       </div>
@@ -323,7 +388,7 @@ function MenuItem({
           <AgentAvatar
             avatar={row.face.avatar}
             color={row.face.color}
-            seed={row.face.id}
+            seed={row.face.seed}
             size="sm"
           />
         ) : (
@@ -337,6 +402,7 @@ function MenuItem({
         {row.detail && <span className="palette__detail">{row.detail}</span>}
       </span>
       <span className="palette__meta">
+        {row.meta}
         {selected && <kbd className="palette__key">{RETURN}</kbd>}
         {keys && <kbd className="palette__key">{keys}</kbd>}
       </span>

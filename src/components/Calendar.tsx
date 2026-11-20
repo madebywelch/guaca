@@ -270,8 +270,7 @@ export function Calendar({ onClose }: Props) {
           ) : days.length === 0 ? (
             <p className="routines__note">
               Nothing on this calendar {crew === null ? "" : "for this group "}in{" "}
-              {monthLabel(window)}. This is Guaca's own calendar, not your Google one: agents put
-              what they learn about here, and so can you.
+              {monthLabel(window)}.
             </p>
           ) : (
             days.map((day) => (

@@ -2,14 +2,40 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { HOLD_MS, useHeld } from "../lib/held";
-import { api } from "../lib/ipc";
+import { api, openExternal } from "../lib/ipc";
 import { DEFAULT_PREFS } from "../lib/prefs";
 import { useStore } from "../lib/store";
 import { aGroup, anAgent, anApproval } from "../test-fixtures";
 import { CommandMenu } from "./CommandMenu";
 
 vi.mock("../lib/ipc", () => ({
-  api: { sendMessage: vi.fn(async () => "run") },
+  api: {
+    sendMessage: vi.fn(async () => "run"),
+    search: vi.fn(async () => ({
+      messages: [
+        {
+          id: "message-1",
+          channelId: "agent-1",
+          from: { kind: "human" },
+          to: { kind: "agent", id: "agent-1" },
+          excerpt: "the quarterly ledger",
+          createdAt: 1,
+        },
+      ],
+      files: [],
+      links: [
+        {
+          url: "https://example.com/ledger",
+          messageId: "message-1",
+          channelId: "agent-1",
+          createdAt: 1,
+        },
+      ],
+      routines: [],
+      artifacts: [],
+    })),
+  },
+  openExternal: vi.fn(async () => {}),
 }));
 
 const group = aGroup();
@@ -23,6 +49,7 @@ function draw(pending = [request]) {
   const onClose = vi.fn();
   const onSection = vi.fn();
   const onPlace = vi.fn();
+  const onEditAgent = vi.fn();
   act(() => {
     useHeld.setState({ held: null, notice: null });
     useStore.setState({
@@ -39,12 +66,19 @@ function draw(pending = [request]) {
       select,
     });
   });
-  render(<CommandMenu onClose={onClose} onSection={onSection} onPlace={onPlace} />);
+  render(
+    <CommandMenu
+      onClose={onClose}
+      onSection={onSection}
+      onPlace={onPlace}
+      onEditAgent={onEditAgent}
+    />,
+  );
   const input = screen.getByRole("textbox", { name: "Command menu" });
   const type = (text: string) => fireEvent.change(input, { target: { value: text } });
   const chosen = () =>
     document.querySelector<HTMLElement>("[data-selected='true'] .palette__title")?.textContent;
-  return { input, type, chosen, onClose, onSection, onPlace };
+  return { input, type, chosen, onClose, onSection, onPlace, onEditAgent };
 }
 
 beforeEach(() => {
@@ -55,6 +89,51 @@ beforeEach(() => {
 });
 
 describe("the command menu", () => {
+  it("opens a message result directly without handing the query to another palette", async () => {
+    const openMessage = vi.fn(async () => {});
+    act(() => useStore.setState({ openMessage }));
+    const { input, type, onPlace } = draw([]);
+    type("ledger");
+    await act(async () => vi.advanceTimersByTime(120));
+    const hit = screen.getByText("the quarterly ledger");
+    fireEvent.mouseMove(hit);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(openMessage).toHaveBeenCalledExactlyOnceWith("agent-1", "message-1");
+    expect(onPlace).not.toHaveBeenCalled();
+    expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps a draft selected when results arrive and opens a selected link externally", async () => {
+    const { type, chosen } = draw([]);
+    type("the quarterly ledger");
+    expect(chosen()).toBe("Write to Noor");
+    await act(async () => vi.advanceTimersByTime(120));
+    expect(chosen()).toBe("Write to Noor");
+    fireEvent.click(screen.getByText("example.com/ledger"));
+    expect(openExternal).toHaveBeenCalledExactlyOnceWith("https://example.com/ledger");
+    expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("opens an agent's editor without opening the conversation", () => {
+    const { input, type, chosen, onEditAgent } = draw([]);
+    type("Dara settings");
+    expect(chosen()).toBe("Dara settings");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onEditAgent).toHaveBeenCalledExactlyOnceWith(dara);
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["calendar", "Calendar"],
+    ["cafeteria", "Open the cafeteria"],
+    ["app settings", "App settings"],
+  ])("offers only one named action for %s", (query, label) => {
+    const { type } = draw([]);
+    type(query);
+    expect(screen.getAllByText(label)).toHaveLength(1);
+    expect(screen.queryByText(/^Search for/)).toBeNull();
+  });
+
   it("lays out what waits, the agents, the actions and the settings, in that order", () => {
     draw();
     const headings = [...document.querySelectorAll(".palette__section")].map((h) => h.textContent);

@@ -34,7 +34,7 @@ export const MENU_KEY = IS_MAC ? "⌘K" : "Ctrl K";
 export const BINDINGS: Binding[] = [
   {
     id: "menu",
-    what: "Open the command menu: write to an agent, answer, jump or change a setting",
+    what: "Open the command menu to search, write to an agent, or run a command",
     combo: { key: "k", mod: true },
     where: "Anywhere",
   },
@@ -54,7 +54,7 @@ export const BINDINGS: Binding[] = [
   },
   {
     id: "search",
-    what: "Search agents, messages and actions",
+    what: "Search messages and files",
     combo: { key: "f", mod: true },
     where: "Anywhere",
   },

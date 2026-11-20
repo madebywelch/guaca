@@ -331,7 +331,7 @@ export function MessageModal({
   return (
     <div className="scrim">
       <button type="button" className="scrim__close" aria-label="Close dialog" onClick={onClose} />
-      <div className="dialog" role="dialog" aria-modal="true" aria-label={title}>
+      <div className="dialog dialog--message" role="dialog" aria-modal="true" aria-label={title}>
         <div className="wire-modal__head">
           <AgentAvatar avatar={peer.avatar} color={peer.color} size="sm" seed={peer.id} />
           {counterpart && (

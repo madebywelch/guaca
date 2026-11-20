@@ -43,17 +43,7 @@ function Workspace({ page }: { page: string }) {
   return (
     <>
       <Markdown>{fence("html", page)}</Markdown>
-      {overlay === "search" && (
-        <Search
-          onClose={() => setOverlay(null)}
-          onEditAgent={() => {}}
-          onEditGroup={() => {}}
-          onNewAgent={() => {}}
-          onNewGroup={() => {}}
-          onOpenCafeteria={() => {}}
-          onOpenSettings={() => {}}
-        />
-      )}
+      {overlay === "search" && <Search onClose={() => setOverlay(null)} />}
     </>
   );
 }

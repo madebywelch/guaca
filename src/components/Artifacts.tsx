@@ -147,10 +147,7 @@ export function Artifacts({ onClose }: Props) {
             )}
 
             <div className="artifacts__foot">
-              <p className="artifacts__note">
-                Pages your agents keep. Ask one to make or change a page; every change is kept as a
-                version.
-              </p>
+              <span className="artifacts__spacer" />
               <button type="button" className="btn" onClick={onClose}>
                 Close
               </button>

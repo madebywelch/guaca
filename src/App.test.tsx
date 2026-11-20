@@ -527,6 +527,20 @@ describe("App", () => {
     expect(lower.isConnected).toBe(false);
   });
 
+  it("opens the command menu from the Groups sheet and returns to the sheet on Escape", async () => {
+    listAgents.mockResolvedValue([agent("Manager")]);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Agents" }));
+    const groups = await screen.findByRole("dialog", { name: "Groups and agents" });
+    const opener = within(groups).getByRole("button", { name: /command menu/i });
+    fireEvent.click(opener);
+    const input = await screen.findByRole("textbox", { name: "Command menu" });
+    expect(document.activeElement).toBe(input);
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Command menu" })).toBeNull();
+    expect(document.activeElement).toBe(opener);
+  });
+
   it.each([["Search", "f"]])(
     "keeps For you open under %s and restores focus",
     async (upperName, key) => {

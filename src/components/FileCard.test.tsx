@@ -73,17 +73,7 @@ function Workspace() {
   return (
     <>
       <FileCard file={file("archive.zip", "application/zip")} />
-      {overlay === "search" && (
-        <Search
-          onClose={() => setOverlay(null)}
-          onEditAgent={() => {}}
-          onEditGroup={() => {}}
-          onNewAgent={() => {}}
-          onNewGroup={() => {}}
-          onOpenCafeteria={() => {}}
-          onOpenSettings={() => {}}
-        />
-      )}
+      {overlay === "search" && <Search onClose={() => setOverlay(null)} />}
     </>
   );
 }

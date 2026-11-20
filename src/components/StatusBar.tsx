@@ -6,6 +6,7 @@ import { artifactUrl } from "../lib/files";
 import { useForYouCount } from "../lib/held";
 import { hostLabel, hostPlace } from "../lib/host";
 import { api } from "../lib/ipc";
+import { APP_SETTINGS, PLACE_LABELS } from "../lib/menu";
 import { questions } from "../lib/questions";
 import { quickTitle } from "../lib/quick";
 import { skew } from "../lib/releases";
@@ -163,7 +164,7 @@ export function StatusBar({ onOpen, onMessage }: Props) {
           className="statusbar__place"
           onClick={() => showArtifacts({ id: null })}
         >
-          Artifacts
+          {PLACE_LABELS.artifacts}
         </button>
         {!opened.has("calendar") && (
           <button
@@ -171,17 +172,19 @@ export function StatusBar({ onOpen, onMessage }: Props) {
             className="statusbar__place"
             onClick={() => onOpen({ kind: "calendar" })}
           >
-            Calendar
+            {PLACE_LABELS.calendar}
           </button>
         )}
         {!opened.has("forYou") && (
           <button
             type="button"
             className="statusbar__place"
-            aria-label={waiting > 0 ? `For you, ${questions(waiting)}` : "For you"}
+            aria-label={
+              waiting > 0 ? `${PLACE_LABELS.forYou}, ${questions(waiting)}` : PLACE_LABELS.forYou
+            }
             onClick={() => onOpen({ kind: "forYou" })}
           >
-            For you
+            {PLACE_LABELS.forYou}
             {waiting > 0 && <b className="statusbar__count">{questions(waiting)}</b>}
           </button>
         )}
@@ -460,9 +463,9 @@ function QuickActionForm({ onAdded }: { onAdded: () => void }) {
         >
           <option value="message">Send a message</option>
           <option value="channel">Open a conversation</option>
-          <option value="calendar">Open the calendar</option>
-          <option value="forYou">Open For you</option>
-          <option value="settings">Open Settings</option>
+          <option value="calendar">{PLACE_LABELS.calendar}</option>
+          <option value="forYou">{PLACE_LABELS.forYou}</option>
+          <option value="settings">{APP_SETTINGS}</option>
         </select>
       </label>
       {needsAgent && (

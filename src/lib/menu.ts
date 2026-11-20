@@ -2,22 +2,23 @@ import type { IconName } from "../components/Icon";
 import { BINDINGS, formatCombo, keyOf } from "./keybinds";
 import type { Prefs, SurfaceMode, Typeface } from "./prefs";
 import { stepped } from "./rail";
+import type { SearchAction, SearchResult } from "./search";
 import { SECTION_LABELS, SECTIONS, type Section } from "./sections";
 import type { Activity, AgentCard, AgentId, Approval, Decision, Escalation } from "./types";
 
 export const WRITE_WORDS = 3;
 
-export type MenuSection = "Waiting on you" | "Agents" | "Actions" | "Settings";
+export type MenuSection = "Waiting on you" | "Agents" | "Actions" | "Settings" | "Search results";
 
 export const MENU_SECTIONS: readonly MenuSection[] = [
   "Waiting on you",
   "Agents",
   "Actions",
   "Settings",
+  "Search results",
 ];
 
 export type Place =
-  | "search"
   | "forYou"
   | "calendar"
   | "artifacts"
@@ -26,14 +27,31 @@ export type Place =
   | "newGroup"
   | "cafeteria";
 
+export const PLACE_LABELS: Record<Place, string> = {
+  forYou: "For you",
+  calendar: "Calendar",
+  artifacts: "Artifacts",
+  groups: "Groups and agents",
+  newAgent: "New agent",
+  newGroup: "New group",
+  cafeteria: "Open the cafeteria",
+};
+
+export const APP_SETTINGS = "App settings";
+
+export function groupsLabel(count: number): string {
+  return count > 1 ? PLACE_LABELS.groups : "Agents";
+}
+
 export type MenuAction =
   | { do: "write"; agentId: AgentId; text: string }
   | { do: "decide"; request: Approval; decision: Decision }
   | { do: "answer"; request: Approval; text: string }
   | { do: "open"; agentId: AgentId }
-  | { do: "place"; place: Place; query?: string }
+  | { do: "place"; place: Place }
   | { do: "section"; section: Section }
-  | { do: "look"; patch: Partial<Prefs> };
+  | { do: "look"; patch: Partial<Prefs> }
+  | { do: "result"; action: SearchAction };
 
 export interface Asking {
   id: string;
@@ -49,7 +67,8 @@ export interface MenuRow {
   title: string;
   detail?: string;
   key?: string;
-  face?: AgentCard;
+  face?: { avatar: string; color: string; seed: string };
+  meta?: string;
   icon?: IconName;
   words: string;
   request?: string;
@@ -65,6 +84,7 @@ export interface MenuInput {
   stuck: Escalation[];
   open: AgentId | null;
   prefs: Prefs;
+  groupCount: number;
 }
 
 export function wordsIn(query: string): string[] {
@@ -107,26 +127,18 @@ const SECTION_WORDS: Partial<Record<Section, string>> = {
   workspace: "host server daemon update",
 };
 
-const ACTIONS: { place: Place; title: string; icon: IconName; words: string; key?: string }[] = [
-  { place: "newAgent", title: "New agent", icon: "plus", words: "create hire add agent" },
-  { place: "newGroup", title: "New group", icon: "group", words: "create add group team" },
-  {
-    place: "search",
-    title: "Search messages",
-    icon: "search",
-    words: "find history look up",
-    key: formatCombo({ key: "f", mod: true }),
-  },
+const ACTIONS: { place: Place; icon: IconName; words: string }[] = [
+  { place: "newAgent", icon: "plus", words: "create hire add agent" },
+  { place: "newGroup", icon: "group", words: "create add group team" },
   {
     place: "forYou",
-    title: "Open For you",
     icon: "for-you",
     words: "inbox questions results decisions requests",
   },
-  { place: "calendar", title: "Open the calendar", icon: "calendar", words: "dates schedule" },
-  { place: "artifacts", title: "Open artifacts", icon: "artifact", words: "pages documents" },
-  { place: "groups", title: "Groups and agents", icon: "group", words: "sheet manage list" },
-  { place: "cafeteria", title: "Open the cafeteria", icon: "agent", words: "hire browse" },
+  { place: "calendar", icon: "calendar", words: "open dates schedule" },
+  { place: "artifacts", icon: "artifact", words: "open pages documents" },
+  { place: "groups", icon: "group", words: "groups agents sheet manage list" },
+  { place: "cafeteria", icon: "agent", words: "hire browse" },
 ];
 
 function waitingRows(input: MenuInput): MenuRow[] {
@@ -214,8 +226,8 @@ function agentRows(input: MenuInput): MenuRow[] {
     title: agent.name,
     detail: stateWord(agent, input.activity[agent.id]),
     key: index < 9 ? formatCombo({ key: String(index + 1), mod: true }) : undefined,
-    face: agent,
-    words: "agent open conversation",
+    face: { avatar: agent.avatar, color: agent.color, seed: agent.id },
+    words: `agent open conversation ${agent.skills.join(" ")} ${agent.systemPrompt}`,
     action: { do: "open" as const, agentId: agent.id },
   }));
 }
@@ -241,9 +253,8 @@ function actionRows(input: MenuInput): MenuRow[] {
     rows.push({
       id: `place:${action.place}`,
       section: "Actions",
-      title: action.title,
+      title: action.place === "groups" ? groupsLabel(input.groupCount) : PLACE_LABELS[action.place],
       icon: action.icon,
-      key: action.key,
       words: action.words,
       action: { do: "place", place: action.place },
     });
@@ -282,7 +293,7 @@ function settingsRows(input: MenuInput): MenuRow[] {
     rows.push({
       id: `section:${section}`,
       section: "Settings",
-      title: `Settings: ${SECTION_LABELS[section]}`,
+      title: section === "general" ? APP_SETTINGS : `Settings: ${SECTION_LABELS[section]}`,
       icon: "gear",
       key:
         section === "shortcuts"
@@ -290,7 +301,7 @@ function settingsRows(input: MenuInput): MenuRow[] {
           : section === "general"
             ? formatCombo({ key: ",", mod: true })
             : undefined,
-      words: `settings preferences ${SECTION_WORDS[section] ?? ""}`,
+      words: `settings preferences ${SECTION_LABELS[section]} ${SECTION_WORDS[section] ?? ""}`,
       action: { do: "section", section },
     });
   return rows;
@@ -301,7 +312,18 @@ function hits(row: MenuRow, words: string[]): boolean {
   return words.every((word) => hay.includes(word));
 }
 
-export function menuRows(input: MenuInput): MenuRow[] {
+const RESULT_ICONS: Record<SearchResult["kind"], IconName> = {
+  messages: "message",
+  agents: "agent",
+  groups: "group",
+  files: "file",
+  links: "external",
+  routines: "clock",
+  artifacts: "artifact",
+  actions: "gear",
+};
+
+export function menuRows(input: MenuInput, matches: SearchResult[] = []): MenuRow[] {
   const words = wordsIn(input.query);
   const text = input.query.trim();
   const found = [
@@ -318,31 +340,34 @@ export function menuRows(input: MenuInput): MenuRow[] {
             section: null,
             title: `Write to ${input.recipient.name}`,
             detail: text,
-            face: input.recipient,
+            face: { ...input.recipient, seed: input.recipient.id },
             words: "",
             action: { do: "write", agentId: input.recipient.id, text },
           },
         ]
       : [];
-  const search: MenuRow[] = text
-    ? [
-        {
-          id: "search",
-          section: "Actions",
-          title: `Search for “${text}”`,
-          icon: "search",
-          words: "",
-          action: { do: "place", place: "search", query: text },
-        },
-      ]
-    : [];
+  const results: MenuRow[] = matches
+    .filter((result) => result.kind !== "agents")
+    .map((result) => ({
+      id: result.key,
+      section:
+        result.kind === "actions" || result.kind === "groups" ? "Settings" : "Search results",
+      title: result.title,
+      detail: result.detail,
+      meta: result.meta,
+      face: result.face,
+      icon: RESULT_ICONS[result.kind],
+      words: "",
+      action: { do: "result", action: result.action },
+    }));
   const actions = found.filter((row) => row.section === "Actions");
   return [
     ...write,
     ...found.filter((row) => row.section === "Waiting on you" || row.section === "Agents"),
     ...actions,
-    ...search,
     ...found.filter((row) => row.section === "Settings"),
+    ...results.filter((row) => row.section === "Settings"),
+    ...results.filter((row) => row.section === "Search results"),
   ];
 }
 
@@ -350,7 +375,7 @@ export function firstChoice(rows: MenuRow[], query: string): string | null {
   const words = wordsIn(query);
   const write = rows.find((row) => row.id === "write");
   if (words.length >= WRITE_WORDS && write) return write.id;
-  const others = rows.filter((row) => row.id !== "write" && row.id !== "search");
+  const others = rows.filter((row) => row.id !== "write" && row.section !== "Search results");
   if (words.length === 0) return others[0]?.id ?? rows[0]?.id ?? null;
   const named = others.find((row) => wordsIn(row.title).join(" ") === words.join(" "));
   const titled = others.find((row) =>
