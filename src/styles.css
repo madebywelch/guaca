@@ -8274,6 +8274,7 @@ button.artifacts__version[aria-pressed="true"] {
   }
 
   .scrim {
+    --space-dialog-top: var(--space-safe-top);
     top: var(--viewport-top, 0px);
     bottom: auto;
     height: var(--viewport-height, 100dvh);
@@ -8298,6 +8299,11 @@ button.artifacts__version[aria-pressed="true"] {
     height: 100%;
     padding: 0;
     overflow: hidden;
+  }
+
+  .scrim > .sheet {
+    width: 100%;
+    border-radius: 0;
   }
 
   .settings__body {

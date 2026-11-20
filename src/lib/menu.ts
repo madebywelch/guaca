@@ -227,7 +227,7 @@ function agentRows(input: MenuInput): MenuRow[] {
     detail: stateWord(agent, input.activity[agent.id]),
     key: index < 9 ? formatCombo({ key: String(index + 1), mod: true }) : undefined,
     face: { avatar: agent.avatar, color: agent.color, seed: agent.id },
-    words: `agent open conversation ${agent.skills.join(" ")} ${agent.systemPrompt}`,
+    words: "agent open conversation",
     action: { do: "open" as const, agentId: agent.id },
   }));
 }
@@ -340,14 +340,19 @@ export function menuRows(input: MenuInput, matches: SearchResult[] = []): MenuRo
             section: null,
             title: `Write to ${input.recipient.name}`,
             detail: text,
-            face: { ...input.recipient, seed: input.recipient.id },
+            face: {
+              avatar: input.recipient.avatar,
+              color: input.recipient.color,
+              seed: input.recipient.id,
+            },
             words: "",
             action: { do: "write", agentId: input.recipient.id, text },
           },
         ]
       : [];
+  const foundIds = new Set(found.map((row) => row.id));
   const results: MenuRow[] = matches
-    .filter((result) => result.kind !== "agents")
+    .filter((result) => !foundIds.has(result.key))
     .map((result) => ({
       id: result.key,
       section:
@@ -358,7 +363,10 @@ export function menuRows(input: MenuInput, matches: SearchResult[] = []): MenuRo
       face: result.face,
       icon: RESULT_ICONS[result.kind],
       words: "",
-      action: { do: "result", action: result.action },
+      action:
+        result.kind === "agents" && result.action.do === "openChannel"
+          ? { do: "open", agentId: result.action.agentId }
+          : { do: "result", action: result.action },
     }));
   const actions = found.filter((row) => row.section === "Actions");
   return [

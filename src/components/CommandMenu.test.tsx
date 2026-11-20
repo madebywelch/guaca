@@ -39,7 +39,12 @@ vi.mock("../lib/ipc", () => ({
 }));
 
 const group = aGroup();
-const dara = anAgent("agent-1", { name: "Dara", groupId: group.id, railOrder: 0 });
+const dara = anAgent("agent-1", {
+  name: "Dara",
+  groupId: group.id,
+  railOrder: 0,
+  systemPrompt: "You are a helpful assistant who answers questions about this kitchen.",
+});
 const noor = anAgent("agent-2", { name: "Noor", groupId: group.id, railOrder: 1 });
 const request = anApproval({ agentId: "agent-1", summary: "Change your name to Robin?" });
 const decide = vi.fn(async () => {});
@@ -121,6 +126,24 @@ describe("the command menu", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onEditAgent).toHaveBeenCalledExactlyOnceWith(dara);
     expect(select).not.toHaveBeenCalled();
+  });
+
+  it("keeps a short draft selected over incidental matches in an agent prompt", () => {
+    const { input, type, chosen } = draw([]);
+    type("on it");
+    expect(chosen()).toBe("Write to Noor");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(api.sendMessage).toHaveBeenCalledExactlyOnceWith("agent-2", "on it");
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it("can find an agent by its prompt without choosing it in place of a draft", () => {
+    const { type, chosen } = draw([]);
+    type("this kitchen");
+    expect(chosen()).toBe("Write to Noor");
+    fireEvent.click(screen.getByRole("button", { name: /Dara.*this kitchen/ }));
+    expect(select).toHaveBeenCalledExactlyOnceWith("agent-1");
+    expect(api.sendMessage).not.toHaveBeenCalled();
   });
 
   it.each([
