@@ -5484,6 +5484,12 @@ input[type="file"]:disabled {
   color: var(--ok);
 }
 
+.banner--attention {
+  border-color: color-mix(in oklab, var(--attention) 40%, transparent);
+  background: color-mix(in oklab, var(--attention) 10%, transparent);
+  color: var(--attention);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -7836,6 +7842,14 @@ button.artifacts__version[aria-pressed="true"] {
 .host-legacy > summary {
   color: var(--muted);
   font-size: var(--type-support);
+}
+
+.host-move {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0 0 var(--space-5);
+  padding-left: var(--space-5);
+  list-style: disc;
 }
 
 .host-setup > .host-legacy {

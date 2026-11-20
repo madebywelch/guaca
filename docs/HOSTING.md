@@ -899,7 +899,8 @@ never offered while the wait is still going. It names the engine the current
 host is recorded in, says its agents and conversations are not moved and that
 it and its data are left untouched, says so when the other engine already holds
 Guaca data of the same name, and needs a ticked confirmation before it does
-anything. Setting it up never addresses the old engine. Afterwards the record
+anything. The confirmation is a screen of its own, and Cancel returns to the
+screen it was opened from. Setting it up never addresses the old engine. Afterwards the record
 points at the new engine and keeps the old one as `previous`; once that engine
 answers with the host still in it, Host settings offer to go back to it, which
 moves nothing and deletes nothing.

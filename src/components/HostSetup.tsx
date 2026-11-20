@@ -4,6 +4,7 @@ import {
   asStall,
   type DockerStatus,
   type Elsewhere,
+  type Engine,
   type ExistingHost,
   hostMode,
   localHost,
@@ -56,23 +57,22 @@ function commit(connection: Remote, mode: HostMode, onConnected?: () => void) {
   }
 }
 
-export function StartOver({ onConnected }: { onConnected?: () => void }) {
+interface Move {
+  from: Engine;
+  to: Engine;
+  toEngine: string;
+  data: boolean;
+}
+
+export function StartOver({ onOpen }: { onOpen: (move: Move) => void }) {
   const [plan, setPlan] = useState<Elsewhere | null>(null);
-  const [open, setOpen] = useState(false);
-  const [sure, setSure] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [imageFailed, setImageFailed] = useState(false);
   const [looked, setLooked] = useState(true);
-  const [unanswered, setUnanswered] = useState("");
   useEffect(() => {
-    if (!looked) return;
     void localHost
       .elsewhere()
       .then(setPlan)
       .catch(() => setLooked(false));
-  }, [looked]);
-  if (unanswered) return <p role="alert">{unanswered}</p>;
+  }, []);
   if (!looked)
     return (
       <p className="field__hint">Guaca could not check the other Docker engines on this Mac.</p>
@@ -86,18 +86,42 @@ export function StartOver({ onConnected }: { onConnected?: () => void }) {
         No other Docker engine is running on this Mac, so a new host cannot be set up elsewhere yet.
       </p>
     );
-  const cancel = () => {
-    setOpen(false);
-    setSure(false);
-    setError("");
-  };
+  return (
+    <div className="access__row">
+      <button
+        className="btn btn--quiet"
+        type="button"
+        onClick={() => onOpen({ from, to, toEngine: plan.toEngine ?? "", data: plan.data })}
+      >
+        Set up a new host in {to.label}
+      </button>
+    </div>
+  );
+}
+
+function NewHost({
+  move: { from, to, toEngine, data },
+  onCancel,
+  onBack,
+  onConnected,
+}: {
+  move: Move;
+  onCancel: () => void;
+  onBack: () => void;
+  onConnected: () => void;
+}) {
+  const [sure, setSure] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [imageFailed, setImageFailed] = useState(false);
+  const [unanswered, setUnanswered] = useState("");
   const confirm = async () => {
     setBusy(true);
     setError("");
     setImageFailed(false);
     let connection: Remote;
     try {
-      connection = await localHost.startElsewhere(to.context, plan.toEngine ?? "");
+      connection = await localHost.startElsewhere(to.context, toEngine);
     } catch (cause) {
       setError(errorMessage(cause));
       setImageFailed(asStall(cause)?.kind === "image");
@@ -115,60 +139,67 @@ export function StartOver({ onConnected }: { onConnected?: () => void }) {
       setBusy(false);
     }
   };
-  if (!open)
-    return (
-      <div className="access__row">
-        <button className="btn btn--quiet" type="button" onClick={() => setOpen(true)}>
-          Set up a new host in {to.label}
-        </button>
-      </div>
-    );
   return (
-    <section className="field" aria-label={`Set up a new host in ${to.label}`}>
-      <span className="field__label">Set up a new host in {to.label}</span>
-      <p>
-        Your current host is recorded in {from.label}. Its agents and conversations are not moved,
-        and they will not appear in the new host.
-      </p>
-      <p>
-        The host in {from.label} and its data are left untouched. Once {from.label} runs again, Host
-        settings offer to go back to it.
-      </p>
-      {plan.data && (
-        <p>
-          {to.label} already holds Guaca data from an earlier host, so the new host starts with that
-          data rather than empty.
-        </p>
-      )}
-      <label className="field field--row">
-        <input
-          type="checkbox"
-          checked={sure}
-          disabled={busy}
-          onChange={(event) => setSure(event.target.checked)}
-        />
-        <span>I understand that my agents stay with the host in {from.label}.</span>
-      </label>
-      {error && (
-        <div className="banner banner--error" role="alert">
-          {error}
-        </div>
-      )}
-      {imageFailed && <ImageRecovery />}
-      <div className="access__row">
-        <button
-          className="btn btn--compact"
-          type="button"
-          disabled={!sure || busy}
-          onClick={() => void confirm()}
-        >
-          {busy ? "Setting up the new host…" : "Set up the new host"}
-        </button>
-        <button className="btn btn--quiet" type="button" disabled={busy} onClick={cancel}>
-          Cancel
-        </button>
-      </div>
-    </section>
+    <main className="threshold">
+      <section className="host-setup">
+        <h1 className="empty__title">Set up a new host in {to.label}</h1>
+        {unanswered ? (
+          <>
+            <p role="alert">{unanswered}</p>
+            <div className="access__row">
+              <button className="btn btn--compact" type="button" onClick={onBack}>
+                Back to your host
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <ul className="host-move">
+              <li>
+                Your agents and conversations stay with the host in {from.label}. They are not
+                moved, and they will not appear in the new host.
+              </li>
+              <li>The host in {from.label} and its data are left untouched. Nothing is deleted.</li>
+              <li>Once {from.label} runs again, Host settings offer to go back to it.</li>
+            </ul>
+            {data && (
+              <div className="banner banner--attention" role="note">
+                {to.label} already holds Guaca data, probably from an earlier host on this Mac. The
+                new host starts with that data instead of starting empty.
+              </div>
+            )}
+            <label className="field field--row">
+              <input
+                type="checkbox"
+                checked={sure}
+                disabled={busy}
+                onChange={(event) => setSure(event.target.checked)}
+              />
+              <span>I understand that my agents stay with the host in {from.label}.</span>
+            </label>
+            {error && (
+              <div className="banner banner--error" role="alert">
+                {error}
+              </div>
+            )}
+            {imageFailed && <ImageRecovery />}
+            <div className="access__row">
+              <button
+                className="btn btn--compact"
+                type="button"
+                disabled={!sure || busy}
+                onClick={() => void confirm()}
+              >
+                {busy ? "Setting up the new host…" : "Set up the new host"}
+              </button>
+              <button className="btn btn--quiet" type="button" disabled={busy} onClick={onCancel}>
+                Cancel
+              </button>
+            </div>
+          </>
+        )}
+      </section>
+    </main>
   );
 }
 
@@ -202,6 +233,7 @@ function LocalReconnect({ onReady }: { onReady: () => void }) {
   const [chosen, setChosen] = useState<string | null>(null);
   const [choosing, setChoosing] = useState<"another" | "new" | null>(null);
   const [opening, setOpening] = useState("");
+  const [moving, setMoving] = useState<Move | null>(null);
   useEffect(() => {
     if (choosing) return;
     let disposed = false;
@@ -242,11 +274,21 @@ function LocalReconnect({ onReady }: { onReady: () => void }) {
     };
   }, [attempt, chosen, choosing, onReady]);
   const retry = () => {
+    setMoving(null);
     setChoosing(null);
     setOpening("");
     setState({ kind: "connecting" });
     setAttempt((n) => n + 1);
   };
+  if (moving)
+    return (
+      <NewHost
+        move={moving}
+        onCancel={() => setMoving(null)}
+        onBack={retry}
+        onConnected={onReady}
+      />
+    );
   if (choosing)
     return (
       <main className="threshold">
@@ -262,7 +304,7 @@ function LocalReconnect({ onReady }: { onReady: () => void }) {
               Back to your host
             </button>
           </div>
-          <StartOver onConnected={onReady} />
+          <StartOver onOpen={setMoving} />
           <HostChoice onConnected={onReady} />
           <LegacyGroups />
         </section>
@@ -353,7 +395,7 @@ function LocalReconnect({ onReady }: { onReady: () => void }) {
               </button>
             )}
           </div>
-          {state.kind === "gaveUp" && <StartOver onConnected={onReady} />}
+          {state.kind === "gaveUp" && <StartOver onOpen={setMoving} />}
         </div>
         <LegacyGroups />
       </section>

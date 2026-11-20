@@ -385,6 +385,10 @@ describe("a host whose engine is gone for good", () => {
       fireEvent.click(screen.getByRole("button", way));
       fireEvent.click(screen.getByRole("checkbox"));
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(screen.getByRole("heading").textContent).toBe("Your host is not running");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
       expect(screen.getByRole("button", way)).toBeTruthy();
       expect(startElsewhere).not.toHaveBeenCalled();
       expect(persist).not.toHaveBeenCalled();
@@ -402,17 +406,14 @@ describe("a host whose engine is gone for good", () => {
       fireEvent.click(screen.getByRole("button", way));
       const confirm = screen.getByRole("button", { name: "Set up the new host" });
       expect(confirm.hasAttribute("disabled")).toBe(true);
-      expect(
-        screen.getByText(
-          "Your current host is recorded in Colima. Its agents and conversations are not moved, and they will not appear in the new host.",
-        ),
-      ).toBeTruthy();
-      expect(
-        screen.getByText(
-          "The host in Colima and its data are left untouched. Once Colima runs again, Host settings offer to go back to it.",
-        ),
-      ).toBeTruthy();
-      expect(screen.getByText(/already holds Guaca data from an earlier host/)).toBeTruthy();
+      expect(screen.getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+        "Your agents and conversations stay with the host in Colima. They are not moved, and they will not appear in the new host.",
+        "The host in Colima and its data are left untouched. Nothing is deleted.",
+        "Once Colima runs again, Host settings offer to go back to it.",
+      ]);
+      expect(screen.getByRole("note").textContent).toBe(
+        "Docker Desktop already holds Guaca data, probably from an earlier host on this Mac. The new host starts with that data instead of starting empty.",
+      );
       fireEvent.click(confirm);
       expect(startElsewhere).not.toHaveBeenCalled();
       fireEvent.click(
@@ -428,6 +429,39 @@ describe("a host whose engine is gone for good", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+  it("shows the confirmation alone, with nothing from the screen behind it", async () => {
+    vi.useFakeTimers();
+    try {
+      elsewhere.mockResolvedValue(plan);
+      await giveUp();
+      fireEvent.click(screen.getByRole("button", way));
+      expect(screen.getByRole("heading").textContent).toBe("Set up a new host in Docker Desktop");
+      expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual([
+        "Set up the new host",
+        "Cancel",
+      ]);
+      expect(screen.queryByText(/Colima, which is not running/)).toBeNull();
+      expect(screen.queryByText(/stopped waiting/)).toBeNull();
+      expect(screen.queryByRole("note")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("leaves the chooser out of the confirmation and returns to it on cancel", async () => {
+    elsewhere.mockResolvedValue(plan);
+    resume.mockRejectedValue(colimaDown);
+    savedLocalHost();
+    fireEvent.click(await screen.findByRole("button", { name: "Choose another host" }));
+    fireEvent.click(await screen.findByRole("button", way));
+    expect(screen.queryByText("Where should your agents work?")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remote host" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Use this Mac/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Back to your host" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("heading").textContent).toBe("Where should your agents work?");
+    expect(await screen.findByRole("button", way)).toBeTruthy();
+    expect(startElsewhere).not.toHaveBeenCalled();
   });
   it("stops waiting once the person chooses another host, so the old host cannot be attached behind the choice", async () => {
     vi.useFakeTimers();
