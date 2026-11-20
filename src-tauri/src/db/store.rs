@@ -3104,7 +3104,7 @@ impl Store {
         envelope: &Envelope,
         accepting: bool,
     ) -> Result<(MessageId, RunId, bool), StoreError> {
-        self.claim_send(key, fingerprint, envelope, accepting, None)
+        self.claim_send(key, fingerprint, envelope, accepting, None, None)
     }
 
     pub fn claim_operator_send_put_down(
@@ -3115,7 +3115,19 @@ impl Store {
         steps: u32,
         snapshot: &GuardSnapshot,
     ) -> Result<(MessageId, RunId, bool), StoreError> {
-        self.claim_send(key, fingerprint, envelope, true, Some((steps, snapshot)))
+        self.claim_send(key, fingerprint, envelope, true, Some((steps, snapshot)), None)
+    }
+
+    pub fn claim_landed_send(
+        &self,
+        key: &str,
+        fingerprint: &str,
+        envelope: &Envelope,
+        accepting: bool,
+        put_down: Option<(u32, &GuardSnapshot)>,
+        landing: &super::Landing,
+    ) -> Result<(MessageId, RunId, bool), StoreError> {
+        self.claim_send(key, fingerprint, envelope, accepting, put_down, Some(landing))
     }
 
     fn claim_send(
@@ -3125,6 +3137,7 @@ impl Store {
         envelope: &Envelope,
         accepting: bool,
         put_down: Option<(u32, &GuardSnapshot)>,
+        landing: Option<&super::Landing>,
     ) -> Result<(MessageId, RunId, bool), StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -3174,6 +3187,9 @@ impl Store {
                     serde_json::to_string(snapshot).expect("guard snapshot serializes")
                 ],
             )?;
+        }
+        if let Some(landing) = landing {
+            super::places::land(&tx, landing, envelope.id, envelope.run_id)?;
         }
         tx.commit()?;
         Ok((envelope.id, envelope.run_id, true))

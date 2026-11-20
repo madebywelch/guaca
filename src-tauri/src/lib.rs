@@ -24,6 +24,7 @@ pub mod notebook;
 pub mod notifications;
 pub mod oauth;
 pub mod pickup;
+pub mod places;
 pub mod plugins;
 #[cfg(any(test, feature = "probe"))]
 pub mod probe;

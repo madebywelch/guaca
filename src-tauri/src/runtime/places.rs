@@ -1,0 +1,317 @@
+use std::sync::Arc;
+
+use parking_lot::Mutex;
+use sha2::{Digest, Sha256};
+use tokio::task::AbortHandle;
+
+use super::relay::backoff;
+use super::{Runtime, RuntimeError};
+use crate::db::{Landing, NewRelay, RelayState, StoreError};
+use crate::domain::approval::{ApprovalState, Request};
+use crate::domain::envelope::{Part, Trust};
+use crate::domain::ids::{AgentId, ApprovalId};
+use crate::domain::now_ms;
+use crate::domain::place::{self, AdapterId, Heard, Outgoing, Said};
+use crate::places::{Adapter, AdapterStatus, Ears, Unheard};
+
+pub(super) struct Attached {
+    status: Arc<Mutex<AdapterStatus>>,
+    tasks: Vec<AbortHandle>,
+}
+
+pub(super) struct LinkCode {
+    code: String,
+    agent: AgentId,
+    expires_at: i64,
+}
+
+fn unheard(err: impl std::fmt::Display) -> Unheard {
+    tracing::warn!(%err, "a message from outside could not be recorded; the provider will deliver it again");
+    Unheard { reason: "Guaca could not record that message yet.".into() }
+}
+
+impl Runtime {
+    pub fn attach_adapter(&self, adapter: Arc<dyn Adapter>) {
+        let id = adapter.id();
+        self.detach_adapter(&id);
+        let status = Arc::new(Mutex::new(AdapterStatus::default()));
+        let holding = self.inner.handle.spawn(self.clone().hold(adapter.clone(), status.clone()));
+        let relaying = self.inner.handle.spawn(self.clone().relay(adapter.clone()));
+        self.inner.adapters.lock().insert(
+            id,
+            Attached { status, tasks: vec![holding.abort_handle(), relaying.abort_handle()] },
+        );
+    }
+
+    pub fn detach_adapter(&self, id: &AdapterId) -> bool {
+        let Some(attached) = self.inner.adapters.lock().remove(id) else { return false };
+        attached.tasks.iter().for_each(AbortHandle::abort);
+        true
+    }
+
+    pub fn adapter_status(&self, id: &AdapterId) -> Option<AdapterStatus> {
+        self.inner.adapters.lock().get(id).map(|attached| attached.status.lock().clone())
+    }
+
+    pub fn link_code(&self, adapter: &AdapterId, agent: AgentId) -> Result<String, RuntimeError> {
+        self.inner.store.get_agent(agent)?.ok_or(RuntimeError::UnknownAgent(agent))?;
+        let drawn = uuid::Uuid::new_v4().as_u128() % 1_000_000;
+        let code = format!("{drawn:06}");
+        self.inner.link_codes.lock().insert(
+            adapter.clone(),
+            LinkCode { code: code.clone(), agent, expires_at: now_ms() + place::LINK_CODE_MS },
+        );
+        Ok(code)
+    }
+
+    async fn hold(self, adapter: Arc<dyn Adapter>, status: Arc<Mutex<AdapterStatus>>) {
+        let id = adapter.id();
+        let mut failures = 0u32;
+        loop {
+            status.lock().connected_since = Some(now_ms());
+            let ears = Ears::new(self.clone(), adapter.clone());
+            let catching = async {
+                let places = match self.inner.store.bound_places(&id) {
+                    Ok(places) => places,
+                    Err(err) => {
+                        tracing::warn!(%err, "could not read the places to catch up on");
+                        return;
+                    }
+                };
+                for (place, after) in places {
+                    if let Err(err) = adapter.catch_up(&place, after.as_ref(), &ears).await {
+                        status.lock().last_error = Some(err.reason);
+                    }
+                }
+            };
+            let (ran, ()) = tokio::join!(adapter.run(ears.clone()), catching);
+            status.lock().connected_since = None;
+            match ran {
+                Ok(()) => failures = 0,
+                Err(err) => {
+                    let mut now = status.lock();
+                    now.last_error = Some(err.reason);
+                    if !err.retry {
+                        now.stopped = true;
+                        return;
+                    }
+                    failures += 1;
+                }
+            }
+            tokio::time::sleep(backoff(failures.max(1))).await;
+        }
+    }
+
+    async fn tell(&self, adapter: &Arc<dyn Adapter>, heard: &Heard, text: &str) {
+        if let Err(err) = adapter.tell(&heard.spot, &heard.speaker, text).await {
+            tracing::warn!(?err, "could not tell a person outside why their message was not taken");
+        }
+    }
+
+    fn code_for(&self, adapter: &AdapterId, said: &str) -> Option<AgentId> {
+        let mut codes = self.inner.link_codes.lock();
+        let live = codes.get(adapter).is_some_and(|code| code.expires_at > now_ms());
+        if !live {
+            codes.remove(adapter);
+            return None;
+        }
+        codes.get(adapter).filter(|code| code.code == said.trim()).map(|code| code.agent)
+    }
+
+    pub(crate) async fn hear(
+        &self,
+        adapter: &Arc<dyn Adapter>,
+        heard: Heard,
+    ) -> Result<(), Unheard> {
+        let id = adapter.id();
+        let store = &self.inner.store;
+        if let Said::Text { text } = &heard.said {
+            if let Some(agent) = self.code_for(&id, text) {
+                if !heard.direct {
+                    self.tell(adapter, &heard, place::CODE_IN_CHANNEL).await;
+                    return Ok(());
+                }
+                let Some(card) = store.get_agent(agent).map_err(unheard)? else {
+                    self.inner.link_codes.lock().remove(&id);
+                    return Ok(());
+                };
+                store
+                    .link_person(&id, &heard.speaker, &heard.spot.place, card.group_id, card.id)
+                    .map_err(unheard)?;
+                store.raise_high_water(&id, &heard.spot.place, &heard.key).map_err(unheard)?;
+                self.inner.link_codes.lock().remove(&id);
+                self.tell(adapter, &heard, &place::linked(&card.name)).await;
+                return Ok(());
+            }
+        }
+        let linked = store.linked(&id).map_err(unheard)?;
+        if place::trust(linked.as_ref().map(|it| &it.person), &heard.speaker).is_none() {
+            self.tell(adapter, &heard, place::STRANGER).await;
+            return Ok(());
+        }
+        match &heard.said {
+            Said::Choice { ask, choice } => self.press(adapter, &heard, ask, choice).await,
+            Said::Text { text } => self.take_text(adapter, &heard, text, Trust::Operator).await,
+        }
+    }
+
+    async fn press(
+        &self,
+        adapter: &Arc<dyn Adapter>,
+        heard: &Heard,
+        ask: &str,
+        choice: &str,
+    ) -> Result<(), Unheard> {
+        let store = &self.inner.store;
+        let approval = match ask.parse::<ApprovalId>() {
+            Ok(id) => store.get_approval(id).map_err(unheard)?,
+            Err(_) => None,
+        };
+        let asked_here = match &approval {
+            Some(approval) => store
+                .place_run(approval.run_id)
+                .map_err(unheard)?
+                .is_some_and(|run| run.adapter == adapter.id()),
+            None => false,
+        };
+        let Some(approval) = approval.filter(|_| asked_here) else {
+            self.tell(adapter, heard, place::NOT_FROM_HERE).await;
+            return Ok(());
+        };
+        let answer = match &approval.request {
+            Request::Permission { .. } => place::decision_for(choice).map(|_| choice.to_string()),
+            Request::Question { options } => place::option_for(choice, options).map(str::to_string),
+        };
+        if let Some(answer) = answer {
+            self.give(approval.id, &answer).map_err(unheard)?;
+        }
+        self.wake_relay();
+        Ok(())
+    }
+
+    fn give(&self, id: ApprovalId, answer: &str) -> Result<(), StoreError> {
+        let Some(approval) = self.inner.store.get_approval(id)? else { return Ok(()) };
+        if approval.state != ApprovalState::Pending {
+            return Ok(());
+        }
+        let given = match approval.request {
+            Request::Permission { .. } => match place::decision_for(answer) {
+                Some(decision) => self.decide_approval(id, decision),
+                None => return Ok(()),
+            },
+            Request::Question { .. } => self.answer_question(id, answer),
+        };
+        match given {
+            Ok(_) | Err(RuntimeError::Store(StoreError::ApprovalSettled { .. })) => Ok(()),
+            Err(RuntimeError::Store(err)) => Err(err),
+            Err(err) => {
+                tracing::warn!(%err, "an answer from outside was not taken");
+                Ok(())
+            }
+        }
+    }
+
+    fn reading(&self, ask: ApprovalId, text: &str) -> Result<Option<String>, StoreError> {
+        let Some(approval) = self.inner.store.get_approval(ask)? else { return Ok(None) };
+        if approval.state != ApprovalState::Pending {
+            return Ok(None);
+        }
+        Ok(match &approval.request {
+            Request::Question { options } => {
+                let card = place::question("", "", "", options);
+                let chosen =
+                    place::read_choice(text, &card.choices).map(|choice| choice.label.clone());
+                Some(chosen.unwrap_or_else(|| text.trim().to_string())).filter(|it| !it.is_empty())
+            }
+            Request::Permission { action } => {
+                let card = place::permission("", "", "", Vec::new(), *action);
+                place::read_choice(text, &card.choices).map(|choice| choice.id.clone())
+            }
+        })
+    }
+
+    async fn take_text(
+        &self,
+        adapter: &Arc<dyn Adapter>,
+        heard: &Heard,
+        text: &str,
+        trust: Trust,
+    ) -> Result<(), Unheard> {
+        let id = adapter.id();
+        let store = &self.inner.store;
+        let key = format!("outside:{}:{}", id.0, heard.key.0);
+        let stale_key = format!("notice:{}/{}:stale", id.0, heard.key.0);
+        if store.heard_before(&key).map_err(unheard)?
+            || store.heard_before(&stale_key).map_err(unheard)?
+        {
+            return Ok(());
+        }
+        if let Some((ask, answer)) = store.place_answer(&id, &heard.key).map_err(unheard)? {
+            return self.give(ask, &answer).map_err(unheard);
+        }
+        let Some(bound) = store.bound(&id, &heard.spot.place).map_err(unheard)? else {
+            self.tell(adapter, heard, place::UNBOUND).await;
+            return Ok(());
+        };
+        if place::stale(heard.at_ms, now_ms()) {
+            let item = Outgoing::Post { card: place::stale_notice(text) };
+            let notice = NewRelay {
+                key: &stale_key,
+                adapter: &id,
+                spot: &heard.spot,
+                run: None,
+                state: RelayState::Queued,
+                item: &item,
+            };
+            store.queue_place_notice(&notice, &heard.key).map_err(unheard)?;
+            self.wake_relay();
+            return Ok(());
+        }
+        if let Some(ask) = store.latest_ask(&id, &heard.spot).map_err(unheard)? {
+            if let Some(answer) = self.reading(ask, text).map_err(unheard)? {
+                store
+                    .record_place_answer(&id, &heard.spot.place, &heard.key, ask, &answer)
+                    .map_err(unheard)?;
+                return self.give(ask, &answer).map_err(unheard);
+            }
+        }
+        let (agent, body) = match store.thread_agent(&id, &heard.spot).map_err(unheard)? {
+            Some(agent) => (agent, text.trim().to_string()),
+            None => {
+                let crew: Vec<_> = store
+                    .list_agents()
+                    .map_err(unheard)?
+                    .into_iter()
+                    .filter(|card| card.group_id == bound.group)
+                    .collect();
+                place::route(text, &crew, bound.agent)
+            }
+        };
+        if body.is_empty() {
+            return store.raise_high_water(&id, &heard.spot.place, &heard.key).map_err(unheard);
+        }
+        let landing = Landing {
+            adapter: id.clone(),
+            spot: heard.spot.clone(),
+            heard: heard.key.clone(),
+            heard_at: heard.at_ms,
+            direct: heard.direct,
+            agent,
+        };
+        let fingerprint = format!("{:x}", Sha256::digest(body.as_bytes()));
+        let parts = vec![Part::Text { text: body }];
+        match self.send_keyed(agent, parts, &key, &fingerprint, trust, Some(&landing)) {
+            Ok(_) => {
+                self.wake_relay();
+                Ok(())
+            }
+            Err(RuntimeError::Store(err @ (StoreError::Sqlite(_) | StoreError::Pool(_)))) => {
+                Err(unheard(err))
+            }
+            Err(err) => {
+                self.tell(adapter, heard, &place::not_delivered(&err.to_string())).await;
+                store.raise_high_water(&id, &heard.spot.place, &heard.key).map_err(unheard)
+            }
+        }
+    }
+}

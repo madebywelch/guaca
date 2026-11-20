@@ -14,6 +14,7 @@ pub mod ids;
 pub mod occasion;
 pub mod outbox;
 pub mod outcome;
+pub mod place;
 pub mod plugin;
 pub mod policy;
 pub mod promise;

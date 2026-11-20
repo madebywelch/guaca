@@ -4,7 +4,9 @@ mod errand;
 pub mod events;
 pub mod guard;
 mod outbox;
+mod places;
 pub mod prompt;
+mod relay;
 mod watch;
 
 pub use drain::{Drained, PickedUp};
@@ -647,6 +649,9 @@ struct Inner {
     modalities: modality::Registry,
     live_actors: Arc<AtomicUsize>,
     resuming: Mutex<HashMap<MessageId, ResumeRecords>>,
+    adapters: Mutex<HashMap<crate::domain::place::AdapterId, places::Attached>>,
+    link_codes: Mutex<HashMap<crate::domain::place::AdapterId, places::LinkCode>>,
+    relay_wake: tokio::sync::watch::Sender<u64>,
     events: Arc<dyn EventSink>,
 }
 
@@ -722,6 +727,7 @@ impl Runtime {
         events: Arc<dyn EventSink>,
     ) -> Self {
         let OnDisk { workspace, skills, notebooks, files } = disk;
+        let (relay_wake, _) = tokio::sync::watch::channel(0);
         Self {
             inner: Arc::new(Inner {
                 workspace_lease: Mutex::new(None),
@@ -758,7 +764,10 @@ impl Runtime {
                 modalities: modality::Registry::new(),
                 live_actors: Arc::new(AtomicUsize::new(0)),
                 resuming: Mutex::new(HashMap::new()),
-                events,
+                adapters: Mutex::new(HashMap::new()),
+                link_codes: Mutex::new(HashMap::new()),
+                relay_wake: relay_wake.clone(),
+                events: Arc::new(relay::Waking { sink: events, wake: relay_wake }),
             }),
         }
     }
@@ -2141,8 +2150,19 @@ impl Runtime {
         key: &str,
         fingerprint: &str,
     ) -> Result<(MessageId, RunId), RuntimeError> {
+        self.send_keyed(to, with_files(text.trim(), files), key, fingerprint, Trust::Operator, None)
+    }
+
+    fn send_keyed(
+        &self,
+        to: AgentId,
+        parts: Vec<Part>,
+        key: &str,
+        fingerprint: &str,
+        trust: Trust,
+        landing: Option<&crate::db::Landing>,
+    ) -> Result<(MessageId, RunId), RuntimeError> {
         let card = self.inner.store.get_agent(to)?.ok_or(RuntimeError::UnknownAgent(to))?;
-        let parts = with_files(text.trim(), files);
         let envelope = Envelope {
             id: MessageId::new(),
             run_id: RunId::new(),
@@ -2150,7 +2170,7 @@ impl Runtime {
             from: Participant::Human,
             to: Participant::Agent { id: to },
             parts,
-            trust: Trust::Operator,
+            trust,
             hop: 0,
             expects_reply: true,
             intent: Intent::Work,
@@ -2161,15 +2181,22 @@ impl Runtime {
         let mut runs = self.inner.runs.lock();
         let held =
             (runs.draining && accepting).then(|| guard::RunState::new(self.limits_for(&card)));
-        let (message, run, created) = match &held {
-            Some(state) => self.inner.store.claim_operator_send_put_down(
+        let put_down = held.as_ref().map(|state| (state.steps_used(), state.snapshot()));
+        let put_down = put_down.as_ref().map(|(steps, snapshot)| (*steps, snapshot));
+        let store = &self.inner.store;
+        let (message, run, created) = match (put_down, landing) {
+            (put_down, Some(landing)) => store.claim_landed_send(
                 key,
                 fingerprint,
                 &envelope,
-                state.steps_used(),
-                &state.snapshot(),
+                accepting,
+                put_down,
+                landing,
             )?,
-            None => self.inner.store.claim_operator_send(key, fingerprint, &envelope, accepting)?,
+            (Some((steps, snapshot)), None) => {
+                store.claim_operator_send_put_down(key, fingerprint, &envelope, steps, snapshot)?
+            }
+            (None, None) => store.claim_operator_send(key, fingerprint, &envelope, accepting)?,
         };
         if !created {
             return Ok((message, run));

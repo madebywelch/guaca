@@ -2154,6 +2154,70 @@ INSERT INTO onboarding_hire_agents (key, position, agent_id)
 ALTER TABLE onboarding_hires DROP COLUMN agent_id;
 "#,
     ),
+    (
+        81,
+        r#"
+CREATE TABLE adapters (
+    id TEXT PRIMARY KEY,
+    person TEXT,
+    linked_place TEXT
+);
+CREATE TABLE places (
+    adapter TEXT NOT NULL,
+    place TEXT NOT NULL,
+    group_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    direct INTEGER NOT NULL,
+    high_water TEXT,
+    PRIMARY KEY (adapter, place)
+);
+CREATE TABLE place_threads (
+    adapter TEXT NOT NULL,
+    place TEXT NOT NULL,
+    thread TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    PRIMARY KEY (adapter, place, thread)
+);
+CREATE TABLE place_runs (
+    run_id TEXT PRIMARY KEY,
+    adapter TEXT NOT NULL,
+    place TEXT NOT NULL,
+    thread TEXT,
+    heard_key TEXT NOT NULL,
+    heard_at INTEGER NOT NULL,
+    direct INTEGER NOT NULL,
+    message_id TEXT NOT NULL,
+    relayed INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX place_runs_open ON place_runs (adapter, created_at) WHERE relayed = 0;
+CREATE TABLE place_answers (
+    adapter TEXT NOT NULL,
+    heard_key TEXT NOT NULL,
+    approval_id TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    PRIMARY KEY (adapter, heard_key)
+);
+CREATE TABLE relay (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT NOT NULL UNIQUE,
+    adapter TEXT NOT NULL,
+    place TEXT NOT NULL,
+    thread TEXT,
+    run_id TEXT,
+    state TEXT NOT NULL
+        CHECK (state IN ('queued','sending','sent','failed','doubt','skipped')),
+    item TEXT NOT NULL,
+    posted TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_at INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX relay_open ON relay (adapter, seq) WHERE state IN ('queued','sending');
+CREATE INDEX relay_run ON relay (run_id);
+"#,
+    ),
 ];
 
 pub const DEFAULT_GROUP_ID: &str = "00000000-0000-4000-8000-000000000001";
