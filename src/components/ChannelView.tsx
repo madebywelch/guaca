@@ -569,7 +569,7 @@ function WaitingLine({ agent, asked }: { agent: AgentCard; asked: Asked | null }
     colleaguesOn(owned, activeRun, (id) => agents.find((one) => one.id === id)?.name);
   const line =
     waitingLine(mine?.names ?? [], waiting) ??
-    runningNote(owned, activity, [], sending === agent.id);
+    runningNote(owned, activity, [], sending.includes(agent.id));
 
   return (
     <div className="turn">

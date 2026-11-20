@@ -213,7 +213,7 @@ function RunningNow({ running }: { running: Running[] }) {
             run,
             activity[run.agentId],
             colleaguesOn(run, activeRun, nameOf),
-            sending === run.agentId,
+            sending.includes(run.agentId),
           );
           return (
             <li key={run.runId} className="home__run">

@@ -42,15 +42,12 @@ export function CommandMenu({ onClose, onPlace, onSection }: Props) {
   const railGroup = useStore((s) => s.railGroup);
   const open = useStore((s) => s.selected);
   const prefs = useStore((s) => s.prefs);
-  const allPending = useStore((s) => s.pending);
-  const allStuck = useStore((s) => s.stuck);
   const select = useStore((s) => s.select);
   const leaveChannel = useStore((s) => s.leaveChannel);
   const setPrefs = useStore((s) => s.setPrefs);
   const decide = useStore((s) => s.decideApproval);
   const answer = useStore((s) => s.answerQuestion);
   const showFailure = useStore((s) => s.showFailure);
-  const heldId = useHeld((s) => s.held?.id);
   const hold = useHeld((s) => s.hold);
   const tell = useHeld((s) => s.tell);
 
@@ -75,8 +72,8 @@ export function CommandMenu({ onClose, onPlace, onSection }: Props) {
     recipient,
     agents: ordered,
     activity,
-    pending: allPending.filter((one) => one.id !== heldId),
-    stuck: allStuck.filter((one) => one.id !== heldId),
+    pending: shownNow.pending,
+    stuck: shownNow.stuck,
     open,
     prefs,
   });

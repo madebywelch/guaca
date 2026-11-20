@@ -97,7 +97,7 @@ describe("presenceOf", () => {
       pending: [asking],
       activity: { "id-Chef": { state: "awaitingApproval" as const } },
     };
-    const held = presenceOf(state, asking.id);
+    const held = presenceOf(state, [asking.id]);
     expect(held.waiting).toEqual([]);
     expect(held.activity["id-Chef"]).toEqual({ state: "thinking" });
     const undone = presenceOf(state);

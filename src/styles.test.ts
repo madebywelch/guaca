@@ -1040,6 +1040,16 @@ describe("the new window's surfaces", () => {
 });
 
 describe("the waiting count", () => {
+  it("draws the menu bar glyph in the same amber as the attention fill", () => {
+    const tray = readFileSync(join(process.cwd(), "scripts/make-tray.py"), "utf8");
+    const rgb = /^ATTENTION = \(0x(\w\w), 0x(\w\w), 0x(\w\w)\)$/m.exec(tray);
+    const fills = [...css.matchAll(/--attention-fill: (#\w{6});/g)].map((m) => m[1]?.toLowerCase());
+    expect(rgb).not.toBeNull();
+    expect(fills.length).toBeGreaterThan(0);
+    const glyph = `#${rgb?.slice(1).join("")}`.toLowerCase();
+    expect(fills).toEqual(fills.map(() => glyph));
+  });
+
   it.each([
     ".orb__waiting",
     ".home__count[data-waiting]",

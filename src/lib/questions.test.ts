@@ -16,6 +16,12 @@ describe("the two nouns For you uses", () => {
     expect(whoIsWaiting(["Pip", "A deleted agent"])).toBe(
       "Pip and a deleted agent are waiting on you",
     );
+    expect(whoIsWaiting(["Pip", "A deleted agent", "Ada", "A deleted agent"])).toBe(
+      "Pip, 2 deleted agents and Ada are waiting on you",
+    );
+    expect(whoIsWaiting(["A deleted agent", "A deleted agent"])).toBe(
+      "2 deleted agents are waiting on you",
+    );
     expect(whoIsWaiting(["A deleted agent", "Pip"])).toBe(
       "A deleted agent and Pip are waiting on you",
     );

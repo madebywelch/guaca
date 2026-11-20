@@ -10,7 +10,7 @@ import {
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { ABSENT_ACCENT } from "../avatars/catalog";
-import { useHeld } from "../lib/held";
+import { useHeld, useShown } from "../lib/held";
 import { formatCombo, IS_MAC } from "../lib/keybinds";
 import { askers, whoIsWaiting } from "../lib/questions";
 import { useStore } from "../lib/store";
@@ -36,16 +36,12 @@ export function Desk({
   title?: ReactNode | null;
   queue?: Queue;
 }) {
-  const allPending = useStore((s) => s.pending);
-  const allStuck = useStore((s) => s.stuck);
+  const { pending, stuck } = useShown();
   const agents = useStore((s) => s.agents);
   const decide = useStore((s) => s.decideApproval);
   const answer = useStore((s) => s.answerQuestion);
   const clear = useStore((s) => s.clearEscalation);
-  const heldId = useHeld((s) => s.held?.id);
   const hold = useHeld((s) => s.hold);
-  const pending = queue ? allPending.filter((request) => request.id !== heldId) : allPending;
-  const stuck = queue ? allStuck.filter((one) => one.id !== heldId) : allStuck;
   const order = [...pending.map((request) => request.id), ...stuck.map((one) => one.id)];
   const selected = queue && order.includes(queue.selected ?? "") ? queue.selected : null;
 

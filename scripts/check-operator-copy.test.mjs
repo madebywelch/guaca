@@ -68,6 +68,13 @@ const RETIRED_COPY = [
   "Decision views",
   "2 pending decisions",
   "View channel",
+  "Its turn is parked until you answer, and gives up after ten minutes.",
+  "2 waiting on you",
+  "For you, 1 waiting",
+  "Allow the request the selected row belongs to",
+  "3 decisions",
+  "1 pending request",
+  "Approve the request",
 ];
 
 const CURRENT_COPY = [
@@ -86,6 +93,11 @@ const CURRENT_COPY = [
   "Testing makes a small model request that may be billed.",
   "a request for an access token when an agent uses a connector",
   "Review the pull request",
+  "Review the pull request in For you",
+  "Pip made a request for you",
+  "Reminders turn on at 9 AM",
+  "2 questions waiting on you",
+  "For you, 1 question",
 ];
 
 test("retires every word the waiting request was once called, and only those", () => {

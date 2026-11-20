@@ -274,6 +274,19 @@ describe("the keys that name an agent and take an answer back", () => {
     expect(listed("Needs you")).toEqual(
       expect.arrayContaining(["Esc", "J / K", "1 to 9", formatCombo({ key: "Enter", mod: true })]),
     );
+    expect(listed("A conversation")).not.toEqual([]);
+  });
+
+  it("calls what the queue walks through a question", () => {
+    expect(BINDINGS.map((binding) => binding.what)).toEqual(
+      expect.arrayContaining([
+        "Allow the question the selected row belongs to",
+        "Leave the field on Today and select the first question",
+        "Select the next or the previous question",
+        "Allow, or the selected question's first button",
+        "Deny, or clear the selected question",
+      ]),
+    );
   });
 });
 

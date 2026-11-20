@@ -34,7 +34,9 @@ export function frontendDashes(source) {
 }
 
 const NOUN = /\b(items?|turns?|decisions?|requests?)\b/i;
-const WAITING = /\b(waiting on you|needs? you|needs? your (attention|answer)|For you|reminders?)\b/i;
+const WAITING = /\b(waiting on you|needs? you|needs? your (attention|answer))\b/i;
+const PLACE = /\bFor you\b/;
+const PULL_REQUEST = /\bpull requests?\b/gi;
 const RETIRED = [
   [/\b(items?|turns?|decisions?|requests?) (is |are )?(waiting|needs?)\b/i, "a waiting request is a question"],
   [/\bfollow(ing)?[ -]through\b/i, "say \"In progress after your answer\""],
@@ -45,6 +47,11 @@ const RETIRED = [
     /\b(this|selected|first|next|previous|each) (requests?|decisions?)\b|\w's (request|decision)\b|\brequests? for help\b|\bdecision views?\b|\b(refresh|pending|open|answered|unanswered|completed|withdrawn) (requests|decisions)\b/i,
     "a waiting request is a question",
   ],
+  [/\b(decision|request) reminders?\b/i, "say \"Reminders about open questions\""],
+  [/\bturn is parked\b/i, "say \"It waits for your answer\""],
+  [/\b\d+ (waiting|needs? you)\b/i, "count questions: \"2 questions waiting on you\""],
+  [/\b\d+ (pending |open )?(decisions?|requests?|items?)\b/i, "count questions: \"2 questions\""],
+  [/\b(allow|deny|approve|answer|clear) the (requests?|decisions?)\b/i, "a waiting request is a question"],
 ];
 const NOT_COPY = /^(className|key|id|role|type|value|htmlFor|name|data-.*|aria-controls|aria-describedby|aria-labelledby)$/;
 
@@ -56,7 +63,8 @@ export const AGENT_FACING = new Set([
 export function retiredWords(text) {
   if (AGENT_FACING.has(text.trim())) return [];
   const found = RETIRED.filter(([pattern]) => pattern.test(text)).map(([, fix]) => fix);
-  if (NOUN.test(text) && WAITING.test(text)) found.push("a waiting request is a question, finished work is a result");
+  const plain = text.replace(PULL_REQUEST, "");
+  if (NOUN.test(plain) && (WAITING.test(plain) || PLACE.test(plain))) found.push("a waiting request is a question, finished work is a result");
   return [...new Set(found)];
 }
 

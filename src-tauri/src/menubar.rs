@@ -155,7 +155,18 @@ const NAMED: usize = 3;
 
 const DELETED: &str = "A deleted agent";
 
-fn who_is_waiting(names: &[&str]) -> String {
+fn who_is_waiting(asked: &[&str]) -> String {
+    let gone = asked.iter().filter(|name| **name == DELETED).count();
+    let folded = format!("{gone} deleted agents");
+    let names: Vec<&str> = if gone < 2 {
+        asked.to_vec()
+    } else {
+        let first = asked.iter().position(|name| *name == DELETED).unwrap_or(0);
+        let mut kept: Vec<&str> = asked.iter().copied().filter(|name| *name != DELETED).collect();
+        kept.insert(first, &folded);
+        kept
+    };
+    let names = names.as_slice();
     let others = names.len().saturating_sub(NAMED - 1);
     let named = if names.len() <= NAMED { names } else { &names[..NAMED - 1] };
     let mut shown: Vec<String> = named
@@ -173,6 +184,7 @@ fn who_is_waiting(names: &[&str]) -> String {
         shown.push(if others == 1 { "1 other".to_string() } else { format!("{others} others") });
     }
     match shown.split_last() {
+        Some((last, [])) if gone > 1 => format!("{last} are waiting on you"),
         Some((last, [])) => format!("{last} is waiting on you"),
         Some((last, rest)) => format!("{} and {last} are waiting on you", rest.join(", ")),
         None => "nobody is waiting on you".to_string(),
@@ -473,6 +485,16 @@ mod tests {
             gone.look().tooltip,
             "Guaca · Pip, a deleted agent and Scout are waiting on you"
         );
+        gone.waiting.push(approval(AgentId::new(), ProtectedAction::CreateAgent, "wants an agent"));
+        assert_eq!(
+            gone.look().tooltip,
+            "Guaca · Pip, 2 deleted agents and Scout are waiting on you"
+        );
+        let mut only_gone = quiet().0;
+        for _ in 0..2 {
+            only_gone.waiting.push(approval(AgentId::new(), ProtectedAction::CreateAgent, "asks"));
+        }
+        assert_eq!(only_gone.look().tooltip, "Guaca · 2 deleted agents are waiting on you");
 
         let ada = hire(&mut presence, "Ada");
         presence.stuck.push(escalation(ada, "no key", 1));

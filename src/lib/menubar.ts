@@ -5,8 +5,8 @@ import { questions } from "./questions";
 import type { State, StreamBuffer } from "./store";
 import type { Activity, AgentCard, AgentId, Envelope, Presence } from "./types";
 
-export function presenceOf(state: State, heldId?: string): Presence {
-  const view = shown(state.pending, state.stuck, state.activity, heldId);
+export function presenceOf(state: State, hidden: readonly string[] = []): Presence {
+  const view = shown(state.pending, state.stuck, state.activity, hidden);
   const roster: Presence["roster"] = {};
   for (const agent of state.agents) {
     if (agent.lifecycle === "terminated") continue;

@@ -169,7 +169,7 @@ describe("a request for permission", () => {
   it("takes the server's answer when a decision is refused", async () => {
     decideApproval.mockRejectedValue({
       kind: "alreadyAnswered",
-      message: "that request was already answered (answered)",
+      message: "that question was already answered (answered)",
     });
     draw("pending");
     await act(async () => {
@@ -177,7 +177,7 @@ describe("a request for permission", () => {
     });
 
     expect(approvalStates).toHaveBeenCalled();
-    expect(useStore.getState().banner?.text).toBe("That request was already answered (answered).");
+    expect(useStore.getState().banner?.text).toBe("That question was already answered (answered).");
   });
 
   it("does not offer a standing yes for acting in the operator's name", () => {

@@ -8,7 +8,7 @@ export const SURFACES = [
   "Anywhere",
   "The command menu",
   "Needs you",
-  "A channel",
+  "A conversation",
   "Search",
   "Anything open",
 ] as const;
@@ -155,21 +155,21 @@ export const BINDINGS: Binding[] = [
     id: "answer",
     what: "From an empty box, answer the question that is waiting",
     combo: { key: "Tab" },
-    where: "A channel",
+    where: "A conversation",
     fixed: true,
   },
   {
     id: "send",
     what: "Send the message",
     combo: { key: "Enter" },
-    where: "A channel",
+    where: "A conversation",
     fixed: true,
   },
   {
     id: "newline",
     what: "Start a new line instead of sending",
     combo: { key: "Enter", shift: true },
-    where: "A channel",
+    where: "A conversation",
     fixed: true,
   },
   {
@@ -177,7 +177,7 @@ export const BINDINGS: Binding[] = [
     what: "Choose which agent to mention",
     combo: { key: "ArrowUp" },
     to: { combo: { key: "ArrowDown" }, joint: "pair" },
-    where: "A channel",
+    where: "A conversation",
     fixed: true,
   },
   {

@@ -17,6 +17,7 @@ interface Held {
 
 interface HeldState {
   held: Held | null;
+  inFlight: string[];
   notice: Notice | null;
   hold: (id: string, text: string, send: () => Promise<void>) => void;
   undo: () => boolean;
@@ -34,6 +35,7 @@ function restart(then: () => void) {
 
 export const useHeld = create<HeldState>((set, get) => ({
   held: null,
+  inFlight: [],
   notice: null,
 
   hold(id, text, send) {
@@ -53,8 +55,10 @@ export const useHeld = create<HeldState>((set, get) => ({
     const held = get().held;
     if (!held) return;
     clearTimeout(timer);
-    set({ held: null, notice: null });
-    void held.send();
+    set({ held: null, notice: null, inFlight: [...get().inFlight, held.id] });
+    void held
+      .send()
+      .finally(() => set({ inFlight: get().inFlight.filter((id) => id !== held.id) }));
   },
 
   tell(notice) {
@@ -74,43 +78,67 @@ export interface Shown {
   pending: Approval[];
   stuck: Escalation[];
   activity: Record<string, Activity>;
-  sending: AgentId | null;
+  sending: AgentId[];
 }
 
 export function shown(
   pending: Approval[],
   stuck: Escalation[],
   activity: Record<string, Activity>,
-  heldId: string | undefined,
+  hidden: readonly string[],
 ): Shown {
-  const open = pending.filter((one) => one.id !== heldId);
-  const sending = pending.find((one) => one.id === heldId)?.agentId ?? null;
-  const still = sending !== null && open.some((one) => one.agentId === sending);
-  const answered = sending !== null && !still && activity[sending]?.state === "awaitingApproval";
+  const gone = new Set(hidden);
+  const open = pending.filter((one) => !gone.has(one.id));
+  const sending = [
+    ...new Set(pending.filter((one) => gone.has(one.id)).map((one) => one.agentId)),
+  ].filter(
+    (agent) =>
+      !open.some((one) => one.agentId === agent) && activity[agent]?.state === "awaitingApproval",
+  );
   return {
     pending: open,
-    stuck: stuck.filter((one) => one.id !== heldId),
-    activity: answered ? { ...activity, [sending]: { state: "thinking" } } : activity,
-    sending: answered ? sending : null,
+    stuck: stuck.filter((one) => !gone.has(one.id)),
+    activity:
+      sending.length === 0
+        ? activity
+        : {
+            ...activity,
+            ...Object.fromEntries(sending.map((agent) => [agent, { state: "thinking" }])),
+          },
+    sending,
   };
 }
 
-export function useShown(): Shown {
+export function hiddenNow(): string[] {
+  const { held, inFlight } = useHeld.getState();
+  return held ? [...inFlight, held.id] : inFlight;
+}
+
+function useHidden(): readonly string[] {
   const heldId = useHeld((s) => s.held?.id);
+  const inFlight = useHeld((s) => s.inFlight);
+  return useMemo(
+    () => (heldId === undefined ? inFlight : [...inFlight, heldId]),
+    [heldId, inFlight],
+  );
+}
+
+export function useShown(): Shown {
+  const hidden = useHidden();
   const pending = useStore((s) => s.pending);
   const stuck = useStore((s) => s.stuck);
   const activity = useStore((s) => s.activity);
-  return useMemo(() => shown(pending, stuck, activity, heldId), [pending, stuck, activity, heldId]);
+  return useMemo(() => shown(pending, stuck, activity, hidden), [pending, stuck, activity, hidden]);
 }
 
 export function useForYouCount(): number {
-  const heldId = useHeld((s) => s.held?.id);
+  const hidden = useHidden();
   return useStore((state) => {
-    const held =
-      heldId !== undefined &&
-      (state.pending.some((one) => one.id === heldId) ||
-        state.stuck.some((one) => one.id === heldId));
-    return forYouCount(state) - (held ? 1 : 0);
+    const gone = hidden.filter(
+      (id) =>
+        state.pending.some((one) => one.id === id) || state.stuck.some((one) => one.id === id),
+    );
+    return forYouCount(state) - gone.length;
   });
 }
 

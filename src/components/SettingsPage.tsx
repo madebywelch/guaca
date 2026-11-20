@@ -1164,7 +1164,7 @@ export function SettingsPage({ request, onSection }: Props) {
 
                 <ApiKeyField
                   label="E2B API key"
-                  title="Lets this host rent a computer for an agent: a desktop and a terminal in a sandbox, shown in the corner of its channel. Which agents have one is set on each agent's Computer panel."
+                  title="Lets this host rent a computer for an agent: a desktop and a terminal in a sandbox, shown in the corner of its conversation. Which agents have one is set on each agent's Computer panel."
                   stored={settings?.e2bKeySet ?? false}
                   hint={settings?.e2bKeyHint ?? ""}
                   value={e2bKey}

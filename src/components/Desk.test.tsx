@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { useHeld } from "../lib/held";
 import { useStore } from "../lib/store";
 import type { AgentCard, Approval, ApprovalId, Escalation } from "../lib/types";
 import { DEFAULT_GROUP } from "../test-fixtures";
@@ -309,6 +310,14 @@ describe("an escalation on the desk", () => {
     draw([], [stuckOn()]);
     fireEvent.click(screen.getByRole("button", { name: "Open conversation" }));
     expect(openChannel).toHaveBeenCalledWith("Manager");
+  });
+
+  it("leaves out a question whose answer is held, so it cannot be answered twice", () => {
+    useHeld.setState({ held: { id: "ap-held", send: async () => {} }, inFlight: [], notice: null });
+    draw([request({ id: "ap-held" as ApprovalId })]);
+    expect(screen.queryByRole("button", { name: "Allow" })).toBeNull();
+    act(() => useHeld.setState({ held: null }));
+    expect(screen.getByRole("button", { name: "Allow" })).toBeTruthy();
   });
 
   it("clears the one it was asked about", () => {

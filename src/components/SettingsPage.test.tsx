@@ -423,6 +423,15 @@ describe("concurrent settings edits", () => {
     expect(field(/^Default model/).value).toBe("remote/model");
   });
 
+  it("says a rented computer shows in the corner of the agent's conversation", () => {
+    open();
+    pane("Machines");
+    const legend = [...document.querySelectorAll("legend")].find((one) =>
+      one.textContent?.startsWith("E2B API key"),
+    );
+    expect(legend?.getAttribute("title")).toContain("shown in the corner of its conversation.");
+  });
+
   it("discards all staged edits and does not restore them on reopen", () => {
     const view = open();
     expect(screen.queryByRole("button", { name: "Discard changes" })).toBeNull();

@@ -10,9 +10,14 @@ export const DELETED = "A deleted agent";
 
 const NAMED = 3;
 
-export function whoIsWaiting(names: string[]): string {
+export function whoIsWaiting(asked: string[]): string {
+  const gone = asked.filter((name) => name === DELETED).length;
+  const first = asked.indexOf(DELETED);
+  const kept = asked.filter((name) => name !== DELETED);
+  const names =
+    gone < 2 ? asked : [...kept.slice(0, first), `${gone} deleted agents`, ...kept.slice(first)];
   if (names.length === 0) return "Nobody is waiting on you";
-  if (names.length === 1) return `${names[0]} is waiting on you`;
+  if (names.length === 1) return `${names[0]} ${gone < 2 ? "is" : "are"} waiting on you`;
   const others = names.length - (NAMED - 1);
   const shown = (
     names.length <= NAMED
