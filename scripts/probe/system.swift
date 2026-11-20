@@ -3,7 +3,7 @@ import ApplicationServices
 import CoreGraphics
 import Foundation
 
-let deepest = 30
+let deepest = 40
 
 func emit(_ value: Any) {
     let data = try! JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
@@ -99,6 +99,20 @@ func actions(_ element: AXUIElement, named label: String, depth: Int = 0) -> [(A
     let own = (names as? [String] ?? []).filter { $0.hasPrefix("Name:") && actionName($0) == label }.map { (element, $0) }
     return own + children(element).flatMap { actions($0, named: label, depth: depth + 1) }
 }
+
+func frame(_ element: AXUIElement) -> [String: Any] {
+    var origin = CGPoint.zero
+    var size = CGSize.zero
+    if let place = attribute(element, kAXPositionAttribute as String) { AXValueGetValue(place as! AXValue, .cgPoint, &origin) }
+    if let extent = attribute(element, kAXSizeAttribute as String) { AXValueGetValue(extent as! AXValue, .cgSize, &size) }
+    return ["name": text(element), "x": origin.x, "y": origin.y, "width": size.width, "height": size.height,
+            "value": (attribute(element, kAXValueAttribute as String) as? NSNumber)?.intValue ?? NSNull()]
+}
+
+let keyCodes: [String: CGKeyCode] = [
+    "k": 40, "tab": 48, "return": 36, "escape": 53, "left": 123, "right": 124, "down": 125, "up": 126,
+]
+let keyFlags: [String: CGEventFlags] = ["cmd": .maskCommand, "shift": .maskShift]
 
 func trusted() {
     if !AXIsProcessTrusted() {
@@ -204,6 +218,94 @@ case "escape":
         usleep(40_000)
     }
     emit(["escape": true])
+case "find":
+    trusted()
+    let rest = Array(args.dropFirst())
+    guard rest.count == 3, let pid = Int32(rest[0]) else { refuse("find needs a pid, a role and a name") }
+    emit(find(AXUIElementCreateApplication(pid), role: rest[1], name: rest[2]).map(frame))
+case "press-one":
+    trusted()
+    let rest = Array(args.dropFirst())
+    guard rest.count == 3, let pid = Int32(rest[0]) else { refuse("press-one needs a pid, a role and a name") }
+    let matches = find(AXUIElementCreateApplication(pid), role: rest[1], name: rest[2])
+    guard matches.count == 1 else { refuse("\(matches.count) \(rest[1]) named \(rest[2]) on screen") }
+    let result = AXUIElementPerformAction(matches[0], kAXPressAction as CFString)
+    if result != .success { refuse("the press was refused (AXError \(result.rawValue))") }
+    emit(["pressed": text(matches[0])])
+case "key":
+    trusted()
+    let chord = args.dropFirst().first ?? ""
+    let parts = chord.split(separator: "+").map(String.init)
+    guard let last = parts.last, let code = keyCodes[last], parts.dropLast().allSatisfy({ keyFlags[$0] != nil })
+    else { refuse("no such key: \(chord)") }
+    let flags = parts.dropLast().reduce(CGEventFlags()) { $0.union(keyFlags[$1]!) }
+    let source = CGEventSource(stateID: .hidSystemState)
+    for down in [true, false] {
+        let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down)
+        event?.flags = flags
+        event?.post(tap: .cghidEventTap)
+        for _ in 0..<100 {
+            if CGEventSource.keyState(.hidSystemState, key: code) == down { break }
+            usleep(2_000)
+        }
+    }
+    emit(["key": chord])
+case "size":
+    trusted()
+    let rest = Array(args.dropFirst())
+    guard rest.count == 3, let pid = Int32(rest[0]), let width = Double(rest[1]), let height = Double(rest[2])
+    else { refuse("size needs a pid, a width and a height") }
+    let windows = attribute(AXUIElementCreateApplication(pid), kAXWindowsAttribute as String) as? [AXUIElement] ?? []
+    guard let window = windows.max(by: { (frame($0)["height"] as! CGFloat) < (frame($1)["height"] as! CGFloat) })
+    else { refuse("no window to size") }
+    var size = CGSize(width: width, height: height)
+    let result = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, AXValueCreate(.cgSize, &size)!)
+    if result != .success { refuse("the window refused the size (AXError \(result.rawValue))") }
+    emit(["size": [width, height]])
+case "status-item":
+    trusted()
+    let rest = Array(args.dropFirst())
+    guard rest.count == 2, let pid = Int32(rest[0]) else { refuse("status-item needs a pid and a file") }
+    if !CGPreflightScreenCaptureAccess() {
+        refuse("Screen Recording is not allowed for the app that runs this command. Turn it on in System Settings, Privacy & Security, Screen & System Audio Recording.")
+    }
+    let bar = attribute(AXUIElementCreateApplication(pid), "AXExtrasMenuBar")
+    guard let item = bar.map({ children($0 as! AXUIElement) })?.first else { refuse("no menu bar icon for \(pid)") }
+    let placed = frame(item)
+    let x = Int((placed["x"] as! CGFloat).rounded()), y = Int((placed["y"] as! CGFloat).rounded())
+    let width = Int((placed["width"] as! CGFloat).rounded()), height = Int((placed["height"] as! CGFloat).rounded())
+    guard width > 0 && height > 0 else { refuse("the menu bar icon has no size") }
+    try? FileManager.default.removeItem(atPath: rest[1])
+    let shot = Process()
+    shot.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+    shot.arguments = ["-x", "-R", "\(x),\(y),\(width),\(height)", rest[1]]
+    try? shot.run()
+    shot.waitUntilExit()
+    guard shot.terminationStatus == 0, let data = try? Data(contentsOf: URL(fileURLWithPath: rest[1])),
+          let image = NSBitmapImageRep(data: data)
+    else { refuse("could not capture the menu bar icon") }
+    var kind: [[Character]] = Array(repeating: Array(repeating: " ", count: image.pixelsWide), count: image.pixelsHigh)
+    for row in 0..<image.pixelsHigh {
+        for column in 0..<image.pixelsWide {
+            guard let color = image.colorAt(x: column, y: row)?.usingColorSpace(.sRGB) else { continue }
+            let (red, green, blue) = (color.redComponent * 255, color.greenComponent * 255, color.blueComponent * 255)
+            if red > 200 && green > 140 && green < 215 && blue < 130 { kind[row][column] = "A" }
+            if red < 90 && green < 90 && blue < 90 { kind[row][column] = "#" }
+        }
+    }
+    let reach = max(3, image.pixelsWide / width * 3)
+    func edged(_ line: [Character]) -> (sides: Int, outlined: Int, eye: Int) {
+        guard let first = line.firstIndex(of: "A"), let last = line.lastIndex(of: "A") else { return (0, 0, 0) }
+        let before = line[max(0, first - reach)..<first].contains("#") ? 1 : 0
+        let after = line[(last + 1)..<min(line.count, last + 1 + reach)].contains("#") ? 1 : 0
+        return (2, before + after, line[first...last].filter { $0 == "#" }.count)
+    }
+    let across = kind.map(edged)
+    let down = (0..<image.pixelsWide).map { column in edged(kind.map { $0[column] }) }
+    emit(["help": attribute(item, "AXHelp") as? String ?? "", "title": attribute(item, kAXTitleAttribute as String) as? String ?? "",
+          "amber": kind.joined().filter { $0 == "A" }.count,
+          "sides": (across + down).map(\.sides).reduce(0, +), "outlined": (across + down).map(\.outlined).reduce(0, +),
+          "eye": across.map(\.eye).reduce(0, +)])
 case "capture":
     let rest = Array(args.dropFirst())
     guard rest.count == 2, let pid = Int(rest[0]) else { refuse("capture needs a pid and a file") }
@@ -222,5 +324,5 @@ case "capture":
     }
     emit(["files": files])
 default:
-    refuse("usage: system access|front|watch-front|idle|windows|owner-windows|press|press-group|describe|capture|click-icon|escape")
+    refuse("usage: system access|front|watch-front|idle|windows|owner-windows|press|press-group|press-one|find|describe|capture|click-icon|escape|key|size|status-item")
 }
