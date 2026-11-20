@@ -36,7 +36,7 @@ impl Runtime {
         self.detach_adapter(&id);
         let status = Arc::new(Mutex::new(AdapterStatus::default()));
         let holding = self.inner.handle.spawn(self.clone().hold(adapter.clone(), status.clone()));
-        let relaying = self.inner.handle.spawn(self.clone().relay(adapter.clone()));
+        let relaying = self.inner.handle.spawn(self.clone().relay(adapter, status.clone()));
         self.inner.adapters.lock().insert(
             id,
             Attached { status, tasks: vec![holding.abort_handle(), relaying.abort_handle()] },
@@ -50,7 +50,9 @@ impl Runtime {
     }
 
     pub fn adapter_status(&self, id: &AdapterId) -> Option<AdapterStatus> {
-        self.inner.adapters.lock().get(id).map(|attached| attached.status.lock().clone())
+        let mut status = self.inner.adapters.lock().get(id)?.status.lock().clone();
+        status.last_relay_error = self.inner.store.last_relay_error(id).ok().flatten();
+        Some(status)
     }
 
     pub fn link_code(&self, adapter: &AdapterId, agent: AgentId) -> Result<String, RuntimeError> {
@@ -65,27 +67,14 @@ impl Runtime {
     }
 
     async fn hold(self, adapter: Arc<dyn Adapter>, status: Arc<Mutex<AdapterStatus>>) {
-        let id = adapter.id();
         let mut failures = 0u32;
         loop {
-            status.lock().connected_since = Some(now_ms());
-            let ears = Ears::new(self.clone(), adapter.clone());
-            let catching = async {
-                let places = match self.inner.store.bound_places(&id) {
-                    Ok(places) => places,
-                    Err(err) => {
-                        tracing::warn!(%err, "could not read the places to catch up on");
-                        return;
-                    }
-                };
-                for (place, after) in places {
-                    if let Err(err) = adapter.catch_up(&place, after.as_ref(), &ears).await {
-                        status.lock().last_error = Some(err.reason);
-                    }
-                }
-            };
-            let (ran, ()) = tokio::join!(adapter.run(ears.clone()), catching);
-            status.lock().connected_since = None;
+            let ears = Ears::new(self.clone(), adapter.clone(), status.clone());
+            let ran = adapter.run(ears).await;
+            let connected = status.lock().connected_since.take();
+            if connected.is_some_and(|began| now_ms().saturating_sub(began) >= 60_000) {
+                failures = 0;
+            }
             match ran {
                 Ok(()) => failures = 0,
                 Err(err) => {
@@ -93,6 +82,7 @@ impl Runtime {
                     now.last_error = Some(err.reason);
                     if !err.retry {
                         now.stopped = true;
+                        self.wake_relay();
                         return;
                     }
                     failures += 1;
@@ -115,6 +105,9 @@ impl Runtime {
         said: &str,
     ) -> Result<Option<String>, StoreError> {
         let mut codes = self.inner.link_codes.lock();
+        if self.inner.store.link_was_heard(adapter, &heard.key)? {
+            return Ok(Some(String::new()));
+        }
         let Some(code) = codes.get(adapter).filter(|code| code.code == said) else {
             return Ok(None);
         };
@@ -127,7 +120,8 @@ impl Runtime {
             return Ok(Some(place::CODE_IN_CHANNEL.into()));
         }
         let store = &self.inner.store;
-        let Some(card) = store.get_agent(code.agent)?.filter(|card| card.lifecycle.accepts_work())
+        let Some(card) =
+            store.get_agent(code.agent)?.filter(|card| card.lifecycle.is_discoverable())
         else {
             return Ok(Some("This agent is unavailable. Pick another in Guaca's Settings.".into()));
         };
@@ -144,11 +138,10 @@ impl Runtime {
         let id = adapter.id();
         let store = &self.inner.store;
         if let Said::Text { text } = &heard.said {
-            if store.link_was_heard(&id, &heard.key).map_err(unheard)? {
-                return Ok(());
-            }
             if let Some(line) = self.use_code(&id, &heard, text).map_err(unheard)? {
-                self.tell(adapter, &heard, &line).await;
+                if !line.is_empty() {
+                    self.tell(adapter, &heard, &line).await;
+                }
                 return Ok(());
             }
         }
@@ -219,7 +212,12 @@ impl Runtime {
         }
     }
 
-    fn reading(&self, ask: ApprovalId, text: &str) -> Result<Option<String>, StoreError> {
+    fn reading(
+        &self,
+        ask: ApprovalId,
+        text: &str,
+        no_buttons: bool,
+    ) -> Result<Option<String>, StoreError> {
         let Some(approval) = self.inner.store.get_approval(ask)? else { return Ok(None) };
         if approval.state != ApprovalState::Pending {
             return Ok(None);
@@ -227,14 +225,17 @@ impl Runtime {
         Ok(match &approval.request {
             Request::Question { options } => {
                 let card = place::question("", "", "", options);
-                let chosen =
-                    place::read_choice(text, &card.choices).map(|choice| choice.label.clone());
+                let chosen = no_buttons
+                    .then(|| place::read_choice(text, &card.choices))
+                    .flatten()
+                    .map(|choice| choice.label.clone());
                 Some(chosen.unwrap_or_else(|| text.trim().to_string())).filter(|it| !it.is_empty())
             }
-            Request::Permission { action } => {
+            Request::Permission { action } if no_buttons => {
                 let card = place::permission("", "", "", Vec::new(), *action);
                 place::read_choice(text, &card.choices).map(|choice| choice.id.clone())
             }
+            Request::Permission { .. } => None,
         })
     }
 
@@ -275,8 +276,8 @@ impl Runtime {
             self.wake_relay();
             return Ok(());
         }
-        if let Some(ask) = store.latest_ask(&id, &heard.spot).map_err(unheard)? {
-            if let Some(answer) = self.reading(ask, text).map_err(unheard)? {
+        if let Some((ask, no_buttons)) = store.latest_ask(&id, &heard.spot).map_err(unheard)? {
+            if let Some(answer) = self.reading(ask, text, no_buttons).map_err(unheard)? {
                 store
                     .record_place_answer(&id, &heard.spot.place, &heard.key, ask, &answer)
                     .map_err(unheard)?;
@@ -295,6 +296,14 @@ impl Runtime {
                 place::route(text, &crew, bound.agent)
             }
         };
+        if !store
+            .get_agent(agent)
+            .map_err(unheard)?
+            .is_some_and(|card| card.group_id == bound.group && card.lifecycle.is_discoverable())
+        {
+            self.tell(adapter, heard, place::AGENT_UNAVAILABLE).await;
+            return store.raise_high_water(&id, &heard.spot.place, &heard.key).map_err(unheard);
+        }
         if body.is_empty() {
             return store.raise_high_water(&id, &heard.spot.place, &heard.key).map_err(unheard);
         }
@@ -316,10 +325,11 @@ impl Runtime {
             Err(RuntimeError::Store(err @ (StoreError::Sqlite(_) | StoreError::Pool(_)))) => {
                 Err(unheard(err))
             }
-            Err(err) => {
-                self.tell(adapter, heard, &place::not_delivered(&err.to_string())).await;
+            Err(RuntimeError::UnknownAgent(_) | RuntimeError::AgentTerminated(_)) => {
+                self.tell(adapter, heard, place::AGENT_UNAVAILABLE).await;
                 store.raise_high_water(&id, &heard.spot.place, &heard.key).map_err(unheard)
             }
+            Err(err) => Err(unheard(err)),
         }
     }
 }

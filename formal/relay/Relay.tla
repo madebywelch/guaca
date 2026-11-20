@@ -8,10 +8,10 @@ CONSTANTS
     CatchUpKeyed,
     PlaceRunOneCommit
 
-Said == {"m1", "m2"}
+Said == {"m1"}
 Stranger == "s"
 Heard == Said \cup {Stranger}
-Index(m) == IF m = "m1" THEN 1 ELSE IF m = "m2" THEN 2 ELSE 0
+Index(m) == IF m = "m1" THEN 1 ELSE 0
 Items == {"reply", "ask", "settle"}
 Terminal == {"sent", "failed", "doubt"}
 Vias == {"live", "catch"}
@@ -69,7 +69,7 @@ TypeOK ==
     /\ committed \subseteq Heard
     /\ landing \subseteq Said /\ catching \subseteq Heard
     /\ claimed \subseteq Said /\ placeRun \subseteq Said
-    /\ high \in 0..2
+    /\ high \in 0..1
     /\ replied \subseteq Said
     /\ rs \in [Items -> {"none", "sending", "queued", "sent", "failed", "doubt"}]
     /\ fresh \subseteq Items /\ awaiting \subseteq Items
@@ -132,7 +132,7 @@ Asks ==
     /\ UNCHANGED <<up, ends, acked, memory, claimed, placeRun, high, replied, made, rs, ghosts>>
 
 Relayable(i) ==
-    \/ i = "reply" /\ "m1" \in replied /\ "m1" \in placeRun
+    \/ i = "reply" /\ "m1" \in replied /\ "m1" \in placeRun /\ "settle" \in Range(made)
     \/ i = "ask" /\ approval # "none" /\ "m1" \in placeRun
     \/ i = "settle" /\ approval = "decided" /\ rs["ask"] \in Terminal
 
@@ -227,7 +227,7 @@ End ==
 Start ==
     /\ ~up
     /\ up' = TRUE
-    /\ catching' = {m \in Heard : Index(m) > high \/ m = Stranger}
+    /\ catching' = Heard
     /\ UNCHANGED <<ends, acked, inflight, committed, landing, fresh, awaiting, disk, ghosts>>
 
 Next ==

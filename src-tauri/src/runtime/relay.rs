@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use parking_lot::Mutex;
 use tokio::sync::watch;
 
 use super::events::{EventSink, UiEvent};
@@ -12,7 +13,7 @@ use crate::domain::envelope::Part;
 use crate::domain::ids::RunId;
 use crate::domain::now_ms;
 use crate::domain::place::{self, Abilities, Card, CardKind, Outgoing, PostSafety, RelayTag, Spot};
-use crate::places::{Adapter, SendError};
+use crate::places::{Adapter, AdapterStatus, SendError};
 
 const STEPS: [u64; 4] = [2, 10, 60, 600];
 const HOURLY: u64 = 3600;
@@ -70,10 +71,10 @@ fn texts(parts: &[Part]) -> String {
     parts
         .iter()
         .filter_map(|part| match part {
-            Part::Text { text } => Some(text.trim()),
+            Part::Text { text } => Some(text.as_str()),
             _ => None,
         })
-        .filter(|text| !text.is_empty())
+        .filter(|text| !text.trim().is_empty())
         .collect::<Vec<_>>()
         .join("\n\n")
 }
@@ -83,12 +84,15 @@ impl Runtime {
         self.inner.relay_wake.send_modify(|count| *count = count.wrapping_add(1));
     }
 
-    pub(super) async fn relay(self, adapter: Arc<dyn Adapter>) {
+    pub(super) async fn relay(self, adapter: Arc<dyn Adapter>, status: Arc<Mutex<AdapterStatus>>) {
         let id = adapter.id();
         let mut woken = self.inner.relay_wake.subscribe();
         loop {
             woken.borrow_and_update();
             loop {
+                if status.lock().stopped {
+                    return;
+                }
                 match self.relay_round(&adapter).await {
                     Ok(true) => continue,
                     Ok(false) => break,
@@ -195,6 +199,9 @@ impl Runtime {
                 match adapter.find(&row.spot, &RelayTag(row.key.clone())).await {
                     Ok(Some(posted)) => store.relay_sent(&row.key, Some(&posted)),
                     Ok(None) => store.relay_doubt(&row.key, UNCERTAIN),
+                    Err(SendError::Retry { .. }) if now_ms() - row.created_at >= GIVE_UP_MS => {
+                        store.relay_doubt(&row.key, UNCERTAIN)
+                    }
                     Err(SendError::Retry { after }) => {
                         let wait = after.unwrap_or_else(|| backoff(row.attempts + 1));
                         store.relay_hold(&row.key, now_ms() + wait.as_millis() as i64, WAITED)
@@ -405,10 +412,19 @@ impl Runtime {
         }
 
         if let Some(outcome) = &outcome {
+            let stopped = outcome.status == crate::domain::outcome::Status::Stopped;
             let ended = place::mark_for(outcome.status);
             let key = format!("mark:{id}:{}", ended.as_str());
-            if fresh(&key, wants) {
+            if !stopped && fresh(&key, wants) {
                 wants.push(Want::new(key, &run.spot, id, (outcome.finished_at, 5, 0), mark(ended)));
+            }
+            if stopped {
+                let key = format!("notice:{id}:stopped");
+                if fresh(&key, &posts) && fresh(&key, wants) {
+                    let item =
+                        Outgoing::Post { card: place::notice("Guaca stopped this run.".into()) };
+                    posts.push(Want::new(key, &run.spot, id, (outcome.finished_at, 6, 0), item));
+                }
             }
             if ended == place::Mark::Failed {
                 let key = format!("notice:{id}:failed");

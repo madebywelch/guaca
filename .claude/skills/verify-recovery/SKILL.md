@@ -115,6 +115,8 @@ When a row fails, replay the trace against the real code before believing either
 
 Last confirmed against commit `79ae97296e7c83b4737c38a7abba9bf308de232b` (`main`). Files covered: `db/put_down.rs`, `runtime/drain.rs`, `boot.rs` (`recover`), `db/store.rs` (`append_delivery`, `claim_send`, `start_deliveries`, `settle_run_as`, `stop_routine_run`) and `runtime/mod.rs` (`deliver_with_expectation`, `run_turn`, `take_in`, `hand_back`, `finish_turn`, `track_inflight`, `stop_run`, `actor_loop`).
 
+The place adapter preserves the `claim_send` commit boundary: the place record joins the operator key, message, and pending run, including the draining branch. `formal/relay/Relay.tla` checks the added record and the provider recovery path; the recovery rows still check the original run guarantees.
+
 Open findings, held as finding rows in `scripts/formal.sh` and each replayed in the real runtime:
 
 1. **NoBlindRepeat (stops).** A drain puts a message a turn took in and acted on down bare, beside the turn's own message and its record. If the operator stops the turn's conversation on the next host before that turn takes the message in again, the message gets a turn of its own with no record of the calls already made for it. Replayed with the agent paused across the restart, which holds the window open.

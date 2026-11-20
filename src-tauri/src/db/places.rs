@@ -283,17 +283,32 @@ impl Store {
             .transpose()
     }
 
-    pub fn bound_places(
+    pub fn catch_up_places(
         &self,
         adapter: &AdapterId,
-    ) -> Result<Vec<(PlaceKey, Option<HeardKey>)>, StoreError> {
+        since_ms: i64,
+    ) -> Result<Vec<(PlaceKey, Vec<ThreadKey>)>, StoreError> {
         let conn = self.conn()?;
-        let mut stmt =
-            conn.prepare("SELECT place,high_water FROM places WHERE adapter=?1 ORDER BY place")?;
-        let rows = stmt.query_map([&adapter.0], |row| {
-            Ok((PlaceKey(row.get(0)?), row.get::<_, Option<String>>(1)?.map(HeardKey)))
+        let mut stmt = conn.prepare(
+            "SELECT places.place, recent.thread FROM places
+               LEFT JOIN (
+                 SELECT DISTINCT place,thread FROM place_runs
+                  WHERE adapter=?1 AND thread IS NOT NULL AND heard_at>=?2
+               ) recent ON places.place=recent.place
+              WHERE places.adapter=?1 ORDER BY places.place,recent.thread",
+        )?;
+        let rows = stmt.query_map(params![adapter.0, since_ms], |row| {
+            Ok((PlaceKey(row.get(0)?), row.get::<_, Option<String>>(1)?.map(ThreadKey)))
         })?;
-        Ok(rows.collect::<Result<_, _>>()?)
+        let mut places: Vec<(PlaceKey, Vec<ThreadKey>)> = Vec::new();
+        for row in rows {
+            let (place, thread) = row?;
+            if places.last().is_none_or(|(last, _)| *last != place) {
+                places.push((place, Vec::new()));
+            }
+            places.last_mut().expect("place was inserted").1.extend(thread);
+        }
+        Ok(places)
     }
 
     pub fn high_water(
@@ -477,21 +492,27 @@ impl Store {
         &self,
         adapter: &AdapterId,
         spot: &Spot,
-    ) -> Result<Option<ApprovalId>, StoreError> {
+    ) -> Result<Option<(ApprovalId, bool)>, StoreError> {
         let conn = self.conn()?;
-        let found: Option<String> = conn
+        let found: Option<(String, String)> = conn
             .query_row(
-                "SELECT substr(key,5) FROM relay
+                "SELECT substr(key,5),item FROM relay
                   WHERE adapter=?1 AND place=?2 AND key LIKE 'ask:%'
-                    AND (thread IS NULL OR thread IS ?3)
-                    AND state IN ('sent','doubt','sending','queued')
+                    AND thread IS ?3 AND state='sent'
                   ORDER BY seq DESC LIMIT 1",
                 params![adapter.0, spot.place.0, spot.thread.as_ref().map(|t| t.0.as_str())],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
         found
-            .map(|raw| raw.parse().map_err(|e: uuid::Error| corrupt("approval id")(e.to_string())))
+            .map(|(raw, item)| {
+                let id =
+                    raw.parse().map_err(|e: uuid::Error| corrupt("approval id")(e.to_string()))?;
+                let item: Outgoing = serde_json::from_str(&item)
+                    .map_err(|e| corrupt("relay item")(e.to_string()))?;
+                let no_buttons = matches!(item, Outgoing::Post { card } if card.choices.is_empty());
+                Ok((id, no_buttons))
+            })
             .transpose()
     }
 
@@ -549,10 +570,30 @@ impl Store {
     pub fn relay_next_at(&self, adapter: &AdapterId) -> Result<Option<i64>, StoreError> {
         let conn = self.conn()?;
         Ok(conn.query_row(
-            "SELECT min(next_at) FROM relay WHERE adapter=?1 AND state IN ('queued','sending')",
+            "SELECT min(head.next_at) FROM relay head
+              WHERE head.adapter=?1 AND head.state IN ('queued','sending')
+                AND NOT EXISTS (
+                    SELECT 1 FROM relay prior WHERE prior.adapter=head.adapter
+                      AND prior.place=head.place AND prior.thread IS head.thread
+                      AND prior.seq<head.seq AND prior.state IN ('queued','sending')
+                )",
             [&adapter.0],
             |row| row.get(0),
         )?)
+    }
+}
+
+impl Store {
+    pub fn last_relay_error(&self, adapter: &AdapterId) -> Result<Option<String>, StoreError> {
+        Ok(self
+            .conn()?
+            .query_row(
+                "SELECT last_error FROM relay WHERE adapter=?1 AND state IN ('failed','doubt')
+             AND last_error IS NOT NULL ORDER BY seq DESC LIMIT 1",
+                [&adapter.0],
+                |row| row.get(0),
+            )
+            .optional()?)
     }
 }
 

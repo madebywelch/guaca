@@ -41,6 +41,7 @@ struct World {
     marks: Mutex<Vec<(HeardKey, Mark)>>,
     tells: Mutex<Vec<(OutsideUser, String)>>,
     history: Mutex<Vec<Heard>>,
+    caught: Mutex<Vec<(PlaceKey, Vec<ThreadKey>, i64)>>,
     failures: Mutex<VecDeque<SendError>>,
     hang_posts: AtomicBool,
     finds: AtomicUsize,
@@ -87,11 +88,14 @@ impl Adapter for Fake {
 
     fn run<'a>(&'a self, ears: Ears) -> Pending<'a, Result<(), AdapterError>> {
         async move {
-            self.0.runs.fetch_add(1, Ordering::SeqCst);
-            *self.0.ears.lock() = Some(ears);
-            if let Some(ending) = self.0.ending.lock().clone() {
+            let ending = self.0.ending.lock().clone();
+            if let Some(ending) = ending {
+                self.0.runs.fetch_add(1, Ordering::SeqCst);
                 return Err(ending);
             }
+            ears.connected().await?;
+            *self.0.ears.lock() = Some(ears);
+            self.0.runs.fetch_add(1, Ordering::SeqCst);
             futures_util::future::pending::<()>().await;
             Ok(())
         }
@@ -101,19 +105,23 @@ impl Adapter for Fake {
     fn catch_up<'a>(
         &'a self,
         place: &'a PlaceKey,
-        after: Option<&'a HeardKey>,
+        recent_threads: &'a [ThreadKey],
+        since_ms: i64,
         ears: &'a Ears,
     ) -> Pending<'a, Result<(), AdapterError>> {
         async move {
-            let history = self.0.history.lock().clone();
-            let start = match after {
-                Some(key) => {
-                    history.iter().position(|heard| &heard.key == key).map(|at| at + 1).unwrap_or(0)
-                }
-                None => 0,
-            };
-            for heard in history.into_iter().skip(start).filter(|heard| &heard.spot.place == place)
-            {
+            self.0.caught.lock().push((place.clone(), recent_threads.to_vec(), since_ms));
+            let mut history = self.0.history.lock().clone();
+            history.sort_by_key(|heard| heard.at_ms);
+            for heard in history.into_iter().filter(|heard| {
+                &heard.spot.place == place
+                    && heard.at_ms >= since_ms
+                    && heard
+                        .spot
+                        .thread
+                        .as_ref()
+                        .is_none_or(|thread| recent_threads.contains(thread))
+            }) {
                 ears.heard(heard)
                     .await
                     .map_err(|unheard| AdapterError { reason: unheard.reason, retry: true })?;
@@ -396,6 +404,29 @@ async fn a_redelivered_message_makes_one_run_and_one_reply() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reconnect_finds_a_missed_reply_in_an_old_thread_even_after_a_newer_live_event() {
+    let stub = saying("Here.").await;
+    let Setup { h, world } = linked(&stub, abilities()).await;
+    let old_root = "last-week";
+    hear(&world, said("recent", DM, Some(old_root), PERSON, "Yesterday's follow-up")).await;
+    settled(&h, "recent").await;
+    let missed = said("missed", DM, Some(old_root), PERSON, "Earlier while disconnected");
+    let live = said("live", DM, None, PERSON, "A newer message");
+    hear(&world, live.clone()).await;
+    settled(&h, "live").await;
+    world.history.lock().extend([missed, live]);
+    attach(&h, &world).await;
+    settled(&h, "missed").await;
+    let calls = world.caught.lock();
+    assert!(calls.iter().any(|(place, roots, floor)| {
+        place.0 == DM
+            && roots == &[ThreadKey(old_root.into())]
+            && now_ms() - floor >= place::STALE_MS
+    }));
+    assert_eq!(runs(&h), 3);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_code_sent_in_a_channel_links_nothing() {
     let stub = saying("Hello.").await;
     let h = harness_in_groups(&stub, &[("Pip", Some("Home"))], GuardLimits::default());
@@ -406,6 +437,8 @@ async fn a_code_sent_in_a_channel_links_nothing() {
     assert_eq!(world.told(PERSON), vec![place::CODE_IN_CHANNEL]);
     assert_eq!(h.runtime.store().linked(&adapter()).unwrap(), None);
     hear(&world, said("c2", DM, None, PERSON, &code)).await;
+    hear(&world, said("c2", DM, None, PERSON, &code)).await;
+    assert_eq!(runs(&h), 0);
     assert_eq!(world.told(PERSON).last().unwrap(), &place::linked("Pip"));
     assert_eq!(
         h.runtime.store().linked(&adapter()).unwrap().unwrap().person,
@@ -656,7 +689,7 @@ async fn a_message_heard_while_the_host_drains_is_put_down_with_its_place() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_stopped_run_posts_nothing_but_its_marks() {
+async fn a_stopped_run_posts_a_stop_notice_instead_of_a_done_mark() {
     let stub = serve(|_| Script::Hang).await;
     let Setup { h, world } = linked(&stub, abilities()).await;
     hear(&world, said("m1", DM, None, PERSON, "Take your time")).await;
@@ -665,9 +698,12 @@ async fn a_stopped_run_posts_nothing_but_its_marks() {
     h.wait_until("the turn to be in the air", |_| stub.calls.load(Ordering::SeqCst) >= 1).await;
     assert!(h.runtime.stop_run(run));
     h.settle(run).await;
-    relayed(&h, run, Mark::Done).await;
-    assert!(world.posts().is_empty(), "{:?}", world.posts());
-    assert_eq!(world.marks(), vec![Mark::Working, Mark::Done]);
+    h.wait_until("the stop notice", |h| {
+        relay_state(h, &format!("notice:{run}:stopped")) == Some(RelayState::Sent)
+    })
+    .await;
+    assert_eq!(texts(&world.posts()), vec!["Guaca stopped this run."]);
+    assert_eq!(world.marks(), vec![Mark::Working]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -899,13 +935,29 @@ async fn an_adapter_that_ends_for_good_stays_stopped_until_attached_again() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_number_never_grants_a_permission_posted_with_buttons() {
+    let stub = hiring("Understood.").await;
+    let Setup { h, world } = linked(&stub, abilities()).await;
+    hear(&world, said("m1", DM, None, PERSON, "Hire an agent")).await;
+    let ask = asked(&h).await;
+    h.wait_until("the request to be sent", |h| {
+        relay_state(h, &format!("ask:{ask}")) == Some(RelayState::Sent)
+    })
+    .await;
+    hear(&world, said("m2", DM, None, PERSON, "1")).await;
+    let approval = h.runtime.store().get_approval(ask).unwrap().unwrap();
+    assert_eq!(approval.state, ApprovalState::Pending);
+    assert!(run_for(&h, "m2").is_some());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_decision_typed_as_a_number_settles_a_permission() {
     let stub = hiring("Understood.").await;
     let Setup { h, world } = linked(&stub, Abilities { buttons: None, ..abilities() }).await;
     hear(&world, said("m1", DM, None, PERSON, "Email the board")).await;
     let ask = asked(&h).await;
-    h.wait_until("the request", |_| {
-        world.posts().iter().any(|p| p.card.kind == CardKind::Permission)
+    h.wait_until("the request to be sent", |h| {
+        relay_state(h, &format!("ask:{ask}")) == Some(RelayState::Sent)
     })
     .await;
     hear(&world, said("m2", DM, None, PERSON, "3")).await;

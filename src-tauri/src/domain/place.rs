@@ -150,6 +150,7 @@ pub const CODE_IN_CHANNEL: &str =
     "Send the code to the Guaca bot in a direct message. A code sent here links nothing.";
 pub const NOT_FROM_HERE: &str =
     "That request was not asked here, so it can only be answered in Guaca.";
+pub const AGENT_UNAVAILABLE: &str = "This agent is unavailable. Pick another in Guaca's Settings.";
 pub const TRY_AGAIN: &str = "Try again in Guaca.";
 pub const ALLOW: &str = "allow";
 pub const ALWAYS_ALLOW: &str = "alwaysAllow";
@@ -162,10 +163,6 @@ const QUOTE_CHARS: usize = 60;
 
 pub fn linked(agent: &str) -> String {
     format!("Linked. Messages here go to {agent}.")
-}
-
-pub fn not_delivered(why: &str) -> String {
-    format!("Guaca could not take that message: {why}")
 }
 
 pub fn waiting_for_owner(agent: &str) -> String {
@@ -403,6 +400,9 @@ pub fn fit(card: Card, abilities: &Abilities) -> Vec<Card> {
 
 pub fn split(text: &str, max: usize) -> Vec<String> {
     assert!(max > 0, "an adapter declares room for at least one character");
+    if text.chars().count() <= max {
+        return vec![text.to_string()];
+    }
     let mut pieces = Vec::new();
     let mut rest = text.trim();
     while rest.chars().count() > max {
@@ -567,6 +567,7 @@ mod tests {
         assert_eq!(split("one\n\ntwo three", 3), vec!["one", "two", "thr", "ee"]);
         assert_eq!(split("abcdefghij", 4), vec!["abcd", "efgh", "ij"]);
         assert_eq!(split("short", 10), vec!["short"]);
+        assert_eq!(split("  code\n", 10), vec!["  code\n"]);
     }
 
     #[test]
