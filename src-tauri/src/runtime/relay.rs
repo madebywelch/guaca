@@ -20,6 +20,7 @@ const GIVE_UP_MS: i64 = 24 * 60 * 60 * 1000;
 const TICK: Duration = Duration::from_secs(60);
 const WAITED: &str = "The provider asked Guaca to wait before sending this.";
 const GAVE_UP: &str = "Guaca gave up after trying to send this for a day.";
+const UNCERTAIN: &str = "This may have reached the conversation. Check there before trying again.";
 
 pub(super) fn backoff(attempt: u32) -> Duration {
     let step = STEPS.get(attempt.saturating_sub(1) as usize).copied().unwrap_or(HOURLY);
@@ -189,11 +190,11 @@ impl Runtime {
         }
         match abilities.posts {
             PostSafety::Idempotent => self.send_out(adapter, row).await,
-            PostSafety::Neither => store.relay_to(&row.key, RelayState::Doubt),
+            PostSafety::Neither => store.relay_doubt(&row.key, UNCERTAIN),
             PostSafety::Findable => {
                 match adapter.find(&row.spot, &RelayTag(row.key.clone())).await {
                     Ok(Some(posted)) => store.relay_sent(&row.key, Some(&posted)),
-                    Ok(None) => self.send_out(adapter, row).await,
+                    Ok(None) => store.relay_doubt(&row.key, UNCERTAIN),
                     Err(SendError::Retry { after }) => {
                         let wait = after.unwrap_or_else(|| backoff(row.attempts + 1));
                         store.relay_hold(&row.key, now_ms() + wait.as_millis() as i64, WAITED)
@@ -317,17 +318,18 @@ impl Runtime {
                     (place::question(&name, &ask, &approval.summary, options), run.spot.clone())
                 }
                 Request::Permission { action } => {
+                    let Some(spot) = direct.clone() else { continue };
                     let fields = approval
                         .detail
                         .iter()
                         .map(|f| (f.label.clone(), f.value.clone()))
                         .collect();
                     let card = place::permission(&name, &ask, &approval.summary, fields, *action);
-                    (card, direct.clone().unwrap_or_else(|| run.spot.clone()))
+                    (card, spot)
                 }
             };
             let settled = place::settled(approval.state, approval.answer.as_deref(), &name);
-            if card.kind == CardKind::Permission && spot != run.spot {
+            if card.kind == CardKind::Permission && !run.direct {
                 let key = format!("notice:{id}:waiting");
                 if fresh(&key, &posts) && fresh(&key, wants) {
                     let item =

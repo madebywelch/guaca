@@ -44,6 +44,7 @@ struct World {
     failures: Mutex<VecDeque<SendError>>,
     hang_posts: AtomicBool,
     finds: AtomicUsize,
+    hide_posts: AtomicBool,
     runs: AtomicUsize,
     ending: Mutex<Option<AdapterError>>,
 }
@@ -165,6 +166,9 @@ impl Adapter for Fake {
     ) -> Pending<'a, Result<Option<Posted>, SendError>> {
         async move {
             self.0.finds.fetch_add(1, Ordering::SeqCst);
+            if self.0.hide_posts.load(Ordering::SeqCst) {
+                return Ok(None);
+            }
             let posts = self.0.posts.lock();
             Ok(posts
                 .iter()
@@ -450,6 +454,21 @@ async fn a_crash_between_post_and_mark_finds_the_post_instead_of_posting_twice()
         h.runtime.store().relay_row(&key).unwrap().unwrap().posted,
         Some(Posted("p1".into()))
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_empty_lookup_after_a_crash_keeps_the_post_in_doubt() {
+    let (Setup { h, world }, key) = crash_after_post(PostSafety::Findable).await;
+    world.hide_posts.store(true, Ordering::SeqCst);
+    attach(&h, &world).await;
+    h.wait_until("the uncertain post to be recorded", |h| {
+        relay_state(h, &key) == Some(RelayState::Doubt)
+    })
+    .await;
+    let row = h.runtime.store().relay_row(&key).unwrap().unwrap();
+    assert!(row.last_error.unwrap().contains("may have reached"));
+    assert_eq!(world.finds.load(Ordering::SeqCst), 1);
+    assert_eq!(world.posts().len(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

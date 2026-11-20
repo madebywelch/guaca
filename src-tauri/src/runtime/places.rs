@@ -108,14 +108,32 @@ impl Runtime {
         }
     }
 
-    fn code_for(&self, adapter: &AdapterId, said: &str) -> Option<AgentId> {
+    fn use_code(
+        &self,
+        adapter: &AdapterId,
+        heard: &Heard,
+        said: &str,
+    ) -> Result<Option<String>, StoreError> {
         let mut codes = self.inner.link_codes.lock();
-        let live = codes.get(adapter).is_some_and(|code| code.expires_at > now_ms());
-        if !live {
-            codes.remove(adapter);
-            return None;
+        let Some(code) = codes.get(adapter).filter(|code| code.code == said) else {
+            return Ok(None);
+        };
+        if code.expires_at <= now_ms() {
+            return Ok(Some(
+                "This link code expired. Ask for a new one in Guaca's Settings.".into(),
+            ));
         }
-        codes.get(adapter).filter(|code| code.code == said.trim()).map(|code| code.agent)
+        if !heard.direct {
+            return Ok(Some(place::CODE_IN_CHANNEL.into()));
+        }
+        let store = &self.inner.store;
+        let Some(card) = store.get_agent(code.agent)?.filter(|card| card.lifecycle.accepts_work())
+        else {
+            return Ok(Some("This agent is unavailable. Pick another in Guaca's Settings.".into()));
+        };
+        store.link_person(adapter, heard, card.group_id, card.id)?;
+        codes.remove(adapter);
+        Ok(Some(place::linked(&card.name)))
     }
 
     pub(crate) async fn hear(
@@ -126,32 +144,22 @@ impl Runtime {
         let id = adapter.id();
         let store = &self.inner.store;
         if let Said::Text { text } = &heard.said {
-            if let Some(agent) = self.code_for(&id, text) {
-                if !heard.direct {
-                    self.tell(adapter, &heard, place::CODE_IN_CHANNEL).await;
-                    return Ok(());
-                }
-                let Some(card) = store.get_agent(agent).map_err(unheard)? else {
-                    self.inner.link_codes.lock().remove(&id);
-                    return Ok(());
-                };
-                store
-                    .link_person(&id, &heard.speaker, &heard.spot.place, card.group_id, card.id)
-                    .map_err(unheard)?;
-                store.raise_high_water(&id, &heard.spot.place, &heard.key).map_err(unheard)?;
-                self.inner.link_codes.lock().remove(&id);
-                self.tell(adapter, &heard, &place::linked(&card.name)).await;
+            if store.link_was_heard(&id, &heard.key).map_err(unheard)? {
+                return Ok(());
+            }
+            if let Some(line) = self.use_code(&id, &heard, text).map_err(unheard)? {
+                self.tell(adapter, &heard, &line).await;
                 return Ok(());
             }
         }
         let linked = store.linked(&id).map_err(unheard)?;
-        if place::trust(linked.as_ref().map(|it| &it.person), &heard.speaker).is_none() {
+        let Some(trust) = place::trust(linked.as_ref().map(|it| &it.person), &heard.speaker) else {
             self.tell(adapter, &heard, place::STRANGER).await;
             return Ok(());
-        }
+        };
         match &heard.said {
             Said::Choice { ask, choice } => self.press(adapter, &heard, ask, choice).await,
-            Said::Text { text } => self.take_text(adapter, &heard, text, Trust::Operator).await,
+            Said::Text { text } => self.take_text(adapter, &heard, text, trust).await,
         }
     }
 

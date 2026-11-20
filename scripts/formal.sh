@@ -5,7 +5,6 @@ cd "$(dirname "$0")/.."
 
 readonly TLA_VERSION=1.7.4
 readonly TLA_SHA256=936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
-readonly MODEL_DIR=formal/recovery
 readonly CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/guaca"
 readonly JAR="$CACHE/tla2tools-$TLA_VERSION.jar"
 
@@ -14,16 +13,24 @@ readonly CALM="OperatorStops=FALSE StartCanFail=FALSE TurnsCanFail=FALSE"
 readonly STOPS="OperatorStops=TRUE StartCanFail=FALSE TurnsCanFail=FALSE"
 readonly FAILS="OperatorStops=FALSE StartCanFail=TRUE TurnsCanFail=FALSE"
 readonly ALL="NoBlindRepeat NothingLost OnlyStartedReported ReportedOnce StoppedStaysStopped"
+readonly RELAY="AckAfterCommit=TRUE FindFirst=TRUE CatchUpKeyed=TRUE PlaceRunOneCommit=TRUE"
+readonly RELAY_ALL="HeardOnce HeardOrToldWhy ShownOnce NothingDropped InOrder DecidedOnce"
 
 CHECKS=(
-  "holds|code, no stops, no failed commit|$CODE $CALM|$ALL"
-  "holds|code, operator stops, a failed start mark, and turns that end on a failed model call or an exhausted budget|$CODE OperatorStops=TRUE StartCanFail=TRUE TurnsCanFail=TRUE|$ALL"
-  "broken|model read before the start mark|MarkBeforeRead=FALSE AcceptOneCommit=TRUE RecoverUntouched=TRUE RecoverClears=TRUE KeepLink=TRUE SkipStartNote=TRUE $CALM|NoBlindRepeat"
-  "broken|pending_runs row in its own commit|MarkBeforeRead=TRUE AcceptOneCommit=FALSE RecoverUntouched=TRUE RecoverClears=TRUE KeepLink=TRUE SkipStartNote=TRUE $CALM|NothingLost"
-  "broken|recover reports every unfinished conversation|MarkBeforeRead=TRUE AcceptOneCommit=TRUE RecoverUntouched=FALSE RecoverClears=TRUE KeepLink=TRUE SkipStartNote=TRUE $CALM|OnlyStartedReported"
-  "broken|recover keeps the rows it reported|MarkBeforeRead=TRUE AcceptOneCommit=TRUE RecoverUntouched=TRUE RecoverClears=FALSE KeepLink=TRUE SkipStartNote=TRUE $CALM|ReportedOnce"
-  "broken|a message the turn acted on is handed on without its carrier|MarkBeforeRead=TRUE AcceptOneCommit=TRUE RecoverUntouched=TRUE RecoverClears=TRUE KeepLink=FALSE SkipStartNote=TRUE $STOPS|NoBlindRepeat"
-  "broken|recover counts the notice that a start could not be recorded as a touch|MarkBeforeRead=TRUE AcceptOneCommit=TRUE RecoverUntouched=TRUE RecoverClears=TRUE KeepLink=TRUE SkipStartNote=FALSE OperatorStops=FALSE StartCanFail=TRUE TurnsCanFail=FALSE|OnlyStartedReported"
+  "recovery|holds|code, no stops, no failed commit|$CODE $CALM|$ALL"
+  "recovery|holds|code, operator stops, a failed start mark, and turns that end on a failed model call or an exhausted budget|$CODE OperatorStops=TRUE StartCanFail=TRUE TurnsCanFail=TRUE|$ALL"
+  "recovery|broken|model read before the start mark|MarkBeforeRead=FALSE AcceptOneCommit=TRUE RecoverUntouched=TRUE RecoverClears=TRUE KeepLink=TRUE SkipStartNote=TRUE $CALM|NoBlindRepeat"
+  "recovery|broken|pending_runs row in its own commit|MarkBeforeRead=TRUE AcceptOneCommit=FALSE RecoverUntouched=TRUE RecoverClears=TRUE KeepLink=TRUE SkipStartNote=TRUE $CALM|NothingLost"
+  "recovery|broken|recover reports every unfinished conversation|MarkBeforeRead=TRUE AcceptOneCommit=TRUE RecoverUntouched=FALSE RecoverClears=TRUE KeepLink=TRUE SkipStartNote=TRUE $CALM|OnlyStartedReported"
+  "recovery|broken|recover keeps the rows it reported|MarkBeforeRead=TRUE AcceptOneCommit=TRUE RecoverUntouched=TRUE RecoverClears=FALSE KeepLink=TRUE SkipStartNote=TRUE $CALM|ReportedOnce"
+  "recovery|broken|a message the turn acted on is handed on without its carrier|MarkBeforeRead=TRUE AcceptOneCommit=TRUE RecoverUntouched=TRUE RecoverClears=TRUE KeepLink=FALSE SkipStartNote=TRUE $STOPS|NoBlindRepeat"
+  "recovery|broken|recover counts the notice that a start could not be recorded as a touch|MarkBeforeRead=TRUE AcceptOneCommit=TRUE RecoverUntouched=TRUE RecoverClears=TRUE KeepLink=TRUE SkipStartNote=FALSE OperatorStops=FALSE StartCanFail=TRUE TurnsCanFail=FALSE|OnlyStartedReported"
+
+  "relay|holds|code, a provider that redelivers, catch-up, two host ends, presses racing an answer and the lapse|$RELAY|$RELAY_ALL"
+  "relay|broken|acknowledge before the commit|AckAfterCommit=FALSE FindFirst=TRUE CatchUpKeyed=TRUE PlaceRunOneCommit=TRUE|HeardOrToldWhy"
+  "relay|broken|post again after a crash without asking find|AckAfterCommit=TRUE FindFirst=FALSE CatchUpKeyed=TRUE PlaceRunOneCommit=TRUE|ShownOnce"
+  "relay|broken|catch-up that skips the idempotency key|AckAfterCommit=TRUE FindFirst=TRUE CatchUpKeyed=FALSE PlaceRunOneCommit=TRUE|HeardOnce"
+  "relay|broken|place_runs written in a second commit|AckAfterCommit=TRUE FindFirst=TRUE CatchUpKeyed=TRUE PlaceRunOneCommit=FALSE|NothingDropped"
 )
 
 fetch_tools() {
@@ -37,7 +44,8 @@ fetch_tools() {
 }
 
 run_tlc() {
-  local constants=$1 invariants=$2 work=$3
+  local model=$1 constants=$2 invariants=$3 work=$4
+  local module="${model^}"
   {
     echo "SPECIFICATION Spec"
     echo "CONSTANTS"
@@ -46,17 +54,17 @@ run_tlc() {
     echo "INVARIANTS"
     echo "    TypeOK"
     for name in $invariants; do echo "    $name"; done
-  } >"$work/Recovery.cfg"
-  cp "$MODEL_DIR/Recovery.tla" "$work/"
+  } >"$work/$module.cfg"
+  cp "formal/$model/$module.tla" "$work/"
   (cd "$work" && java -XX:+UseParallelGC -cp "$JAR" tlc2.TLC -workers 1 -deadlock \
-    -metadir "$work/states" -config Recovery.cfg Recovery.tla) >"$work/tlc.out" 2>&1 || true
+    -metadir "$work/states" -config "$module.cfg" "$module.tla") >"$work/tlc.out" 2>&1 || true
 }
 
 check() {
-  local expect=$1 what=$2 constants=$3 invariants=$4
+  local model=$1 expect=$2 what=$3 constants=$4 invariants=$5
   local work
   work=$(mktemp -d)
-  run_tlc "$constants" "$invariants" "$work"
+  run_tlc "$model" "$constants" "$invariants" "$work"
   local out="$work/tlc.out" violated=""
   if grep -q "Model checking completed. No error has been found." "$out"; then
     violated=none
@@ -67,7 +75,7 @@ check() {
   states=$(sed -n 's/.* \([0-9]*\) distinct states found.*/\1/p' "$out" | tail -1)
   case "$expect:$violated" in
     holds:none)
-      printf 'ok    holds     %-22s %s (%s states)\n' "$invariants" "$what" "$states" | sed 's/NoBlindRepeat NothingLost OnlyStartedReported ReportedOnce StoppedStaysStopped/all five/'
+      printf 'ok    holds     %-22s %s (%s states)\n' "$invariants" "$what" "$states" | sed 's/NoBlindRepeat NothingLost OnlyStartedReported ReportedOnce StoppedStaysStopped/all five/; s/HeardOnce HeardOrToldWhy ShownOnce NothingDropped InOrder DecidedOnce/all six/'
       rm -rf "$work"; return 0 ;;
     finding:"$invariants"|broken:"$invariants")
       printf 'ok    %-9s %-22s %s\n' "$expect" "$invariants" "$what"
@@ -90,14 +98,14 @@ if [ "${1:-}" = "--trace" ]; then
   work=$(mktemp -d)
   scope=$1
   [[ $scope == *TurnsCanFail* ]] || scope="$scope TurnsCanFail=FALSE"
-  run_tlc "$CODE $scope" "$2" "$work"
+  run_tlc recovery "$CODE $scope" "$2" "$work"
   cat "$work/tlc.out"
   exit 0
 fi
 
 failed=0
 for row in "${CHECKS[@]}"; do
-  IFS='|' read -r expect what constants invariants <<<"$row"
-  check "$expect" "$what" "$constants" "$invariants" || failed=1
+  IFS='|' read -r model expect what constants invariants <<<"$row"
+  check "$model" "$expect" "$what" "$constants" "$invariants" || failed=1
 done
 exit $failed

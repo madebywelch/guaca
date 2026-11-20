@@ -447,11 +447,15 @@ mod tests {
             "browserId": null,
             "hasComputer": false,
             "hasBrowser": false,
-            "browserConsent": "ask",
+            "browserConsent": "open",
             "runsErrands": false,
             "lifecycle": "active",
             "pinned": false,
-            "railOrder": 0
+            "railOrder": 0,
+            "version": 1,
+            "createdAt": 0,
+            "updatedAt": 0,
+            "discardedAt": null
         }))
         .expect("a minimal agent card");
         card.lifecycle = Lifecycle::Active;

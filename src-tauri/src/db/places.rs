@@ -6,7 +6,7 @@ use crate::domain::envelope::Envelope;
 use crate::domain::ids::{AgentId, ApprovalId, GroupId, MessageId, RunId};
 use crate::domain::now_ms;
 use crate::domain::place::{
-    AdapterId, HeardKey, Outgoing, OutsideUser, PlaceKey, Posted, Spot, ThreadKey,
+    AdapterId, Heard, HeardKey, Outgoing, OutsideUser, PlaceKey, Posted, Spot, ThreadKey,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,8 +209,7 @@ impl Store {
     pub fn link_person(
         &self,
         adapter: &AdapterId,
-        person: &OutsideUser,
-        place: &PlaceKey,
+        heard: &Heard,
         group: GroupId,
         agent: AgentId,
     ) -> Result<(), StoreError> {
@@ -219,11 +218,29 @@ impl Store {
         tx.execute(
             "INSERT INTO adapters (id,person,linked_place) VALUES (?1,?2,?3)
              ON CONFLICT(id) DO UPDATE SET person=excluded.person, linked_place=excluded.linked_place",
-            params![adapter.0, person.0, place.0],
+            params![adapter.0, heard.speaker.0, heard.spot.place.0],
         )?;
+        let place = &heard.spot.place;
         bind(&tx, adapter, place, group, agent, true)?;
+        tx.execute(
+            "INSERT INTO place_links (adapter,heard_key) VALUES (?1,?2)",
+            params![adapter.0, heard.key.0],
+        )?;
+        raise(&tx, adapter, place, &heard.key)?;
         tx.commit()?;
         Ok(())
+    }
+
+    pub fn link_was_heard(
+        &self,
+        adapter: &AdapterId,
+        heard: &HeardKey,
+    ) -> Result<bool, StoreError> {
+        Ok(self.conn()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM place_links WHERE adapter=?1 AND heard_key=?2)",
+            params![adapter.0, heard.0],
+            |row| row.get(0),
+        )?)
     }
 
     pub fn bind_place(
