@@ -11,11 +11,13 @@ import time
 import unittest
 from unittest import mock
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
 from e2e.browser import Browser, BrowserError, split_frames
 from e2e.scenarios import SCENARIOS, unproved
+from e2e.slack import Slack, read_frame
 from e2e.world import (UNSCRIPTED, Call, Egress, Failed, Model, Updater, call, held, redact, refuse, say,
                        stream, until)
 
@@ -379,6 +381,103 @@ class Evidence(unittest.TestCase):
         for name, scenario in SCENARIOS.items():
             self.assertTrue(scenario.proves.endswith("."), name)
             self.assertIn(";", scenario.proves, f"{name} names no failure path")
+
+
+def slack_call(slack: "Slack", method: str, token: str, fields: dict) -> dict:
+    request = urllib.request.Request(f"{slack.origin}/api/{method}", data=json.dumps(fields).encode(),
+                                     headers={"content-type": "application/json; charset=utf-8",
+                                              "authorization": f"Bearer {token}"}, method="POST")
+    with urllib.request.urlopen(request, timeout=10) as answer:
+        return json.loads(answer.read())
+
+
+def socket_open(url: str) -> socket.socket:
+    parsed = urllib.parse.urlparse(url)
+    conn = socket.create_connection((parsed.hostname, parsed.port), timeout=10)
+    conn.sendall((f"GET {parsed.path} HTTP/1.1\r\nHost: {parsed.hostname}\r\nUpgrade: websocket\r\n"
+                  "Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                  "Sec-WebSocket-Version: 13\r\n\r\n").encode())
+    head = b""
+    while b"\r\n\r\n" not in head:
+        head += conn.recv(1)
+    assert b" 101 " in head.split(b"\r\n", 1)[0], head
+    assert b"s3pPLMBiTxaQ9kYGzzhZRbK+xOo=" in head, head
+    return conn
+
+
+def socket_send(conn: socket.socket, payload: dict) -> None:
+    data = json.dumps(payload).encode()
+    mask = b"\x01\x02\x03\x04"
+    conn.sendall(bytes([0x81, 0x80 | len(data)]) + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
+
+
+class ScriptedSlack(unittest.TestCase):
+    def setUp(self) -> None:
+        self.slack = Slack()
+
+    def tearDown(self) -> None:
+        self.slack.stop()
+
+    def connect(self) -> socket.socket:
+        opened = slack_call(self.slack, "apps.connections.open", "xapp-test-not-a-token", {})
+        conn = socket_open(opened["url"])
+        opcode, hello = read_frame(conn)
+        self.assertEqual((opcode, json.loads(hello)["type"]), (1, "hello"))
+        return conn
+
+    def test_a_wrong_or_revoked_token_is_refused_the_way_slack_refuses_it(self) -> None:
+        self.assertEqual(slack_call(self.slack, "apps.connections.open", "xoxb-test-not-a-token", {}),
+                         {"ok": False, "error": "invalid_auth"})
+        self.slack.revoked = True
+        self.assertEqual(slack_call(self.slack, "chat.postMessage", "xoxb-test-not-a-token", {"channel": "D1"}),
+                         {"ok": False, "error": "token_revoked"})
+        self.assertEqual([entry["token"] for entry in self.slack.requests], ["bot", "bot"])
+        self.assertNotIn("xoxb-test-not-a-token", json.dumps(self.slack.requests))
+
+    def test_a_said_message_arrives_on_the_socket_and_only_an_ack_counts(self) -> None:
+        conn = self.connect()
+        said = self.slack.say("ship it", "U1")
+        opcode, data = read_frame(conn)
+        envelope = json.loads(data)
+        self.assertEqual(envelope["envelope_id"], said.envelope)
+        self.assertEqual(envelope["payload"]["event"]["text"], "ship it")
+        self.assertEqual(envelope["payload"]["event"]["channel_type"], "im")
+        self.assertEqual(self.slack.acks(), [])
+        socket_send(conn, {"envelope_id": said.envelope})
+        until("the ack is recorded", lambda: self.slack.acks() == [said.envelope], 5)
+        conn.close()
+
+    def test_a_post_is_found_again_by_its_metadata_and_its_button_can_be_pressed(self) -> None:
+        conn = self.connect()
+        said = self.slack.say("which one?", "U1", channel="C1")
+        read_frame(conn)
+        blocks = [{"type": "actions", "elements": [{"type": "button", "action_id": "ask:ap_1:0"}]}]
+        slack_call(self.slack, "chat.postMessage", "xoxb-test-not-a-token",
+                   {"channel": "C1", "thread_ts": said.ts, "text": "Pick", "blocks": blocks,
+                    "metadata": {"event_type": "guaca_relay", "event_payload": {"tag": "ask:ap_1"}}})
+        hidden = slack_call(self.slack, "conversations.replies", "xoxb-test-not-a-token", {"channel": "C1", "ts": said.ts})
+        self.assertNotIn("metadata", hidden["messages"][-1])
+        shown = slack_call(self.slack, "conversations.replies", "xoxb-test-not-a-token",
+                           {"channel": "C1", "ts": said.ts, "include_all_metadata": True})
+        self.assertEqual(shown["messages"][-1]["metadata"]["event_payload"]["tag"], "ask:ap_1")
+        self.assertEqual([post["text"] for post in self.slack.posts()], ["Pick"])
+        pressed = self.slack.press("ask:ap_1:0", "U1")
+        envelope = json.loads(read_frame(conn)[1])
+        self.assertEqual(envelope["envelope_id"], pressed)
+        self.assertEqual(envelope["payload"]["container"]["thread_ts"], said.ts)
+        self.assertEqual(envelope["payload"]["actions"][0]["action_id"], "ask:ap_1:0")
+        conn.close()
+
+    def test_a_dropped_connection_is_noticed_and_a_new_one_is_used(self) -> None:
+        first = self.connect()
+        self.slack.drop()
+        with self.assertRaises((ConnectionError, OSError)):
+            read_frame(first)
+        first.close()
+        second = self.connect()
+        said = self.slack.say("again", "U1")
+        self.assertEqual(json.loads(read_frame(second)[1])["envelope_id"], said.envelope)
+        second.close()
 
 
 if __name__ == "__main__":
