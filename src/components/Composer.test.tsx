@@ -768,6 +768,11 @@ describe("the keyboard outside a composition", () => {
   });
 });
 
+function Open({ onDismiss }: { onDismiss: () => void }) {
+  useDismiss(onDismiss);
+  return null;
+}
+
 describe("Escape from the box", () => {
   async function draw(onLeave = vi.fn()) {
     render(
@@ -809,14 +814,10 @@ describe("Escape from the box", () => {
 
   it("closes whatever is open over the page first, and does not go back", async () => {
     const closed = vi.fn();
-    function Open() {
-      useDismiss(closed);
-      return null;
-    }
     const onLeave = vi.fn();
     render(
       <>
-        <Open />
+        <Open onDismiss={closed} />
         <Composer
           placeholder="Message Manager"
           group={CREW}
