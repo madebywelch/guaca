@@ -2,7 +2,7 @@ import {
   type CSSProperties,
   type KeyboardEvent,
   type ReactNode,
-  useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -59,7 +59,7 @@ export function Ribbon({
   const buttons = useRef(new Map<string, HTMLButtonElement>());
 
   const track = useRef<HTMLDivElement>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const node = track.current;
     if (!node || !onTrackWidth) return;
     onTrackWidth(node.getBoundingClientRect().width);

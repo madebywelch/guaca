@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { useLayoutEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { type Ribbon as Layout, layoutRibbon } from "../lib/ribbon";
@@ -252,5 +253,27 @@ describe("a coming item", () => {
     const item = container.querySelector(".ribbon__item");
     expect(item?.querySelector(".ribbon__item-when")?.textContent).toBe("9:00 AM");
     expect(item?.querySelector(".ribbon__item-what")).toBeNull();
+  });
+});
+
+describe("its width", () => {
+  it("is reported before the first paint, so the faces never slide in from no width", () => {
+    const reported = vi.fn<(px: number) => void>();
+    const beforePaint: number[] = [];
+    function Page() {
+      useLayoutEffect(() => {
+        beforePaint.push(reported.mock.calls.length);
+      }, []);
+      return (
+        <Ribbon
+          ribbon={morning()}
+          onOpenAgent={openAgent}
+          onOpenGroups={openGroups}
+          onTrackWidth={reported}
+        />
+      );
+    }
+    render(<Page />);
+    expect(beforePaint).toEqual([1]);
   });
 });
