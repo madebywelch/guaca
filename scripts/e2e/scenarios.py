@@ -1888,6 +1888,17 @@ def scenario_roster(w: World) -> None:
 
     open_agent(w, names[9])
     w.wait("the clicked row focuses its question", lambda: ui.focused() == ("button", "Early"))
+    ui.viewport(320, 355)
+    w.wait("the compact agent picker is visible",
+           lambda: ui.find("combobox", "Switch agent") and ui.evaluate(look.SETTLED))
+    w.check("the composer and Send stay visible with a question at keyboard height",
+            ui.on_screen("combobox", f"Write to {asking}") and ui.on_screen("button", "Send"),
+            detail=ui.evaluate("""Object.fromEntries(['.app', '.roster', '.pane__header', '.agent-tabs',
+              '.pane__body', '.working', '.composer', '.composer__input', '.composer__send', '.statusbar'].map(s => {
+                const el = document.querySelector(s), r = el.getBoundingClientRect();
+                return [s, [r.top, r.bottom, getComputedStyle(el).paddingBlock]];
+              }))"""), shot=True)
+    ui.viewport(900, 700)
     ui.key("Tab", mod=True)
     w.wait("Control Tab opens the next row", lambda: ui.find("log", f"Conversation with {names[10]}"))
     ui.key("Tab", mod=True, shift=True)
@@ -2237,6 +2248,18 @@ def scenario_queue(w: World) -> None:
             and w.wait("K goes back", lambda: ui.focused()[1].startswith(AGENT)),
             observed={"second": second, "focused": ui.focused()})
 
+    for _ in range(8):
+        ui.key("Tab")
+        if ui.focused() == ("button", "Early"):
+            break
+    w.check("Tab brings the answer and its selected card into agreement",
+            ui.focused() == ("button", "Early") and "Early" in selected_card(w))
+    ui.key("Enter", mod=True)
+    w.check("Command Return cannot authorize an earlier permission from a later question",
+            not ui.find("button", "Undo", exact=False)
+            and [a["state"] for a in approvals(w)] == ["pending", "pending"])
+    ui.key("k")
+
     ui.key("Enter", mod=True)
     w.wait("the Allow is held with an Undo and the next card takes focus",
            lambda: ui.find("button", "Undo", exact=False) and RESEARCHER in ui.focused()[1])
@@ -2467,6 +2490,22 @@ def scenario_firstgroup(w: World) -> None:
     w.check("the record opens onto both answers",
             RESEARCHER_SAYS in card_text(w) and ANALYST_SAYS in card_text(w),
             observed={"researcher": RESEARCHER_SAYS in card_text(w), "analyst": ANALYST_SAYS in card_text(w)}, shot=True)
+    ui.click("button", MARKET)
+    w.wait("the colleague thread opens", lambda: not ui.find("log", f"Conversation with {LEAD}"))
+    open_agent(w, LEAD)
+    w.wait("the current agent row restores the conversation and result",
+           lambda: ui.find("article", f"Result from {LEAD}", exact=False))
+    ui.click("button", MARKET)
+    w.wait("the colleague thread is open again", lambda: not ui.find("log", f"Conversation with {LEAD}"))
+    ui.click("button", "For you")
+    w.wait("Earlier shows the already opened result",
+           lambda: ui.evaluate("document.querySelector('.for-you .finished-line[title^=\"Lease,\"]') !== null"))
+    ui.evaluate("document.querySelector('.for-you .finished-line[title^=\"Lease,\"]').closest('details').open = true")
+    ui.click("button", row["headline"], exact=False)
+    w.wait("opening a result leaves the colleague thread and highlights the result",
+           lambda: ui.evaluate("!!document.querySelector('[role=log] [data-found] .msg--result')"))
+    w.check("the roster and For you can return from a colleague thread to the current agent",
+            bool(ui.find("log", f"Conversation with {LEAD}")))
     folded = ui.evaluate(BRIEF_HEIGHT)
     ui.click("button", "Show all")
     w.wait("the brief opens", lambda: ui.find("button", "Show less"))
@@ -2711,6 +2750,7 @@ SCENARIOS: dict[str, Scenario] = {
         "the result is a raised card under the coordinator's name, and the brief before it is folded below it in weight",
         "the hand-off settles into a record right above the result that says both answered",
         "the record opens onto both answers",
+        "the roster and For you can return from a colleague thread to the current agent",
         "the person's long brief is folded to three lines and opens whole on request",
         "the roster shows Working while the earlier result stays in the conversation",
         "every model call was one the scenario scripted",
@@ -2746,6 +2786,7 @@ SCENARIOS: dict[str, Scenario] = {
         "the conversation has no Today destination or spare writing field",
         "a new question changes the tenth status without reordering or switching conversations",
         "every roster row scrolls fully into view with its name readable at both sizes",
+        "the composer and Send stay visible with a question at keyboard height",
         "mouse, Control Tab in both directions, and the numbered shortcut keep the draft with its agent",
         "stacked Search and its keys leave the command menu and underlying draft unchanged",
         "reload lands on the pending question but keeps the other conversation's draft",
@@ -2830,6 +2871,8 @@ SCENARIOS: dict[str, Scenario] = {
         "Escape closes Questions without answering or switching conversations",
         "Questions selects the first request and shows the keys on its buttons",
         "J and K move the selection, and an option shows its number only while selected",
+        "Tab brings the answer and its selected card into agreement",
+        "Command Return cannot authorize an earlier permission from a later question",
         "Command Return holds the Allow with an Undo, sends nothing yet and selects the next request",
         "Command Z takes the Allow back: the card returns and nothing was sent",
         "the held answers are each sent once, and the agents are told",

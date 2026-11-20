@@ -1158,7 +1158,8 @@ in For you; if there are no live requests, the count opens it instead.
 
 J and K move through the cards. Command Return allows a request or opens a
 stuck agent's conversation, Command Backspace denies or clears, and 1 to 9
-pick an answer. Keys appear on the selected card only. An answer moves to the
+pick an answer. Tab stays in the tray and selects the card it enters, so keys
+never act on a different card. Keys appear on the selected card only. An answer moves to the
 next card and the last answer gives focus back to the composer. Escape closes
 the tray without answering. The conversation underneath stays at the task,
 including when the selected question came from a colleague.
@@ -2941,7 +2942,8 @@ so the composer keeps its width. Names and statuses wrap, shortcuts sit under
 them, and the question count stays in reach. Opening an agent brings its row
 into view without moving the conversation.
 When the keyboard leaves little height, a picker shows the same names,
-statuses, and keys without pushing the composer offscreen.
+statuses, and keys without pushing the composer offscreen. The shortest
+viewports hide the footer and composer hints while the keyboard is up.
 
 Groups are chosen by name on a phone: the Groups sheet draws a labeled select
 above the list, and a touch scrolling the agent list never starts a reorder.

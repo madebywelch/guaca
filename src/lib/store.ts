@@ -10,6 +10,7 @@ import { hosted, isUnreachable, openExternal, PAGE_ID } from "./transport";
 
 let decisionRead = 0;
 let rosterRead = 0;
+let rosterRequest = Promise.resolve();
 let usageRead = 0;
 let approvalRead = 0;
 let escalationRead = 0;
@@ -134,6 +135,7 @@ export interface State {
   refreshOutcomes: (valid?: () => boolean) => Promise<void>;
   running: Running[];
   runningKnown: boolean;
+  runningUnavailable: boolean;
   refreshRunning: (valid?: () => boolean) => Promise<void>;
   seeOutcomes: (target: { runIds?: RunId[]; before?: number }) => Promise<void>;
   forYou: boolean;
@@ -149,6 +151,7 @@ export interface State {
   refreshDecisions: (valid?: () => boolean) => Promise<void>;
 
   selected: ChannelKey | null;
+  conversationVisit: number;
   railGroup: GroupId | null;
   messages: Record<ChannelKey, Envelope[] | undefined>;
   streams: Record<MessageId, StreamBuffer | undefined>;
@@ -272,13 +275,26 @@ export const useStore = create<State>((set, get) => ({
   outcomes: [],
   running: [],
   runningKnown: false,
+  runningUnavailable: false,
   async refreshRunning(valid = () => true) {
     const read = ++runningRead;
     runningRequest = (async () => {
       try {
         const running = await api.runningRuns();
-        if (valid() && read === runningRead) set({ running, runningKnown: true });
+        if (valid() && read === runningRead)
+          set({ running, runningKnown: true, runningUnavailable: false });
       } catch (error) {
+        if (
+          valid() &&
+          read === runningRead &&
+          typeof error === "object" &&
+          error !== null &&
+          "kind" in error &&
+          error.kind === "unknownCommand"
+        ) {
+          set({ runningUnavailable: true });
+          return;
+        }
         console.warn(`Running work could not be read: ${errorMessage(error)}`);
       }
     })();
@@ -329,6 +345,7 @@ export const useStore = create<State>((set, get) => ({
     }
   },
   selected: null,
+  conversationVisit: 0,
   railGroup: null,
   messages: {},
   streams: {},
@@ -353,26 +370,22 @@ export const useStore = create<State>((set, get) => ({
 
   async bootstrap(valid = () => true) {
     const decisionSnapshot = ++decisionRead;
-    const rosterSnapshot = ++rosterRead;
     const usageSnapshot = ++usageRead;
-    const [agents, groups, activity, lastActive, settings, capabilities, usage, decisions] =
-      await Promise.all([
-        api.listAgents(),
-        api.listGroups(),
-        hosted ? Promise.resolve(null) : api.agentActivity(),
-        api.agentLastActive(),
-        api.getSettings(),
-        api.capabilities(),
-        api.usageSummary(),
-        api.listDecisions(),
-        get().refreshApprovals(valid),
-        get().refreshEscalations(valid),
-        get().refreshOutcomes(valid),
-        get().refreshRunning(valid),
-      ]);
+    const [activity, lastActive, settings, capabilities, usage, decisions] = await Promise.all([
+      hosted ? Promise.resolve(null) : api.agentActivity(),
+      api.agentLastActive(),
+      api.getSettings(),
+      api.capabilities(),
+      api.usageSummary(),
+      api.listDecisions(),
+      get().refreshAgents(valid),
+      get().refreshApprovals(valid),
+      get().refreshEscalations(valid),
+      get().refreshOutcomes(valid),
+      get().refreshRunning(valid),
+    ]);
     if (!valid()) return;
     set({
-      ...(rosterSnapshot === rosterRead ? { agents, groups } : {}),
       ...(activity ? { activity } : {}),
       lastActive,
       settings,
@@ -381,12 +394,16 @@ export const useStore = create<State>((set, get) => ({
       ...(decisionSnapshot === decisionRead ? { decisions, decisionError: null } : {}),
     });
     while (valid()) {
-      const reads = [approvalRequest, escalationRequest, runningRequest];
-      await Promise.all(reads);
+      const roster = rosterRequest;
+      const approvals = approvalRequest;
+      const escalations = escalationRequest;
+      const running = runningRequest;
+      await Promise.all([roster, approvals, escalations, running]);
       if (
-        reads[0] === approvalRequest &&
-        reads[1] === escalationRequest &&
-        reads[2] === runningRequest
+        roster === rosterRequest &&
+        approvals === approvalRequest &&
+        escalations === escalationRequest &&
+        running === runningRequest
       )
         break;
     }
@@ -414,20 +431,21 @@ export const useStore = create<State>((set, get) => ({
     if (next) await get().loadChannel(next, undefined, valid);
   },
 
-  async refreshAgents(valid = () => true) {
+  refreshAgents(valid = () => true) {
     const rosterSnapshot = ++rosterRead;
-    const [agents, groups] = await Promise.all([api.listAgents(), api.listGroups()]);
-    if (!valid() || rosterSnapshot !== rosterRead) return;
-    set((state) => ({
-      agents,
-      groups,
-      railGroup: groups.some((g) => g.id === state.railGroup) ? state.railGroup : null,
-    }));
-
-    const selected = get().selected;
-    if (selected && !agents.some((a) => a.id === selected && a.lifecycle !== "terminated")) {
-      set({ selected: null, focused: null });
-    }
+    rosterRequest = Promise.all([api.listAgents(), api.listGroups()]).then(([agents, groups]) => {
+      if (!valid() || rosterSnapshot !== rosterRead) return;
+      set((state) => ({
+        agents,
+        groups,
+        railGroup: groups.some((g) => g.id === state.railGroup) ? state.railGroup : null,
+        ...(state.selected &&
+        !agents.some((a) => a.id === state.selected && a.lifecycle !== "terminated")
+          ? { selected: null, focused: null }
+          : {}),
+      }));
+    });
+    return rosterRequest;
   },
 
   async select(key, valid = () => true) {
@@ -438,6 +456,7 @@ export const useStore = create<State>((set, get) => ({
     }
     set((state) => ({
       selected: key,
+      conversationVisit: state.conversationVisit + 1,
       focused: null,
       openingRoutine: null,
       settingsPage: null,
@@ -528,6 +547,7 @@ export const useStore = create<State>((set, get) => ({
   async openMessage(channel, message, context) {
     set((state) => ({
       selected: channel,
+      conversationVisit: state.conversationVisit + 1,
       focused: message,
       settingsPage: null,
       railGroup: keptFocus(state, channel),

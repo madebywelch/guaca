@@ -85,6 +85,11 @@ export function Desk({
     if (!queue || event.nativeEvent.isComposing || event.altKey) return;
     const target = event.target;
     if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+    if (
+      !(target instanceof HTMLElement) ||
+      !target.closest(".desk__card")?.hasAttribute("data-selected")
+    )
+      return;
     const mod = event.metaKey || event.ctrlKey;
     const at = selected === null ? -1 : order.indexOf(selected);
     const step = (to: number) => {
@@ -110,21 +115,19 @@ export function Desk({
     const request = pending.find((one) => one.id === selected);
     const escalation = stuck.find((one) => one.id === selected);
     if (mod && event.key === "Enter") {
+      event.preventDefault();
       if (request?.request.kind === "permission") {
-        event.preventDefault();
         void decideHeld(request, "allow");
       } else if (escalation) {
-        event.preventDefault();
         onOpenChannel(escalation.agentId);
       }
       return;
     }
     if (mod && event.key === "Backspace") {
+      event.preventDefault();
       if (request?.request.kind === "permission") {
-        event.preventDefault();
         void decideHeld(request, "deny");
       } else if (escalation) {
-        event.preventDefault();
         void clearHeld(escalation);
       }
       return;
@@ -218,9 +221,7 @@ function StuckCard({ escalation, agent, selected, onSelect, onClear, onOpenChann
       data-selected={selected ? "" : undefined}
       tabIndex={onSelect ? -1 : undefined}
       aria-label={onSelect ? `${asker} is stuck: ${escalation.summary}` : undefined}
-      onFocus={(event) => {
-        if (event.target === event.currentTarget) onSelect?.();
-      }}
+      onFocus={onSelect}
     >
       <header className="desk__who">
         <AgentAvatar
@@ -303,9 +304,7 @@ function DeskCard({
       data-selected={selected ? "" : undefined}
       tabIndex={onSelect ? -1 : undefined}
       aria-label={onSelect ? `${asker} asks: ${request.summary}` : undefined}
-      onFocus={(event) => {
-        if (event.target === event.currentTarget) onSelect?.();
-      }}
+      onFocus={onSelect}
     >
       <header className="desk__who">
         <AgentAvatar

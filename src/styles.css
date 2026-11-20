@@ -8665,6 +8665,21 @@ button.artifacts__version[aria-pressed="true"] {
       font-size: var(--type-support);
     }
   }
+
+  @container frame (max-height: 24rem) {
+    .roster {
+      padding-block: var(--space-1);
+    }
+
+    .app[data-roster][data-page="agent"] .pane__header {
+      padding-block: var(--space-2);
+    }
+
+    .app[data-roster] .composer__foot,
+    .app[data-roster] .statusbar {
+      display: none;
+    }
+  }
 }
 
 .topbar {

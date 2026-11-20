@@ -395,9 +395,11 @@ export default function App() {
         Object.values(groups[0]!.inference).every((value) => value === null)));
   const welcoming = firstRun && !checkingFirstTask;
   const showRoster = ready && !firstRun && !settingsPage && agents.length > 0;
+  const runningResolved = useStore((state) => state.runningKnown || state.runningUnavailable);
 
   useLayoutEffect(() => {
-    if (!ready || firstRun || settingsPage || selected || agents.length === 0) return;
+    if (!ready || !runningResolved || firstRun || settingsPage || selected || agents.length === 0)
+      return;
     const state = useStore.getState();
     if (state.selected) return;
     const order = numbered(state.agents, state.groups);
@@ -411,7 +413,7 @@ export default function App() {
       lastConversation(),
     );
     if (id) openConversation(id);
-  }, [ready, firstRun, settingsPage, selected, agents.length, openConversation]);
+  }, [ready, runningResolved, firstRun, settingsPage, selected, agents.length, openConversation]);
 
   const openQuestions = () => {
     const state = useStore.getState();

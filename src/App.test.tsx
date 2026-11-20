@@ -174,6 +174,8 @@ beforeEach(() => {
   agentLastActive.mockResolvedValue({});
   agentActivity.mockResolvedValue({});
   useStore.setState({
+    runningKnown: false,
+    runningUnavailable: false,
     agents: [],
     activity: {},
     lastActive: {},
@@ -707,6 +709,34 @@ describe("App", () => {
     fireEvent.keyDown(document.activeElement as Element, { key: "Escape" });
     const input = await screen.findByRole("combobox", { name: "Write to Manager" });
     await waitFor(() => expect(document.activeElement).toBe(input));
+  });
+
+  it("waits for a successful running snapshot rather than opening the remembered conversation", async () => {
+    listAgents.mockResolvedValue([agent("Manager"), agent("Chef")]);
+    runningRuns.mockRejectedValue(new Error("temporarily unavailable"));
+    rememberConversation("id-Manager");
+    render(<App />);
+    await screen.findByRole("navigation", { name: "Agent conversations" });
+    expect(useStore.getState().selected).toBeNull();
+    runningRuns.mockResolvedValue([
+      {
+        runId: "working",
+        agentId: "id-Chef",
+        groupId: agent("Chef").groupId,
+        startedAt: 1,
+        note: null,
+      },
+    ]);
+    await act(() => useStore.getState().refreshRunning());
+    expect(await screen.findByRole("log", { name: "Conversation with Chef" })).toBeTruthy();
+  });
+
+  it("opens the remembered conversation on a host without a running snapshot command", async () => {
+    listAgents.mockResolvedValue([agent("Manager"), agent("Chef")]);
+    runningRuns.mockRejectedValue({ kind: "unknownCommand" });
+    rememberConversation("id-Chef");
+    render(<App />);
+    expect(await screen.findByRole("log", { name: "Conversation with Chef" })).toBeTruthy();
   });
 
   it("lands a notification for an agent on that agent's conversation", async () => {

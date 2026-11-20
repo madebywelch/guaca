@@ -88,6 +88,32 @@ describe("Needs you as a keyboard queue", () => {
     expect(document.activeElement).toBe(card(/^Dara asks/));
   });
 
+  it("does not let a shortcut authorize another card after focus moves to an answer", () => {
+    drawQueue();
+    const option = screen.getByRole("button", { name: "Notebooks" });
+    act(() => option.focus());
+    expect(document.activeElement).toBe(option);
+    expect(card(/^Noor asks/).hasAttribute("data-selected")).toBe(true);
+    fireEvent.keyDown(option, { key: "Enter", ctrlKey: true });
+    expect(useHeld.getState().held).toBeNull();
+    fireEvent.keyDown(option, { key: "1" });
+    expect(useHeld.getState().notice?.text).toBe("Answered Noor: Notebooks");
+    act(() => vi.advanceTimersByTime(HOLD_MS));
+    expect(decide).not.toHaveBeenCalled();
+    expect(answer).toHaveBeenCalledExactlyOnceWith(question.id, "Notebooks");
+  });
+
+  it("keeps Tab and Shift Tab inside Questions at both ends", () => {
+    drawQueue();
+    const first = screen.getByRole("button", { name: "Done" });
+    const last = screen.getByRole("button", { name: "The renewal" });
+    act(() => last.focus());
+    expect(fireEvent.keyDown(last, { key: "Tab" })).toBe(false);
+    expect(document.activeElement).toBe(first);
+    expect(fireEvent.keyDown(first, { key: "Tab", shiftKey: true })).toBe(false);
+    expect(document.activeElement).toBe(last);
+  });
+
   it("draws the keys on the selected card's buttons and on no other card", () => {
     drawQueue();
     const selected = card(/^Dara asks/);

@@ -33,7 +33,28 @@ export function QuestionTray({
         aria-label="Close questions"
         onClick={onClose}
       />
-      <div className="dialog question-tray" role="dialog" aria-modal="true" aria-label="Questions">
+      <div
+        className="dialog question-tray"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Questions"
+        onKeyDown={(event) => {
+          if (event.key !== "Tab" || event.ctrlKey || event.metaKey || event.altKey) return;
+          const active = document.activeElement;
+          const controls = Array.from(
+            event.currentTarget.querySelectorAll<HTMLElement>(
+              "button:not(:disabled), input:not(:disabled), a[href]",
+            ),
+          );
+          const direction = event.shiftKey
+            ? Node.DOCUMENT_POSITION_PRECEDING
+            : Node.DOCUMENT_POSITION_FOLLOWING;
+          if (!active || controls.some((one) => active.compareDocumentPosition(one) & direction))
+            return;
+          event.preventDefault();
+          (event.shiftKey ? controls.at(-1) : controls[0])?.focus();
+        }}
+      >
         <header className="question-tray__head">
           <h2 className="dialog__title">Questions</h2>
           <button type="button" className="btn btn--quiet btn--compact" onClick={onClose}>
@@ -45,8 +66,8 @@ export function QuestionTray({
           title={null}
           queue={{ selected, onSelect, onLeave: onClose }}
         />
+        <Toast />
       </div>
-      <Toast />
     </div>
   );
 }

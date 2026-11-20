@@ -608,6 +608,38 @@ describe("the channel open when the rail goes inside a crew", () => {
 });
 
 describe("activity", () => {
+  it("waits for the latest roster even when its first read is superseded twice", async () => {
+    const initial = useStore.getState();
+    let latest!: (rows: AgentCard[]) => void;
+    let earlier!: (rows: AgentCard[]) => void;
+    vi.mocked(api.listAgents)
+      .mockResolvedValueOnce([])
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          earlier = resolve;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          latest = resolve;
+        }),
+      );
+    const ready = vi.fn();
+    const startup = initial.bootstrap().then(ready);
+    const middle = initial.refreshAgents();
+    const newer = initial.refreshAgents();
+    earlier([AGENTS[0]!]);
+    await middle;
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    try {
+      expect(ready).not.toHaveBeenCalled();
+    } finally {
+      latest(AGENTS);
+      await Promise.all([startup, newer]);
+    }
+    expect(useStore.getState().agents).toEqual(AGENTS);
+  });
+
   it("does not finish bootstrap before a newer question snapshot is applied", async () => {
     const request = anApproval({ agentId: "chef" });
     let first!: (rows: Approval[]) => void;
