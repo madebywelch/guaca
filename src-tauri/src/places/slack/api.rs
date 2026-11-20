@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use reqwest::header::{HeaderMap, CONTENT_TYPE, RETRY_AFTER};
 use serde_json::Value;
 
@@ -129,7 +128,8 @@ pub enum Token {
 
 pub enum Body {
     Json(Value),
-    Form(Vec<(&'static str, String)>),
+    Query(Vec<(&'static str, String)>),
+    Empty,
 }
 
 pub struct Api {
@@ -154,17 +154,18 @@ impl Api {
             Token::Bot => &self.bot,
             Token::App => &self.app,
         };
-        let request =
-            self.http.post(format!("{}/api/{method}", self.origin)).bearer_auth(secret.expose());
+        let url = format!("{}/api/{method}", self.origin);
         let request = match body {
-            Body::Json(value) => request
+            Body::Json(value) => self
+                .http
+                .post(url)
                 .header(CONTENT_TYPE, "application/json; charset=utf-8")
                 .body(value.to_string()),
-            Body::Form(pairs) => {
-                request.header(CONTENT_TYPE, "application/x-www-form-urlencoded").body(form(&pairs))
-            }
+            Body::Query(pairs) => self.http.get(url).query(&pairs),
+            Body::Empty => self.http.post(url),
         };
-        let response = request.send().await.map_err(|_| Failure::Unreachable)?;
+        let response =
+            request.bearer_auth(secret.expose()).send().await.map_err(|_| Failure::Unreachable)?;
         let status = response.status();
         let after = retry_after(response.headers());
         if status.as_u16() == 429 {
@@ -191,14 +192,6 @@ impl Api {
             _ => Err(Failure::Code(code)),
         }
     }
-}
-
-fn form(pairs: &[(&'static str, String)]) -> String {
-    pairs
-        .iter()
-        .map(|(name, value)| format!("{name}={}", utf8_percent_encode(value, NON_ALPHANUMERIC)))
-        .collect::<Vec<_>>()
-        .join("&")
 }
 
 fn retry_after(headers: &HeaderMap) -> Option<Duration> {
@@ -272,13 +265,5 @@ mod tests {
             assert!(!reason.contains('\u{2014}'), "{reason}");
             assert!(reason.ends_with('.'), "{reason}");
         }
-    }
-
-    #[test]
-    fn a_form_body_encodes_every_value() {
-        assert_eq!(
-            form(&[("channel", "C1".into()), ("cursor", "dXNlcj0=&x".into())]),
-            "channel=C1&cursor=dXNlcj0%3D%26x"
-        );
     }
 }

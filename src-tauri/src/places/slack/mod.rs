@@ -141,7 +141,7 @@ impl SlackAdapter {
     async fn connection(&self, ears: &Ears) -> Result<Ended, AdapterError> {
         let opened = self
             .api
-            .call("apps.connections.open", Token::App, Body::Form(vec![]))
+            .call("apps.connections.open", Token::App, Body::Empty)
             .await
             .map_err(Failure::into_adapter)?;
         let url = opened["url"].as_str().ok_or_else(|| Failure::Garbled.into_adapter())?;
@@ -270,7 +270,7 @@ impl SlackAdapter {
         if let Some(user) = self.bot_user.lock().clone() {
             return Ok(user);
         }
-        let found = self.api.call("auth.test", Token::Bot, Body::Form(vec![])).await?;
+        let found = self.api.call("auth.test", Token::Bot, Body::Empty).await?;
         let user = found["user_id"].as_str().ok_or(Failure::Garbled)?.to_string();
         *self.bot_user.lock() = Some(user.clone());
         Ok(user)
@@ -283,7 +283,7 @@ impl SlackAdapter {
     ) -> Result<Value, Failure> {
         let mut last = Failure::Limited(None);
         for attempt in 1..=LIMITED_TRIES {
-            match self.api.call(method, Token::Bot, Body::Form(form.clone())).await {
+            match self.api.call(method, Token::Bot, Body::Query(form.clone())).await {
                 Err(Failure::Limited(after)) => {
                     last = Failure::Limited(after);
                     if attempt < LIMITED_TRIES {
@@ -312,7 +312,7 @@ impl SlackAdapter {
             let page = if patient {
                 self.patient(method, page_form).await?
             } else {
-                self.api.call(method, Token::Bot, Body::Form(page_form)).await?
+                self.api.call(method, Token::Bot, Body::Query(page_form)).await?
             };
             messages.extend(page["messages"].as_array().ok_or(Failure::Garbled)?.iter().cloned());
             cursor = page["response_metadata"]["next_cursor"]
@@ -500,7 +500,7 @@ impl Adapter for SlackAdapter {
                 }
                 None => self
                     .api
-                    .call("conversations.history", Token::Bot, Body::Form(form))
+                    .call("conversations.history", Token::Bot, Body::Query(form))
                     .await
                     .and_then(|page| {
                         let messages = page["messages"].as_array().ok_or(Failure::Garbled)?;

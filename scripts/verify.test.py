@@ -17,7 +17,7 @@ from pathlib import Path
 
 from e2e.browser import Browser, BrowserError, split_frames
 from e2e.scenarios import SCENARIOS, unproved
-from e2e.slack import Slack, read_frame
+from e2e.slack import READ_METHODS, Slack, read_frame
 from e2e.world import (UNSCRIPTED, Call, Egress, Failed, Model, Updater, call, held, redact, refuse, say,
                        stream, until)
 
@@ -384,9 +384,16 @@ class Evidence(unittest.TestCase):
 
 
 def slack_call(slack: "Slack", method: str, token: str, fields: dict) -> dict:
-    request = urllib.request.Request(f"{slack.origin}/api/{method}", data=json.dumps(fields).encode(),
-                                     headers={"content-type": "application/json; charset=utf-8",
-                                              "authorization": f"Bearer {token}"}, method="POST")
+    url = f"{slack.origin}/api/{method}"
+    headers = {"authorization": f"Bearer {token}"}
+    if method in READ_METHODS:
+        query = urllib.parse.urlencode({key: str(value).lower() if isinstance(value, bool) else value
+                                        for key, value in fields.items()})
+        request = urllib.request.Request(f"{url}?{query}", headers=headers, method="GET")
+    else:
+        request = urllib.request.Request(url, data=json.dumps(fields).encode(),
+                                         headers={**headers, "content-type": "application/json; charset=utf-8"},
+                                         method="POST")
     with urllib.request.urlopen(request, timeout=10) as answer:
         return json.loads(answer.read())
 

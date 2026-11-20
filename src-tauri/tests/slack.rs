@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use axum::extract::Path;
 use axum::http::header::{AUTHORIZATION, LOCATION, RETRY_AFTER};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use futures_util::{SinkExt, StreamExt};
 use guac_lib::domain::place::{
@@ -30,6 +30,7 @@ const BOT_USER: &str = "UBOT";
 #[derive(Clone, Debug)]
 struct Request {
     method: String,
+    verb: Method,
     authorization: String,
     body: String,
 }
@@ -106,10 +107,23 @@ impl Slack {
         let posts = Arc::new(AtomicUsize::new(0));
         let app = axum::Router::new().route(
             "/api/:method",
-            axum::routing::post(
-                move |Path(method): Path<String>, headers: HeaderMap, body: String| {
+            axum::routing::any(
+                move |Path(method): Path<String>,
+                      verb: Method,
+                      uri: Uri,
+                      headers: HeaderMap,
+                      body: String| {
                     let (api, posts) = (api.clone(), posts.clone());
-                    async move { api.answer(method, &headers, body, &posts).await }
+                    async move {
+                        let body = if verb == Method::GET {
+                            assert!(body.is_empty());
+                            uri.query().unwrap_or_default().to_string()
+                        } else {
+                            assert!(uri.query().is_none());
+                            body
+                        };
+                        api.answer(method, verb, &headers, body, &posts).await
+                    }
                 },
             ),
         );
@@ -127,6 +141,7 @@ impl Slack {
     async fn answer(
         &self,
         method: String,
+        verb: Method,
         headers: &HeaderMap,
         body: String,
         posts: &AtomicUsize,
@@ -136,7 +151,7 @@ impl Slack {
             .and_then(|value| value.to_str().ok())
             .unwrap_or_default()
             .to_string();
-        let request = Request { method: method.clone(), authorization, body };
+        let request = Request { method: method.clone(), verb, authorization, body };
         self.requests.lock().unwrap().push(request.clone());
         let scripted = self.answers.lock().unwrap().get_mut(&method).and_then(VecDeque::pop_front);
         let answer = scripted.unwrap_or_else(|| {
@@ -273,6 +288,15 @@ impl Slack {
     fn assert_no_token_leaked(&self, errors: &[String]) {
         for request in self.requests.lock().unwrap().iter() {
             let token = if request.method == "apps.connections.open" { APP } else { BOT };
+            let verb = if matches!(
+                request.method.as_str(),
+                "conversations.history" | "conversations.replies"
+            ) {
+                Method::GET
+            } else {
+                Method::POST
+            };
+            assert_eq!(request.verb, verb, "{}", request.method);
             assert_eq!(request.authorization, format!("Bearer {token}"), "{}", request.method);
             for leaked in [BOT, APP] {
                 assert!(!request.body.contains(leaked), "{} body carried a token", request.method);
