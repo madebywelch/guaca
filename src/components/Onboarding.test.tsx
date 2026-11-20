@@ -36,10 +36,11 @@ vi.mock("./OnboardingProvider", () => ({
   ),
 }));
 
-const preset = HIREABLE.find((agent) => agent.id === "product-manager")!;
-const agent: AgentCard = {
-  ...toDraft(preset),
-  id: "first-agent",
+const PLAN_GROUP = ["chief-of-staff", "product-manager", "qa-tester"];
+const presets = PLAN_GROUP.map((id) => HIREABLE.find((agent) => agent.id === id)!);
+const card = (index: number): AgentCard => ({
+  ...toDraft(presets[index]!),
+  id: index === 0 ? "first-agent" : "colleague-" + index,
   groupId: aGroup().id,
   model: "",
   subscriptionModel: "",
@@ -56,7 +57,9 @@ const agent: AgentCard = {
   createdAt: 1,
   updatedAt: 1,
   discardedAt: null,
-};
+});
+const group = presets.map((_, index) => card(index));
+const agent = group[0]!;
 const refresh = vi.fn(async () => {});
 const select = vi.fn(async () => {});
 const done = vi.fn();
@@ -99,7 +102,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   platform.desktop = true;
   localStorage.clear();
-  hire.mockResolvedValue([agent]);
+  hire.mockResolvedValue(group);
   send.mockResolvedValue("run-1");
   refresh.mockResolvedValue();
   select.mockResolvedValue();
@@ -156,10 +159,62 @@ describe("guided first task", () => {
     fireEvent.click(screen.getByRole("button", { name: /Draft content/ }));
     expect(
       (screen.getByRole("textbox", { name: "Your first brief" }) as HTMLTextAreaElement).value,
-    ).toContain("first draft");
+    ).toContain("one draft I can send");
   });
 
-  it("creates one recommended agent and sends only after the explicit Start action", async () => {
+  it("says on the first step that a task goes to a group of three, and keeps the way to set up alone", () => {
+    mount();
+    expect(screen.getByText(/Guaca hires a group of three for it/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Create one agent" })).toBeTruthy();
+  });
+
+  it("names the three it will hire and what each is for before anything is created", () => {
+    mount();
+    toReview();
+    const listed = screen.getByRole("region", { name: "Your group for this task" });
+    expect(
+      Array.from(listed.querySelectorAll("li")).map(
+        (row) => row.querySelector("strong")!.textContent,
+      ),
+    ).toEqual(["Chief of Staff", "Product Manager", "QA Tester"]);
+    expect(listed.textContent).toContain("Looks for the ways that plan could go wrong.");
+    expect(
+      screen.getByText(/asks Product Manager and QA Tester at the same time/).textContent,
+    ).toContain("one question if it cannot go on without you");
+    expect(screen.getByText(/at least five instead of one/).textContent).toContain(
+      "stays inside your group's limits",
+    );
+    expect(hire).not.toHaveBeenCalled();
+  });
+
+  it("writes the names the host gave the colleagues into the brief it sends", async () => {
+    hire.mockResolvedValueOnce([group[0], group[1], { ...group[2]!, name: "QA Tester 2" }]);
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: /Plan a project/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Connect test provider" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    await waitFor(() => expect(done).toHaveBeenCalledOnce());
+    const sent = send.mock.calls[0]![1] as string;
+    expect(sent).toContain("Ask Product Manager and QA Tester 2 at the same time");
+    expect(sent).not.toMatch(/QA Tester(?! 2)/);
+  });
+
+  it("does not promise a split it cannot see in a brief the person wrote", () => {
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: /Something else/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Your first brief" }), {
+      target: { value: "Plan a small team offsite." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Connect test provider" }));
+    expect(
+      screen.getByText(/decides what to hand Market Researcher and Product Manager/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/at the same time/)).toBeNull();
+  });
+
+  it("hires the task's group of three in one keyed request and sends only after the explicit Start action", async () => {
     mount();
     toReview();
     expect(hire).not.toHaveBeenCalled();
@@ -168,10 +223,48 @@ describe("guided first task", () => {
     await waitFor(() => expect(done).toHaveBeenCalledOnce());
     const key = hire.mock.calls[0]![2];
     expect(key).toMatch(/^[0-9a-f-]{36}$/);
-    expect(hire).toHaveBeenCalledWith(aGroup().id, [toDraft(preset)], key);
+    expect(hire).toHaveBeenCalledExactlyOnceWith(aGroup().id, presets.map(toDraft), key);
     expect(send).toHaveBeenCalledExactlyOnceWith(agent.id, "Plan our launch next month.", [], key);
     expect(select).toHaveBeenCalledWith(agent.id);
     expect(readFirstTask().brief).toBe("");
+    expect(useStore.getState().agents.map((hired) => hired.id)).toEqual(
+      group.map((hired) => hired.id),
+    );
+  });
+
+  it("sends nothing and keeps no agent when the host answers with less than the whole group", async () => {
+    hire.mockResolvedValueOnce([agent]);
+    mount();
+    toReview();
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "The host did not return the whole group. Try again.",
+    );
+    expect(send).not.toHaveBeenCalled();
+    expect(readFirstTask().agentId).toBeNull();
+    expect(done).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    await waitFor(() => expect(done).toHaveBeenCalledOnce());
+    expect(hire.mock.calls[1]![2]).toBe(hire.mock.calls[0]![2]);
+    expect(send).toHaveBeenCalledExactlyOnceWith(
+      agent.id,
+      "Plan our launch next month.",
+      [],
+      hire.mock.calls[0]![2],
+    );
+  });
+
+  it("sends nothing when the hire fails, and retries the same group under the same key", async () => {
+    hire.mockRejectedValueOnce(new Error("The host is restarting."));
+    mount();
+    toReview();
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    expect((await screen.findByRole("alert")).textContent).toBe("The host is restarting.");
+    expect(send).not.toHaveBeenCalled();
+    expect(readFirstTask().agentId).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    await waitFor(() => expect(done).toHaveBeenCalledOnce());
+    expect(hire.mock.calls[1]).toEqual(hire.mock.calls[0]);
   });
 
   it("persists the key before a lost hire response and reuses it after reload", async () => {
@@ -190,7 +283,7 @@ describe("guided first task", () => {
     expect(
       (screen.getByRole("textbox", { name: "Your first brief" }) as HTMLTextAreaElement).readOnly,
     ).toBe(true);
-    expect(screen.getByText(/previous start may have created this agent/i)).toBeTruthy();
+    expect(screen.getByText(/previous start may have hired this group/i)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Start task" }));
     await waitFor(() => expect(done).toHaveBeenCalledOnce());
     expect(hire.mock.calls[1]![2]).toBe(key);

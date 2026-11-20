@@ -30,16 +30,21 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
   const heading = useRef<HTMLHeadingElement>(null);
   const briefHint = useId();
   const continueHint = useId();
+  const groupHeading = useId();
   const settings = useStore((state) => state.settings);
   const agents = useStore((state) => state.agents);
   const refreshAgents = useStore((state) => state.refreshAgents);
   const select = useStore((state) => state.select);
   const task = FIRST_TASKS.find((entry) => entry.id === draft.task)!;
-  const preset = HIREABLE.find((entry) => entry.id === task.agent)!;
+  const members = task.group.map((member) => ({
+    ...member,
+    preset: HIREABLE.find((entry) => entry.id === member.agent)!,
+  }));
+  const [lead, first, second] = members.map((member) => member.preset.name);
   const hired = agents.find(
     (agent) => agent.id === draft.agentId && agent.lifecycle !== "terminated",
   );
-  const name = hired?.name ?? preset.name;
+  const name = hired?.name ?? lead;
 
   useEffect(() => {
     heading.current?.focus();
@@ -103,15 +108,25 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
     try {
       if (next.agentId && !hired)
         throw new Error(
-          "This agent is no longer available. Choose another task below; your brief is kept here.",
+          `${name} is no longer available. Choose another task below; your brief is kept here.`,
         );
       if (!next.agentId) {
-        const created = await api.hireAgents(group.id, [toDraft(preset)], next.key);
-        if (!created[0]) throw new Error("The host did not return an agent. Try again.");
-        next = { ...next, agentId: created[0].id };
+        const created = await api.hireAgents(
+          group.id,
+          members.map((member) => toDraft(member.preset)),
+          next.key,
+        );
+        if (created.length !== members.length)
+          throw new Error("The host did not return the whole group. Try again.");
+        const brief = created.reduce(
+          (text, card, index) => text.replaceAll(members[index]!.preset.name, card.name),
+          next.brief,
+        );
+        next = { ...next, agentId: created[0]!.id, brief };
         const saved = keep(next);
+        const ids = new Set(created.map((agent) => agent.id));
         useStore.setState((state) => ({
-          agents: [...state.agents.filter((agent) => agent.id !== created[0]!.id), created[0]!],
+          agents: [...state.agents.filter((agent) => !ids.has(agent.id)), ...created],
         }));
         if (!saved) return;
       }
@@ -194,7 +209,10 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
               <h1 ref={heading} tabIndex={-1}>
                 What would you like help with?
               </h1>
-              <p>Start with one task and one agent. You can build a group as you go.</p>
+              <p>
+                Pick a task and Guaca hires a group of three for it. They work it out between
+                themselves and come back with a result.
+              </p>
             </div>
             <fieldset className="onboarding-options" aria-label="First task">
               {FIRST_TASKS.map((entry) => (
@@ -268,7 +286,7 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
               <h1 ref={heading} tabIndex={-1}>
                 Connect your AI
               </h1>
-              <p>Choose what powers your agent. Your first brief is waiting for you.</p>
+              <p>Choose what powers your group. Your first brief is waiting for you.</p>
             </div>
             <OnboardingProvider
               onConnected={() => setStep("start")}
@@ -278,27 +296,37 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
         ) : (
           <>
             <div className="onboarding-intro">
-              <p className="onboarding-eyebrow">One task. Someone to help.</p>
+              <p className="onboarding-eyebrow">One task. A group of three.</p>
               <h1 ref={heading} tabIndex={-1}>
                 Ready when you are.
               </h1>
-              <p>Review your brief, then let {name} take the first step.</p>
+              <p>
+                Review your brief. {name} takes it,{" "}
+                {task.brief
+                  ? `asks ${first} and ${second} at the same time,`
+                  : `decides what to hand ${first} and ${second},`}{" "}
+                and comes back with a result, or with one question if it cannot go on without you.
+              </p>
             </div>
-            <div className="onboarding-agent">
-              <AgentAvatar
-                avatar={hired?.avatar ?? preset.avatar}
-                color={hired?.color ?? preset.color}
-                size="lg"
-                seed={task.agent}
-              />
-              <div>
-                <span className="onboarding-eyebrow">
-                  {draft.agentId ? "Your first agent" : "Recommended for this task"}
-                </span>
-                <h2>{name}</h2>
-                <p>{preset.tagline}</p>
-              </div>
-            </div>
+            <section className="onboarding-group" aria-labelledby={groupHeading}>
+              <h2 className="onboarding-eyebrow" id={groupHeading}>
+                {draft.agentId ? "Your group" : "Your group for this task"}
+              </h2>
+              <ul>
+                {members.map((member) => (
+                  <li key={member.agent}>
+                    <AgentAvatar
+                      avatar={member.preset.avatar}
+                      color={member.preset.color}
+                      size="md"
+                      seed={member.agent}
+                    />
+                    <strong>{member.preset.name}</strong>
+                    <span>{member.role}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
             <label className="field">
               <span className="field__label">Your first brief</span>
               <textarea
@@ -314,10 +342,10 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
               {draft.sent
                 ? "Your task was sent. Open the conversation to see how it is going."
                 : draft.agentId
-                  ? "Your agent is already created. If a connection failed, check the conversation before sending again."
+                  ? "Your group is already hired. If a connection failed, check the conversation before sending again."
                   : draft.key
-                    ? "Your previous start may have created this agent. Retry with the same brief to continue safely."
-                    : "Start task creates this agent and sends your brief using the provider you just connected. Other services can be connected later, when needed."}
+                    ? "Your previous start may have hired this group. Retry with the same brief to continue safely."
+                    : `Start task hires these three and sends your brief to ${name}, using the provider you just connected. A group task uses more model calls than one agent would, at least five instead of one, and it stays inside your group's limits.`}
             </p>
             {desktop && (
               <p className="onboarding-notice">

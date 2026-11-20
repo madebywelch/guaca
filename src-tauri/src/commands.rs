@@ -1545,11 +1545,8 @@ pub async fn hire_agents(
         format!("{:x}", Sha256::digest(format!("{group_id}:{drafts:?}").as_bytes()))
     });
     if let Some(key) = &idempotency_key {
-        if key.is_empty() || key.len() > 128 || drafts.len() != 1 {
-            return Err(CommandError::new(
-                "validation",
-                "A hire key requires one agent and at most 128 characters.",
-            ));
+        if key.is_empty() || key.len() > 128 {
+            return Err(CommandError::new("validation", "A hire key has at most 128 characters."));
         }
     }
     if !store.list_groups()?.iter().any(|g| g.id == group_id) {
@@ -1574,9 +1571,7 @@ pub async fn hire_agents(
         .collect::<Result<Vec<_>, _>>()?;
 
     let hired = if let Some(key) = idempotency_key {
-        let (card, _) =
-            store.create_onboarding_agent(&key, fingerprint.as_deref().unwrap(), &clean[0])?;
-        vec![card]
+        store.create_onboarding_agents(&key, fingerprint.as_deref().unwrap(), &clean)?.0
     } else {
         store.create_agents(&clean)?
     };

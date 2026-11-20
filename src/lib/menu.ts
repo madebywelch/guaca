@@ -346,10 +346,11 @@ export function firstChoice(rows: MenuRow[], query: string): string | null {
   if (words.length >= WRITE_WORDS && write) return write.id;
   const others = rows.filter((row) => row.id !== "write" && row.id !== "search");
   if (words.length === 0) return others[0]?.id ?? rows[0]?.id ?? null;
+  const named = others.find((row) => wordsIn(row.title).join(" ") === words.join(" "));
   const titled = others.find((row) =>
     words.every((word) => row.title.toLowerCase().includes(word)),
   );
-  return (titled ?? others[0] ?? write ?? rows[0])?.id ?? null;
+  return (named ?? titled ?? others[0] ?? write ?? rows[0])?.id ?? null;
 }
 
 export function requestAt(rows: MenuRow[], selected: string | null): string | undefined {
