@@ -797,7 +797,7 @@ def scenario_settings(w: World) -> None:
             w.capture(f"Settings with {state} at {width}x{height}")
 
     w.host.call("update_settings", patch={"baseUrl": "https://openrouter.ai/api/v1", "apiKey": ""})
-    w.wait("the page asks for an API key", lambda: ui.find("button", "Open settings"))
+    w.wait("the page asks for an API key", lambda: ui.find("button", "Go to Provider"))
     crowd("the no-key banner", 1)
 
     with urllib.request.urlopen(f"{w.host.origin}/health", timeout=10) as health:
