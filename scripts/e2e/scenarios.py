@@ -602,6 +602,14 @@ def scenario_controls(w: World) -> None:
             not any(ui.property("radio", label(node), "checked")
                     for node in ui.within("radiogroup", "Theme presets", "radio")))
     ui.click("tab", "Notifications")
+    w.check("long notification choices use visible radios even with only two options",
+            len(ui.within("radiogroup", "What a push says", "radio")) == 2
+            and ui.evaluate("""(() => {
+              const options = [...document.querySelectorAll(
+                '[aria-label="Include what finished"], [aria-label="Only say that something finished"]'
+              )];
+              return options.length === 2 && options.every(input => getComputedStyle(input).opacity === '1');
+            })()"""))
     ui.evaluate("""(() => {
       const send = window.fetch;
       window.formatSaves = 0;
@@ -2199,19 +2207,22 @@ def scenario_roster(w: World) -> None:
     open_agent(w, names[9])
     w.wait("the clicked row focuses its question", lambda: ui.focused() == ("button", "Early"))
     compact = {}
+    compact_geometry = {}
     for height in (355, 320):
         ui.viewport(320, height)
         w.wait(f"the app fits the {height}-pixel viewport and the compact picker is visible",
                lambda: ui.evaluate(f"document.querySelector('.app').getBoundingClientRect().height === {height}")
                and ui.find("combobox", "Switch agent") and ui.evaluate(look.SETTLED))
-        compact[str(height)] = ui.on_screen("combobox", f"Write to {asking}") and ui.on_screen("button", "Send")
-    w.check("the composer and Send stay visible with a question at keyboard height",
-            all(compact.values()), observed=compact,
-            detail=ui.evaluate("""Object.fromEntries(['.app', '.roster', '.pane__header', '.agent-tabs',
+        compact[str(height)] = (ui.on_screen("combobox", f"Write to {asking}") and ui.on_screen("button", "Send")
+                                and ui.evaluate("document.querySelector('.composer').getBoundingClientRect().bottom "
+                                                "<= document.querySelector('.app').getBoundingClientRect().bottom"))
+        compact_geometry[str(height)] = ui.evaluate("""Object.fromEntries(['.app', '.roster', '.pane__header', '.agent-tabs',
               '.pane__body', '.working', '.composer', '.composer__input', '.composer__send', '.statusbar'].map(s => {
                 const el = document.querySelector(s), r = el.getBoundingClientRect();
                 return [s, [r.top, r.bottom, getComputedStyle(el).paddingBlock]];
-              }))"""), shot=True)
+              }))""")
+    w.check("the composer and Send stay visible with a question at keyboard height",
+            all(compact.values()), observed=compact, detail=compact_geometry, shot=True)
     ui.viewport(900, 700)
     ui.key("Tab", mod=True)
     w.wait("Control Tab opens the next row", lambda: ui.find("log", f"Conversation with {names[10]}"))
@@ -3055,6 +3066,7 @@ SCENARIOS: dict[str, Scenario] = {
         "one arrow changes the selected segment and applies the new surface",
         "Tab leaves the radio group instead of stopping on each segment",
         "a custom look does not falsely mark any preset selected",
+        "long notification choices use visible radios even with only two options",
         "a refused notification format keeps focus and the saved value without a second write",
         "a notification format stays selected after the Host saves it",
         "the recipient pill moves the unsent draft to the selected conversation",

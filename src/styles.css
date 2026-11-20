@@ -8774,6 +8774,42 @@ button.artifacts__version[aria-pressed="true"] {
       padding-block: var(--space-2);
     }
 
+    .app[data-roster] .composer {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+      align-items: center;
+      column-gap: var(--space-3);
+      margin-block: 0;
+      padding-block: var(--space-2);
+    }
+
+    .app[data-roster] .composer > :not(.composer__recipient, .composer__row) {
+      grid-column: 1 / -1;
+    }
+
+    .app[data-roster] .composer__recipient {
+      grid-row: 1;
+      grid-column: 1;
+      justify-self: start;
+    }
+
+    .app[data-roster] .composer__row {
+      grid-row: 1;
+      grid-column: 2;
+      align-items: center;
+      padding-block: 0;
+    }
+
+    .app[data-roster] .composer__input,
+    .app[data-roster] .composer__mirror {
+      max-height: var(--control-touch);
+    }
+
+    .app[data-roster] .composer__send,
+    .app[data-roster] .composer__attach {
+      margin-bottom: 0;
+    }
+
     .app[data-roster] .composer__foot,
     .app[data-roster] .statusbar {
       display: none;
