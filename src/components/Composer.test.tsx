@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useDismiss } from "../lib/dismiss";
 import { workspaceOrigin } from "../lib/transport";
 import type { AgentCard, Attachment, Staged } from "../lib/types";
 import { Composer } from "./Composer";
@@ -804,6 +805,30 @@ describe("Escape from the box", () => {
     fireEvent(screen.getByRole("combobox"), event);
     expect(onLeave).toHaveBeenCalledTimes(1);
     expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("closes whatever is open over the page first, and does not go back", async () => {
+    const closed = vi.fn();
+    function Open() {
+      useDismiss(closed);
+      return null;
+    }
+    const onLeave = vi.fn();
+    render(
+      <>
+        <Open />
+        <Composer
+          placeholder="Message Manager"
+          group={CREW}
+          onSend={vi.fn(async () => {})}
+          onLeave={onLeave}
+        />
+      </>,
+    );
+    await waitFor(() => expect(dropped).not.toBeNull());
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+    expect(onLeave).not.toHaveBeenCalled();
+    expect(closed).toHaveBeenCalledTimes(1);
   });
 
   it("does not go back on an Escape that cancels a character being composed", async () => {

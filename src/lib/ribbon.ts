@@ -533,6 +533,11 @@ export function layoutRibbon(given: RibbonInput): Ribbon {
     asks = [...asks, slot];
     past = past.filter((one) => one !== slot);
   }
+  for (const slot of [...tray, ...past].sort((a, b) => rank(b) - rank(a))) {
+    if (!slot.tight) continue;
+    slot.tight = false;
+    if (!fits()) slot.tight = true;
+  }
 
   const axis = trayWidth() > 0 ? trayWidth() + gap : 0;
   const nowX = Math.min(

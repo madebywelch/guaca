@@ -141,9 +141,10 @@ export default function App() {
     const onMove = (event: KeyboardEvent) => {
       const id = bindingFor(event)?.id;
       if (id !== "back" && id !== "step") return;
-      if (dismissing() && !menuOpen.current) return;
+      if (event.isComposing) return;
       event.preventDefault();
       event.stopPropagation();
+      if (dismissing() && !menuOpen.current) return;
       setShowMenu(false);
       const state = useStore.getState();
       if (id === "back") {

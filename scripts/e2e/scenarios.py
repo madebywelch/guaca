@@ -2183,14 +2183,14 @@ def scenario_glance(w: World) -> None:
     ui.key("1", mod=True)
     numbered_first = w.wait("Command 1 opens the first agent", lambda: next(
         (n for n in four if ui.find("log", f"Conversation with {n}")), None))
-    w.check("Control Tab and Control Shift Tab step through the agents in the order of their numbers, "
-            "and Escape from an empty box goes back to Today with the focus in the field",
+    w.check("Control Tab steps through the agents by number, and Escape from an empty box goes to Today",
             first == numbered_first and second != first and bool(back_focus) and bool(escaped) and bool(field),
             observed={"first": first == numbered_first, "second": second != first, "escaped": bool(escaped),
                       "field": bool(field)}, detail={"first": first, "second": second}, shot=True)
 
     ui.type("combobox", f"Write to {first}", HALF_THOUGHT)
     ui.key("Escape")
+    w.wait("the window has finished moving", lambda: ui.evaluate(look.SETTLED))
     kept = ui.find("log", f"Conversation with {first}") and ui.value("combobox", f"Write to {first}") == HALF_THOUGHT
     ui.key("[", mod=True)
     home = w.wait("Command [ goes to Today", lambda: ui.find("region", "Today"))
@@ -2213,8 +2213,7 @@ def scenario_glance(w: World) -> None:
     moved = w.wait("Control Tab from the menu closes it and opens the next agent", lambda: not ui.find(
         "dialog", "Command menu") and next((n for n in four if n != first and ui.find("log", f"Conversation with {n}")), None))
     listed = [r for r in rows if r.startswith(("Back to Today", "Next agent", "Previous agent"))]
-    w.check("the command menu lists Back to Today, Next agent and Previous agent with their keys, the box "
-            "names them, and Control Tab works from the menu",
+    w.check("the menu and the box name the keys back and on, and Control Tab works from the menu",
             any("Back to Today" in r and "Ctrl+[" in r for r in listed)
             and any("Next agent" in r and "Ctrl+Tab" in r for r in listed)
             and any("Previous agent" in r and "Ctrl+Shift+Tab" in r for r in listed)
@@ -2226,9 +2225,10 @@ def scenario_glance(w: World) -> None:
     w.wait("the Groups sheet opens", lambda: ui.find("dialog", "Groups and agents"))
     ui.key("Tab", mod=True)
     ui.key("[", mod=True)
-    stayed = ui.find("log", f"Conversation with {moved}") and ui.find("dialog", "Groups and agents")
     ui.key("Escape")
     w.wait("the sheet closes", lambda: not ui.find("dialog", "Groups and agents"))
+    w.wait("the window has finished moving", lambda: ui.evaluate(look.SETTLED))
+    stayed = ui.find("log", f"Conversation with {moved}") and not ui.find("region", "Today")
     w.check("with a sheet open, Control Tab and Command [ do nothing",
             bool(stayed), observed=bool(stayed))
 
@@ -2775,11 +2775,9 @@ SCENARIOS: dict[str, Scenario] = {
         "both agents with a question keep their faces at 1280 and at 900, and nothing is folded",
         "idle faces sit left of the hours, and no hour is labeled over them",
         "no face sits beside an hour label at a time it did not happen",
-        "Control Tab and Control Shift Tab step through the agents in the order of their numbers, "
-        "and Escape from an empty box goes back to Today with the focus in the field",
+        "Control Tab steps through the agents by number, and Escape from an empty box goes to Today",
         "Escape leaves a box with words in it alone, and Command [ goes back to Today and keeps the draft",
-        "the command menu lists Back to Today, Next agent and Previous agent with their keys, the box "
-        "names them, and Control Tab works from the menu",
+        "the menu and the box name the keys back and on, and Control Tab works from the menu",
         "with a sheet open, Control Tab and Command [ do nothing",
         "opening an agent by its face works from another agent's page at 900x700",
         "every model call was one the scenario scripted",

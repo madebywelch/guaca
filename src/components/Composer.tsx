@@ -8,6 +8,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
+import { dismissing } from "../lib/dismiss";
 import {
   type DraftAction,
   readDraftState,
@@ -300,7 +301,7 @@ export function Composer({
     }
 
     const empty = !text && files.length === 0;
-    if (event.key === "Escape" && onLeave && empty) {
+    if (event.key === "Escape" && onLeave && empty && !dismissing()) {
       event.preventDefault();
       onLeave();
       return;

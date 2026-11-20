@@ -1,5 +1,5 @@
 import type { IconName } from "../components/Icon";
-import { formatCombo, keyOf } from "./keybinds";
+import { BINDINGS, formatCombo, keyOf } from "./keybinds";
 import type { Prefs, SurfaceMode, Typeface } from "./prefs";
 import { stepped } from "./rail";
 import { SECTION_LABELS, SECTIONS, type Section } from "./sections";
@@ -221,6 +221,12 @@ function agentRows(input: MenuInput): MenuRow[] {
   }));
 }
 
+const STEP_BACK = BINDINGS.find((binding) => binding.id === "step")?.to?.combo ?? {
+  key: "Tab",
+  ctrl: true,
+  shift: true,
+};
+
 function actionRows(input: MenuInput): MenuRow[] {
   const rows: MenuRow[] = [];
   if (input.open !== null)
@@ -245,7 +251,7 @@ function actionRows(input: MenuInput): MenuRow[] {
         title,
         detail: to.name,
         icon: by > 0 ? "chevron-right" : "chevron-left",
-        key: formatCombo({ key: "Tab", ctrl: true, shift: by < 0 }),
+        key: by > 0 ? keyOf("step") : formatCombo(STEP_BACK),
         words,
         action: { do: "open", agentId: to.id },
       });
