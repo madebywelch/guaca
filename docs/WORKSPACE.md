@@ -2095,6 +2095,14 @@ are the last thing in it, so they were at y=1001 in a 900px window — reachable
 only by scrolling a bar a Mac draws as an overlay that is not there until you
 scroll. They are held to the bottom of the pane now. The one screen that decides
 whether the product works is the one that must not have a hidden next step.
+For the same reason, Test and continue, a sign-in this Mac already has, and
+Start task say why they failed inside that bar, after the buttons, as an alert,
+and a Start stopped because this device could not save the draft says so there
+too. A message placed above a bar held to the bottom of the pane lands under
+the bar once the step is taller than the pane: a failed Start task did, at 1280
+by 820, and looked like a button that did nothing. In a window 45rem tall or
+less the steps sit closer together, so the Start step's three colleagues and
+what each is for clear the bar at 900 by 700.
 
 `Onboarding.test.tsx` covers that handoff and recovery, `OnboardingProvider.test.tsx`
 covers connection failures, and `lib/onboarding.test.ts` holds the host boundary

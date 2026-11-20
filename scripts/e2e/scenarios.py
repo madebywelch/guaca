@@ -1828,16 +1828,30 @@ def to_connect(w: World) -> None:
     ui.evaluate("document.querySelector('.onboarding').scrollTop = 0")
 
 
+def alert_shown(w: World) -> bool:
+    return bool(w.ui.evaluate(
+        "(() => { const a = [...document.querySelectorAll('.onboarding-actions [role=alert]')].find(e => e.innerText.trim());"
+        " if (!a) return false; const r = a.getBoundingClientRect();"
+        " const seen = (x, y) => { const hit = document.elementFromPoint(x, y); return hit !== null && a.contains(hit); };"
+        " return r.top >= 0 && r.bottom <= innerHeight && seen(r.left + 4, r.bottom - 4) && seen(r.right - 4, r.top + 4); })()"))
+
+
+def group_clear(w: World) -> bool:
+    return bool(w.ui.evaluate(
+        "(() => { const pane = document.querySelector('.onboarding'); const bar = document.querySelector('.onboarding-actions');"
+        " if (!pane || !bar) return false; const top = pane.getBoundingClientRect().top, floor = bar.getBoundingClientRect().top;"
+        " const rows = [...document.querySelectorAll('.onboarding-group li')];"
+        " return rows.length === 3 && rows.every(li => { const r = li.getBoundingClientRect();"
+        " return r.top >= top && r.bottom <= floor; }); })()"))
+
+
 def refusal(w: World, why: str) -> tuple[str, bool]:
     ui = w.ui
     ui.click("button", "Test and continue")
     alert = w.wait(why, lambda: [
         t for t in (ui.evaluate("Array.from(document.querySelectorAll('[role=alert]')).map(e=>e.innerText)") or [])
         if t.strip()])
-    shown = ui.evaluate("(() => { const a = document.querySelector('[role=alert]'); const r = a.getBoundingClientRect();"
-                        " const hit = document.elementFromPoint(r.left + 4, r.bottom - 4);"
-                        " return r.bottom <= innerHeight && hit !== null && a.contains(hit); })()")
-    return alert[0], bool(shown)
+    return alert[0], alert_shown(w)
 
 
 def scenario_connect(w: World) -> None:
@@ -2116,6 +2130,12 @@ def scenario_firstgroup(w: World) -> None:
             == ["Chief", "Market", "Financial"] and all(len(row.split(" ")) > 4 for row in listed)
             and not w.host.scalar("SELECT count(*) FROM agents"),
             observed=listed, shot=True)
+    clear = {}
+    for width, height in ((900, 700), WINDOW):
+        ui.viewport(width, height)
+        clear[f"{width}x{height}"] = group_clear(w)
+    w.check("the three colleagues and what each is for clear the pinned bar at 900x700 and 1280x820",
+            all(clear.values()), observed=clear)
 
     w.host.stop()
     ui.click("button", "Start task")
@@ -2127,6 +2147,12 @@ def scenario_firstgroup(w: World) -> None:
             and "buy or lease" in ui.value("textbox", "Your first brief"),
             observed={"agents": w.host.scalar("SELECT count(*) FROM agents"),
                       "messages": w.host.scalar("SELECT count(*) FROM messages")}, detail=alert, shot=True)
+    shown = {}
+    for width, height in ((900, 700), WINDOW):
+        ui.viewport(width, height)
+        shown[f"{width}x{height}"] = {"alert": alert_shown(w), "group": group_clear(w)}
+    w.check("a Start that fails says why beside Start, on screen without scrolling at 900x700 and 1280x820",
+            all(seen["alert"] and seen["group"] for seen in shown.values()), observed=shown, shot=True)
     w.host.start()
     w.wait("the page is back with the Host", lambda: ui.find("button", "App settings"))
     w.wait("Start task is offered again", lambda: ui.find("button", "Start task")
@@ -2321,15 +2347,17 @@ SCENARIOS: dict[str, Scenario] = {
         "an updater that does not answer leaves the outcome unknown, and nothing is sent twice",
     ), updater=True),
     "firstgroup": Scenario(scenario_firstgroup, "A person picks a suggested first task; the Start step names the "
-                           "three agents it will hire and what each is for; a Start that cannot reach the Host "
-                           "hires nobody; Start then hires the three exactly once and opens the coordinator's "
+                           "three agents it will hire and what each is for, clear of the pinned bar; a Start that cannot reach the Host "
+                           "says why beside Start, on screen, and hires nobody; Start then hires the three exactly once and opens the coordinator's "
                            "conversation, where the coordinator asks both colleagues at once, the live hand-off "
                            "card and status line show it, Today shows it running, and one result comes back.",
     (
         "the first step says a task goes to a group of three and keeps Create one agent",
         "the suggested brief asks both colleagues at once and does not open by asking the person",
         "the Start step names the three it will hire and what each is for, before any is hired",
+        "the three colleagues and what each is for clear the pinned bar at 900x700 and 1280x820",
         "a Start that fails hires nobody and sends nothing, and keeps the brief",
+        "a Start that fails says why beside Start, on screen without scrolling at 900x700 and 1280x820",
         "Start hires the group of three exactly once",
         "the coordinator asks both colleagues on its first turn, in one message, and the person sees the card",
         "under the coordinator a status line names both colleagues it waits for",

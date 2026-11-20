@@ -259,7 +259,11 @@ describe("guided first task", () => {
     mount();
     toReview();
     fireEvent.click(screen.getByRole("button", { name: "Start task" }));
-    expect((await screen.findByRole("alert")).textContent).toBe("The host is restarting.");
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("The host is restarting.");
+    expect(alert.closest(".onboarding-actions")).toBe(
+      screen.getByRole("button", { name: "Start task" }).closest(".onboarding-actions"),
+    );
     expect(send).not.toHaveBeenCalled();
     expect(readFirstTask().agentId).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Start task" }));
@@ -393,6 +397,33 @@ describe("guided first task", () => {
     expect(screen.getByRole("alert")).toBeTruthy();
     expect(hire).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it("says beside Start that a save failed, so a Start stopped by storage is never silent", () => {
+    mount();
+    toReview();
+    storage().setItem.mockImplementation(() => {
+      throw new Error("Storage denied");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    const said = screen.getByRole("status");
+    expect(said.textContent).toContain("could not save your progress");
+    expect(said.closest(".onboarding-actions")).toBe(
+      screen.getByRole("button", { name: "Start task" }).closest(".onboarding-actions"),
+    );
+  });
+
+  it("says nothing beside Start about saving when no Start was stopped by it", () => {
+    mount();
+    toReview();
+    storage().setItem.mockImplementation(() => {
+      throw new Error("Storage denied");
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Your first brief" }), {
+      target: { value: "A brief typed on the Start step" },
+    });
+    expect(screen.getByRole("alert").textContent).toContain("Keep this window open");
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("keeps a confirmed send in memory if saving its marker fails", async () => {

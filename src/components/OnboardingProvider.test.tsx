@@ -686,6 +686,18 @@ it("reuses the Codex account through Guaca's own sign-in rather than its token",
   expect(mocks.updateSettings).toHaveBeenCalledWith({ provider: "chatgpt" });
 });
 
+it("says why a sign-in offer failed in the bar with the buttons, so it is never scrolled under them", async () => {
+  mocks.existingSignins.mockResolvedValue([claudePickup]);
+  mocks.testConnection.mockRejectedValue(new Error("claude is not signed in"));
+  await draw();
+  fireEvent.click(await screen.findByRole("button", { name: "Use Claude Code" }));
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain("claude is not signed in");
+  expect(alert.closest(".onboarding-actions")).toBe(
+    screen.getByRole("button", { name: "Back" }).closest(".onboarding-actions"),
+  );
+});
+
 it("skips the offer without writing anything and shows the provider choices", async () => {
   mocks.existingSignins.mockResolvedValue([claudePickup, codexPickup]);
   await draw();
