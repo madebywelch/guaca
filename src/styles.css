@@ -8599,6 +8599,36 @@ button.artifacts__version[aria-pressed="true"] {
   color: var(--attention);
 }
 
+@media (width > 40rem) {
+  .roster__agent {
+    row-gap: 0;
+  }
+
+  .roster__agent > .avatar {
+    grid-area: 1 / 1 / span 2;
+  }
+
+  .roster__label {
+    display: contents;
+  }
+
+  .roster__name {
+    grid-area: 1 / 2 / 2 / -1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .roster__status {
+    grid-area: 2 / 2;
+  }
+
+  .roster__agent kbd {
+    grid-area: 2 / 3;
+    justify-self: end;
+  }
+}
+
 @media (max-width: 60rem) {
   .app[data-roster] {
     grid-template-columns: var(--roster-w-compact) minmax(0, 1fr);
