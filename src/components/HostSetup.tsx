@@ -3,6 +3,7 @@ import {
   type AppSource,
   asStall,
   type DockerStatus,
+  type Elsewhere,
   type ExistingHost,
   hostMode,
   localHost,
@@ -15,6 +16,7 @@ import {
   adoptRemote,
   attached,
   desktop,
+  type HostMode,
   openExternal,
   preflightReload,
   probe,
@@ -37,6 +39,137 @@ function within<T>(work: Promise<T>, message: string): Promise<T> {
       deadline = setTimeout(() => reject(new Error(message)), PROBE_DEADLINE_MS);
     }),
   ]).finally(() => clearTimeout(deadline));
+}
+
+function commit(connection: Remote, mode: HostMode, onConnected?: () => void) {
+  preflightReload();
+  try {
+    saveConnection(connection, mode);
+  } catch {
+    throw new Error("Guaca could not save this choice. Nothing changed.");
+  }
+  if (onConnected) {
+    adoptRemote(connection);
+    onConnected();
+  } else {
+    restart(false);
+  }
+}
+
+export function StartOver({ onConnected }: { onConnected?: () => void }) {
+  const [plan, setPlan] = useState<Elsewhere | null>(null);
+  const [open, setOpen] = useState(false);
+  const [sure, setSure] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [imageFailed, setImageFailed] = useState(false);
+  const [looked, setLooked] = useState(true);
+  const [unanswered, setUnanswered] = useState("");
+  useEffect(() => {
+    if (!looked) return;
+    void localHost
+      .elsewhere()
+      .then(setPlan)
+      .catch(() => setLooked(false));
+  }, [looked]);
+  if (unanswered) return <p role="alert">{unanswered}</p>;
+  if (!looked)
+    return (
+      <p className="field__hint">Guaca could not check the other Docker engines on this Mac.</p>
+    );
+  const from = plan?.from;
+  if (!from) return null;
+  const to = plan.to;
+  if (!to)
+    return (
+      <p className="field__hint">
+        No other Docker engine is running on this Mac, so a new host cannot be set up elsewhere yet.
+      </p>
+    );
+  const cancel = () => {
+    setOpen(false);
+    setSure(false);
+    setError("");
+  };
+  const confirm = async () => {
+    setBusy(true);
+    setError("");
+    setImageFailed(false);
+    let connection: Remote;
+    try {
+      connection = await localHost.startElsewhere(to.context, plan.toEngine ?? "");
+    } catch (cause) {
+      setError(errorMessage(cause));
+      setImageFailed(asStall(cause)?.kind === "image");
+      setBusy(false);
+      return;
+    }
+    try {
+      await probe(connection);
+      commit(connection, "local", onConnected);
+    } catch (cause) {
+      setUnanswered(
+        `The new host in ${to.label} was set up, but it did not answer: ${errorMessage(cause)} Go back to your host to try again.`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!open)
+    return (
+      <div className="access__row">
+        <button className="btn btn--quiet" type="button" onClick={() => setOpen(true)}>
+          Set up a new host in {to.label}
+        </button>
+      </div>
+    );
+  return (
+    <section className="field" aria-label={`Set up a new host in ${to.label}`}>
+      <span className="field__label">Set up a new host in {to.label}</span>
+      <p>
+        Your current host is recorded in {from.label}. Its agents and conversations are not moved,
+        and they will not appear in the new host.
+      </p>
+      <p>
+        The host in {from.label} and its data are left untouched. Once {from.label} runs again, Host
+        settings offer to go back to it.
+      </p>
+      {plan.data && (
+        <p>
+          {to.label} already holds Guaca data from an earlier host, so the new host starts with that
+          data rather than empty.
+        </p>
+      )}
+      <label className="field field--row">
+        <input
+          type="checkbox"
+          checked={sure}
+          disabled={busy}
+          onChange={(event) => setSure(event.target.checked)}
+        />
+        <span>I understand that my agents stay with the host in {from.label}.</span>
+      </label>
+      {error && (
+        <div className="banner banner--error" role="alert">
+          {error}
+        </div>
+      )}
+      {imageFailed && <ImageRecovery />}
+      <div className="access__row">
+        <button
+          className="btn btn--compact"
+          type="button"
+          disabled={!sure || busy}
+          onClick={() => void confirm()}
+        >
+          {busy ? "Setting up the new host…" : "Set up the new host"}
+        </button>
+        <button className="btn btn--quiet" type="button" disabled={busy} onClick={cancel}>
+          Cancel
+        </button>
+      </div>
+    </section>
+  );
 }
 
 export function HostSetup({ children }: { children: ReactNode }) {
@@ -70,6 +203,7 @@ function LocalReconnect({ onReady }: { onReady: () => void }) {
   const [choosing, setChoosing] = useState<"another" | "new" | null>(null);
   const [opening, setOpening] = useState("");
   useEffect(() => {
+    if (choosing) return;
     let disposed = false;
     let pause: ReturnType<typeof setTimeout> | undefined;
     const waited = () =>
@@ -106,7 +240,7 @@ function LocalReconnect({ onReady }: { onReady: () => void }) {
       disposed = true;
       clearTimeout(pause);
     };
-  }, [attempt, chosen, onReady]);
+  }, [attempt, chosen, choosing, onReady]);
   const retry = () => {
     setChoosing(null);
     setOpening("");
@@ -128,6 +262,7 @@ function LocalReconnect({ onReady }: { onReady: () => void }) {
               Back to your host
             </button>
           </div>
+          <StartOver onConnected={onReady} />
           <HostChoice onConnected={onReady} />
           <LegacyGroups />
         </section>
@@ -218,6 +353,7 @@ function LocalReconnect({ onReady }: { onReady: () => void }) {
               </button>
             )}
           </div>
+          {state.kind === "gaveUp" && <StartOver onConnected={onReady} />}
         </div>
         <LegacyGroups />
       </section>
@@ -421,24 +557,14 @@ export function HostChoice({
     if (changing) address.current?.focus();
   }, [changing]);
 
-  const connectExisting = async (name: string) => {
+  const connectExisting = (name: string) => adopt(() => localHost.connect(name), "existing");
+  const adopt = async (reach: () => Promise<Remote>, chosen: HostMode) => {
     setBusy(true);
     setError("");
     try {
-      const connection = await localHost.connect(name);
+      const connection = await reach();
       await probe(connection);
-      preflightReload();
-      try {
-        saveConnection(connection, "existing");
-      } catch {
-        throw new Error("Guaca could not save this choice. Nothing changed.");
-      }
-      if (onConnected) {
-        adoptRemote(connection);
-        onConnected();
-      } else {
-        restart(false);
-      }
+      commit(connection, chosen, onConnected);
     } catch (cause) {
       setError(errorMessage(cause));
       void refresh();
@@ -530,6 +656,27 @@ export function HostChoice({
       </fieldset>
       {mode === "local" ? (
         <>
+          {docker?.previous && (
+            <section className="field" aria-label="Your earlier host">
+              <span className="field__label">Your earlier host is in {docker.previous.label}</span>
+              <p className="field__hint">
+                Going back leaves the host you use now, and its data, where it is.
+              </p>
+              <div className="access__row">
+                <button
+                  className="btn btn--compact"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    const context = docker.previous?.context;
+                    if (context) void adopt(() => localHost.choose(context), "local");
+                  }}
+                >
+                  Go back to the host in {docker.previous.label}
+                </button>
+              </div>
+            </section>
+          )}
           {existing.length > 0 && (
             <section className="field" aria-label="Existing local hosts">
               <span className="field__label">Already running on this Mac</span>

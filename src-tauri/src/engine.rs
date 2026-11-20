@@ -14,6 +14,19 @@ impl Engine {
     pub fn kind(&self) -> Kind {
         Kind::of(&self.context, &self.endpoint)
     }
+
+    pub fn same(&self, other: &Engine) -> bool {
+        self.endpoint == other.endpoint || self.id == other.id
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Record {
+    #[serde(flatten)]
+    pub engine: Engine,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous: Option<Engine>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -155,7 +168,7 @@ pub fn canonical(endpoint: &str) -> String {
     }
 }
 
-pub fn read(path: &Path) -> Option<Engine> {
+pub fn read(path: &Path) -> Option<Record> {
     let bytes = std::fs::read(path).ok()?;
     match serde_json::from_slice(&bytes) {
         Ok(engine) => Some(engine),
@@ -166,13 +179,13 @@ pub fn read(path: &Path) -> Option<Engine> {
     }
 }
 
-pub fn write(path: &Path, engine: &Engine) -> Result<(), String> {
+pub fn write(path: &Path, record: &Record) -> Result<(), String> {
     let write = || -> std::io::Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let temp = path.with_extension("tmp");
-        std::fs::write(&temp, serde_json::to_vec(engine)?)?;
+        std::fs::write(&temp, serde_json::to_vec(record)?)?;
         std::fs::rename(&temp, path)
     };
     write().map_err(|error| format!("Guaca could not record where its host runs: {error}"))
@@ -240,8 +253,18 @@ mod tests {
             endpoint: "unix:///Users/r/.colima/default/docker.sock".into(),
             id: "ENGINE".into(),
         };
-        write(&path, &engine).unwrap();
-        assert_eq!(read(&path), Some(engine));
+        std::fs::write(&path, serde_json::to_vec(&engine).unwrap()).unwrap();
+        assert_eq!(
+            read(&path),
+            Some(Record { engine: engine.clone(), previous: None }),
+            "a record written before the previous engine was kept still reads"
+        );
+        let record = Record {
+            engine: Engine { context: "desktop-linux".into(), ..engine.clone() },
+            previous: Some(engine),
+        };
+        write(&path, &record).unwrap();
+        assert_eq!(read(&path), Some(record));
         std::fs::write(&path, "not json").unwrap();
         assert_eq!(read(&path), None);
     }

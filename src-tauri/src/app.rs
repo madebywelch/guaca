@@ -1,4 +1,4 @@
-use crate::host::{Connection, LocalHost, Stall, Status};
+use crate::host::{Connection, Elsewhere, LocalHost, Stall, Status};
 use crate::tray::{self, Tray};
 use std::sync::Arc;
 use tauri::Manager;
@@ -14,6 +14,18 @@ async fn local_host_start(state: tauri::State<'_, LocalHost>) -> Result<Connecti
 #[tauri::command]
 async fn local_host_resume(state: tauri::State<'_, LocalHost>) -> Result<Connection, Stall> {
     state.resume().await
+}
+#[tauri::command]
+async fn local_host_elsewhere(state: tauri::State<'_, LocalHost>) -> Result<Elsewhere, String> {
+    state.elsewhere().await
+}
+#[tauri::command]
+async fn local_host_start_elsewhere(
+    state: tauri::State<'_, LocalHost>,
+    context: String,
+    engine: String,
+) -> Result<Connection, Stall> {
+    state.start_elsewhere(&context, &engine).await
 }
 #[tauri::command]
 async fn local_host_choose(
@@ -208,6 +220,8 @@ pub fn run() {
             local_host_start,
             local_host_resume,
             local_host_choose,
+            local_host_elsewhere,
+            local_host_start_elsewhere,
             local_host_update,
             local_hosts,
             connect_local_host,
