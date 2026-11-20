@@ -122,3 +122,4 @@ impl Ears {
         self.runtime.hear(&self.adapter, heard, self.history).await
     }
 }
+pub mod slack;
