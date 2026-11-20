@@ -54,7 +54,7 @@ type Reconnect =
 
 const TITLES: Record<Stall["kind"] | "connecting" | "gaveUp", string> = {
   connecting: "Connecting to your host",
-  engine: "Your host is not running",
+  engine: "Waiting for your host",
   gaveUp: "Your host is not running",
   choose: "Which host is yours?",
   missing: "Guaca can't find your host",

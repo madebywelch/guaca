@@ -214,7 +214,7 @@ describe("a Mac whose host is already set up", () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
-      expect(screen.getByRole("heading").textContent).toBe("Your host is not running");
+      expect(screen.getByRole("heading").textContent).toBe("Waiting for your host");
       expect(screen.getByRole("status").textContent).toBe(colimaDown.message);
       expect(screen.getByText("Guaca reconnects by itself as soon as it starts.")).toBeTruthy();
       expect(screen.queryByText("Where should your agents work?")).toBeNull();
