@@ -26,10 +26,9 @@ exchange happened; the pair's thread is what it said*, in `ARCHITECTURE.md`.
 A channel is a conversation between a person and agents, so it is drawn as one.
 An audit counted eight different left edges for text within 106 pixels of each
 other: a time gutter, a face lane, vertical rules, footnote numbers and the
-text beside each. Text now starts on two edges, and every row is placed by
-three tokens: `--column-inset` (the face), `--column-face` (the face's lane)
-and `--column-bubble`, which sets a box back by its own padding so the words
-inside it still start on the body's edge.
+text beside each. The brief, result, hand-off, question, and error boxes start
+at `--column-inset`. `--column-face` reserves the face lane so the words in an
+agent's turn and the person's brief share a left edge.
 
 **An agent's turn is its face, name and time on one line.** `.msg__head` is the
 face at `xs`, the name in the strong interface role and the time in meta, and
@@ -1101,10 +1100,10 @@ without the operator having scrolled anything.
 
 The composer is a raised, bounded field with a visible send control. Its edge
 uses `--edge-control`, which is solved against the surfaces on both sides.
-Focus adds a distinct boundary without moving the field. The recipient is the
-agent whose channel is open, and selecting another recipient opens that agent's
-channel with the unsent draft. An @mention names an agent in the text; it does
-not change the recipient.
+Focus uses the same inset neutral ring as other fields without moving the
+composer. The recipient is the agent whose channel is open, and selecting
+another recipient opens that agent's channel with the unsent draft. An @mention
+names an agent in the text; it does not change the recipient.
 
 The permanent row names the model that will answer and says that `@` names an
 agent. Its shortcut comes from `FIND_KEY` in `lib/keybinds.ts`, shared with the
@@ -2651,9 +2650,9 @@ lightness, which is the axis red-green colorblindness keeps.
 
 And it is spent only on attention. It had become the focus ring, the primary
 button, the send button, every toggle that was on, every link, a running job
-and the streaming caret, so "you tabbed here" and "answer me" were one ring. A
-focus ring and a drop target use the system color, and nothing else is filled
-or edged in it: something running is drawn in ink, and the system's chips and
+and the streaming caret, so "you tabbed here" and "answer me" were one ring.
+Focus rings and drop targets use a neutral token independent of the theme's
+system color. Something running is drawn in ink, and the system's chips and
 banners sit on a neutral wash. Primary and send buttons use the action fill
 and its paired text color. `styles.test.ts` fails a focus rule or an on-state
 spelled from the attention color, a fill or an edge in the system color outside

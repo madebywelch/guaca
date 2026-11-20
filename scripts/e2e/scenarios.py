@@ -524,6 +524,132 @@ def look_surface(w: World, surface: str) -> None:
     ui.viewport(*look.FRAME)
 
 
+def scenario_controls(w: World) -> None:
+    look_world(w)
+    look_surface(w, "light")
+    ui = w.ui
+    field = ("combobox", f"Write to {AGENT}")
+    ui.fill(*field, "   ")
+    w.check("Send is unavailable for a blank draft",
+            ui.property("button", "Send", "disabled"), stop=False)
+    ui.fill(*field, "")
+    composer = ui.evaluate("""(() => {
+      const box = document.activeElement.closest('.composer');
+      const ring = getComputedStyle(box);
+      return {ring: [ring.outlineColor, ring.outlineWidth, ring.outlineOffset],
+              shadow: ring.boxShadow,
+              send: box.querySelector('button[aria-label="Send"]').textContent.trim(),
+              recipient: box.querySelector('label:has(select) > [aria-hidden="true"]')?.innerText.trim(),
+              face: !!box.querySelector('label:has(select) .avatar')};
+    })()""")
+    w.check("the composer has an icon Send and a recipient pill with a face",
+            composer["send"] == "" and composer["recipient"] == AGENT and composer["face"],
+            observed={k: v for k, v in composer.items() if k not in ("ring", "shadow")}, stop=False)
+
+    edges = """['.composer', '.result', '.msg__bubble', '.ask'].map(
+      selector => document.querySelector(selector)?.getBoundingClientRect().left)"""
+    columns = {}
+    for width, height in (look.FRAME, (390, 700)):
+        ui.viewport(width, height)
+        columns[width] = ui.evaluate(edges)
+    w.check("the composer, result, brief and question start on the same edge",
+            all(None not in values and max(values) - min(values) < 1 for values in columns.values()),
+            observed=columns, stop=False)
+    ui.viewport(*look.FRAME)
+
+    show(w, "Settings")
+    ui.click("tab", "General")
+    ui.click("textbox", "Your name")
+    field_ring = ui.evaluate("""(() => {
+      const s = getComputedStyle(document.activeElement);
+      return [s.outlineColor, s.outlineWidth, s.outlineOffset];
+    })()""")
+    neutral = ui.evaluate("""(() => {
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--faint)';
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    })()""")
+    w.check("the focused composer and name field share one neutral ring without a halo",
+            composer["ring"] == field_ring and field_ring[0] == neutral
+            and field_ring[1] != "0px" and composer["shadow"] == "none",
+            observed={"composer": composer["ring"], "field": field_ring}, stop=False)
+
+    ui.click("tab", "Appearance")
+    short = ui.within("radiogroup", "Reading surface", "radio")
+    long = ui.within("radiogroup", "Reading size", "radio")
+    w.check("short choices are segments and longer choices are visible radios",
+            len(short) == 3 and len(long) == 5 and ui.evaluate("""(() => {
+              const short = document.querySelector('[aria-label="Reading surface: Light"]');
+              const long = document.querySelector('[aria-label="Reading size: 16px"]');
+              return getComputedStyle(short).opacity === '0'
+                && getComputedStyle(long).opacity === '1' && long.checked;
+            })()"""), observed={"surface": len(short), "sizes": len(long)})
+    ui.click("radio", "Reading surface: Light")
+    ui.key("ArrowDown")
+    w.check("one arrow changes the selected segment and applies the new surface",
+            ui.focused() == ("radio", "Reading surface: Dark")
+            and ui.property("radio", "Reading surface: Dark", "checked")
+            and not ui.property("radio", "Reading surface: Light", "checked")
+            and ui.evaluate("document.documentElement.dataset.surface") == "dark")
+    ui.key("Tab")
+    w.check("Tab leaves the radio group instead of stopping on each segment",
+            ui.focused() == ("radio", "Theme: Violet"))
+    ui.click("radio", "Contrast: More")
+    w.check("a custom look does not falsely mark any preset selected",
+            not any(ui.property("radio", label(node), "checked")
+                    for node in ui.within("radiogroup", "Theme presets", "radio")))
+    ui.click("tab", "Notifications")
+    ui.evaluate("""(() => {
+      const send = window.fetch;
+      window.formatSaves = 0;
+      window.fetch = (url, init) => {
+        if (!String(url).endsWith('/v1/call') || !init?.body ||
+            JSON.parse(init.body).args?.patch?.delivery?.format !== 'json') return send(url, init);
+        window.formatSaves++;
+        return new Promise(resolve => {
+          window.rejectFormatSave = () => {
+            window.fetch = send;
+            resolve(new Response(JSON.stringify({
+              err: {kind: 'storage', message: 'Could not save the notification format.'}
+            }), {status: 500}));
+          };
+        });
+      };
+    })()""")
+    ui.click("radio", "Format: ntfy")
+    ui.key("ArrowDown")
+    w.wait("the first format save is pending", lambda: ui.evaluate("window.formatSaves === 1"))
+    held_focus = ui.focused()
+    ui.key(" ")
+    ui.evaluate("window.rejectFormatSave()")
+    w.wait("the refusal is visible", lambda: "Could not save the notification format." in ui.text())
+    w.check("a refused notification format keeps focus and the saved value without a second write",
+            held_focus == ("radio", "Format: JSON webhook")
+            and ui.focused() == held_focus and ui.evaluate("window.formatSaves") == 1
+            and ui.property("radio", "Format: ntfy", "checked")
+            and w.host.call("get_settings")["delivery"]["format"] == "ntfy",
+            observed={"pendingFocus": held_focus, "afterRefusal": ui.focused(),
+                      "writes": ui.evaluate("window.formatSaves")})
+    ui.key(" ")
+    w.check("a notification format stays selected after the Host saves it",
+            w.wait("the saved format", lambda: w.host.call("get_settings")["delivery"]["format"] == "json"
+                   and ui.property("radio", "Format: JSON webhook", "checked")
+                   and not ui.property("radio", "Format: ntfy", "checked")))
+    dismiss(w)
+    draft = "Keep this as a draft."
+    ui.fill(*field, draft)
+    ui.choose("combobox", "Recipient", "Market Researcher")
+    w.check("the recipient pill moves the unsent draft to the selected conversation",
+            w.wait("the new conversation holds the draft", lambda:
+                   ui.find("combobox", "Write to Market Researcher")
+                   and ui.value("combobox", "Write to Market Researcher") == draft)
+            and w.host.scalar("SELECT count(*) FROM messages WHERE parts LIKE ?", f"%{draft}%") == 0)
+    no_unscripted(w)
+
+
 def scenario_look(w: World) -> None:
     look_world(w)
     ui = w.ui
@@ -1487,6 +1613,10 @@ def scenario_failed(w: World) -> None:
             sorted(o["status"] for o in ended[1:]) == ["failed", "interrupted"]
             and len(w.ui.find("button", "Try again")) == 2,
             observed={"outcomes": ended, "tryAgain": len(w.ui.find("button", "Try again"))}, shot=True)
+    edges = w.ui.evaluate("""['.composer', ...document.querySelectorAll('.wire--notice > .chip')].map(
+      item => (typeof item === 'string' ? document.querySelector(item) : item).getBoundingClientRect().left)""")
+    w.check("both failure notices start at the composer edge",
+            len(edges) == 3 and max(edges) - min(edges) < 1, observed=edges)
     no_unscripted(w)
 
 
@@ -2914,6 +3044,22 @@ SCENARIOS: dict[str, Scenario] = {
         "a nested hand-off opens the named colleague's conversation",
         "every model call was one the scenario scripted",
     )),
+    "controls": Scenario(scenario_controls, "A person changes an exclusive setting by keyboard and uses the "
+                         "conversation composer; an empty draft cannot send and a custom look selects no preset.",
+    (
+        "Send is unavailable for a blank draft",
+        "the composer has an icon Send and a recipient pill with a face",
+        "the composer, result, brief and question start on the same edge",
+        "the focused composer and name field share one neutral ring without a halo",
+        "short choices are segments and longer choices are visible radios",
+        "one arrow changes the selected segment and applies the new surface",
+        "Tab leaves the radio group instead of stopping on each segment",
+        "a custom look does not falsely mark any preset selected",
+        "a refused notification format keeps focus and the saved value without a second write",
+        "a notification format stays selected after the Host saves it",
+        "the recipient pill moves the unsent draft to the selected conversation",
+        "every model call was one the scenario scripted",
+    )),
     "resume": Scenario(scenario_resume, "A person queues two messages while an agent is paused and resumes it; "
                        "paused work calls no model, and Resume answers each message without duplicating its prompt.",
     (
@@ -3026,6 +3172,7 @@ SCENARIOS: dict[str, Scenario] = {
                        "silently with the turn.",
     (
         "a failed model call tells the other conversation the turn acted on at once, with Try again on each",
+        "both failure notices start at the composer edge",
         "every model call was one the scenario scripted",
     )),
     "routine": Scenario(scenario_routine, "A person adds a routine on an event, copies its curl line, reveals its secret and hides it again, and one delivery "

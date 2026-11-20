@@ -191,6 +191,7 @@ export function Composer({
   }, [disabled, take]);
 
   const live = useLiveAgents();
+  const recipientAgent = live.find((agent) => agent.id === recipient?.id);
   const groups = useStore((s) => s.groups);
   const crew = useMemo(
     () => (group ? live.filter((agent) => agent.groupId === group) : []),
@@ -339,7 +340,6 @@ export function Composer({
     <div className="composer" data-dragging={dragging || undefined}>
       {recipient && onRecipientChange && (
         <label className="composer__recipient">
-          <span>To</span>
           <select
             aria-label="Recipient"
             value={recipient.id}
@@ -394,6 +394,19 @@ export function Composer({
               );
             })}
           </select>
+          <span className="composer__recipient-label" aria-hidden="true">
+            {recipientAgent && (
+              <AgentAvatar
+                avatar={recipientAgent.avatar}
+                color={recipientAgent.color}
+                size="xs"
+                mood="idle"
+                seed={recipientAgent.id}
+              />
+            )}
+            <span>{recipient.name}</span>
+            <Icon name="chevron-down" />
+          </span>
         </label>
       )}
       {files.length > 0 && (
@@ -610,7 +623,6 @@ export function Composer({
             (text.trim().length === 0 && files.length === 0)
           }
         >
-          <span>Send</span>
           <Icon name="arrow-up" size={16} />
         </button>
       </div>

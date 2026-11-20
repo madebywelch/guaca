@@ -448,9 +448,10 @@ describe("a turn on the page", () => {
 
   it("starts an agent's words on the name's edge, and the person's inside a bubble on the same edge", () => {
     expect(rule(".msg__body")).toMatch(/margin-left: var\(--column-face\)/);
-    expect(css).toMatch(/--column-bubble: calc\(var\(--column-face\) - var\(--space-5\)\);/);
-    expect(rule(".msg__bubble")).toMatch(/margin-left: var\(--column-bubble\)/);
-    expect(rule(".msg__bubble")).toMatch(/padding: var\(--space-4\) var\(--space-5\)/);
+    expect(rule(".msg__bubble")).not.toMatch(/margin-left:/);
+    expect(rule(".msg__bubble")).toMatch(
+      /padding: var\(--space-4\) var\(--space-5\) var\(--space-4\) var\(--column-face\)/,
+    );
     expect(rule(".msg__bubble")).toMatch(/background: var\(--wash\)/);
     expect(css).toMatch(/--page: var\(--sunken\);/);
   });
@@ -876,7 +877,10 @@ describe("what the attention color is spent on", () => {
       rules.filter((d) => d.selector === selector && d.property === property).at(-1)?.value;
     expect(last(".composer", "border")).toBe("1px solid var(--edge-control)");
     expect(last(".composer", "border-radius")).toBe("var(--radius-card)");
-    expect(last(".composer:focus-within", "border-color")).toBe("var(--focus)");
+    expect(last(".composer:focus-within", "outline")).toBe(
+      "var(--focus-outline) solid var(--focus)",
+    );
+    expect(last(".composer:focus-within", "box-shadow")).toBeUndefined();
     expect(
       last(
         ".composer__send, .composer__send:disabled, .composer__send:hover:not(:disabled)",

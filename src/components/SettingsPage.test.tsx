@@ -688,7 +688,7 @@ describe("the Save in the foot", () => {
     const attention = { needsYou: true, failures: true, finished: true };
     updateSettings.mockResolvedValueOnce(stored({ attention: { ...attention, failures: false } }));
     open(stored({ attention }), DEFAULT_PREFS, "appearance");
-    fireEvent.click(screen.getByRole("button", { name: "Reading surface: Dark" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Reading surface: Dark" }));
     expect(saveButton()).toBeNull();
 
     pane("Notifications");
@@ -1694,9 +1694,21 @@ describe("appearance", () => {
     expect(useStore.getState().prefs.showReasoning).toBe(false);
   });
 
-  function choice(label: string): HTMLButtonElement {
-    return screen.getByRole("button", { name: label }) as HTMLButtonElement;
+  function choice(label: string): HTMLInputElement {
+    const input = screen.getByRole("radio", { name: label });
+    if (!(input instanceof HTMLInputElement)) throw new Error("Expected a native radio");
+    return input;
   }
+
+  it("exposes short and long exclusive choices as single-selection groups", () => {
+    open();
+    pane("Appearance");
+    const surface = screen.getByRole("radiogroup", { name: "Reading surface" });
+    const sizes = screen.getByRole("radiogroup", { name: "Reading size" });
+    expect(surface.querySelectorAll("input:checked")).toHaveLength(1);
+    expect(sizes.querySelectorAll("input:checked")).toHaveLength(1);
+    expect(sizes.querySelectorAll("input[type=radio]")).toHaveLength(5);
+  });
 
   it("keeps a chosen surface and paints it onto the document", () => {
     open();
@@ -1705,13 +1717,13 @@ describe("appearance", () => {
 
     expect(useStore.getState().prefs.surface).toBe("dark");
     expect(document.documentElement.dataset.surface).toBe("dark");
-    expect(choice("Reading surface: Dark").getAttribute("aria-pressed")).toBe("true");
-    expect(choice("Reading surface: Light").getAttribute("aria-pressed")).toBe("false");
+    expect(choice("Reading surface: Dark").checked).toBe(true);
+    expect(choice("Reading surface: Light").checked).toBe(false);
     expect(screen.getByText("Dark mode.")).toBeTruthy();
   });
 
   it("resolves the system's answer rather than handing it on as one", () => {
-    open();
+    open(stored(), { ...DEFAULT_PREFS, surface: "dark" });
     pane("Appearance");
     fireEvent.click(choice("Reading surface: Match system"));
 
@@ -1745,16 +1757,22 @@ describe("appearance", () => {
   it("keeps a chosen cast and shows each one before it is chosen", () => {
     open();
     pane("Appearance");
-    expect(choice("Characters: Cut").querySelectorAll('[data-cast="cut"]')).toHaveLength(3);
-    expect(choice("Characters: Drawn").querySelectorAll('[data-cast="drawn"]')).toHaveLength(3);
-    expect(choice("Characters: Drawn").getAttribute("aria-pressed")).toBe("true");
+    expect(
+      choice("Characters: Cut").parentElement?.querySelectorAll('[data-cast="cut"]'),
+    ).toHaveLength(3);
+    expect(
+      choice("Characters: Drawn").parentElement?.querySelectorAll('[data-cast="drawn"]'),
+    ).toHaveLength(3);
+    expect(choice("Characters: Drawn").checked).toBe(true);
 
     fireEvent.click(choice("Characters: Cut"));
 
     expect(useStore.getState().prefs.cast).toBe("cut");
-    expect(choice("Characters: Cut").getAttribute("aria-pressed")).toBe("true");
-    expect(choice("Characters: Drawn").getAttribute("aria-pressed")).toBe("false");
-    expect(choice("Characters: Drawn").querySelectorAll('[data-cast="drawn"]')).toHaveLength(3);
+    expect(choice("Characters: Cut").checked).toBe(true);
+    expect(choice("Characters: Drawn").checked).toBe(false);
+    expect(
+      choice("Characters: Drawn").parentElement?.querySelectorAll('[data-cast="drawn"]'),
+    ).toHaveLength(3);
     expect(useStore.getState().prefs.surface).toBe(DEFAULT_PREFS.surface);
   });
 
@@ -1779,8 +1797,8 @@ describe("appearance", () => {
         temperature: "plain",
       }),
     );
-    expect(choice("Grays: Avocado").getAttribute("aria-pressed")).toBe("true");
-    expect(choice("Grays: Neutral").getAttribute("aria-pressed")).toBe("false");
+    expect(choice("Grays: Avocado").checked).toBe(true);
+    expect(choice("Grays: Neutral").checked).toBe(false);
     expect(useStore.getState().prefs.surface).toBe(DEFAULT_PREFS.surface);
   });
 
@@ -1802,22 +1820,22 @@ describe("appearance", () => {
       reading: "serif",
       surface: "dark",
     });
-    expect(choice("Theme: Field").getAttribute("aria-pressed")).toBe("true");
+    expect(choice("Theme: Field").checked).toBe(true);
     fireEvent.click(choice("Contrast: More"));
-    expect(choice("Theme: Field").getAttribute("aria-pressed")).toBe("false");
+    expect(choice("Theme: Field").checked).toBe(false);
   });
 
-  it("shows each gray and each attention hue before it is chosen", () => {
+  it("previews the attention hue without drawing dots on the gray segments", () => {
     open();
     pane("Appearance");
-    const warm = choice("Grays: Warm").querySelector<HTMLElement>(".choice__swatch");
-    expect(warm?.style.getPropertyValue("--swatch")).toBe(
-      themeTokens({ ...DEFAULT_PREFS, grays: "warm" }, "light")["--rail-ground"],
-    );
-    const blue = choice("Attention: Blue").querySelector<HTMLElement>(".choice__swatch");
-    expect(blue?.style.getPropertyValue("--swatch")).toBe(
-      themeTokens({ ...DEFAULT_PREFS, attention: "blue" }, "light")["--attention-fill"],
-    );
+    expect(choice("Grays: Warm").parentElement?.querySelector(".setting-choice__dot")).toBeNull();
+    const blue =
+      choice("Attention: Blue").parentElement?.querySelector<HTMLElement>(".setting-choice__dot");
+    const expected = document.createElement("span");
+    expected.style.backgroundColor = themeTokens({ ...DEFAULT_PREFS, attention: "blue" }, "light")[
+      "--attention-fill"
+    ];
+    expect(blue?.style.backgroundColor).toBe(expected.style.backgroundColor);
   });
 
   it("keeps a typeface, a reading face and a reading size, and names them to the stylesheet", () => {
@@ -2113,20 +2131,18 @@ describe("sending to a phone", () => {
     open(withPush(SAVED));
     pane("Notifications");
     await act(async () =>
-      fireEvent.click(screen.getByRole("button", { name: "Format: JSON webhook" })),
+      fireEvent.click(screen.getByRole("radio", { name: "Format: JSON webhook" })),
     );
     await act(async () =>
-      fireEvent.click(screen.getByRole("button", { name: "Only say that something finished" })),
+      fireEvent.click(screen.getByRole("radio", { name: "Only say that something finished" })),
     );
     expect(updateSettings.mock.calls).toEqual([
       [{ delivery: { format: "json" } }],
       [{ delivery: { content: "generic" } }],
     ]);
     expect(
-      screen
-        .getByRole("button", { name: "Only say that something finished" })
-        .getAttribute("aria-pressed"),
-    ).toBe("true");
+      screen.getByRole("radio", { name: "Only say that something finished", checked: true }),
+    ).toBeTruthy();
   });
 
   it("says how the last attempt failed, in the Host's words", async () => {

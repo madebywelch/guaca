@@ -76,7 +76,7 @@ and *Every length is named* in `docs/INVARIANTS.md` is the rule they all sit und
 - **The amber is not the accent, it is the request.** It had spread to the
   focus ring, primary and send buttons, toggles, links, running jobs and the
   streaming caret, so "you tabbed here" and "answer me" were one ring. Focus and
-  drop targets are `--focus`, which is the system's slate; primary and on-states
+  drop targets are `--focus`, which follows the neutral faint ink; primary and on-states
   are ink; activity and links are `--system`. `styles.test.ts` fails a focus
   rule, a primary control or an on-state spelled from `--attention`.
 - **No color in the `:root` blocks is a decision to edit.** They are the default
