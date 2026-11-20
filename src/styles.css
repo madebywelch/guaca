@@ -90,6 +90,7 @@
   --roster-w: 15.5rem;
   --roster-w-compact: 13.25rem;
   --roster-phone-card: 9.25rem;
+  --roster-phone-count: 5.5rem;
   --roster-phone-scroll: 7rem;
   --grail-w: min(4rem, 8vw);
   --grail-lip: 0.5rem;
@@ -8444,6 +8445,7 @@ button.artifacts__version[aria-pressed="true"] {
 
 .app[data-roster] > main {
   grid-area: 2 / 2;
+  overflow: hidden;
 }
 
 .roster {
@@ -8459,6 +8461,10 @@ button.artifacts__version[aria-pressed="true"] {
 
 .roster__scroll {
   overflow: auto;
+}
+
+.roster__compact {
+  display: none;
 }
 
 .roster__group {
@@ -8545,6 +8551,7 @@ button.artifacts__version[aria-pressed="true"] {
   .app[data-roster] {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto auto minmax(0, 1fr);
+    container: frame / size;
   }
 
   .app[data-roster] > main {
@@ -8554,8 +8561,18 @@ button.artifacts__version[aria-pressed="true"] {
   .roster {
     border-right: 0;
     border-bottom: 1px solid var(--rule);
+    flex-direction: row;
     padding: var(--space-3) var(--space-4);
     gap: var(--space-2);
+  }
+
+  .roster__questions {
+    align-self: center;
+    width: var(--roster-phone-count);
+    height: auto;
+    min-height: var(--control-h);
+    padding-block: var(--space-2);
+    font-size: var(--type-support);
   }
 
   .roster__scroll,
@@ -8565,6 +8582,8 @@ button.artifacts__version[aria-pressed="true"] {
   }
 
   .roster__scroll {
+    flex: 1;
+    min-width: 0;
     max-height: var(--roster-phone-scroll);
   }
 
@@ -8575,10 +8594,32 @@ button.artifacts__version[aria-pressed="true"] {
   .roster__agent {
     width: var(--roster-phone-card);
     grid-template-columns: auto minmax(0, 1fr);
+    gap: var(--space-2);
+    padding-block: var(--space-2);
   }
 
   .roster__agent kbd {
     grid-column: 2;
+  }
+
+  @container frame (max-height: 30rem) {
+    .roster__scroll {
+      display: none;
+    }
+
+    .roster__compact {
+      display: block;
+      flex: 1;
+      min-width: 0;
+      min-height: var(--control-h);
+      padding-inline: var(--space-3);
+      border: 1px solid var(--rule);
+      border-radius: var(--radius-control);
+      color: var(--text);
+      background: var(--raised);
+      font: inherit;
+      font-size: var(--type-support);
+    }
   }
 }
 

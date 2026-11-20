@@ -1569,26 +1569,8 @@ conversation. Following a link to an agent keeps an already scoped sheet in that
 agent's group; choosing a different management group leaves the conversation
 in place.
 
-`focusGroup` repairs the same invariant from the other end, and lets go rather
-than following. The asymmetry is the point: `select` is the operator naming an
-agent, so taking them to that agent's group is what they asked for, and
-`focusGroup` is the operator naming a group, so following the channel back out of
-it would undo the click. The pane falls back to nothing rather than to the first
-row of the group being entered: opening a channel is the operator naming somebody,
-and a group that picked one for them would put an agent's history on screen as a
-side effect of a click that was about the group.
-
-Closing it is not tidiness. Two groups can hold two agents with the same name and
-the same face, and a rail that is not drawing the row leaves nothing on screen
-saying which group the pane belongs to: a channel left open from the group you
-came from reads as a member of the group you are looking at, working while nobody
-here is. The agent goes on working either way. Closing a channel is not a control
-on the conversation, only on what you are looking at.
-
-Going back out to the overview keeps whatever was open, because the overview
-draws everybody. Neither does a move close anything: dragging somebody into
-another group is not a change of view, and the operator who just made the gesture
-is the one person who does not need telling where that row went.
+Going back to All groups or moving an agent to a different group also keeps the
+conversation open.
 
 ## Deleting a group deletes the agents in it, and the machines they were renting
 
@@ -2935,6 +2917,8 @@ At phone widths the roster sits above the conversation and scrolls sideways
 so the composer keeps its width. Names and statuses wrap, shortcuts sit under
 them, and the question count stays in reach. Opening an agent brings its row
 into view without moving the conversation.
+When the keyboard leaves little height, a picker shows the same names,
+statuses, and keys without pushing the composer offscreen.
 
 Groups are chosen by name on a phone: the Groups sheet draws a labeled select
 above the list, and a touch scrolling the agent list never starts a reorder.

@@ -7,7 +7,7 @@ import { newestByAgent } from "../lib/outcomes";
 import { numbered } from "../lib/rail";
 import { useStore } from "../lib/store";
 import { useNow } from "../lib/time";
-import type { AgentCard, AgentId, Group } from "../lib/types";
+import type { AgentId } from "../lib/types";
 
 export function ConversationRoster({
   onOpen,
@@ -29,15 +29,33 @@ export function ConversationRoster({
   const asking = new Set([...pending, ...stuck, ...filed].map((one) => one.agentId));
   const working = new Set(running.map((one) => one.agentId));
   const newest = newestByAgent(outcomes);
-  const order = numbered(agents, groups);
-  const assigned = new Set(groups.map((group) => group.id));
+  const order = numbered(agents, groups).map((agent, index) => {
+    const state = activity[agent.id]?.state;
+    const result = newest[agent.id]?.status;
+    const status = asking.has(agent.id)
+      ? "Has a question"
+      : working.has(agent.id) || state === "thinking" || state === "queued"
+        ? "Working"
+        : result === "failed" || result === "interrupted" || result === "stopped"
+          ? "Needs attention"
+          : result === "done"
+            ? "Has a result"
+            : agent.lifecycle === "paused"
+              ? "Paused"
+              : "Idle";
+    const key = index < 9 ? formatCombo({ key: String(index + 1), mod: true }) : undefined;
+    return { agent, index, status, key };
+  });
   const sections = groups.map((group) => ({
-    group,
-    agents: order.filter((a) => a.groupId === group.id),
+    id: group.id,
+    name: group.name,
+    rows: order.filter(({ agent }) => agent.groupId === group.id),
   }));
-  const others = order.filter((a) => !assigned.has(a.groupId));
-  const all: { group: Group | null; agents: AgentCard[] }[] = sections;
-  if (others.length) all.push({ group: null, agents: others });
+  const assigned = new Set(groups.map((group) => group.id));
+  const others = order.filter(({ agent }) => !assigned.has(agent.groupId));
+  const all = [...sections, { id: "other", name: "Other agents", rows: others }].filter(
+    ({ rows }) => rows.length > 0,
+  );
 
   useLayoutEffect(() => {
     scroll.current
@@ -55,60 +73,59 @@ export function ConversationRoster({
       >
         {count === 1 ? "1 question waiting" : `${count} questions waiting`}
       </button>
+      <select
+        className="roster__compact"
+        aria-label="Switch agent"
+        value={selected ?? ""}
+        onChange={(event) => onOpen(event.currentTarget.value)}
+      >
+        {all.map(({ id, name, rows }) => (
+          <optgroup key={id} label={name}>
+            {rows.map(({ agent, status, key }) => (
+              <option key={agent.id} value={agent.id}>
+                {agent.name}, {status}
+                {key && ` (${key})`}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
       <div className="roster__scroll" ref={scroll}>
-        {all.map(({ group, agents: members }) =>
-          members.length ? (
-            <section key={group?.id ?? "other"} aria-label={group?.name ?? "Other agents"}>
-              <h2 className="roster__group">{group?.name ?? "Other agents"}</h2>
-              <ul className="roster__list">
-                {members.map((agent) => {
-                  const index = order.indexOf(agent);
-                  const state = activity[agent.id]?.state;
-                  const result = newest[agent.id]?.status;
-                  const status = asking.has(agent.id)
-                    ? "Has a question"
-                    : working.has(agent.id) || state === "thinking" || state === "queued"
-                      ? "Working"
-                      : result === "failed" || result === "interrupted" || result === "stopped"
-                        ? "Needs attention"
-                        : result === "done"
-                          ? "Has a result"
-                          : "Idle";
-                  return (
-                    <li key={agent.id}>
-                      <button
-                        type="button"
-                        className="roster__agent"
-                        aria-label={`${agent.name}, ${status}`}
-                        aria-current={agent.id === selected ? "page" : undefined}
-                        aria-keyshortcuts={
-                          index < 9 ? `Meta+${index + 1} Control+${index + 1}` : undefined
-                        }
-                        onClick={() => onOpen(agent.id)}
-                        data-status={status}
-                      >
-                        <AgentAvatar
-                          avatar={agent.avatar}
-                          color={agent.color}
-                          seed={agent.id}
-                          size="sm"
-                          title=""
-                        />
-                        <span className="roster__label">
-                          <span className="roster__name">{agent.name}</span>
-                          <span className="roster__status">{status}</span>
-                        </span>
-                        {index < 9 && (
-                          <kbd>{formatCombo({ key: String(index + 1), mod: true })}</kbd>
-                        )}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            </section>
-          ) : null,
-        )}
+        {all.map(({ id, name, rows }) => (
+          <section key={id} aria-label={name}>
+            <h2 className="roster__group">{name}</h2>
+            <ul className="roster__list">
+              {rows.map(({ agent, index, status, key }) => (
+                <li key={agent.id}>
+                  <button
+                    type="button"
+                    className="roster__agent"
+                    aria-label={`${agent.name}, ${status}`}
+                    aria-current={agent.id === selected ? "page" : undefined}
+                    aria-keyshortcuts={
+                      index < 9 ? `Meta+${index + 1} Control+${index + 1}` : undefined
+                    }
+                    onClick={() => onOpen(agent.id)}
+                    data-status={status}
+                  >
+                    <AgentAvatar
+                      avatar={agent.avatar}
+                      color={agent.color}
+                      seed={agent.id}
+                      size="sm"
+                      title=""
+                    />
+                    <span className="roster__label">
+                      <span className="roster__name">{agent.name}</span>
+                      <span className="roster__status">{status}</span>
+                    </span>
+                    {key && <kbd>{key}</kbd>}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ))}
       </div>
     </nav>
   );

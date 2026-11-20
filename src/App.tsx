@@ -169,6 +169,7 @@ export default function App() {
   useEffect(() => {
     if (!selected) return;
     setAgentView("conversation");
+    setInlineQuestion((current) => (current?.agentId === selected ? current : null));
     rememberConversation(selected);
     seeConversationResults(selected);
   }, [selected]);

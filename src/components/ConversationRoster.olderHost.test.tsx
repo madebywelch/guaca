@@ -62,3 +62,15 @@ it("draws a request from a 0.4.0 host with no lapse, in the roster and the quest
   expect(screen.queryByText(/waits until/)).toBeNull();
   expect(container.innerHTML).not.toContain("NaN");
 });
+
+it("distinguishes an agent who is paused from one who is idle", () => {
+  useStore.setState({
+    agents: [
+      anAgent("dara", { name: "Dara", lifecycle: "paused" }),
+      anAgent("jo", { name: "Jo" }),
+    ],
+  });
+  render(<ConversationRoster onOpen={vi.fn()} onQuestions={vi.fn()} />);
+  expect(screen.getByRole("button", { name: "Dara, Paused" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Jo, Idle" })).toBeTruthy();
+});

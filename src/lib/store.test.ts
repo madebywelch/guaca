@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { anApproval } from "../test-fixtures";
 import { expectRestart, forgetRestart } from "./link";
-import type { AgentCard, Envelope, Running, UiEvent } from "./types";
+import type { AgentCard, Approval, Envelope, Running, UiEvent } from "./types";
 
 vi.mock("./ipc", () => ({
   api: {
@@ -21,9 +21,10 @@ vi.mock("./ipc", () => ({
     setAgentPinned: vi.fn(async () => null),
     approvalStates: async () => ({ "q-1": "answered" }),
     approvalAnswers: async () => ({ "q-1": "Northwind" }),
-    pendingApprovals: async () => [],
+    pendingApprovals: vi.fn(async (): Promise<Approval[]> => []),
     openEscalations: async () => [],
     listDecisions: async () => [],
+    listOutcomes: async () => [],
     runningRuns: vi.fn(async (): Promise<Running[]> => []),
   },
   onRuntimeEvent: vi.fn(),
@@ -607,6 +608,37 @@ describe("the channel open when the rail goes inside a crew", () => {
 });
 
 describe("activity", () => {
+  it("does not finish bootstrap before a newer question snapshot is applied", async () => {
+    const request = anApproval({ agentId: "chef" });
+    let first!: (rows: Approval[]) => void;
+    let latest!: (rows: Approval[]) => void;
+    vi.mocked(api.pendingApprovals)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            first = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            latest = resolve;
+          }),
+      );
+    const ready = vi.fn();
+    const startup = useStore.getState().bootstrap().then(ready);
+    const newer = useStore.getState().refreshApprovals();
+    first([request]);
+    try {
+      await waitFor(() => expect(useStore.getState().agents).toEqual([]));
+      expect(ready).not.toHaveBeenCalled();
+    } finally {
+      latest([request]);
+      await Promise.all([startup, newer]);
+    }
+    expect(useStore.getState().pending).toEqual([request]);
+  });
+
   it("waits for the live snapshot read when it supersedes the startup read", async () => {
     const row = {
       runId: "r1",

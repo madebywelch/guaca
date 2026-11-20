@@ -16,6 +16,8 @@ let escalationRead = 0;
 let outcomeRead = 0;
 let runningRead = 0;
 let runningRequest = Promise.resolve();
+let approvalRequest = Promise.resolve();
+let escalationRequest = Promise.resolve();
 const channelReads = new Map<ChannelKey, { arrivals: Envelope[] }>();
 
 const EVERYTHING: Capabilities = {
@@ -347,8 +349,6 @@ export const useStore = create<State>((set, get) => ({
     const decisionSnapshot = ++decisionRead;
     const rosterSnapshot = ++rosterRead;
     const usageSnapshot = ++usageRead;
-    const approvalSnapshot = ++approvalRead;
-    const escalationSnapshot = ++escalationRead;
     const [
       agents,
       groups,
@@ -357,10 +357,6 @@ export const useStore = create<State>((set, get) => ({
       settings,
       capabilities,
       usage,
-      approvals,
-      answers,
-      pending,
-      stuck,
       decisions,
     ] = await Promise.all([
       api.listAgents(),
@@ -370,11 +366,9 @@ export const useStore = create<State>((set, get) => ({
       api.getSettings(),
       api.capabilities(),
       api.usageSummary(),
-      api.approvalStates(),
-      api.approvalAnswers(),
-      api.pendingApprovals(),
-      api.openEscalations(),
       api.listDecisions(),
+      get().refreshApprovals(valid),
+      get().refreshEscalations(valid),
       get().refreshOutcomes(valid),
       get().refreshRunning(valid),
     ]);
@@ -386,10 +380,17 @@ export const useStore = create<State>((set, get) => ({
       settings,
       capabilities,
       ...(usageSnapshot === usageRead ? { usage: byGroup(usage) } : {}),
-      ...(approvalSnapshot === approvalRead ? { approvals, answers, pending } : {}),
-      ...(escalationSnapshot === escalationRead ? { stuck } : {}),
       ...(decisionSnapshot === decisionRead ? { decisions, decisionError: null } : {}),
     });
+    while (valid()) {
+      const reads = [approvalRequest, escalationRequest, runningRequest];
+      await Promise.all(reads);
+      if (
+        reads[0] === approvalRequest &&
+        reads[1] === escalationRequest &&
+        reads[2] === runningRequest
+      ) break;
+    }
   },
 
   async resynchronize(valid = () => true) {
@@ -541,20 +542,24 @@ export const useStore = create<State>((set, get) => ({
     if (valid() && read === usageRead) set({ usage: byGroup(usage) });
   },
 
-  async refreshApprovals(valid = () => true) {
+  refreshApprovals(valid = () => true) {
     const read = ++approvalRead;
-    const [approvals, answers, pending] = await Promise.all([
+    approvalRequest = Promise.all([
       api.approvalStates(),
       api.approvalAnswers(),
       api.pendingApprovals(),
-    ]);
-    if (valid() && read === approvalRead) set({ approvals, answers, pending });
+    ]).then(([approvals, answers, pending]) => {
+      if (valid() && read === approvalRead) set({ approvals, answers, pending });
+    });
+    return approvalRequest;
   },
 
-  async refreshEscalations(valid = () => true) {
+  refreshEscalations(valid = () => true) {
     const read = ++escalationRead;
-    const stuck = await api.openEscalations();
-    if (valid() && read === escalationRead) set({ stuck });
+    escalationRequest = api.openEscalations().then((stuck) => {
+      if (valid() && read === escalationRead) set({ stuck });
+    });
+    return escalationRequest;
   },
 
   async clearEscalation(id) {

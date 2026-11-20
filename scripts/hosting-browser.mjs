@@ -420,9 +420,9 @@ try {
   const routine = await call("create_routine", { agentId: agent.id, draft: { name: "Morning check", what: "Say good morning.", trigger: "every:86400", inSecs: null, skipIfWorking: false } });
   await call("update_agent", { id: agent.id, draft: { ...draft, model: "offline-test-with-a-long-dated-model-identifier-2026-11-16" } });
   await until(() => evaluate("!!document.querySelector('.agent-tabs__count')"), "the routine count shows on its tab");
-  await until(() => evaluate("document.querySelector('.agent-tabs .pane__meta')?.textContent.includes('long-dated')"), "the long model is in the caption");
+  await until(() => evaluate("document.querySelector('.agent-tabs .pane__meta')?.textContent.includes('Long Dated')"), "the long model is in the caption");
   for (const width of [1280, 900]) {
-    await size(width, width === 1280 ? 820 : 700, false);
+    await size(width, 900, false);
     await rosterClear(`the ${width}px conversation`);
     const row = await evaluate(`(() => {
       const list = document.querySelector('.agent-tabs__list'), edge = list.getBoundingClientRect().right;
