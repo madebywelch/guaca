@@ -18,6 +18,7 @@ use guac_lib::places::{Adapter, AdapterError, Ears, SendError, Unheard};
 use guac_lib::secrets::Secret;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
+use tokio::sync::Notify;
 use tokio_tungstenite::tungstenite::Message;
 
 const BOT: &str = "xoxb-test-not-a-token";
@@ -58,6 +59,7 @@ impl Request {
 #[derive(Clone)]
 enum Answer {
     Json(Value),
+    Held(Arc<Notify>, Value),
     Status(u16, Option<u64>),
     Redirect(String),
 }
@@ -68,6 +70,7 @@ fn slack_error(code: &str) -> Answer {
 
 enum Push {
     Envelope(Value),
+    Ping,
     Drop,
     Freeze,
 }
@@ -79,6 +82,7 @@ struct Slack {
     requests: Arc<Mutex<Vec<Request>>>,
     answers: Arc<Mutex<HashMap<String, VecDeque<Answer>>>>,
     acks: Arc<Mutex<Vec<String>>>,
+    pongs: Arc<AtomicUsize>,
     sockets: Arc<Mutex<Vec<mpsc::UnboundedSender<Push>>>>,
 }
 
@@ -95,6 +99,7 @@ impl Slack {
             requests: Arc::default(),
             answers: Arc::default(),
             acks: Arc::default(),
+            pongs: Arc::default(),
             sockets: Arc::default(),
         };
         let api = slack.clone();
@@ -104,7 +109,7 @@ impl Slack {
             axum::routing::post(
                 move |Path(method): Path<String>, headers: HeaderMap, body: String| {
                     let (api, posts) = (api.clone(), posts.clone());
-                    async move { api.answer(method, &headers, body, &posts) }
+                    async move { api.answer(method, &headers, body, &posts).await }
                 },
             ),
         );
@@ -119,7 +124,7 @@ impl Slack {
         slack
     }
 
-    fn answer(
+    async fn answer(
         &self,
         method: String,
         headers: &HeaderMap,
@@ -151,6 +156,10 @@ impl Slack {
         });
         match answer {
             Answer::Json(value) => axum::Json(value).into_response(),
+            Answer::Held(gate, value) => {
+                gate.notified().await;
+                axum::Json(value).into_response()
+            }
             Answer::Status(status, after) => {
                 let mut response = StatusCode::from_u16(status).unwrap().into_response();
                 if let Some(after) = after {
@@ -178,6 +187,11 @@ impl Slack {
                             return;
                         }
                     }
+                    Some(Push::Ping) => {
+                        if socket.send(Message::Ping(Default::default())).await.is_err() {
+                            return;
+                        }
+                    }
                     Some(Push::Freeze) => {
                         while pushed.recv().await.is_some_and(|next| !matches!(next, Push::Drop)) {}
                         return;
@@ -190,6 +204,9 @@ impl Slack {
                         if let Some(id) = ack["envelope_id"].as_str() {
                             self.acks.lock().unwrap().push(id.to_string());
                         }
+                    }
+                    Some(Ok(Message::Pong(_))) => {
+                        self.pongs.fetch_add(1, Ordering::SeqCst);
                     }
                     Some(Ok(_)) => {}
                     _ => return,
@@ -231,6 +248,12 @@ impl Slack {
     fn drop_connection(&self) {
         let sockets = self.sockets.lock().unwrap();
         sockets.last().expect("a connection to drop").send(Push::Drop).unwrap();
+    }
+
+    async fn ping(&self) {
+        let before = self.pongs.load(Ordering::SeqCst);
+        self.sockets.lock().unwrap().last().unwrap().send(Push::Ping).unwrap();
+        until("pong", || (self.pongs.load(Ordering::SeqCst) > before).then_some(())).await;
     }
 
     fn freeze(&self) {
@@ -525,6 +548,60 @@ async fn a_socket_that_goes_silent_is_pinged_then_replaced() {
 }
 
 #[tokio::test]
+async fn reconnect_recovers_a_message_in_the_gap_before_acknowledging_buffered_events() {
+    let slack = Slack::start().await;
+    captured();
+    let heard = Heards::default();
+    let adapter = slack.adapter();
+    let sweep_adapter = adapter.clone();
+    let connections = Arc::new(AtomicUsize::new(0));
+    let count = connections.clone();
+    let ears = heard.ears().on_connected(move |ears| {
+        let adapter = sweep_adapter.clone();
+        let connection = count.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async move {
+            if connection == 0 {
+                return Ok(());
+            }
+            adapter.catch_up(&PlaceKey("T1/D1".into()), &[], 11_000, &ears).await
+        })
+    });
+    let _task = tokio::spawn(async move { adapter.run(ears).await });
+    slack.connected(1).await;
+    slack.push(dm("before", "before the gap", "10.0"));
+    slack.acked("before").await;
+    slack.drop_connection();
+    let gate = Arc::new(Notify::new());
+    slack.script(
+        "conversations.history",
+        [Answer::Held(
+            gate.clone(),
+            json!({
+                "ok": true, "messages": [
+                    { "ts": "12.0", "user": ME, "text": "overlap" },
+                    { "ts": "11.0", "user": ME, "text": "during the gap" },
+                ]
+            }),
+        )],
+    );
+    slack.connected(2).await;
+    until("history request", || {
+        (!slack.requests("conversations.history").is_empty()).then_some(())
+    })
+    .await;
+    slack.push(dm("overlap", "overlap", "12.0"));
+    slack.push(dm("after", "after the gap", "13.0"));
+    slack.ping().await;
+    assert_eq!(slack.acks(), ["before"]);
+    gate.notify_one();
+    slack.acked("after").await;
+    let keys: Vec<_> = heard.all().into_iter().map(|event| event.key.0).collect();
+    assert_eq!(keys, ["D1/10.0", "D1/11.0", "D1/12.0", "D1/12.0", "D1/13.0"]);
+    assert_eq!(connections.load(Ordering::SeqCst), 2);
+    slack.assert_no_token_leaked(&[]);
+}
+
+#[tokio::test]
 async fn a_disabled_socket_mode_ends_the_run_with_what_to_turn_on() {
     let slack = Slack::start().await;
     captured();
@@ -552,7 +629,7 @@ async fn catch_up_that_cannot_reach_the_oldest_page_reads_nothing_and_says_so() 
     let heards = Heards::default();
     let failed = slack
         .adapter()
-        .catch_up(&PlaceKey("T1/C1".into()), None, &heards.ears())
+        .catch_up(&PlaceKey("T1/C1".into()), &[], 0, &heards.ears())
         .await
         .unwrap_err();
     assert!(!failed.retry);
@@ -580,7 +657,8 @@ async fn slack_refusing_channel_thread_access_is_not_a_missing_post_or_empty_cat
     let failed = adapter.find(&to, &tag).await.unwrap_err();
     assert!(matches!(failed, SendError::Refused { .. }));
     let heard = Heards::default();
-    let stopped = adapter.catch_up(&to.place, None, &heard.ears()).await.unwrap_err();
+    let stopped =
+        adapter.catch_up(&to.place, &[ThreadKey(root.into())], 0, &heard.ears()).await.unwrap_err();
     assert!(!stopped.retry);
     assert!(heard.all().is_empty());
     slack.assert_no_token_leaked(&[reason(&failed), stopped.reason]);
@@ -835,7 +913,7 @@ async fn a_redirect_is_never_followed() {
 }
 
 #[tokio::test]
-async fn catch_up_reads_every_page_and_thread_oldest_first_and_waits_out_a_limit() {
+async fn catch_up_reads_recent_replies_to_old_roots_and_paged_history_oldest_first() {
     let slack = Slack::start().await;
     captured();
     slack.script("conversations.history", [
@@ -850,31 +928,35 @@ async fn catch_up_reads_every_page_and_thread_oldest_first_and_waits_out_a_limit
         ] })),
     ]);
     slack.script("conversations.replies", [Answer::Json(json!({ "ok": true, "messages": [
-        { "type": "message", "ts": "104.000001", "user": ME, "text": "four", "thread_ts": "104.000001" },
-        { "type": "message", "ts": "104.000002", "user": ME, "text": "in the thread", "thread_ts": "104.000001" },
-        { "type": "message", "ts": "101.000001", "user": ME, "text": "already heard", "thread_ts": "104.000001" },
+        { "type": "message", "ts": "100.000001", "user": ME, "text": "old parent", "thread_ts": "100.000001" },
+        { "type": "message", "ts": "104.000002", "user": ME, "text": "in the thread", "thread_ts": "100.000001" },
+        { "type": "message", "ts": "101.000001", "user": ME, "text": "outside the window", "thread_ts": "100.000001" },
     ] }))]);
     let heards = Heards::default();
-    let after = HeardKey("C1/101.000001".into());
     slack
         .adapter()
-        .catch_up(&PlaceKey("T1/C1".into()), Some(&after), &heards.ears())
+        .catch_up(
+            &PlaceKey("T1/C1".into()),
+            &[ThreadKey("100.000001".into())],
+            101_500,
+            &heards.ears(),
+        )
         .await
         .unwrap();
     let heard = heards.all();
     let order: Vec<&str> = heard.iter().map(|heard| heard.key.0.as_str()).collect();
     assert_eq!(order, ["C1/102.000001", "C1/104.000001", "C1/104.000002", "C1/105.000001"]);
     assert_eq!(heard[0].said, Said::Text { text: "two".into() });
-    assert_eq!(heard[2].spot.thread, Some(ThreadKey("104.000001".into())));
+    assert_eq!(heard[2].spot.thread, Some(ThreadKey("100.000001".into())));
     let reads = slack.requests("conversations.history");
     assert_eq!(reads.len(), 3);
-    assert_eq!(reads[0].field("oldest").as_deref(), Some("101.000001"));
+    assert_eq!(reads[0].field("oldest").as_deref(), Some("101.500000"));
     assert_eq!(reads[0].field("cursor"), None);
     assert_eq!(reads[2].field("cursor").as_deref(), Some("c2"));
-    assert_eq!(
-        slack.requests("conversations.replies")[0].field("ts").as_deref(),
-        Some("104.000001")
-    );
+    let reads = slack.requests("conversations.replies");
+    assert_eq!(reads.len(), 1);
+    assert_eq!(reads[0].field("ts").as_deref(), Some("100.000001"));
+    assert_eq!(reads[0].field("oldest").as_deref(), Some("101.500000"));
     slack.assert_no_token_leaked(&[]);
 }
 
@@ -893,7 +975,7 @@ async fn catch_up_stops_at_the_first_message_it_cannot_record() {
     heards.refuse_next();
     let failed = slack
         .adapter()
-        .catch_up(&PlaceKey("T1/D1".into()), None, &heards.ears())
+        .catch_up(&PlaceKey("T1/D1".into()), &[], 0, &heards.ears())
         .await
         .unwrap_err();
     assert!(failed.retry);
@@ -913,7 +995,7 @@ async fn catch_up_with_a_revoked_token_says_so_and_is_not_retried() {
     slack.script("auth.test", [slack_error("invalid_auth")]);
     let failed = slack
         .adapter()
-        .catch_up(&PlaceKey("T1/D1".into()), None, &Heards::default().ears())
+        .catch_up(&PlaceKey("T1/D1".into()), &[], 0, &Heards::default().ears())
         .await
         .unwrap_err();
     assert!(!failed.retry);
