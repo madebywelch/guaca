@@ -8,7 +8,7 @@ import { api } from "../lib/ipc";
 import { drawnThrough, finished, statusWord } from "../lib/outcomes";
 import { groupNamed } from "../lib/presence";
 import { questions } from "../lib/questions";
-import { colleaguesOn, runningNote } from "../lib/running";
+import { colleaguesOn, runningNote, together, workingLead } from "../lib/running";
 import { useStore } from "../lib/store";
 import { clockLabel, elapsed, useNow } from "../lib/time";
 import { errorMessage, type Outcome, type Running } from "../lib/types";
@@ -47,12 +47,19 @@ export function Home({ onSearch, onManageGroups }: Props) {
   const due = open.filter((item) => item.snoozedUntil === null || item.snoozedUntil <= now);
   const setAside = open.length - due.length;
   const working = agents.filter((agent) => activity[agent.id]?.state === "thinking");
-  const quiet = pending.length + stuck.length + due.length + news.length === 0;
+  const waiting = pending.length + stuck.length + due.length > 0;
+  const quiet = !waiting && news.length === 0;
+  const underway = !waiting && running.length > 0;
 
   const openOutcome = (outcome: Outcome) => {
     if (outcome.seenAt === null) void seeOutcomes({ runIds: [outcome.runId] });
-    if (outcome.noteId) void openMessage(outcome.agentId, outcome.noteId);
-    else void select(outcome.agentId);
+    if (outcome.noteId) {
+      void openMessage(
+        outcome.agentId,
+        outcome.noteId,
+        outcome.status === "done" ? "result" : undefined,
+      );
+    } else void select(outcome.agentId);
   };
 
   return (
@@ -63,15 +70,14 @@ export function Home({ onSearch, onManageGroups }: Props) {
         onLeave={() => setChosen(pending[0]?.id ?? stuck[0]?.id ?? null)}
       />
 
-      {quiet ? (
-        <>
-          <Quiet
-            working={running.length > 0 ? [] : working.map((agent) => agent.name)}
-            decisions={setAside}
-            now={now}
-          />
-          <RunningNow running={running} />
-        </>
+      {underway && (
+        <Underway
+          running={running}
+          backInto={quiet ? <BackInto decisions={setAside} now={now} /> : null}
+        />
+      )}
+      {quiet && !underway ? (
+        <Quiet working={working.map((agent) => agent.name)} decisions={setAside} now={now} />
       ) : (
         <>
           <Desk
@@ -153,6 +159,9 @@ export function Home({ onSearch, onManageGroups }: Props) {
                   const agent = agents.find((one) => one.id === outcome.agentId);
                   const group = groupNamed(groups, outcome.groupId);
                   const word = statusWord(outcome.status);
+                  const helped = (outcome.colleagues ?? []).flatMap(
+                    (id) => agents.find((one) => one.id === id)?.name ?? [],
+                  );
                   return (
                     <li key={outcome.runId}>
                       <button
@@ -171,10 +180,15 @@ export function Home({ onSearch, onManageGroups }: Props) {
                         <span className="home__rowtext">
                           <span className="home__meta">
                             <strong>{agent?.name ?? "A deleted agent"}</strong>
+                            {helped.length > 0 ? `, with ${together(helped)},` : ""}
                             {group ? ` ${group},` : ""} {clockLabel(outcome.finishedAt)}
                             {word ? `, ${word}` : ""}
                           </span>
                           <span className="home__headline">{outcome.headline}</span>
+                          <span className="home__open" aria-hidden="true">
+                            Open
+                            <Icon name="chevron-right" size={16} />
+                          </span>
                         </span>
                       </button>
                     </li>
@@ -245,6 +259,23 @@ function RunningNow({ running }: { running: Running[] }) {
   );
 }
 
+function Underway({ running, backInto }: { running: Running[]; backInto: React.ReactNode }) {
+  const agents = useStore((state) => state.agents);
+  const activeRun = useStore((state) => state.activeRun);
+  const nameOf = (id: string) => agents.find((agent) => agent.id === id)?.name;
+  const names = running.flatMap((run) => [
+    nameOf(run.agentId) ?? "A deleted agent",
+    ...colleaguesOn(run, activeRun, nameOf),
+  ]);
+  return (
+    <div className="home__underway">
+      <h2 className="home__calm">{workingLead(names)}</h2>
+      <p className="home__still">Nothing needs you.</p>
+      {backInto}
+    </div>
+  );
+}
+
 function StopRun({ run, name }: { run: Running; name: string }) {
   const showFailure = useStore((state) => state.showFailure);
   const [stopping, setStopping] = useState(false);
@@ -273,6 +304,22 @@ function StopRun({ run, name }: { run: Running; name: string }) {
 }
 
 function Quiet({ working, decisions, now }: { working: string[]; decisions: number; now: number }) {
+  const still =
+    working.length === 0
+      ? "You've seen everything."
+      : working.length === 1
+        ? `You've seen everything. ${working[0]} is working.`
+        : `You've seen everything. ${working.length} agents are working.`;
+  return (
+    <div className="home__quiet">
+      <h2 className="home__calm">Nothing needs you.</h2>
+      <p className="home__still">{still}</p>
+      <BackInto decisions={decisions} now={now} />
+    </div>
+  );
+}
+
+function BackInto({ decisions, now }: { decisions: number; now: number }) {
   const showForYou = useStore((state) => state.showForYou);
   const [today, setToday] = useState<number | null>(null);
   const midnight = new Date(now).setHours(0, 0, 0, 0);
@@ -292,23 +339,10 @@ function Quiet({ working, decisions, now }: { working: string[]; decisions: numb
     };
   }, [midnight]);
 
-  const still =
-    working.length === 0
-      ? "You've seen everything."
-      : working.length === 1
-        ? `You've seen everything. ${working[0]} is working.`
-        : `You've seen everything. ${working.length} agents are working.`;
+  if (decisions === 0 && (today ?? 0) === 0) return null;
   return (
-    <div className="home__quiet">
-      <h2 className="home__calm">Nothing needs you.</h2>
-      <p className="home__still">{still}</p>
-      {(decisions > 0 || (today ?? 0) > 0) && (
-        <button type="button" className="home__more" onClick={() => showForYou(true)}>
-          {decisions > 0
-            ? `${questions(decisions)} set aside in For you`
-            : `Today, ${today} finished`}
-        </button>
-      )}
-    </div>
+    <button type="button" className="home__more" onClick={() => showForYou(true)}>
+      {decisions > 0 ? `${questions(decisions)} set aside in For you` : `Today, ${today} finished`}
+    </button>
   );
 }

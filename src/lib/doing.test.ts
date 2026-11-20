@@ -16,6 +16,7 @@ function news(over: Partial<Outcome> = {}): Outcome {
     status: "done",
     headline: "Sent the digest to 12 people.",
     noteId: null,
+    colleagues: [],
     needs: [],
     steps: 1,
     startedAt: NOW - 6 * 3_600_000,

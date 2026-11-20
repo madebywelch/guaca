@@ -404,6 +404,7 @@ describe("finished work in the panel", () => {
       status: "done",
       headline: `Report ${runId}`,
       noteId: null,
+      colleagues: [],
       needs: [],
       steps: 1,
       startedAt: NOW - 3 * HOUR,

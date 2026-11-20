@@ -55,7 +55,13 @@ export type Row =
       body: string;
       reason: string;
     }
-  | { kind: "when"; key: string; at: number };
+  | { kind: "when"; key: string; at: number }
+  | {
+      kind: "result";
+      key: string;
+      message: Envelope;
+      handoffs: Extract<Row, { kind: "peers" }>[];
+    };
 
 const CONTINUATION_MS = 4 * 60 * 1000;
 
@@ -255,8 +261,71 @@ export function transcriptRows(messages: Envelope[], lookups: Lookups): Row[] {
   return rows;
 }
 
+function toPerson(row: Row): row is Extract<Row, { kind: "message" }> {
+  return (
+    row.kind === "message" && row.message.from.kind === "agent" && row.message.to.kind === "human"
+  );
+}
+
+function answers(row: Extract<Row, { kind: "message" }>): boolean {
+  const { parts } = row.message;
+  return parts.length > 0 && parts.every((part) => part.type === "text" || part.type === "file");
+}
+
+export function withResults(rows: Row[], running: ReadonlySet<RunId>): Row[] {
+  const last = new Map<RunId, Extract<Row, { kind: "message" }>>();
+  const cutShort = new Set<RunId>();
+  for (const row of rows) {
+    if (row.kind !== "message") continue;
+    const { runId, parts } = row.message;
+    if (
+      parts.some(
+        (part) =>
+          part.type === "notice" &&
+          (part.kind === "interrupted" ||
+            (part.kind === "guardStop" && part.text.startsWith("You stopped this conversation"))),
+      )
+    ) {
+      cutShort.add(runId);
+    }
+    if (parts.some((part) => part.type === "notice" && part.kind !== "lifecycle")) {
+      last.delete(runId);
+    } else if (toPerson(row) && !running.has(runId) && !cutShort.has(runId)) {
+      last.set(runId, row);
+    }
+  }
+  const results = new Map<RunId, string>();
+  for (const [run, row] of last) {
+    if (answers(row)) results.set(run, row.key);
+  }
+  if (results.size === 0) return rows;
+
+  const shown: Row[] = [];
+  const held = new Map<RunId, Extract<Row, { kind: "peers" }>[]>();
+  for (const row of rows) {
+    if (row.kind === "peers" && results.has(row.runId) && row.peers.some((one) => one.sent > 0)) {
+      held.set(row.runId, [...(held.get(row.runId) ?? []), row]);
+      continue;
+    }
+    if (row.kind === "message" && results.get(row.message.runId) === row.key) {
+      shown.push({
+        kind: "result",
+        key: row.key,
+        message: row.message,
+        handoffs: held.get(row.message.runId) ?? [],
+      });
+      results.delete(row.message.runId);
+      held.delete(row.message.runId);
+      continue;
+    }
+    shown.push(row);
+  }
+  return shown;
+}
+
 export function rowStandsFor(row: Row): MessageId[] {
   if (row.kind === "peers") return row.folded;
+  if (row.kind === "result") return [row.message.id, ...row.handoffs.flatMap((one) => one.folded)];
   if (row.kind === "refused" || row.kind === "when") return [];
   return [row.message.id];
 }

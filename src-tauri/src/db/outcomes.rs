@@ -101,6 +101,7 @@ pub(super) fn record(
         status,
         headline,
         note_id,
+        colleagues: colleagues(tx, run, owner)?,
         needs,
         steps,
         started_at: start.created_at,
@@ -153,6 +154,7 @@ pub(super) fn record_interrupted(
         status: Status::Interrupted,
         headline: first_sentence(&notice_text(notice)),
         note_id: Some(notice.id),
+        colleagues: colleagues(tx, original.run_id, owner)?,
         needs: left_open(tx, original.run_id)?,
         steps,
         started_at: original.created_at,
@@ -204,6 +206,28 @@ fn first(
         )
         .optional()?;
     found.transpose()
+}
+
+fn colleagues(tx: &Connection, run: RunId, owner: AgentId) -> Result<Vec<AgentId>, StoreError> {
+    let mut stmt = tx.prepare_cached(
+        "SELECT m.from_agent FROM messages m
+          WHERE m.run_id=?1 AND m.from_kind='agent' AND m.to_kind='agent'
+            AND m.to_agent=?2 AND m.from_agent<>?2
+          GROUP BY m.from_agent
+          ORDER BY min(m.created_at), m.from_agent",
+    )?;
+    let rows =
+        stmt.query_map(params![run.to_string(), owner.to_string()], |row| row.get::<_, String>(0))?;
+    let mut found = Vec::new();
+    for id in rows {
+        found.push(id?.parse().map_err(|e| StoreError::Corrupt(format!("bad agent id: {e}")))?);
+    }
+    Ok(found)
+}
+
+fn with_colleagues(tx: &Connection, mut outcome: Outcome) -> Result<Outcome, StoreError> {
+    outcome.colleagues = colleagues(tx, outcome.run_id, outcome.agent_id)?;
+    Ok(outcome)
 }
 
 fn left_open(tx: &Connection, run: RunId) -> Result<Vec<Need>, StoreError> {
@@ -291,6 +315,7 @@ fn read(row: &Row<'_>) -> rusqlite::Result<Result<Outcome, StoreError>> {
                 .map(|id| id.parse())
                 .transpose()
                 .map_err(|e| corrupt("bad note id", &e))?,
+            colleagues: Vec::new(),
             needs: needs
                 .map(|raw| serde_json::from_str(&raw))
                 .transpose()
@@ -376,7 +401,7 @@ impl Store {
         )?;
         let mut outcomes = Vec::new();
         for row in rows {
-            outcomes.push(row??);
+            outcomes.push(with_colleagues(&conn, row??)?);
         }
         Ok(outcomes)
     }
@@ -437,7 +462,7 @@ impl Store {
         )?;
         let mut outcomes = Vec::new();
         for row in rows {
-            outcomes.push(row??);
+            outcomes.push(with_colleagues(&conn, row??)?);
         }
         Ok(outcomes)
     }
@@ -451,7 +476,7 @@ impl Store {
                 read,
             )
             .optional()?;
-        found.transpose()
+        found.transpose()?.map(|outcome| with_colleagues(&conn, outcome)).transpose()
     }
 
     pub fn mark_outcomes_seen(
@@ -560,6 +585,7 @@ mod tests {
             status,
             headline: headline.into(),
             note_id: None,
+            colleagues: Vec::new(),
             needs: Vec::new(),
             steps: 1,
             started_at: started,

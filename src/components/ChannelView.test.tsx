@@ -308,6 +308,10 @@ describe("peer traffic in a channel", () => {
 
 describe("who said what", () => {
   it("names the speaker once per turn rather than once per message", () => {
+    useStore.setState({
+      running: [{ runId: "r1", agentId: MANAGER, groupId: "g", startedAt: 0, note: null }],
+      runningKnown: true,
+    });
     open([
       envelope({ parts: [{ type: "text", text: "what is the status" }] }),
       envelope({
@@ -327,6 +331,60 @@ describe("who said what", () => {
     expect(document.querySelectorAll(".msg--continued")).toHaveLength(1);
     expect(document.querySelectorAll(".msg__head")).toHaveLength(1);
     expect(document.querySelectorAll(".msg__bubble")).toHaveLength(1);
+    useStore.setState({ running: [] });
+  });
+
+  it("sets the line a settled conversation ended on apart as its result, with its own byline", () => {
+    useStore.setState({ running: [], runningKnown: true });
+    open([
+      envelope({ parts: [{ type: "text", text: "what is the status" }] }),
+      envelope({
+        from: { kind: "agent", id: MANAGER },
+        to: { kind: "human" },
+        parts: [{ type: "text", text: "checking with Chef" }],
+      }),
+      envelope({
+        from: { kind: "agent", id: MANAGER },
+        to: { kind: "human" },
+        parts: [{ type: "text", text: "all clear" }],
+      }),
+    ]);
+    const result = screen.getByRole("article", { name: /^Result from Manager/ });
+    expect(result.textContent).toContain("all clear");
+    expect(result.querySelector(".msg__name")?.textContent).toBe("Manager");
+    expect(screen.getByText("checking with Chef").closest(".msg--result")).toBeNull();
+  });
+
+  it("draws no result while the conversation is still running", () => {
+    useStore.setState({
+      running: [{ runId: "r1", agentId: MANAGER, groupId: "g", startedAt: 0, note: null }],
+      runningKnown: true,
+    });
+    open([
+      envelope({ parts: [{ type: "text", text: "what is the status" }] }),
+      envelope({
+        from: { kind: "agent", id: MANAGER },
+        to: { kind: "human" },
+        parts: [{ type: "text", text: "checking with Chef" }],
+      }),
+    ]);
+    expect(screen.queryByRole("article", { name: /^Result from/ })).toBeNull();
+    useStore.setState({ running: [] });
+  });
+
+  it("draws no result before the host has said what is running", () => {
+    useStore.setState({ running: [], runningKnown: false });
+    open([
+      envelope({ parts: [{ type: "text", text: "what is the status" }] }),
+      envelope({
+        from: { kind: "agent", id: MANAGER },
+        to: { kind: "human" },
+        parts: [{ type: "text", text: "checking with Chef" }],
+      }),
+    ]);
+    expect(screen.queryByRole("article", { name: /^Result from/ })).toBeNull();
+    act(() => useStore.setState({ runningKnown: true }));
+    expect(screen.getByRole("article", { name: /^Result from Manager/ })).toBeTruthy();
   });
 
   it("says when the conversation picked up again, where it did", () => {

@@ -5,7 +5,7 @@ import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import { clockLabel } from "../lib/time";
 import type { Escalation, Outcome, RunId, Running, WorkDecision } from "../lib/types";
-import { aDecision, aGroup, anAgent, anApproval } from "../test-fixtures";
+import { aDecision, aGroup, anAgent, anApproval, anOutcome } from "../test-fixtures";
 import { Home } from "./Home";
 
 vi.mock("../lib/ipc", () => ({
@@ -152,6 +152,7 @@ describe("running work", () => {
       status: "done",
       headline: "Sent the digest.",
       noteId: null,
+      colleagues: [],
       needs: [],
       steps: 1,
       startedAt: NOW - 600_000,
@@ -170,12 +171,90 @@ describe("running work", () => {
     expect(at("Running")).toBeLessThan(at("Finished"));
   });
 
-  it("keeps the calm sentence and lists the work under it, saying it once", () => {
+  it("leads with who is working, keeps the calm sentence under it, and says it once", () => {
     draw({ running: [run] });
     act(() => useStore.setState({ activity: { [dara.id]: { state: "thinking" } } }));
-    expect(screen.getByText("Nothing needs you.")).toBeTruthy();
-    expect(screen.queryByText(/Dara is working/)).toBeNull();
+    const lead = screen.getAllByRole("heading")[0];
+    expect(lead?.textContent).toBe("Dara is working.");
+    expect(screen.getByText("Nothing needs you.").tagName).toBe("P");
+    expect(screen.getAllByText(/Dara is working/)).toHaveLength(1);
     expect(screen.getByRole("region", { name: /Running/ })).toBeTruthy();
+  });
+
+  it("names the colleagues working on the conversation in the lead", () => {
+    const noor = anAgent("agent-2", { name: "Noor" });
+    const sami = anAgent("agent-3", { name: "Sami" });
+    draw({ running: [run] });
+    act(() =>
+      useStore.setState({
+        agents: [dara, noor, sami],
+        activeRun: { [noor.id]: run.runId, [sami.id]: run.runId },
+      }),
+    );
+    expect(screen.getAllByRole("heading")[0]?.textContent).toBe("Dara, Noor and Sami are working.");
+  });
+
+  it("leads with running work even when an older result is unread", () => {
+    draw({
+      running: [run],
+      outcomes: [anOutcome({ agentId: dara.id, headline: "Sent the digest." })],
+    });
+    const headings = screen.getAllByRole("heading").map((one) => one.textContent);
+    expect(headings[0]).toBe("Dara is working.");
+    expect(headings.some((text) => text?.startsWith("Finished"))).toBe(true);
+    expect(screen.getByRole("button", { name: /Sent the digest/ })).toBeTruthy();
+  });
+
+  it("leads with what needs you, not with what runs, while something waits", () => {
+    draw({
+      pending: [anApproval({ agentId: "agent-1", createdAt: ASKED, lapsesAt: LAPSES })],
+      running: [run],
+    });
+    expect(screen.getAllByRole("heading")[0]?.textContent).toMatch(/^Needs you/);
+    expect(screen.queryByText(/is working/)).toBeNull();
+  });
+
+  it("keeps the calm sentence as the lead when nothing runs", () => {
+    draw({});
+    expect(screen.getAllByRole("heading")[0]?.textContent).toBe("Nothing needs you.");
+  });
+});
+
+describe("a result on Today", () => {
+  const noor = anAgent("agent-2", { name: "Noor" });
+  const result = (over: Partial<Outcome>): Outcome =>
+    anOutcome({
+      agentId: dara.id,
+      runId: "run-9" as RunId,
+      headline: "Lease, if you replace the car within three years.",
+      finishedAt: NOW - 60_000,
+      ...over,
+    });
+
+  it("still opens a result from a host that does not send colleagues", () => {
+    const older = result({});
+    delete older.colleagues;
+    draw({ outcomes: [older] });
+    expect(screen.getByRole("button", { name: /Lease, if you replace/ })).toBeTruthy();
+  });
+
+  it("names who produced it and who helped", () => {
+    draw({ outcomes: [result({ colleagues: [noor.id] })] });
+    act(() => useStore.setState({ agents: [dara, noor] }));
+    const row = screen.getByRole("button", { name: /Lease, if you replace/ });
+    expect(row.textContent).toContain("Dara, with Noor,");
+  });
+
+  it("drops a colleague who was deleted rather than naming nobody", () => {
+    draw({ outcomes: [result({ colleagues: ["agent-gone" as Outcome["agentId"]] })] });
+    const row = screen.getByRole("button", { name: /Lease, if you replace/ });
+    expect(row.textContent).toMatch(/^Dara \d/);
+  });
+
+  it("offers to open the whole result", () => {
+    draw({ outcomes: [result({})] });
+    const row = screen.getByRole("button", { name: /Lease, if you replace/ });
+    expect(within(row).getByText("Open")).toBeTruthy();
   });
 });
 
