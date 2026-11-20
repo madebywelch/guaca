@@ -28,11 +28,13 @@ const FIND_PAGE: usize = 100;
 const PAGES: usize = 50;
 const LIMITED_TRIES: usize = 6;
 const LIMITED_WAIT: Duration = Duration::from_secs(1);
-const LIMITED_CEILING: Duration = Duration::from_secs(120);
+const QUIET: Duration = Duration::from_secs(30);
+const RECONNECT_PAUSE: Duration = Duration::from_secs(1);
 
 pub struct SlackAdapter {
     api: Api,
     bot_user: Mutex<Option<String>>,
+    quiet: Duration,
 }
 
 enum Ended {
@@ -58,6 +60,21 @@ fn unready() -> AdapterError {
     }
 }
 
+fn socket_off() -> AdapterError {
+    AdapterError {
+        reason: "Socket Mode is turned off for this Slack app. Turn it on under Socket Mode in the app's settings, then reconnect."
+            .to_string(),
+        retry: false,
+    }
+}
+
+fn too_much() -> AdapterError {
+    AdapterError {
+        reason: "Slack returned incomplete history. Guaca did not deliver any of it. Check Slack for messages that still need an answer.".into(),
+        retry: false,
+    }
+}
+
 fn not_slack() -> AdapterError {
     AdapterError {
         reason: "That place is not a Slack conversation, so Guaca cannot read it.".to_string(),
@@ -76,6 +93,12 @@ fn unrecorded() -> AdapterError {
 
 fn unknown_post() -> SendError {
     SendError::Refused { reason: "That Slack message reference is not one Guaca made.".to_string() }
+}
+
+fn lookup_incomplete() -> SendError {
+    SendError::Refused {
+        reason: "Slack did not return enough history to verify the post. Check the conversation before sending it again.".into(),
+    }
 }
 
 fn channel_of(to: &Spot) -> Result<&str, SendError> {
@@ -104,7 +127,12 @@ impl SlackAdapter {
     }
 
     pub fn at(bot: Secret, app: Secret, origin: impl Into<String>) -> Self {
-        Self { api: Api::new(origin.into(), bot, app), bot_user: Mutex::new(None) }
+        Self { api: Api::new(origin.into(), bot, app), bot_user: Mutex::new(None), quiet: QUIET }
+    }
+
+    pub fn with_quiet(mut self, quiet: Duration) -> Self {
+        self.quiet = quiet;
+        self
     }
 
     async fn connection(&self, ears: &Ears) -> Result<Ended, AdapterError> {
@@ -116,11 +144,31 @@ impl SlackAdapter {
         let url = opened["url"].as_str().ok_or_else(|| Failure::Garbled.into_adapter())?;
         let (mut socket, _) = tokio_tungstenite::connect_async(url).await.map_err(|_| unready())?;
         let mut ready = false;
-        while let Some(Ok(frame)) = socket.next().await {
+        let mut pinged = false;
+        loop {
+            let frame = match tokio::time::timeout(self.quiet, socket.next()).await {
+                Err(_) if pinged => {
+                    tracing::warn!("Slack stopped answering on the socket");
+                    break;
+                }
+                Err(_) => {
+                    pinged = true;
+                    if socket.send(Message::Ping(Default::default())).await.is_err() {
+                        break;
+                    }
+                    continue;
+                }
+                Ok(Some(Ok(frame))) => frame,
+                Ok(_) => break,
+            };
+            pinged = false;
             let Message::Text(text) = frame else { continue };
             let Ok(envelope) = serde_json::from_str::<Value>(text.as_str()) else { continue };
             match envelope["type"].as_str() {
                 Some("hello") => ready = true,
+                Some("disconnect") if envelope["reason"].as_str() == Some("link_disabled") => {
+                    return Err(socket_off());
+                }
                 Some("disconnect") => return Ok(Ended::Asked),
                 _ => {
                     let Some(id) = envelope["envelope_id"].as_str() else { continue };
@@ -182,11 +230,13 @@ impl SlackAdapter {
         form: Vec<(&'static str, String)>,
     ) -> Result<Value, Failure> {
         let mut last = Failure::Limited(None);
-        for _ in 0..LIMITED_TRIES {
+        for attempt in 1..=LIMITED_TRIES {
             match self.api.call(method, Token::Bot, Body::Form(form.clone())).await {
                 Err(Failure::Limited(after)) => {
-                    tokio::time::sleep(after.unwrap_or(LIMITED_WAIT).min(LIMITED_CEILING)).await;
                     last = Failure::Limited(after);
+                    if attempt < LIMITED_TRIES {
+                        tokio::time::sleep(after.unwrap_or(LIMITED_WAIT)).await;
+                    }
                 }
                 other => return other,
             }
@@ -199,7 +249,7 @@ impl SlackAdapter {
         method: &str,
         form: Vec<(&'static str, String)>,
         patient: bool,
-    ) -> Result<Vec<Value>, Failure> {
+    ) -> Result<(Vec<Value>, bool), Failure> {
         let mut messages = Vec::new();
         let mut cursor: Option<String> = None;
         for _ in 0..PAGES {
@@ -212,16 +262,16 @@ impl SlackAdapter {
             } else {
                 self.api.call(method, Token::Bot, Body::Form(page_form)).await?
             };
-            messages.extend(page["messages"].as_array().cloned().unwrap_or_default());
+            messages.extend(page["messages"].as_array().ok_or(Failure::Garbled)?.iter().cloned());
             cursor = page["response_metadata"]["next_cursor"]
                 .as_str()
                 .filter(|next| !next.is_empty())
                 .map(str::to_string);
             if cursor.is_none() {
-                break;
+                return Ok((messages, page["has_more"].as_bool() != Some(true)));
             }
         }
-        Ok(messages)
+        Ok((messages, false))
     }
 
     async fn react(
@@ -262,7 +312,8 @@ impl Adapter for SlackAdapter {
                 match self.connection(&ears).await? {
                     Ended::Asked => tracing::info!("Slack asked for a new connection"),
                     Ended::Dropped => {
-                        tracing::warn!("the connection to Slack dropped, reconnecting")
+                        tracing::warn!("the connection to Slack dropped, reconnecting");
+                        tokio::time::sleep(RECONNECT_PAUSE).await;
                     }
                 }
             }
@@ -285,10 +336,13 @@ impl Adapter for SlackAdapter {
                 form.push(("oldest", oldest.clone()));
                 form.push(("inclusive", "false".to_string()));
             }
-            let mut messages = self
+            let (mut messages, whole) = self
                 .pages("conversations.history", form.clone(), true)
                 .await
                 .map_err(Failure::into_adapter)?;
+            if !whole {
+                return Err(too_much());
+            }
             let parents: Vec<String> = messages
                 .iter()
                 .filter(|message| message["reply_count"].as_u64().unwrap_or_default() > 0)
@@ -297,10 +351,13 @@ impl Adapter for SlackAdapter {
             for parent in parents {
                 let mut replies_form = form.clone();
                 replies_form.push(("ts", parent.clone()));
-                let replies = self
+                let (replies, whole) = self
                     .pages("conversations.replies", replies_form, true)
                     .await
                     .map_err(Failure::into_adapter)?;
+                if !whole {
+                    return Err(too_much());
+                }
                 messages.extend(
                     replies
                         .into_iter()
@@ -390,7 +447,7 @@ impl Adapter for SlackAdapter {
                 ("include_all_metadata", "true".to_string()),
                 ("limit", FIND_PAGE.to_string()),
             ];
-            let messages = match &to.thread {
+            let (messages, whole) = match &to.thread {
                 Some(thread) => {
                     form.push(("ts", thread.0.clone()));
                     self.pages("conversations.replies", form, false).await
@@ -399,14 +456,32 @@ impl Adapter for SlackAdapter {
                     .api
                     .call("conversations.history", Token::Bot, Body::Form(form))
                     .await
-                    .map(|page| page["messages"].as_array().cloned().unwrap_or_default()),
+                    .and_then(|page| {
+                        let messages = page["messages"].as_array().ok_or(Failure::Garbled)?;
+                        let more = page["has_more"].as_bool() == Some(true)
+                            || page["response_metadata"]["next_cursor"]
+                                .as_str()
+                                .is_some_and(|cursor| !cursor.is_empty());
+                        Ok((messages.clone(), !more))
+                    }),
             }
             .map_err(Failure::into_send)?;
-            Ok(messages
-                .iter()
-                .find(|message| tagged(message, tag))
-                .and_then(|message| message["ts"].as_str())
-                .map(|ts| Posted(format!("{channel}/{ts}"))))
+            if let Some(message) = messages.iter().find(|message| tagged(message, tag)) {
+                let ts = message["ts"]
+                    .as_str()
+                    .filter(|ts| events::ts_ms(ts).is_some())
+                    .ok_or_else(lookup_incomplete)?;
+                return Ok(Some(Posted(format!("{channel}/{ts}"))));
+            }
+            if !whole
+                || messages.iter().any(|message| {
+                    message["metadata"]["event_type"].as_str() == Some(RELAY_EVENT)
+                        && message["metadata"]["event_payload"]["tag"].as_str().is_none()
+                })
+            {
+                return Err(lookup_incomplete());
+            }
+            Ok(None)
         })
     }
 

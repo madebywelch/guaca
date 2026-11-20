@@ -117,7 +117,7 @@ impl Failure {
     }
 
     pub fn into_adapter(self) -> AdapterError {
-        AdapterError { retry: self.refused_token().is_none(), reason: self.reason() }
+        AdapterError { retry: self.passing(), reason: self.reason() }
     }
 }
 
@@ -145,7 +145,7 @@ impl Api {
             .redirect(reqwest::redirect::Policy::none())
             .timeout(TIMEOUT)
             .build()
-            .unwrap_or_default();
+            .expect("Slack HTTP client setup failed");
         Self { http, origin, bot, app }
     }
 
@@ -177,7 +177,15 @@ impl Api {
         if value["ok"].as_bool() == Some(true) {
             return Ok(value);
         }
-        let code = Code::parse(value["error"].as_str().unwrap_or_default());
+        let raw = value["error"].as_str().unwrap_or_default();
+        let code = if [&self.bot, &self.app]
+            .iter()
+            .any(|secret| !secret.is_empty() && raw.contains(secret.expose()))
+        {
+            Code::parse("")
+        } else {
+            Code::parse(raw)
+        };
         match code.as_str() {
             "ratelimited" => Err(Failure::Limited(after)),
             _ => Err(Failure::Code(code)),

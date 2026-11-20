@@ -66,6 +66,12 @@ fn slack_error(code: &str) -> Answer {
     Answer::Json(json!({ "ok": false, "error": code }))
 }
 
+enum Push {
+    Envelope(Value),
+    Drop,
+    Freeze,
+}
+
 #[derive(Clone)]
 struct Slack {
     origin: String,
@@ -73,7 +79,7 @@ struct Slack {
     requests: Arc<Mutex<Vec<Request>>>,
     answers: Arc<Mutex<HashMap<String, VecDeque<Answer>>>>,
     acks: Arc<Mutex<Vec<String>>>,
-    sockets: Arc<Mutex<Vec<mpsc::UnboundedSender<Option<Value>>>>>,
+    sockets: Arc<Mutex<Vec<mpsc::UnboundedSender<Push>>>>,
 }
 
 impl Slack {
@@ -167,12 +173,16 @@ impl Slack {
         loop {
             tokio::select! {
                 next = pushed.recv() => match next {
-                    Some(Some(envelope)) => {
+                    Some(Push::Envelope(envelope)) => {
                         if socket.send(Message::text(envelope.to_string())).await.is_err() {
                             return;
                         }
                     }
-                    _ => return,
+                    Some(Push::Freeze) => {
+                        while pushed.recv().await.is_some_and(|next| !matches!(next, Push::Drop)) {}
+                        return;
+                    }
+                    Some(Push::Drop) | None => return,
                 },
                 frame = socket.next() => match frame {
                     Some(Ok(Message::Text(text))) => {
@@ -215,12 +225,17 @@ impl Slack {
 
     fn push(&self, envelope: Value) {
         let sockets = self.sockets.lock().unwrap();
-        sockets.last().expect("a connection to push to").send(Some(envelope)).unwrap();
+        sockets.last().expect("a connection to push to").send(Push::Envelope(envelope)).unwrap();
     }
 
     fn drop_connection(&self) {
         let sockets = self.sockets.lock().unwrap();
-        sockets.last().expect("a connection to drop").send(None).unwrap();
+        sockets.last().expect("a connection to drop").send(Push::Drop).unwrap();
+    }
+
+    fn freeze(&self) {
+        let sockets = self.sockets.lock().unwrap();
+        sockets.last().expect("a connection to freeze").send(Push::Freeze).unwrap();
     }
 
     async fn acked(&self, id: &str) {
@@ -486,6 +501,111 @@ async fn a_disconnect_or_a_dropped_socket_reconnects_and_keeps_hearing() {
     assert_eq!(slack.requests("apps.connections.open").len(), 3);
     assert!(!task.is_finished());
     slack.assert_no_token_leaked(&[]);
+}
+
+#[tokio::test]
+async fn a_socket_that_goes_silent_is_pinged_then_replaced() {
+    let slack = Slack::start().await;
+    captured();
+    let heards = Heards::default();
+    let adapter = Arc::new(
+        SlackAdapter::at(Secret::new(BOT), Secret::new(APP), slack.origin.clone())
+            .with_quiet(Duration::from_millis(200)),
+    );
+    let ears = heards.ears();
+    let _task = tokio::spawn(async move { adapter.run(ears).await });
+    slack.connected(1).await;
+    slack.freeze();
+    slack.connected(2).await;
+    slack.push(dm("q1", "still there?", "250.000001"));
+    slack.acked("q1").await;
+    assert_eq!(heards.all().len(), 1);
+    assert!(logs().contains("stopped answering"));
+    slack.assert_no_token_leaked(&[]);
+}
+
+#[tokio::test]
+async fn a_disabled_socket_mode_ends_the_run_with_what_to_turn_on() {
+    let slack = Slack::start().await;
+    captured();
+    let adapter = slack.adapter();
+    let task = tokio::spawn(async move { adapter.run(Heards::default().ears()).await });
+    slack.connected(1).await;
+    slack.push(json!({ "type": "disconnect", "reason": "link_disabled" }));
+    let ended =
+        tokio::time::timeout(Duration::from_secs(2), task).await.unwrap().unwrap().unwrap_err();
+    assert!(!ended.retry);
+    assert!(ended.reason.contains("Socket Mode"), "{}", ended.reason);
+    assert_eq!(slack.requests("apps.connections.open").len(), 1);
+    slack.assert_no_token_leaked(&[ended.reason]);
+}
+
+#[tokio::test]
+async fn catch_up_that_cannot_reach_the_oldest_page_reads_nothing_and_says_so() {
+    let slack = Slack::start().await;
+    captured();
+    let endless = (0..50).map(|page| {
+        Answer::Json(json!({ "ok": true, "has_more": true, "response_metadata": { "next_cursor": format!("c{page}") },
+            "messages": [{ "type": "message", "ts": format!("{}.0", 1000 - page), "user": ME, "text": "new" }] }))
+    });
+    slack.script("conversations.history", endless);
+    let heards = Heards::default();
+    let failed = slack
+        .adapter()
+        .catch_up(&PlaceKey("T1/C1".into()), None, &heards.ears())
+        .await
+        .unwrap_err();
+    assert!(!failed.retry);
+    assert!(heards.all().is_empty(), "the newest must not be heard past a gap they would hide");
+    slack.assert_no_token_leaked(&[failed.reason]);
+}
+
+#[tokio::test]
+async fn slack_refusing_channel_thread_access_is_not_a_missing_post_or_empty_catch_up() {
+    let slack = Slack::start().await;
+    let adapter = slack.adapter();
+    let root = "600.000001";
+    let to = spot("C1", Some(root));
+    let tag = RelayTag("ask:ap_42".into());
+    slack.script(
+        "conversations.replies",
+        [slack_error("not_allowed_token_type"), slack_error("missing_scope")],
+    );
+    slack.script(
+        "conversations.history",
+        [Answer::Json(json!({
+            "ok": true, "messages": [{ "ts": root, "user": ME, "text": "parent", "reply_count": 1 }]
+        }))],
+    );
+    let failed = adapter.find(&to, &tag).await.unwrap_err();
+    assert!(matches!(failed, SendError::Refused { .. }));
+    let heard = Heards::default();
+    let stopped = adapter.catch_up(&to.place, None, &heard.ears()).await.unwrap_err();
+    assert!(!stopped.retry);
+    assert!(heard.all().is_empty());
+    slack.assert_no_token_leaked(&[reason(&failed), stopped.reason]);
+}
+
+#[tokio::test]
+async fn an_incomplete_lookup_is_not_proof_that_a_post_was_never_sent() {
+    let slack = Slack::start().await;
+    let adapter = slack.adapter();
+    let tag = RelayTag("ask:ap_42".into());
+    let dm = spot("D1", None);
+    let thread = spot("D1", Some("500.0"));
+    slack.script("conversations.history", [
+        Answer::Json(json!({ "ok": true, "messages": [], "response_metadata": { "next_cursor": "older" } })),
+        Answer::Json(json!({ "ok": true, "messages": [{ "ts": "600.0", "metadata": { "event_type": "guaca_relay" } }] })),
+        Answer::Json(json!({ "ok": true })),
+    ]);
+    slack.script(
+        "conversations.replies",
+        [Answer::Json(json!({ "ok": true, "messages": [], "has_more": true }))],
+    );
+    for to in [&dm, &thread, &dm, &dm] {
+        assert!(adapter.find(to, &tag).await.is_err());
+    }
+    assert!(slack.requests("chat.postMessage").is_empty());
 }
 
 #[tokio::test]
