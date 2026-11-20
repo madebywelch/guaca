@@ -612,6 +612,11 @@ SETTINGS_PAGE = """
     paneTop: pane.scrollTop,
     inDialog: !!document.querySelector('.settings').closest('[role=dialog], .scrim'),
     timeline: !!document.querySelector('.ribbon'),
+    notices: document.querySelectorAll('main .banner').length,
+    selectedFill: getComputedStyle(nav.querySelector('[aria-selected=true]')).backgroundColor,
+    listFill: getComputedStyle(document.querySelector('.app > main')).backgroundColor,
+    selectedWeight: Number(getComputedStyle(nav.querySelector('[aria-selected=true]')).fontWeight),
+    otherWeight: Number(getComputedStyle(nav.querySelector('[aria-selected=false]')).fontWeight),
   };
 })()
 """
@@ -769,6 +774,55 @@ def scenario_settings(w: World) -> None:
                 for f in sheets.values()),
             observed={k: {"fits": v["top"] >= 0 and v["bottom"] <= v["height"], "actions": v["actions"]}
                       for k, v in sheets.items()})
+
+    ui.viewport(*look.FRAME)
+    ui.key(",", mod=True)
+    w.wait("Settings opens", lambda: ui.find("region", "Settings"))
+    fill = ui.evaluate(SETTINGS_PAGE)
+    w.check("the selected section has a fill of its own against the page and keeps its heavier weight",
+            fill["selectedFill"] != fill["listFill"] and fill["selectedWeight"] > fill["otherWeight"],
+            observed={key: fill[key] for key in ("selectedFill", "listFill", "selectedWeight", "otherWeight")},
+            shot=True)
+
+    crowded = {}
+
+    def crowd(state: str, notices: int) -> None:
+        for width, height in SETTINGS_FRAMES:
+            ui.viewport(width, height)
+            w.wait(f"Settings lays out at {width}x{height}", lambda: ui.evaluate(look.SETTLED))
+            fit = ui.evaluate(SETTINGS_PAGE)
+            crowded[f"{state} at {width}x{height}"] = {
+                "fits": not fit["navScrolls"] and fit["tabs"] == 13 and fit["tabsShown"] == 13,
+                "notices": fit["notices"], "expected": notices}
+            w.capture(f"Settings with {state} at {width}x{height}")
+
+    w.host.call("update_settings", patch={"baseUrl": "https://openrouter.ai/api/v1", "apiKey": ""})
+    w.wait("the page asks for an API key", lambda: ui.find("button", "Open settings"))
+    crowd("the no-key banner", 1)
+
+    with urllib.request.urlopen(f"{w.host.origin}/health", timeout=10) as health:
+        version = json.loads(health.read())["version"]
+    ui.answer("*/v1/updates*", lambda: {
+        "automatic": True, "checkedAt": "2026-11-17T00:00:00Z", "error": None, "channel": "main",
+        "latest": {"schema": 1, "channel": "main", "version": version, "commit": REVIEWED,
+                   "image": f"{IMAGE}{'e' * 64}", "apiGeneration": 1, "clientMinimum": 1, "clientMaximum": 1,
+                   "notes": f"https://github.com/madebywelch/guaca/commit/{REVIEWED}"}})
+
+    def offered() -> bool:
+        if ui.find("button", "Review update"):
+            return True
+        ui.evaluate("window.dispatchEvent(new Event('focus'))")
+        return False
+
+    w.wait("the host update notice shows", offered)
+    crowd("the no-key banner and the host update notice", 2)
+
+    w.host.stop()
+    w.wait("the page says the host cannot be reached", lambda: ui.find("button", "Retry"))
+    crowd("the no-key banner, the host update notice and the unreachable host banner", 3)
+    w.check("with the no-key banner, then the host update notice, then the unreachable host banner showing, "
+            "the section list still shows all thirteen sections without scrolling at 1280x820 and 900x700",
+            all(c["fits"] and c["notices"] == c["expected"] for c in crowded.values()), observed=crowded)
     ui.viewport(*look.FRAME)
     no_unscripted(w)
 
@@ -2198,7 +2252,9 @@ SCENARIOS: dict[str, Scenario] = {
                          "1280 by 820 and 900 by 700; a section scrolls on its own with Save kept on screen, Escape, "
                          "the back control and Command-comma each return to where it was opened with the focus back, "
                          "the command menu opens every section straight to itself, and New agent, New group and a "
-                         "group's settings fit a 900 by 700 window with their actions on screen.",
+                         "group's settings fit a 900 by 700 window with their actions on screen; the selected section "
+                         "has a fill of its own, and the list still fits with the no-key banner, the host update "
+                         "notice and the unreachable host banner showing.",
     (
         "the gear opens Settings as a page in the window, with the timeline and a back control, and no dialog",
         "at 1280x820 and 900x700 the section list shows all thirteen sections without scrolling",
@@ -2208,6 +2264,9 @@ SCENARIOS: dict[str, Scenario] = {
         "the command menu opens every section straight to itself, from Today and from the page",
         "opened from an agent's page, the back control is named for that agent and returns to it",
         "New agent, New group and a group's settings fit a 900x700 window with their actions on screen",
+        "the selected section has a fill of its own against the page and keeps its heavier weight",
+        "with the no-key banner, then the host update notice, then the unreachable host banner showing, "
+        "the section list still shows all thirteen sections without scrolling at 1280x820 and 900x700",
         "every model call was one the scenario scripted",
     )),
     "tabs": Scenario(scenario_tabs, "A person opens Settings from the keyboard, reaches the tab list in one Tab, "
