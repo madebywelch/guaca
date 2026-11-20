@@ -8620,7 +8620,7 @@ button.artifacts__version[aria-pressed="true"] {
 
 .ribbon__face,
 .ribbon__item {
-  transition: left var(--tempo-move) var(--ease), opacity var(--tempo-tap) var(--ease);
+  transition: opacity var(--tempo-tap) var(--ease);
 }
 
 .ribbon__portrait {

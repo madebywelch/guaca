@@ -2166,6 +2166,10 @@ def scenario_glance(w: World) -> None:
     w.check("no face sits beside an hour label at a time it did not happen",
             not any(wrong.values()), observed=wrong,
             detail={r: {"hours": readings[r]["hours"], "faces": readings[r]["faces"]} for r in readings})
+    sliding = ui.evaluate("[...document.querySelectorAll('.ribbon__face, .ribbon__item')].filter(e => "
+                          "getComputedStyle(e).transitionProperty.split(', ').some(p => p === 'left' || p === 'all')"
+                          ").map(e => e.querySelector('button')?.getAttribute('aria-label') ?? e.textContent)")
+    w.check("faces move with the scale instead of sliding over each other", sliding == [], observed=sliding)
 
     w.wait("the field takes the focus", lambda: ui.focused() == ("textbox", "What do you need?"))
     ui.key("Tab", mod=True)
@@ -2775,6 +2779,7 @@ SCENARIOS: dict[str, Scenario] = {
         "both agents with a question keep their faces at 1280 and at 900, and nothing is folded",
         "idle faces sit left of the hours, and no hour is labeled over them",
         "no face sits beside an hour label at a time it did not happen",
+        "faces move with the scale instead of sliding over each other",
         "Control Tab steps through the agents by number, and Escape from an empty box goes to Today",
         "Escape leaves a box with words in it alone, and Command [ goes back to Today and keeps the draft",
         "the menu and the box name the keys back and on, and Control Tab works from the menu",
