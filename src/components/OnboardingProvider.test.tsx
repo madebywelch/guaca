@@ -322,7 +322,9 @@ it("says in plain words that the endpoint could not be reached, and gives the te
   expect((await screen.findByRole("alert")).textContent).toBe(
     "Guaca could not reach http://localhost:11434/v1. Check that the server there is running and the address is right, then test again.",
   );
-  expect(document.activeElement).toBe(screen.getByRole("button", { name: "Test and continue" }));
+  await waitFor(() =>
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Test and continue" })),
+  );
 });
 
 it("says a saved key was refused, and forgets it once another way to pay is chosen", async () => {
@@ -343,7 +345,7 @@ it("puts focus on the first sign-in this Mac already has when it is offered", as
   mocks.existingSignins.mockResolvedValue([claudePickup, codexPickup]);
   await draw();
   const first = await screen.findByRole("button", { name: "Use Claude Code" });
-  expect(document.activeElement).toBe(first);
+  await waitFor(() => expect(document.activeElement).toBe(first));
 });
 
 it("puts focus on the chosen way to pay first", async () => {
@@ -369,7 +371,7 @@ it("says a rejected key at the key field, in plain words, and clears it as the k
   expect(field.getAttribute("aria-describedby")).toBe(alert.id);
   expect(alert.closest(".onboarding-actions")).toBeNull();
   expect(mocks.updateSettings).not.toHaveBeenCalled();
-  expect(document.activeElement).toBe(field);
+  await waitFor(() => expect(document.activeElement).toBe(field));
   key("sk-right");
   expect(screen.queryByRole("alert")).toBeNull();
   expect(field.getAttribute("aria-invalid")).toBeNull();
