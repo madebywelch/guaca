@@ -12,6 +12,10 @@ permissions:
   contents: read
   packages: write
 
+defaults:
+  run:
+    shell: bash
+
 env:
   IMAGE: ghcr.io/madebywelch/guaca/guacad
 
@@ -19,6 +23,7 @@ jobs:
   build:
     name: build ${{ matrix.arch }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - arch: amd64
@@ -60,7 +65,7 @@ jobs:
             GUACA_RELEASE=1
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
           provenance: false
-          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true,oci-mediatypes=true
           cache-from: type=gha,scope=guacad-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=guacad-${{ matrix.arch }},ignore-error=true
 
@@ -75,19 +80,17 @@ jobs:
           name: release-digests-${{ matrix.arch }}
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
+          overwrite: true
           retention-days: 1
 
   publish:
     needs: build
-    runs-on: aws-linux-2cpu-4gb
+    runs-on: aws-release-linux-2cpu-4gb
     timeout-minutes: 15
+    concurrency:
+      group: release-image-${{ inputs.version }}
+      queue: max
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: ${{ runner.temp }}/digests
-          pattern: release-digests-*
-          merge-multiple: true
-
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
@@ -96,13 +99,55 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Check the version tag before writing it
+        id: existing
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          tag="$IMAGE:$VERSION"
+          prior="$RUNNER_TEMP/prior-index"
+          if docker buildx imagetools inspect --raw "$tag" > "$prior" 2> "$prior.error"; then
+            number=$(jq -er '.annotations["io.github.actions.run-number"] // "0"' "$prior")
+            [[ "$number" =~ ^[0-9]+$ ]]
+            if [ "$number" -gt "$GITHUB_RUN_NUMBER" ]; then
+              echo "::error::$tag was already published by newer run $number."
+              exit 1
+            fi
+            if [ "$number" -eq "$GITHUB_RUN_NUMBER" ]; then
+              echo "published=true" >> "$GITHUB_OUTPUT"
+            fi
+          elif ! grep -qE 'manifest unknown|: not found$' "$prior.error"; then
+            cat "$prior.error" >&2
+            exit 1
+          fi
+
+      - if: steps.existing.outputs.published != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: release-digests-*
+
       - name: Publish the multi-platform image
+        if: steps.existing.outputs.published != 'true'
         env:
           VERSION: ${{ inputs.version }}
         run: |
           cd "$RUNNER_TEMP/digests"
-          # shellcheck disable=SC2046
-          docker buildx imagetools create --tag "$IMAGE:$VERSION" $(printf "$IMAGE@sha256:%s " *)
+          sources=()
+          for arch in amd64 arm64; do
+            files=("release-digests-$arch"/*)
+            [ "${#files[@]}" -eq 1 ]
+            digest=${files[0]##*/}
+            [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+            sources+=("$IMAGE@sha256:$digest")
+          done
+          docker buildx imagetools create --tag "$IMAGE:$VERSION" \
+            --annotation "index:io.github.actions.run-number=$GITHUB_RUN_NUMBER" "${sources[@]}"
+
+      - name: Record the published digest
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
           digest=$(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{json .Manifest}}' | jq -r .digest)
           case "$digest" in
             sha256:*) echo "Image: $IMAGE@$digest" >> "$GITHUB_STEP_SUMMARY" ;;
