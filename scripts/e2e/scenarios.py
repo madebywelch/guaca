@@ -1888,11 +1888,14 @@ def scenario_roster(w: World) -> None:
 
     open_agent(w, names[9])
     w.wait("the clicked row focuses its question", lambda: ui.focused() == ("button", "Early"))
-    ui.viewport(320, 355)
-    w.wait("the compact agent picker is visible",
-           lambda: ui.find("combobox", "Switch agent") and ui.evaluate(look.SETTLED))
+    compact = {}
+    for height in (355, 320):
+        ui.viewport(320, height)
+        w.wait("the compact agent picker is visible",
+               lambda: ui.find("combobox", "Switch agent") and ui.evaluate(look.SETTLED))
+        compact[str(height)] = ui.on_screen("combobox", f"Write to {asking}") and ui.on_screen("button", "Send")
     w.check("the composer and Send stay visible with a question at keyboard height",
-            ui.on_screen("combobox", f"Write to {asking}") and ui.on_screen("button", "Send"),
+            all(compact.values()), observed=compact,
             detail=ui.evaluate("""Object.fromEntries(['.app', '.roster', '.pane__header', '.agent-tabs',
               '.pane__body', '.working', '.composer', '.composer__input', '.composer__send', '.statusbar'].map(s => {
                 const el = document.querySelector(s), r = el.getBoundingClientRect();

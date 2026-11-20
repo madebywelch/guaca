@@ -176,6 +176,7 @@ beforeEach(() => {
   useStore.setState({
     runningKnown: false,
     runningUnavailable: false,
+    runningReadFailed: false,
     agents: [],
     activity: {},
     lastActive: {},
@@ -711,25 +712,33 @@ describe("App", () => {
     await waitFor(() => expect(document.activeElement).toBe(input));
   });
 
-  it("waits for a successful running snapshot rather than opening the remembered conversation", async () => {
-    listAgents.mockResolvedValue([agent("Manager"), agent("Chef")]);
-    runningRuns.mockRejectedValue(new Error("temporarily unavailable"));
-    rememberConversation("id-Manager");
-    render(<App />);
-    await screen.findByRole("navigation", { name: "Agent conversations" });
-    expect(useStore.getState().selected).toBeNull();
-    runningRuns.mockResolvedValue([
-      {
-        runId: "working",
-        agentId: "id-Chef",
-        groupId: agent("Chef").groupId,
-        startedAt: 1,
-        note: null,
-      },
-    ]);
-    await act(() => useStore.getState().refreshRunning());
-    expect(await screen.findByRole("log", { name: "Conversation with Chef" })).toBeTruthy();
-  });
+  it.each(["automatic", "manual"])(
+    "uses a successful %s running retry to choose the conversation",
+    async (retry) => {
+      listAgents.mockResolvedValue([agent("Manager"), agent("Chef")]);
+      runningRuns.mockRejectedValue(new Error("temporarily unavailable"));
+      rememberConversation("id-Manager");
+      render(<App />);
+      const retryButton = await screen.findByRole("button", {
+        name: "Retry checking running work",
+      });
+      expect(screen.getByRole("navigation", { name: "Agent conversations" })).toBeTruthy();
+      expect(useStore.getState().selected).toBeNull();
+      runningRuns.mockResolvedValue([
+        {
+          runId: "working",
+          agentId: "id-Chef",
+          groupId: agent("Chef").groupId,
+          startedAt: 1,
+          note: null,
+        },
+      ]);
+      if (retry === "manual") fireEvent.click(retryButton);
+      expect(
+        await screen.findByRole("log", { name: "Conversation with Chef" }, { timeout: 2_000 }),
+      ).toBeTruthy();
+    },
+  );
 
   it("opens the remembered conversation on a host without a running snapshot command", async () => {
     listAgents.mockResolvedValue([agent("Manager"), agent("Chef")]);

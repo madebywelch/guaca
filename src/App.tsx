@@ -66,6 +66,8 @@ const reportPresence = presenceReporter(async (presence: ReturnType<typeof prese
   }
 }, samePresence);
 
+const RUNNING_RETRY_MS = 1_000;
+
 function seeConversationResults(id: AgentId) {
   const state = useStore.getState();
   const runIds = state.outcomes
@@ -396,6 +398,17 @@ export default function App() {
   const welcoming = firstRun && !checkingFirstTask;
   const showRoster = ready && !firstRun && !settingsPage && agents.length > 0;
   const runningResolved = useStore((state) => state.runningKnown || state.runningUnavailable);
+  const runningReadFailed = useStore((state) => state.runningReadFailed);
+  const retryOpening = showRoster && !selected && !runningResolved && runningReadFailed;
+
+  useEffect(() => {
+    if (!retryOpening) return;
+    const timer = window.setTimeout(() => {
+      const state = useStore.getState();
+      if (!state.selected && state.runningReadFailed) void state.refreshRunning();
+    }, RUNNING_RETRY_MS);
+    return () => window.clearTimeout(timer);
+  }, [retryOpening]);
 
   useLayoutEffect(() => {
     if (!ready || !runningResolved || firstRun || settingsPage || selected || agents.length === 0)
@@ -538,6 +551,19 @@ export default function App() {
               focusRequest={inlineQuestion?.agentId === selected ? inlineQuestion : null}
               onEditProfile={(agent) => setEditing(agent)}
             />
+          ) : retryOpening ? (
+            <div className="empty">
+              <p className="empty__body">
+                Guaca couldn't check which agents are working. Choose an agent or try again.
+              </p>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => void useStore.getState().refreshRunning()}
+              >
+                Retry checking running work
+              </button>
+            </div>
           ) : null}
         </div>
 

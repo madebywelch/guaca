@@ -136,6 +136,7 @@ export interface State {
   running: Running[];
   runningKnown: boolean;
   runningUnavailable: boolean;
+  runningReadFailed: boolean;
   refreshRunning: (valid?: () => boolean) => Promise<void>;
   seeOutcomes: (target: { runIds?: RunId[]; before?: number }) => Promise<void>;
   forYou: boolean;
@@ -276,25 +277,31 @@ export const useStore = create<State>((set, get) => ({
   running: [],
   runningKnown: false,
   runningUnavailable: false,
+  runningReadFailed: false,
   async refreshRunning(valid = () => true) {
     const read = ++runningRead;
     runningRequest = (async () => {
       try {
         const running = await api.runningRuns();
         if (valid() && read === runningRead)
-          set({ running, runningKnown: true, runningUnavailable: false });
+          set({
+            running,
+            runningKnown: true,
+            runningUnavailable: false,
+            runningReadFailed: false,
+          });
       } catch (error) {
+        if (!valid() || read !== runningRead) return;
         if (
-          valid() &&
-          read === runningRead &&
           typeof error === "object" &&
           error !== null &&
           "kind" in error &&
           error.kind === "unknownCommand"
         ) {
-          set({ runningUnavailable: true });
+          set({ runningUnavailable: true, runningReadFailed: false });
           return;
         }
+        set({ runningReadFailed: true });
         console.warn(`Running work could not be read: ${errorMessage(error)}`);
       }
     })();

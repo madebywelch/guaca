@@ -8680,6 +8680,12 @@ button.artifacts__version[aria-pressed="true"] {
       display: none;
     }
   }
+
+  @container frame (max-height: 21rem) {
+    .app[data-roster][data-page="agent"] .pane__header {
+      display: none;
+    }
+  }
 }
 
 .topbar {

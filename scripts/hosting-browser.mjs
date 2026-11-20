@@ -359,10 +359,12 @@ try {
     await size(width,400);
     await fits(".composer");
     if (width === 320) {
-      await size(width,355);
-      await fits(".composer__input");
-      await fits(".composer__send");
-      assert.equal(await evaluate("document.querySelector('.roster__compact').getClientRects().length"), 1, "the agent picker is visible with the keyboard up");
+      for (const height of [355, 320]) {
+        await size(width,height);
+        await fits(".composer__input");
+        await fits(".composer__send");
+        assert.equal(await evaluate("document.querySelector('.roster__compact').getClientRects().length"), 1, "the agent picker is visible with the keyboard up");
+      }
     }
     await size(width,844);
     await evaluate("document.querySelector('.composer__input').focus()");
