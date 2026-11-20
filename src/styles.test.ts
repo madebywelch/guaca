@@ -990,7 +990,10 @@ describe("the new window's surfaces", () => {
 
   it("gives the page's tabs, the top bar's buttons and the field's send a finger's room", () => {
     const opener = "@media (max-width: 48rem), (hover: none) and (pointer: coarse) {";
-    const blocks = css.split(opener).slice(1).map((block) => block.slice(0, block.indexOf("\n}\n")));
+    const blocks = css
+      .split(opener)
+      .slice(1)
+      .map((block) => block.slice(0, block.indexOf("\n}\n")));
     expect(blocks.length).toBeGreaterThan(0);
     for (const selector of [
       ".agent-tabs__tab",
@@ -999,15 +1002,17 @@ describe("the new window's surfaces", () => {
       ".desk__open",
       ".composer__attach",
     ]) {
-      const sized = blocks.flatMap((block) => [...block.matchAll(/([^{}]*)\{([^{}]*)\}/g)]).some(
-        (m) =>
-          (m[1] ?? "")
-            .split(",")
-            .map((s) => s.trim())
-            .includes(selector) &&
-          (m[2] ?? "").includes("min-height: var(--control-touch)") &&
-          (m[2] ?? "").includes("min-width: var(--control-touch)"),
-      );
+      const sized = blocks
+        .flatMap((block) => [...block.matchAll(/([^{}]*)\{([^{}]*)\}/g)])
+        .some(
+          (m) =>
+            (m[1] ?? "")
+              .split(",")
+              .map((s) => s.trim())
+              .includes(selector) &&
+            (m[2] ?? "").includes("min-height: var(--control-touch)") &&
+            (m[2] ?? "").includes("min-width: var(--control-touch)"),
+        );
       expect(sized, `${selector} is not sized for touch`).toBe(true);
     }
   });

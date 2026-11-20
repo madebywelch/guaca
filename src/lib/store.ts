@@ -349,29 +349,21 @@ export const useStore = create<State>((set, get) => ({
     const decisionSnapshot = ++decisionRead;
     const rosterSnapshot = ++rosterRead;
     const usageSnapshot = ++usageRead;
-    const [
-      agents,
-      groups,
-      activity,
-      lastActive,
-      settings,
-      capabilities,
-      usage,
-      decisions,
-    ] = await Promise.all([
-      api.listAgents(),
-      api.listGroups(),
-      hosted ? Promise.resolve(null) : api.agentActivity(),
-      api.agentLastActive(),
-      api.getSettings(),
-      api.capabilities(),
-      api.usageSummary(),
-      api.listDecisions(),
-      get().refreshApprovals(valid),
-      get().refreshEscalations(valid),
-      get().refreshOutcomes(valid),
-      get().refreshRunning(valid),
-    ]);
+    const [agents, groups, activity, lastActive, settings, capabilities, usage, decisions] =
+      await Promise.all([
+        api.listAgents(),
+        api.listGroups(),
+        hosted ? Promise.resolve(null) : api.agentActivity(),
+        api.agentLastActive(),
+        api.getSettings(),
+        api.capabilities(),
+        api.usageSummary(),
+        api.listDecisions(),
+        get().refreshApprovals(valid),
+        get().refreshEscalations(valid),
+        get().refreshOutcomes(valid),
+        get().refreshRunning(valid),
+      ]);
     if (!valid()) return;
     set({
       ...(rosterSnapshot === rosterRead ? { agents, groups } : {}),
@@ -389,7 +381,8 @@ export const useStore = create<State>((set, get) => ({
         reads[0] === approvalRequest &&
         reads[1] === escalationRequest &&
         reads[2] === runningRequest
-      ) break;
+      )
+        break;
     }
   },
 
