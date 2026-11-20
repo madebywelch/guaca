@@ -28,6 +28,7 @@ function outcome(runId: string, over: Partial<Outcome> = {}): Outcome {
     status: "done",
     headline: `Headline of ${runId}`,
     noteId: null,
+    colleagues: [],
     needs: [],
     steps: 1,
     startedAt: NOW - 2 * HOUR,

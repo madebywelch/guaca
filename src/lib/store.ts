@@ -133,6 +133,7 @@ export interface State {
   outcomes: Outcome[];
   refreshOutcomes: (valid?: () => boolean) => Promise<void>;
   running: Running[];
+  runningKnown: boolean;
   refreshRunning: (valid?: () => boolean) => Promise<void>;
   seeOutcomes: (target: { runIds?: RunId[]; before?: number }) => Promise<void>;
   forYou: boolean;
@@ -189,8 +190,12 @@ export interface State {
   moveAgent: (id: AgentId, at: Placement) => Promise<void>;
   dropAgent: (id: AgentId, target: DropTarget) => Promise<void>;
   dropGroup: (id: GroupId, onto: GroupId) => Promise<void>;
-  loadChannel: (key: ChannelKey, through?: MessageId, valid?: () => boolean) => Promise<void>;
-  openMessage: (channel: AgentId, message: MessageId) => Promise<void>;
+  loadChannel: (
+    key: ChannelKey,
+    anchor?: { message: MessageId; context?: "result" },
+    valid?: () => boolean,
+  ) => Promise<void>;
+  openMessage: (channel: AgentId, message: MessageId, context?: "result") => Promise<void>;
   clearFocus: () => void;
   openRoutine: (id: RoutineId) => void;
   routineOpened: () => void;
@@ -266,12 +271,13 @@ export const useStore = create<State>((set, get) => ({
   decisionError: null,
   outcomes: [],
   running: [],
+  runningKnown: false,
   async refreshRunning(valid = () => true) {
     const read = ++runningRead;
     runningRequest = (async () => {
       try {
         const running = await api.runningRuns();
-        if (valid() && read === runningRead) set({ running });
+        if (valid() && read === runningRead) set({ running, runningKnown: true });
       } catch (error) {
         console.warn(`Running work could not be read: ${errorMessage(error)}`);
       }
@@ -488,12 +494,24 @@ export const useStore = create<State>((set, get) => ({
     set({ groups: await api.moveGroup(id, before) });
   },
 
-  async loadChannel(key, through, valid = () => true) {
+  async loadChannel(key, anchor, valid = () => true) {
     const read = { arrivals: channelReads.get(key)?.arrivals ?? [] };
     channelReads.set(key, read);
     const before = new Set((get().messages[key] ?? []).map((m) => m.id));
     try {
-      const messages = await api.channelMessages(key, 300, through);
+      let messages = await api.channelMessages(
+        key,
+        300,
+        anchor?.context === "result" ? undefined : anchor?.message,
+      );
+      if (
+        valid() &&
+        channelReads.get(key) === read &&
+        anchor?.context === "result" &&
+        !messages.some((one) => one.id === anchor.message)
+      ) {
+        messages = await api.channelMessages(key, 300, anchor.message);
+      }
       if (!valid() || channelReads.get(key) !== read) return;
       set((state) => {
         let merged = messages;
@@ -507,14 +525,14 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
-  async openMessage(channel, message) {
+  async openMessage(channel, message, context) {
     set((state) => ({
       selected: channel,
       focused: message,
       settingsPage: null,
       railGroup: keptFocus(state, channel),
     }));
-    await get().loadChannel(channel, message);
+    await get().loadChannel(channel, { message, context });
   },
 
   clearFocus() {

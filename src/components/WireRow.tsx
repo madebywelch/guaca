@@ -82,7 +82,6 @@ export function HandoffRow({
   onOpen: (peer: AgentId) => void;
 }) {
   const live = useStore((state) => state.running.some((one) => one.runId === runId));
-  const region = useId();
 
   if (peers.every((summary) => summary.sent === 0)) {
     return <PeerLine peers={peers} channel={channel} rowKey={rowKey} onOpen={onOpen} />;
@@ -103,6 +102,37 @@ export function HandoffRow({
     );
   }
 
+  return (
+    <HandoffRecord
+      peers={peers}
+      runId={runId}
+      channel={channel}
+      rowKey={rowKey}
+      open={open}
+      onToggle={onToggle}
+      onOpen={onOpen}
+    />
+  );
+}
+
+export function HandoffRecord({
+  peers,
+  runId,
+  channel,
+  rowKey,
+  open,
+  onToggle,
+  onOpen,
+}: {
+  peers: PeerSummary[];
+  runId: RunId;
+  channel: string;
+  rowKey: string;
+  open: boolean;
+  onToggle: () => void;
+  onOpen: (peer: AgentId) => void;
+}) {
+  const region = useId();
   const span = spanOf(peers);
   return (
     <div className="handoff">

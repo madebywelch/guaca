@@ -19,7 +19,7 @@ API_KEY = "API key Use OpenRouter or OpenAI, with usage billed to that account."
 WRONG_KEY = "verify-wrong-key"
 HELLO = "Hello. I am ready when you are."
 ROSTER = "Agent conversations"
-STATUSES = ("Idle", "Working", "Has a question", "Has a result", "Needs attention")
+STATUSES = ("Idle", "Paused", "Working", "Has a question", "Has a result", "Needs attention")
 
 
 def roster_entry(accessible_name: str, name: str) -> re.Match | None:
@@ -207,6 +207,11 @@ def scenario_reply(w: World) -> None:
     w.check("the brief reached the agent and its reply is in the conversation",
             HELLO in conversation(w) and "Say hello." in conversation(w),
             observed={"outcomes": first, "said": said(w, AGENT)}, shot=True)
+    w.wait("the reply is drawn as a result", lambda: ui.find("article", f"Result from {AGENT}", exact=False))
+    alone = ui.evaluate(LONE_RESULT)
+    w.check("a lone agent's reply lands as a result card under its name, with no hand-off record",
+            alone == {"name": AGENT, "text": HELLO, "records": 0},
+            observed=alone, shot=True)
 
     write(w, AGENT, "What is two and two?")
     w.wait("the second reply is shown", lambda: "Four." in conversation(w))
@@ -1248,7 +1253,9 @@ def scenario_handoff(w: World) -> None:
     write(w, AGENT, ASK_AGAIN)
     w.wait("the second hand-off is live", lambda: card_text(w).count(LEASE_Q) == 2 and R_SAYS in card_text(w))
     w.wait("the status line offers Stop", lambda: ui.find("button", "Stop"))
+    w.wait("the ongoing hand-off has a start mark", lambda: started_marks(w))
     ui.click("button", "Stop")
+    w.wait("the host records Stop before the held answer can come back", lambda: not started_marks(w))
     never.set()
     ended = settled(w, 3, "the stopped conversation settles")
     w.wait("the stopped hand-off folds", lambda: ui.find(
@@ -2297,11 +2304,16 @@ CAR_RESULT = ("Lease, if you replace the car within three years. Market Research
 def scenario_firstgroup(w: World) -> None:
     researcher = threading.Event()
     analyst = threading.Event()
+    followup = threading.Event()
 
     def script(c: Call) -> Reply | None:
         if c.last_user == "ping":
             return say("pong")
         if c.speaker == LEAD:
+            if c.last_user.endswith("Check the mileage assumption."):
+                if not c.tool_results():
+                    return call("note_progress", note="Checking the mileage assumption")
+                return held(followup, say("The estimate assumes twelve thousand miles a year."))
             if ANALYST_SAYS in c.last_user:
                 return say(CAR_RESULT)
             if RESEARCHER_SAYS in c.last_user:
@@ -2416,9 +2428,21 @@ def scenario_firstgroup(w: World) -> None:
     w.check("beside the conversation, the roster shows the coordinator working",
             bool(ui.find("log", f"Conversation with {LEAD}")), observed=roster_status(w, LEAD), shot=True)
 
+    w.wait("the roster shows all three agents working",
+           lambda: all(roster_status(w, name) == "Working" for name in (LEAD, MARKET, FINANCE)))
     researcher.set()
-    w.wait("the card shows Market Researcher's answer", lambda: RESEARCHER_SAYS in card_text(w))
+    w.wait("Market Researcher has answered", lambda: [m["from"] for m in between(w)].count(MARKET) == 1)
+    open_agent(w, MARKET)
     analyst.set()
+    w.wait("the roster shows the coordinator has a result", lambda: roster_status(w, LEAD) == "Has a result")
+    ui.click("button", "For you")
+    row = w.wait("For you lists the result", lambda: ui.evaluate(FINISHED_RESULT))
+    kept = row["headline"].removesuffix("…")
+    w.check("For you shows who produced the result and who helped, with a preview cut on a boundary",
+            row["byline"] == f"{LEAD}, with {MARKET} and {FINANCE}:"
+            and CAR_RESULT.startswith(kept) and (kept == CAR_RESULT or CAR_RESULT[len(kept)] == " "),
+            observed=row, shot=True)
+    ui.click("button", row["headline"], exact=False)
     w.wait("the result reaches the person", lambda: CAR_RESULT in conversation(w))
     ended = settled(w, 1, "the group's conversation settles")
     w.check("the coordinator comes back with one result after both answered, and the run ends there",
@@ -2428,7 +2452,84 @@ def scenario_firstgroup(w: World) -> None:
             observed={"outcome": ended[-1]["status"], "colleagues": sorted(m["from"] for m in between(w)
                                                                              if m["from"] != LEAD)},
             detail={"modelCalls": len(w.model.calls), "said": said(w, LEAD)}, shot=True)
+    w.wait("the result is drawn as a result", lambda: ui.find("article", f"Result from {LEAD}", exact=False))
+    frame = ui.evaluate(RESULT_FRAME)
+    w.check("the result is a raised card under the coordinator's name, and the brief before it is folded below it in weight",
+            frame["name"] == LEAD and frame["raised"] and frame["text"] == CAR_RESULT
+            and not frame["fillerRaised"] and frame["briefHeight"] < frame["resultHeight"],
+            observed={"name": frame["name"], "raised": frame["raised"], "fillerRaised": frame["fillerRaised"],
+                      "briefShorter": frame["briefHeight"] < frame["resultHeight"]}, detail=frame, shot=True)
+    w.check("the hand-off settles into a record right above the result that says both answered",
+            frame["record"] == f"Asked {MARKET} and {FINANCE}, both answered" and frame["recordAbove"],
+            observed={"record": frame["record"], "above": frame["recordAbove"]})
+    ui.click("button", f"Asked {MARKET} and {FINANCE}, both answered", exact=False)
+    w.wait("the record opens onto both answers", lambda: ANALYST_SAYS in card_text(w))
+    w.check("the record opens onto both answers",
+            RESEARCHER_SAYS in card_text(w) and ANALYST_SAYS in card_text(w),
+            observed={"researcher": RESEARCHER_SAYS in card_text(w), "analyst": ANALYST_SAYS in card_text(w)}, shot=True)
+    folded = ui.evaluate(BRIEF_HEIGHT)
+    ui.click("button", "Show all")
+    w.wait("the brief opens", lambda: ui.find("button", "Show less"))
+    opened = ui.evaluate(BRIEF_HEIGHT)
+    w.check("the person's long brief is folded to three lines and opens whole on request",
+            folded["lines"] <= 3 and opened["lines"] > 3 and opened["text"].startswith("Help me decide"),
+            observed={"folded": folded["lines"] <= 3, "opens": opened["lines"] > 3}, detail={"folded": folded, "opened": opened})
+    write(w, LEAD, "Check the mileage assumption.")
+    w.wait("the follow-up model call starts", lambda: asked(w, "Check the mileage assumption.") == 1)
+    w.wait("the follow-up note appears", lambda: "Checking the mileage assumption" in working_line(w))
+    w.check("the roster shows Working while the earlier result stays in the conversation",
+            roster_status(w, LEAD) == "Working" and bool(ui.find("article", f"Result from {LEAD}", exact=False)),
+            observed=roster_status(w, LEAD), shot=True)
+    followup.set()
+    settled(w, 2, "the second task settles")
     no_unscripted(w)
+
+
+LONE_RESULT = """(() => {
+  const result = [...document.querySelectorAll('.msg--result')].at(-1);
+  return {
+    name: result.querySelector('.msg__name').innerText,
+    text: result.querySelector('.result__body').innerText.trim(),
+    records: document.querySelectorAll('[role=log] .handoff').length,
+  };
+})()"""
+
+RESULT_FRAME = """(() => {
+  const result = [...document.querySelectorAll('.msg--result')].at(-1);
+  const card = result.querySelector('.result');
+  const page = getComputedStyle(document.querySelector('[role=log]')).backgroundColor;
+  const style = getComputedStyle(card);
+  const rows = [...document.querySelectorAll('[role=log] > div[data-message]')];
+  const at = rows.findIndex((row) => row.contains(result));
+  const record = rows[at].querySelector('.handoff__fold');
+  const filler = rows.slice(0, at).map((row) => row.querySelector('.msg:not([data-operator])')).filter(Boolean).at(-1);
+  const brief = document.querySelector('.msg[data-operator] .msg__bubble');
+  return {
+    name: result.querySelector('.msg__name').innerText,
+    text: result.querySelector('.result__body').innerText.trim(),
+    raised: style.backgroundColor !== page && style.boxShadow !== 'none',
+    fillerRaised: filler ? getComputedStyle(filler).boxShadow !== 'none' : null,
+    resultHeight: card.getBoundingClientRect().height,
+    briefHeight: brief.getBoundingClientRect().height,
+    record: record ? record.querySelector('.handoff__line').innerText : null,
+    recordAbove: !!record && !!(record.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING),
+  };
+})()"""
+
+BRIEF_HEIGHT = """(() => {
+  const brief = document.querySelector('.msg[data-operator] .msg__brief');
+  const lead = parseFloat(getComputedStyle(brief.querySelector('p') || brief).lineHeight);
+  return { lines: Math.round(brief.getBoundingClientRect().height / lead), text: brief.innerText.trim() };
+})()"""
+
+FINISHED_RESULT = """(() => {
+  const row = document.querySelector('.for-you .finished-line[title^="Lease,"]');
+  if (!row) return null;
+  return {
+    byline: row.querySelector('.finished-line__who').innerText.trim(),
+    headline: row.title,
+  };
+})()"""
 
 
 SCENARIOS: dict[str, Scenario] = {
@@ -2447,6 +2548,7 @@ SCENARIOS: dict[str, Scenario] = {
         "the right key passes the test and is kept on the Host",
         "Start task opens the conversation while the agent is still answering",
         "the brief reached the agent and its reply is in the conversation",
+        "a lone agent's reply lands as a result card under its name, with no hand-off record",
         "a message written in the composer is answered in the same conversation",
         "the page was told about each reply as it happened",
         "every model call was one the scenario scripted",
@@ -2604,7 +2706,13 @@ SCENARIOS: dict[str, Scenario] = {
         "the coordinator asks both colleagues on its first turn, in one message, and the person sees the card",
         "under the coordinator a status line names both colleagues it waits for",
         "beside the conversation, the roster shows the coordinator working",
+        "For you shows who produced the result and who helped, with a preview cut on a boundary",
         "the coordinator comes back with one result after both answered, and the run ends there",
+        "the result is a raised card under the coordinator's name, and the brief before it is folded below it in weight",
+        "the hand-off settles into a record right above the result that says both answered",
+        "the record opens onto both answers",
+        "the person's long brief is folded to three lines and opens whole on request",
+        "the roster shows Working while the earlier result stays in the conversation",
         "every model call was one the scenario scripted",
     )),
     "newagent": Scenario(scenario_newagent, "A person opens New agent in a 1280 by 820 window, reaches its one "
