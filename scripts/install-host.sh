@@ -12,8 +12,7 @@ install_host() {
   if [ -n "$image" ]; then
     note "pulling the published host for this commit"
     docker pull "$image" || { echo "Could not pull the published host; check Docker and try again." >&2; return 1; }
-    docker tag "$image" "$tag" || { echo "Could not tag the published host; check Docker and try again." >&2; return 1; }
-    export GUACA_BACKEND_IMAGE="$tag"
+    export GUACA_BACKEND_IMAGE="$image"
     return
   fi
   memory="$(docker info --format '{{.MemTotal}}')" || return 1

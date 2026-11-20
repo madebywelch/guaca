@@ -20,6 +20,32 @@ export interface DockerStatus {
   targetImage?: string;
   targetVersion?: string;
   operation?: HostOperation | null;
+  engine?: Engine | null;
+}
+
+export interface Engine {
+  context: string;
+  label: string;
+  action: string | null;
+}
+
+export type Stall =
+  | { kind: "engine"; message: string; engines: Engine[] }
+  | { kind: "choose"; message: string; engines: Engine[] }
+  | { kind: "missing"; message: string }
+  | { kind: "image"; message: string }
+  | { kind: "failed"; message: string };
+
+const STALLS = new Set(["engine", "choose", "missing", "image", "failed"]);
+
+export function asStall(value: unknown): Stall | null {
+  if (!value || typeof value !== "object") return null;
+  const said = value as Record<string, unknown>;
+  if (typeof said.kind !== "string" || !STALLS.has(said.kind) || typeof said.message !== "string")
+    return null;
+  if ((said.kind === "engine" || said.kind === "choose") && !Array.isArray(said.engines))
+    return null;
+  return said as unknown as Stall;
 }
 
 export type UpdateFailure = "refused" | "unanswered";
@@ -58,7 +84,9 @@ export const localHost = {
   status: () => invokeLocal<DockerStatus>("local_host_status"),
   update: (origin?: string) => invokeLocal<Remote>("local_host_update", { origin }),
   start: () => invokeLocal<Remote>("local_host_start"),
-  openDocker: () => invokeLocal<void>("open_docker"),
+  resume: () => invokeLocal<Remote>("local_host_resume"),
+  choose: (context: string) => invokeLocal<Remote>("local_host_choose", { context }),
+  openDocker: (context?: string) => invokeLocal<void>("open_docker", { context: context ?? null }),
 };
 export interface AppSource {
   checkout: string | null;

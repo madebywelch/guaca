@@ -1,4 +1,4 @@
-use crate::host::{Connection, LocalHost, Status};
+use crate::host::{Connection, LocalHost, Stall, Status};
 use crate::tray::{self, Tray};
 use std::sync::Arc;
 use tauri::Manager;
@@ -8,8 +8,19 @@ async fn local_host_status(state: tauri::State<'_, LocalHost>) -> Result<Status,
     Ok(state.status().await)
 }
 #[tauri::command]
-async fn local_host_start(state: tauri::State<'_, LocalHost>) -> Result<Connection, String> {
+async fn local_host_start(state: tauri::State<'_, LocalHost>) -> Result<Connection, Stall> {
     state.start().await
+}
+#[tauri::command]
+async fn local_host_resume(state: tauri::State<'_, LocalHost>) -> Result<Connection, Stall> {
+    state.resume().await
+}
+#[tauri::command]
+async fn local_host_choose(
+    state: tauri::State<'_, LocalHost>,
+    context: String,
+) -> Result<Connection, Stall> {
+    state.choose(&context).await
 }
 #[tauri::command]
 async fn local_host_update(
@@ -38,23 +49,18 @@ async fn app_source(
     Ok(state.status().await)
 }
 #[tauri::command]
-async fn rebuild_app(state: tauri::State<'_, crate::rebuild::Rebuild>) -> Result<(), String> {
-    state.start()
+async fn rebuild_app(
+    state: tauri::State<'_, crate::rebuild::Rebuild>,
+    host: tauri::State<'_, LocalHost>,
+) -> Result<(), String> {
+    state.start(host.engine_endpoint().as_deref())
 }
 #[tauri::command]
-async fn open_docker() -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        let status = tokio::process::Command::new("/usr/bin/open")
-            .args(["-a", "Docker"])
-            .status()
-            .await
-            .map_err(|e| e.to_string())?;
-        if status.success() {
-            return Ok(());
-        }
-    }
-    Err("Open Docker Desktop from your applications, then check again.".into())
+async fn open_docker(
+    state: tauri::State<'_, LocalHost>,
+    context: Option<String>,
+) -> Result<(), String> {
+    state.open_engine(context.as_deref()).await
 }
 #[tauri::command]
 async fn notification_access() -> Option<crate::notifications::Permission> {
@@ -173,10 +179,12 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .on_window_event(hide_rather_than_quit)
         .setup(|app| {
-            let journal = app.path().app_data_dir()?.join("host-update.json");
-            std::fs::create_dir_all(journal.parent().unwrap())?;
+            let data = app.path().app_data_dir()?;
+            std::fs::create_dir_all(&data)?;
             app.manage(
-                LocalHost::new(&app.config().identifier, crate::host::IMAGE).with_journal(journal),
+                LocalHost::new(&app.config().identifier, crate::host::IMAGE)
+                    .with_journal(data.join("host-update.json"))
+                    .with_engine_record(data.join("host-engine.json")),
             );
             app.manage(crate::rebuild::Rebuild::new(
                 crate::rebuild::Origin::this_app(),
@@ -198,6 +206,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             local_host_status,
             local_host_start,
+            local_host_resume,
+            local_host_choose,
             local_host_update,
             local_hosts,
             connect_local_host,
