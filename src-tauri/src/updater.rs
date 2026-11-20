@@ -278,7 +278,8 @@ impl Updater {
                     self.problem.lock().take();
                     return;
                 }
-                Err(error) => {
+                Err(stall) => {
+                    let error = stall.message().to_string();
                     tracing::warn!(%error, "the host did not start; trying again in a minute");
                     *self.problem.lock() = Some(error);
                 }
