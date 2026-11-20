@@ -54,6 +54,10 @@ run_tlc() {
     echo "INVARIANTS"
     echo "    TypeOK"
     for name in $invariants; do echo "    $name"; done
+    if [[ $model == relay && $invariants == "$RELAY_ALL" ]]; then
+      echo "PROPERTIES"
+      echo "    EventuallyTerminal"
+    fi
   } >"$work/$module.cfg"
   cp "formal/$model/$module.tla" "$work/"
   (cd "$work" && java -XX:+UseParallelGC -cp "$JAR" tlc2.TLC -workers 1 -deadlock \

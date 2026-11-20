@@ -240,7 +240,21 @@ Next ==
     \/ Press \/ AppAnswer \/ Lapse
     \/ End \/ Start
 
-Spec == Init /\ [][Next]_vars
+Fair ==
+    /\ WF_vars(Start)
+    /\ WF_vars(Lapse)
+    /\ \A i \in Items :
+        /\ WF_vars(Make(i))
+        /\ WF_vars(Insert(i))
+        /\ WF_vars(Post(i))
+        /\ WF_vars(MarkSent(i))
+        /\ WF_vars(Recover(i))
+        /\ SF_vars(GiveUp(i))
+
+Spec == Init /\ [][Next]_vars /\ Fair
+
+EventuallyTerminal ==
+    \A i \in Items : (i \in Range(made)) ~> (rs[i] \in Terminal)
 
 HeardOnce == \A m \in Said : runs[m] <= 1
 

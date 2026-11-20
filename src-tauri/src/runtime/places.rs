@@ -1,3 +1,4 @@
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -15,8 +16,19 @@ use crate::domain::place::{self, AdapterId, Heard, Outgoing, Said};
 use crate::places::{Adapter, AdapterStatus, Ears, Unheard};
 
 pub(super) struct Attached {
+    adapter: Arc<dyn Adapter>,
     status: Arc<Mutex<AdapterStatus>>,
-    tasks: Vec<AbortHandle>,
+    connection: AbortHandle,
+    relay: Option<AbortHandle>,
+}
+
+impl Drop for Attached {
+    fn drop(&mut self) {
+        self.connection.abort();
+        if let Some(relay) = &self.relay {
+            relay.abort();
+        }
+    }
 }
 
 pub(super) struct LinkCode {
@@ -33,20 +45,35 @@ fn unheard(err: impl std::fmt::Display) -> Unheard {
 impl Runtime {
     pub fn attach_adapter(&self, adapter: Arc<dyn Adapter>) {
         let id = adapter.id();
-        self.detach_adapter(&id);
+        let mut adapters = self.inner.adapters.lock();
+        drop(adapters.remove(&id));
         let status = Arc::new(Mutex::new(AdapterStatus::default()));
         let holding = self.inner.handle.spawn(self.clone().hold(adapter.clone(), status.clone()));
-        let relaying = self.inner.handle.spawn(self.clone().relay(adapter, status.clone()));
-        self.inner.adapters.lock().insert(
-            id,
-            Attached { status, tasks: vec![holding.abort_handle(), relaying.abort_handle()] },
-        );
+        let mut attached =
+            Attached { adapter, status, connection: holding.abort_handle(), relay: None };
+        if self.inner.relay_started.load(Ordering::Acquire) {
+            self.start_relay(&mut attached);
+        }
+        adapters.insert(id, attached);
+    }
+
+    pub(super) fn start_relays(&self) {
+        let mut adapters = self.inner.adapters.lock();
+        self.inner.relay_started.store(true, Ordering::Release);
+        for attached in adapters.values_mut() {
+            self.start_relay(attached);
+        }
+    }
+
+    fn start_relay(&self, attached: &mut Attached) {
+        if attached.relay.is_none() {
+            let task = self.clone().relay(attached.adapter.clone(), attached.status.clone());
+            attached.relay = Some(self.inner.handle.spawn(task).abort_handle());
+        }
     }
 
     pub fn detach_adapter(&self, id: &AdapterId) -> bool {
-        let Some(attached) = self.inner.adapters.lock().remove(id) else { return false };
-        attached.tasks.iter().for_each(AbortHandle::abort);
-        true
+        self.inner.adapters.lock().remove(id).is_some()
     }
 
     pub fn adapter_status(&self, id: &AdapterId) -> Option<AdapterStatus> {

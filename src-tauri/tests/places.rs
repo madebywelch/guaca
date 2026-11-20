@@ -263,6 +263,8 @@ struct Setup {
 }
 
 async fn attach(h: &Harness, world: &Arc<World>) {
+    let started = h.runtime.start_all().unwrap();
+    h.runtime.pick_up(&started, Default::default());
     let before = world.runs.load(Ordering::SeqCst);
     h.runtime.attach_adapter(Arc::new(Fake(world.clone())));
     h.wait_until("the adapter to connect", |_| world.runs.load(Ordering::SeqCst) > before).await;

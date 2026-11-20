@@ -414,6 +414,7 @@ impl Runtime {
             envelopes.push(put.envelope);
         }
         self.queue_all(envelopes);
+        self.start_relays();
         if messages > 0 {
             tracing::info!(messages, conversations, "picked up the work the last host put down");
         }
