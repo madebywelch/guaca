@@ -3482,6 +3482,7 @@ mod tests {
             status,
             headline: headline.into(),
             note_id: None,
+            colleagues: Vec::new(),
             needs: Vec::new(),
             steps: 1,
             started_at: finished_at - 60_000,

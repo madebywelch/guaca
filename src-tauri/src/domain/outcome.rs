@@ -134,6 +134,7 @@ pub struct Outcome {
     pub status: Status,
     pub headline: String,
     pub note_id: Option<MessageId>,
+    pub colleagues: Vec<AgentId>,
     pub needs: Vec<Need>,
     pub steps: u32,
     pub started_at: i64,
@@ -141,8 +142,40 @@ pub struct Outcome {
     pub seen_at: Option<i64>,
 }
 
+pub const ELLIPSIS: char = '…';
+
 pub fn headline(note: &str) -> Option<String> {
-    first_line(note).map(|words| cut_to(&words, HEADLINE_MAX).0)
+    first_line(note).map(|words| shorten(&words))
+}
+
+fn shorten(line: &str) -> String {
+    let line = line.trim();
+    if line.chars().count() <= HEADLINE_MAX {
+        return line.to_string();
+    }
+    if let Some(end) = sentence_end(line) {
+        return line[..end].to_string();
+    }
+    format!("{}{ELLIPSIS}", cut_to(line, HEADLINE_MAX - 1).0)
+}
+
+fn sentence_end(line: &str) -> Option<usize> {
+    let mut last = None;
+    let mut chars = line.char_indices().enumerate().peekable();
+    while let Some((count, (at, c))) = chars.next() {
+        if count >= HEADLINE_MAX {
+            break;
+        }
+        let closes = match c {
+            '.' | '!' | '?' => chars.peek().is_some_and(|(_, (_, next))| next.is_whitespace()),
+            '。' | '！' | '？' => true,
+            _ => false,
+        };
+        if closes && count >= HEADLINE_MAX / 2 {
+            last = Some(at + c.len_utf8());
+        }
+    }
+    last
 }
 
 pub fn first_line(note: &str) -> Option<String> {
@@ -182,7 +215,7 @@ pub fn headline_of(note: &Envelope) -> Option<String> {
         2 => format!("Sent {first} and 1 other file."),
         n => format!("Sent {first} and {} other files.", n - 1),
     };
-    Some(cut_to(&line, HEADLINE_MAX).0)
+    Some(shorten(&line))
 }
 
 pub fn first_sentence(text: &str) -> String {
@@ -344,7 +377,7 @@ mod tests {
         let line = first_line(&format!("\n> [!NOTE]\n> {long}\n\nDetail.")).unwrap();
         assert!(line.starts_with("Done: every feed checked"), "{line}");
         assert!(line.chars().count() > HEADLINE_MAX, "{}", line.chars().count());
-        assert_eq!(headline(&long).unwrap(), cut_to(&line, HEADLINE_MAX).0);
+        assert_eq!(headline(&long).unwrap(), shorten(&line));
         assert_eq!(first_line("```\nonly code\n```"), None);
     }
 
@@ -422,16 +455,45 @@ mod tests {
         assert!(line.chars().count() > HEADLINE_MAX);
         let cut = headline(line).unwrap();
         assert!(cut.chars().count() <= HEADLINE_MAX, "{} characters", cut.chars().count());
-        assert!(line.starts_with(&cut));
-        assert_eq!(line[cut.len()..].chars().next(), Some(' '), "cut inside a word: {cut:?}");
+        let kept = cut.strip_suffix(ELLIPSIS).expect("a cut headline ends in an ellipsis");
+        assert!(line.starts_with(kept));
+        assert_eq!(line[kept.len()..].chars().next(), Some(' '), "cut inside a word: {cut:?}");
     }
 
     #[test]
-    fn a_language_without_spaces_is_cut_on_a_character() {
-        let line = "毎朝のダイジェストを十二人に送信しました。".repeat(12);
+    fn a_long_first_line_is_cut_after_its_last_whole_sentence_when_that_keeps_most_of_it() {
+        let line = "Lease, if you replace the car within three years and keep it under twelve thousand miles a year. Market Researcher and Financial Analyst agree on the three-year cost and disagree on resale, which matters only past year four.";
+        assert!(line.chars().count() > HEADLINE_MAX);
+        let cut = headline(line).unwrap();
+        assert!(cut.ends_with("a year."), "{cut:?}");
+        assert!(line.starts_with(&cut));
+    }
+
+    #[test]
+    fn a_short_first_sentence_is_not_where_a_long_line_is_cut() {
+        let line = "Lease, if you replace the car within three years. Market Researcher and Financial Analyst agree on the three-year cost and disagree on resale, which matters only past year four.";
+        let cut = headline(line).unwrap();
+        let kept = cut.strip_suffix(ELLIPSIS).expect("a cut headline ends in an ellipsis");
+        assert!(kept.contains("Market Researcher"), "{cut:?}");
+        assert_eq!(line[kept.len()..].chars().next(), Some(' '), "cut inside a word: {cut:?}");
+        assert!(cut.chars().count() <= HEADLINE_MAX);
+    }
+
+    #[test]
+    fn a_line_that_fits_is_never_marked_as_cut() {
+        let line = "Lease, if you replace the car within three years.";
+        assert_eq!(headline(line).as_deref(), Some(line));
+    }
+
+    #[test]
+    fn a_language_without_spaces_is_cut_on_a_sentence_or_a_character() {
+        let sentences = "毎朝のダイジェストを十二人に送信しました。".repeat(12);
+        let cut = headline(&sentences).unwrap();
+        assert!(cut.ends_with('。') && sentences.starts_with(&cut), "{cut:?}");
+        let line = "毎朝のダイジェストを十二人に送信しました".repeat(12);
         let cut = headline(&line).unwrap();
         assert_eq!(cut.chars().count(), HEADLINE_MAX);
-        assert!(line.starts_with(&cut));
+        assert!(line.starts_with(cut.strip_suffix(ELLIPSIS).unwrap()));
     }
 
     #[test]

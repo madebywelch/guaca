@@ -1073,6 +1073,7 @@ export interface Outcome {
   status: OutcomeStatus;
   headline: string;
   noteId: MessageId | null;
+  colleagues: AgentId[];
   needs: OutcomeNeed[];
   steps: number;
   startedAt: number;

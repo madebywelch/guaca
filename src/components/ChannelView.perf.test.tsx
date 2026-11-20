@@ -16,6 +16,10 @@ vi.mock("./MessageItem", () => ({
     rendersOfMessages += 1;
     return <div />;
   },
+  ResultItem: () => {
+    rendersOfMessages += 1;
+    return <div />;
+  },
   StreamingMessage: ({ text }: { text: string }) => {
     rendersOfBubbles += 1;
     latestBubble = text;

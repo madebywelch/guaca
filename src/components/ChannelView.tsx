@@ -19,7 +19,7 @@ import {
   tallyTrail,
   trailStep,
 } from "../lib/trail";
-import { type Row, rowStandsFor, toPeer, transcriptRows } from "../lib/transcript";
+import { type Row, rowStandsFor, toPeer, transcriptRows, withResults } from "../lib/transcript";
 import {
   type Activity,
   type AgentCard,
@@ -34,7 +34,7 @@ import { AgentPanel, type AgentSection } from "./AgentPanel";
 import { Composer } from "./Composer";
 import { Answering } from "./HtmlArtifact";
 import { Icon } from "./Icon";
-import { MessageItem, StreamingMessage, WhenRow } from "./MessageItem";
+import { MessageItem, ResultItem, StreamingMessage, WhenRow } from "./MessageItem";
 import { PairThread } from "./PairThread";
 import { TrailRow } from "./Trail";
 import { TurnWork } from "./TurnWork";
@@ -106,6 +106,13 @@ export function ChannelView({
   useLayoutEffect(pin, [pin, channel, reading]);
 
   const rows = useMemo(() => transcriptRows(messages ?? [], lookups), [messages, lookups]);
+  const runs = useStore((s) =>
+    s.runningKnown ? s.running.map((one) => one.runId).join(" ") : null,
+  );
+  const shown = useMemo(
+    () => (runs === null ? rows : withResults(rows, new Set(runs.split(" ") as RunId[]))),
+    [rows, runs],
+  );
   const asked = useMemo((): Asked | null => {
     let last: Row | undefined;
     for (const row of rows) if (row.kind === "peers") last = row;
@@ -224,15 +231,25 @@ export function ChannelView({
                 <p className="empty__body">No messages with {agent?.name ?? "this agent"} yet.</p>
               </div>
             ) : (
-              rows.map((row) => {
+              shown.map((row) => {
                 const stands = rowStandsFor(row);
+                const toggle = (key: string) =>
+                  setUnfolded((held) => {
+                    const next = new Set(held);
+                    if (!next.delete(key)) next.add(key);
+                    return next;
+                  });
                 return (
                   <div
                     key={row.key}
                     data-message={stands.join(" ")}
                     data-found={focused && stands.includes(focused) ? "true" : undefined}
                     onClickCapture={(event) => {
-                      if (!agent || row.kind !== "peers" || !(event.target instanceof Element))
+                      if (
+                        !agent ||
+                        (row.kind !== "peers" && row.kind !== "result") ||
+                        !(event.target instanceof Element)
+                      )
                         return;
                       const button = event.target.closest<HTMLButtonElement>(
                         "button.handoff__name, button.footnote__send",
@@ -247,13 +264,16 @@ export function ChannelView({
                         channel={channel}
                         rowKey={row.key}
                         open={unfolded.has(row.key)}
-                        onToggle={() =>
-                          setUnfolded((held) => {
-                            const next = new Set(held);
-                            if (!next.delete(row.key)) next.add(row.key);
-                            return next;
-                          })
-                        }
+                        onToggle={() => toggle(row.key)}
+                        onOpen={setReading}
+                      />
+                    ) : row.kind === "result" ? (
+                      <ResultItem
+                        row={row}
+                        lookups={lookups}
+                        channel={channel}
+                        open={row.handoff !== null && unfolded.has(row.handoff.key)}
+                        onToggle={() => row.handoff && toggle(row.handoff.key)}
                         onOpen={setReading}
                       />
                     ) : row.kind === "refused" ? (

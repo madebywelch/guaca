@@ -102,6 +102,7 @@ export function anOutcome(over: Partial<Outcome> & Pick<Outcome, "agentId">): Ou
     status: "done",
     headline: "Done.",
     noteId: null,
+    colleagues: [],
     needs: [],
     steps: 1,
     startedAt: 0,

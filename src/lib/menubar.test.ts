@@ -128,6 +128,7 @@ describe("presenceOf", () => {
       status: "done",
       headline: "Done.",
       noteId: null,
+      colleagues: [],
       needs: [],
       steps: 1,
       startedAt: 0,

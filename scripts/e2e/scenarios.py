@@ -182,6 +182,11 @@ def scenario_reply(w: World) -> None:
     w.check("the brief reached the agent and its reply is in the conversation",
             HELLO in conversation(w) and "Say hello." in conversation(w),
             observed={"outcomes": first, "said": said(w, AGENT)}, shot=True)
+    w.wait("the reply is drawn as a result", lambda: ui.find("article", f"Result from {AGENT}", exact=False))
+    alone = ui.evaluate(LONE_RESULT)
+    w.check("a lone agent's reply lands as a result card under its name, with no hand-off record",
+            alone == {"name": AGENT, "text": HELLO, "records": 0},
+            observed=alone, shot=True)
 
     write(w, AGENT, "What is two and two?")
     w.wait("the second reply is shown", lambda: "Four." in conversation(w))
@@ -2263,11 +2268,24 @@ def scenario_firstgroup(w: World) -> None:
     w.wait("Today lists the coordinator's conversation as running", lambda: LEAD in running_text(w))
     w.check("behind the conversation, Today shows the group's work as running",
             LEAD in running_text(w), observed=LEAD in running_text(w), shot=True)
-    open_agent(w, LEAD)
-
+    working = f"{LEAD}, {FINANCE} and {MARKET} are working."
+    w.wait("the lead names the whole group at work", lambda: ui.evaluate(LARGEST_ON_TODAY)["text"] == working)
+    lead = ui.evaluate(LARGEST_ON_TODAY)
+    w.check("while the group works and nothing waits, the largest words on Today say who is working",
+            lead["text"] == working, observed=lead["text"], detail=lead, shot=True)
     researcher.set()
-    w.wait("the card shows Market Researcher's answer", lambda: RESEARCHER_SAYS in card_text(w))
+    w.wait("Market Researcher has answered", lambda: [m["from"] for m in between(w)].count(MARKET) == 1)
     analyst.set()
+    w.wait("Today lists the result", lambda: ui.evaluate(TODAY_RESULT))
+    row = ui.evaluate(TODAY_RESULT)
+    kept = row["headline"].removesuffix("…")
+    w.check("on Today the result names who produced it and who helped, is cut on a boundary, and offers Open",
+            row["byline"].startswith(f"{LEAD}, with {MARKET} and {FINANCE},")
+            and CAR_RESULT.startswith(kept) and (kept == CAR_RESULT or CAR_RESULT[len(kept)] == " ")
+            and row["open"] == "Open",
+            observed={"byline": re.sub(r"\d{1,2}:\d{2}.*$", "TIME", row["byline"]), "headline": row["headline"],
+                      "open": row["open"]}, shot=True)
+    open_agent(w, LEAD)
     w.wait("the result reaches the person", lambda: CAR_RESULT in conversation(w))
     ended = settled(w, 1, "the group's conversation settles")
     w.check("the coordinator comes back with one result after both answered, and the run ends there",
@@ -2277,7 +2295,88 @@ def scenario_firstgroup(w: World) -> None:
             observed={"outcome": ended[-1]["status"], "colleagues": sorted(m["from"] for m in between(w)
                                                                              if m["from"] != LEAD)},
             detail={"modelCalls": len(w.model.calls), "said": said(w, LEAD)}, shot=True)
+    w.wait("the result is drawn as a result", lambda: ui.find("article", f"Result from {LEAD}", exact=False))
+    frame = ui.evaluate(RESULT_FRAME)
+    w.check("the result is a raised card under the coordinator's name, and the brief before it is folded below it in weight",
+            frame["name"] == LEAD and frame["raised"] and frame["text"] == CAR_RESULT
+            and not frame["fillerRaised"] and frame["briefHeight"] < frame["resultHeight"],
+            observed={"name": frame["name"], "raised": frame["raised"], "fillerRaised": frame["fillerRaised"],
+                      "briefShorter": frame["briefHeight"] < frame["resultHeight"]}, detail=frame, shot=True)
+    w.check("the hand-off settles into a record right above the result that says both answered",
+            frame["record"] == f"Asked {MARKET} and {FINANCE}, both answered" and frame["recordAbove"],
+            observed={"record": frame["record"], "above": frame["recordAbove"]})
+    ui.click("button", f"Asked {MARKET} and {FINANCE}, both answered", exact=False)
+    w.wait("the record opens onto both answers", lambda: ANALYST_SAYS in card_text(w))
+    w.check("the record opens onto both answers",
+            RESEARCHER_SAYS in card_text(w) and ANALYST_SAYS in card_text(w),
+            observed={"researcher": RESEARCHER_SAYS in card_text(w), "analyst": ANALYST_SAYS in card_text(w)}, shot=True)
+    folded = ui.evaluate(BRIEF_HEIGHT)
+    ui.click("button", "Show all")
+    w.wait("the brief opens", lambda: ui.find("button", "Show less"))
+    opened = ui.evaluate(BRIEF_HEIGHT)
+    w.check("the person's long brief is folded to three lines and opens whole on request",
+            folded["lines"] <= 3 and opened["lines"] > 3 and opened["text"].startswith("Help me decide"),
+            observed={"folded": folded["lines"] <= 3, "opens": opened["lines"] > 3}, detail={"folded": folded, "opened": opened})
     no_unscripted(w)
+
+
+LONE_RESULT = """(() => {
+  const result = [...document.querySelectorAll('.msg--result')].at(-1);
+  return {
+    name: result.querySelector('.msg__name').innerText,
+    text: result.querySelector('.result__body').innerText.trim(),
+    records: document.querySelectorAll('[role=log] .handoff').length,
+  };
+})()"""
+
+LARGEST_ON_TODAY = """(() => {
+  const home = document.querySelector('.home');
+  let best = { size: 0, text: '' };
+  for (const el of home.querySelectorAll('h1, h2, h3, p, span, strong, button')) {
+    if (![...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim())) continue;
+    const size = parseFloat(getComputedStyle(el).fontSize);
+    if (size > best.size) best = { size, text: el.innerText.trim() };
+  }
+  return best;
+})()"""
+
+RESULT_FRAME = """(() => {
+  const result = [...document.querySelectorAll('.msg--result')].at(-1);
+  const card = result.querySelector('.result');
+  const page = getComputedStyle(document.querySelector('[role=log]')).backgroundColor;
+  const style = getComputedStyle(card);
+  const rows = [...document.querySelectorAll('[role=log] > div[data-message]')];
+  const at = rows.findIndex((row) => row.contains(result));
+  const record = rows[at].querySelector('.handoff__fold');
+  const filler = rows.slice(0, at).map((row) => row.querySelector('.msg:not([data-operator])')).filter(Boolean).at(-1);
+  const brief = document.querySelector('.msg[data-operator] .msg__bubble');
+  return {
+    name: result.querySelector('.msg__name').innerText,
+    text: result.querySelector('.result__body').innerText.trim(),
+    raised: style.backgroundColor !== page && style.boxShadow !== 'none',
+    fillerRaised: filler ? getComputedStyle(filler).boxShadow !== 'none' : null,
+    resultHeight: card.getBoundingClientRect().height,
+    briefHeight: brief.getBoundingClientRect().height,
+    record: record ? record.querySelector('.handoff__line').innerText : null,
+    recordAbove: !!record && !!(record.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING),
+  };
+})()"""
+
+BRIEF_HEIGHT = """(() => {
+  const brief = document.querySelector('.msg[data-operator] .msg__brief');
+  const lead = parseFloat(getComputedStyle(brief.querySelector('p') || brief).lineHeight);
+  return { lines: Math.round(brief.getBoundingClientRect().height / lead), text: brief.innerText.trim() };
+})()"""
+
+TODAY_RESULT = """(() => {
+  const row = document.querySelector('.home__finished .home__row');
+  if (!row) return null;
+  return {
+    byline: row.querySelector('.home__meta').innerText.trim(),
+    headline: row.querySelector('.home__headline').innerText.trim(),
+    open: row.querySelector('.home__open')?.innerText.trim() ?? null,
+  };
+})()"""
 
 
 SCENARIOS: dict[str, Scenario] = {
@@ -2296,6 +2395,7 @@ SCENARIOS: dict[str, Scenario] = {
         "the right key passes the test and is kept on the Host",
         "Start task opens the conversation while the agent is still answering",
         "the brief reached the agent and its reply is in the conversation",
+        "a lone agent's reply lands as a result card under its name, with no hand-off record",
         "a message written in the field is answered in the same conversation",
         "the page was told about each reply as it happened",
         "every model call was one the scenario scripted",
@@ -2452,7 +2552,13 @@ SCENARIOS: dict[str, Scenario] = {
         "the coordinator asks both colleagues on its first turn, in one message, and the person sees the card",
         "under the coordinator a status line names both colleagues it waits for",
         "behind the conversation, Today shows the group's work as running",
+        "while the group works and nothing waits, the largest words on Today say who is working",
+        "on Today the result names who produced it and who helped, is cut on a boundary, and offers Open",
         "the coordinator comes back with one result after both answered, and the run ends there",
+        "the result is a raised card under the coordinator's name, and the brief before it is folded below it in weight",
+        "the hand-off settles into a record right above the result that says both answered",
+        "the record opens onto both answers",
+        "the person's long brief is folded to three lines and opens whole on request",
         "every model call was one the scenario scripted",
     )),
     "newagent": Scenario(scenario_newagent, "A person opens New agent in a 1280 by 820 window, reaches its one "

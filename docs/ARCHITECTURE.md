@@ -575,8 +575,15 @@ holds:
   otherwise. `nothing_new` exists for the check that found nothing, and nothing
   writes it until the prompt lets an agent say so.
 - **The headline** is the first line with words in it of the owner's newest note
-  to the operator, its Markdown taken off and cut on a word at 160 characters.
-  A failure takes the first sentence of its notice instead. No model call
+  to the operator, its Markdown taken off. A line over 160 characters is cut
+  after its last whole sentence when that keeps at least half of it, and
+  otherwise on a word with an ellipsis, so a cut headline never stops mid-word
+  and never reads as complete when it is not. A failure takes the first
+  sentence of its notice instead.
+- **The colleagues** are the agents who answered the owner inside the run, in
+  the order they first did, read from the run's messages each time the row is
+  read rather than stored, so Today can say who helped without a column that
+  could disagree with the transcript. No model call
   writes it: the agent already wrote the line, and paying again to summarize it
   doubles the cost of every finished conversation.
 

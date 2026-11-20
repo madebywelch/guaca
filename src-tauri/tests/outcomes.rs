@@ -75,6 +75,7 @@ async fn a_routine_run_ends_in_the_first_line_of_its_note() {
     assert_eq!(outcome.headline, "Sent the digest to 12 people.");
     assert_eq!(outcome.note_id, Some(note.id), "a click opens the note it came from");
     assert_eq!(outcome.needs, vec![]);
+    assert_eq!(outcome.colleagues, vec![], "a run nobody helped with names no colleague");
     assert_eq!(outcome.steps, 1);
     assert!(outcome.started_at <= outcome.finished_at);
     assert_eq!(outcome.seen_at, None);
@@ -131,6 +132,11 @@ async fn a_delegation_is_one_outcome_and_it_is_the_coordinators() {
     assert_eq!(outcome.trigger_ref, None);
     assert_eq!(outcome.status, Status::Done);
     assert_eq!(outcome.headline, "Venue and Caterer are both booked for Friday.");
+    let mut helped = outcome.colleagues.clone();
+    helped.sort();
+    let mut answered = vec![h.id("Venue"), h.id("Caterer")];
+    answered.sort();
+    assert_eq!(helped, answered, "the colleagues who answered are named on the result");
     assert!(outcome.steps >= 4, "the peers' calls are on the run's bill: {}", outcome.steps);
 }
 

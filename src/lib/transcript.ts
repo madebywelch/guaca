@@ -55,7 +55,13 @@ export type Row =
       body: string;
       reason: string;
     }
-  | { kind: "when"; key: string; at: number };
+  | { kind: "when"; key: string; at: number }
+  | {
+      kind: "result";
+      key: string;
+      message: Envelope;
+      handoff: Extract<Row, { kind: "peers" }> | null;
+    };
 
 const CONTINUATION_MS = 4 * 60 * 1000;
 
@@ -255,8 +261,81 @@ export function transcriptRows(messages: Envelope[], lookups: Lookups): Row[] {
   return rows;
 }
 
+function toPerson(row: Row): row is Extract<Row, { kind: "message" }> {
+  return (
+    row.kind === "message" && row.message.from.kind === "agent" && row.message.to.kind === "human"
+  );
+}
+
+function answers(row: Extract<Row, { kind: "message" }>): boolean {
+  const { parts } = row.message;
+  return parts.length > 0 && parts.every((part) => part.type === "text" || part.type === "file");
+}
+
+function joined(bursts: Extract<Row, { kind: "peers" }>[]): Extract<Row, { kind: "peers" }> | null {
+  const [first, ...rest] = bursts;
+  if (!first) return null;
+  const peers = first.peers.map((one) => ({ ...one }));
+  for (const burst of rest) {
+    for (const one of burst.peers) {
+      const held = peers.find((entry) => entry.peer.id === one.peer.id);
+      if (!held) {
+        peers.push({ ...one });
+        continue;
+      }
+      held.sent += one.sent;
+      held.received += one.received;
+      held.gist ??= one.gist;
+      if (held.asked === null) {
+        held.asked = one.asked;
+        held.askedAt = one.askedAt;
+      }
+      if (one.answer !== null) {
+        held.answer = one.answer;
+        held.answeredAt = one.answeredAt;
+      }
+    }
+  }
+  return { ...first, peers, folded: bursts.flatMap((burst) => burst.folded) };
+}
+
+export function withResults(rows: Row[], running: ReadonlySet<RunId>): Row[] {
+  const last = new Map<RunId, Extract<Row, { kind: "message" }>>();
+  for (const row of rows) {
+    if (toPerson(row) && !running.has(row.message.runId)) last.set(row.message.runId, row);
+  }
+  const results = new Map<RunId, string>();
+  for (const [run, row] of last) {
+    if (answers(row)) results.set(run, row.key);
+  }
+  if (results.size === 0) return rows;
+
+  const shown: Row[] = [];
+  const held = new Map<RunId, Extract<Row, { kind: "peers" }>[]>();
+  for (const row of rows) {
+    if (row.kind === "peers" && results.has(row.runId) && row.peers.some((one) => one.sent > 0)) {
+      held.set(row.runId, [...(held.get(row.runId) ?? []), row]);
+      continue;
+    }
+    if (row.kind === "message" && results.get(row.message.runId) === row.key) {
+      shown.push({
+        kind: "result",
+        key: row.key,
+        message: row.message,
+        handoff: joined(held.get(row.message.runId) ?? []),
+      });
+      results.delete(row.message.runId);
+      held.delete(row.message.runId);
+      continue;
+    }
+    shown.push(row);
+  }
+  return shown;
+}
+
 export function rowStandsFor(row: Row): MessageId[] {
   if (row.kind === "peers") return row.folded;
+  if (row.kind === "result") return [row.message.id, ...(row.handoff?.folded ?? [])];
   if (row.kind === "refused" || row.kind === "when") return [];
   return [row.message.id];
 }

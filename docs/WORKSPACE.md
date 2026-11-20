@@ -46,7 +46,22 @@ cut by their rule.
 `--sunken`, so a bubble of that fill would vanish into it. Its words start on
 the same edge as an agent's body.
 It has no head: the bubble is the one shape on the page that is yours, and its
-article is named "You" with the time for a screen reader.
+article is named "You" with the time for a screen reader. A long one is
+clamped to three lines with Show all under it: the person already knows what
+they asked, and an audit found a 150px brief was the heaviest thing on screen
+when the result landed. The clamp is measured, not guessed from a character
+count, so Show all appears exactly when lines are hidden.
+
+**A conversation's result is a card.** Once the host no longer lists the run,
+the last thing its agent said to the person (text or files, never a failure
+notice) is drawn by `ResultItem` on `--raised` with a ring and `--lift-1`,
+under the agent's face, name and time, and named "Result from" that agent for a
+screen reader. Lines the agent said on the way, such as "I asked them both.",
+stay plain, so the result is the one raised thing in the column. The words are
+the agent's, drawn by the same Markdown; only the frame is ours. Which row is
+the result is decided by `withResults` in `lib/transcript.ts` from the
+transcript and the host's running list, so it agrees with the outcome's note
+without asking for it.
 
 **Tool steps are one quiet line.** See the next section. **A hand-off is shown,
 not footnoted.** When an agent asks colleagues, `HandoffRow` draws a card: each
@@ -57,7 +72,10 @@ from `lib/handoff.ts`, pure functions over the burst `lib/transcript.ts`
 folds. The card is live while the host lists the run as running and a
 colleague still owes an answer; after that it folds to one line, such as
 "Asked Researcher and Analyst, both answered", with the time from the first
-question to the last answer, and opens again on a press. Which rows are open is
+question to the last answer, and opens again on a press. When the run has a
+result, that line moves from where the question was asked to directly above
+the result card, so the record of who was asked and who answered sits on what
+they produced instead of folding away under the brief. Which rows are open is
 kept by `ChannelView`, so reading a pair's thread and coming back does not
 fold the card under the button that opened it. A colleague who wrote without
 being asked is a line naming them, which opens the pair's thread in one press.
@@ -1284,8 +1302,17 @@ dropping it. The same holds for answers given from the command menu. For you
 and the menu bar send at once and offer no Undo.
 
 With none of those it is one sentence, "Nothing needs
-you.", with what is running listed under it, or who is still working when
-nothing is, and one way back into what already happened today. That is the
+you.", with who is still working when nothing runs, and one way back into what
+already happened today. While a conversation runs and nothing waits, the title
+line says who is working instead ("Chief of Staff, Financial Analyst and
+Market Researcher are working.", or a count past three names), with "Nothing
+needs you." under it and the Running list after: the largest words on the
+screen describe what is happening, not what is not.
+
+A Finished row names who produced the result and who helped ("Chief of Staff,
+with Market Researcher and Financial Analyst"), from the outcome's colleagues,
+and ends in Open. Its headline is cut by the host on a sentence or a word, with
+an ellipsis when cut mid-sentence. That is the
 screen seen most, and it is the one that has to be calm.
 
 The line above the composer carries the same clock for the conversation the

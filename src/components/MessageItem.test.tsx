@@ -1,9 +1,9 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { Lookups } from "../lib/transcript";
+import type { Lookups, PeerSummary, Row } from "../lib/transcript";
 import type { AgentCard, Envelope, Part } from "../lib/types";
-import { MessageItem } from "./MessageItem";
+import { MessageItem, ResultItem } from "./MessageItem";
 
 const retryTurn = vi.fn<(agentId: string, messageId: string) => Promise<string>>(
   async () => "run-2",
@@ -712,5 +712,139 @@ describe("an overnight tidy", () => {
     const time = (container: HTMLElement) => container.querySelector(".wire__meta")?.textContent;
     expect(time(ran)).toBeTruthy();
     expect(time(ran)).toBe(time(fired));
+  });
+});
+
+describe("your brief once it is sent", () => {
+  const brief = "Compare buying and leasing the next car. ".repeat(20);
+
+  function overflowing(by: number) {
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(100 + by);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(100);
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("offers nothing to open when it fits in its few lines", () => {
+    overflowing(0);
+    render(
+      <MessageItem
+        message={envelope({ parts: [{ type: "text", text: "Hi." }] })}
+        lookups={lookups}
+        continued={false}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Show all" })).toBeNull();
+  });
+
+  it("folds to a few lines and opens on request when it is longer", () => {
+    overflowing(80);
+    const { container } = render(
+      <MessageItem
+        message={envelope({ parts: [{ type: "text", text: brief }] })}
+        lookups={lookups}
+        continued={false}
+      />,
+    );
+    const folded = container.querySelector(".msg__brief");
+    expect(folded?.getAttribute("data-folded")).toBe("true");
+    const more = screen.getByRole("button", { name: "Show all" });
+    expect(more.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(more);
+    expect(folded?.hasAttribute("data-folded")).toBe(false);
+    expect(screen.getByRole("button", { name: "Show less" }).getAttribute("aria-expanded")).toBe(
+      "true",
+    );
+    expect(folded?.textContent).toBe(brief.trim());
+  });
+
+  it("never folds what an agent wrote", () => {
+    overflowing(80);
+    render(
+      <MessageItem
+        message={envelope({
+          from: { kind: "agent", id: "manager" },
+          to: { kind: "human" },
+          parts: [{ type: "text", text: brief }],
+        })}
+        lookups={lookups}
+        continued={false}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Show all" })).toBeNull();
+  });
+});
+
+describe("the result a conversation ends in", () => {
+  const answer = "Lease, if you replace the car within **three years**.";
+  const message = envelope({
+    id: "m9",
+    from: { kind: "agent", id: "manager" },
+    to: { kind: "human" },
+    parts: [{ type: "text", text: answer }],
+  });
+  const chef: PeerSummary = {
+    peer: { id: "chef", name: "Chef", color: "#c7d96b", avatar: "plain" },
+    agentId: "chef",
+    sent: 1,
+    received: 1,
+    gist: null,
+    asked: "Which is cheaper?",
+    askedAt: 1_000,
+    answer: "Leasing.",
+    answeredAt: 2_000,
+  };
+  const handoff: Extract<Row, { kind: "peers" }> = {
+    kind: "peers",
+    key: "peers:1",
+    runId: "r1",
+    peers: [chef],
+    folded: [],
+    at: 1_000,
+  };
+
+  function draw(row: Extract<Row, { kind: "result" }>, onToggle = vi.fn()) {
+    return render(
+      <ResultItem
+        row={row}
+        lookups={lookups}
+        channel="manager"
+        open={false}
+        onToggle={onToggle}
+        onOpen={vi.fn()}
+      />,
+    );
+  }
+
+  it("is its own card, named for the agent that produced it", () => {
+    const { container } = draw({ kind: "result", key: "m9", message, handoff: null });
+    const result = screen.getByRole("article", { name: /^Result from Manager, / });
+    expect(result.querySelector(".result")).toBeTruthy();
+    expect(result.querySelector(".msg__name")?.textContent).toBe("Manager");
+    expect(container.querySelector(".msg__body")).toBeNull();
+  });
+
+  it("keeps the agent's words exactly as written", () => {
+    draw({ kind: "result", key: "m9", message, handoff: null });
+    const result = screen.getByRole("article", { name: /^Result from/ });
+    expect(result.querySelector(".result__body")?.textContent).toBe(
+      "Lease, if you replace the car within three years.",
+    );
+    expect(result.querySelector(".result__body strong")?.textContent).toBe("three years");
+  });
+
+  it("carries the hand-off above it as a record that says who answered, and opens it", () => {
+    const onToggle = vi.fn();
+    const { container } = draw({ kind: "result", key: "m9", message, handoff }, onToggle);
+    const record = screen.getByRole("button", { name: /Asked Chef, answered/ });
+    const card = container.querySelector(".result");
+    expect(
+      record.compareDocumentPosition(card as Node) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(record.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(record);
+    expect(onToggle).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useId, useLayoutEffect, useRef, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { ABSENT_ACCENT } from "../avatars/catalog";
@@ -7,7 +7,7 @@ import { routineTitle } from "../lib/routine";
 import { useStore } from "../lib/store";
 import { whenLabel } from "../lib/time";
 import { type Step, trailStep } from "../lib/trail";
-import type { Lookups } from "../lib/transcript";
+import type { Lookups, Row } from "../lib/transcript";
 import type {
   AgentCard,
   AgentId,
@@ -24,7 +24,7 @@ import { FileCard } from "./FileCard";
 import { Markdown } from "./Markdown";
 import { QuestionRequest } from "./QuestionRequest";
 import { TrailFootnote } from "./Trail";
-import { AsideRow, NoticeRow, RoutineRow } from "./WireRow";
+import { AsideRow, HandoffRecord, NoticeRow, RoutineRow } from "./WireRow";
 
 interface Props {
   message: Envelope;
@@ -285,15 +285,109 @@ function ChatBubble({
           />
         ))}
 
-        {texts.map(({ part, key }) => (
-          <Markdown key={key}>{part.text}</Markdown>
-        ))}
+        {isOperator ? (
+          <Brief>
+            {texts.map(({ part, key }) => (
+              <Markdown key={key}>{part.text}</Markdown>
+            ))}
+          </Brief>
+        ) : (
+          texts.map(({ part, key }) => <Markdown key={key}>{part.text}</Markdown>)
+        )}
 
         {files.map(({ part, key }) => (
           <FileCard key={key} file={part} />
         ))}
       </div>
     </article>
+  );
+}
+
+function Brief({ children }: { children: React.ReactNode }) {
+  const body = useRef<HTMLDivElement>(null);
+  const region = useId();
+  const [open, setOpen] = useState(false);
+  const [long, setLong] = useState(false);
+
+  useLayoutEffect(() => {
+    const node = body.current;
+    if (!node || open) return;
+    const measure = () => setLong(node.scrollHeight > node.clientHeight);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [open]);
+
+  return (
+    <>
+      <div ref={body} id={region} className="msg__brief" data-folded={open ? undefined : "true"}>
+        {children}
+      </div>
+      {(long || open) && (
+        <button
+          type="button"
+          className="msg__more"
+          aria-expanded={open}
+          aria-controls={region}
+          onClick={() => setOpen(!open)}
+        >
+          {open ? "Show less" : "Show all"}
+        </button>
+      )}
+    </>
+  );
+}
+
+export function ResultItem({
+  row,
+  lookups,
+  channel,
+  open,
+  onToggle,
+  onOpen,
+}: {
+  row: Extract<Row, { kind: "result" }>;
+  lookups: Lookups;
+  channel: string;
+  open: boolean;
+  onToggle: () => void;
+  onOpen: (peer: AgentId) => void;
+}) {
+  const { message, handoff } = row;
+  const author = identity(message.from, lookups.byId);
+  const parts = keyed(message);
+  return (
+    <>
+      {handoff && (
+        <HandoffRecord
+          peers={handoff.peers}
+          runId={handoff.runId}
+          channel={channel}
+          rowKey={handoff.key}
+          open={open}
+          onToggle={onToggle}
+          onOpen={onOpen}
+        />
+      )}
+      <article
+        className="msg msg--result"
+        aria-label={`Result from ${author.name}, ${clockTime(message.createdAt)}`}
+      >
+        <div className="result">
+          <TurnHead author={author} at={message.createdAt} />
+          <div className="result__body">
+            {parts.map(({ part, key }) =>
+              part.type === "text" ? (
+                <Markdown key={key}>{part.text}</Markdown>
+              ) : part.type === "file" ? (
+                <FileCard key={key} file={part} />
+              ) : null,
+            )}
+          </div>
+        </div>
+      </article>
+    </>
   );
 }
 

@@ -456,6 +456,7 @@ mod tests {
             status,
             headline: "Sent the digest to 12 people.".into(),
             note_id: None,
+            colleagues: Vec::new(),
             needs: Vec::new(),
             steps: 3,
             started_at: NOW - 1_000,

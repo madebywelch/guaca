@@ -57,6 +57,17 @@ the operator. `docs/WORKSPACE.md`, then `src/lib/reasoning.ts`,
   open, ticking, after a stop or a failure ended the run. `HandoffRow` reads
   `running` for its run: an answer still owed in a run the host no longer
   lists folds to "no answer".
+- **A result is found from the transcript and the running list, not from the
+  outcome's note.** The store keeps only outcomes nobody has seen, and an open
+  conversation marks its outcomes seen, so a card keyed on `noteId` would lose
+  its frame the moment the person looked at it. `withResults` takes the last
+  thing the agent said to the person in a run the host no longer lists, and
+  draws it as the result only when it is words or files: a run that ended on a
+  failure notice has no result, so a line said on the way is never promoted to
+  one. A line the agent says on the way is plain until the run settles, and
+  nothing is a result until the host's running list has been read once
+  (`runningKnown`), so a reload never draws a live run's last line as a
+  result and then drops it back.
 - **A note that opens must not say what it opens onto.** A call with detail
   behind it draws its filename in the panel underneath, so printing it on the
   line as well said the same filename twice a line apart, and the two copies

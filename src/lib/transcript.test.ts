@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { type Lookups, type Row, rowStandsFor, summaryLabel, transcriptRows } from "./transcript";
+import {
+  type Lookups,
+  type Row,
+  rowStandsFor,
+  summaryLabel,
+  transcriptRows,
+  withResults,
+} from "./transcript";
 import type { AgentCard, Envelope, Part } from "./types";
 
 function card(id: string, name: string): AgentCard {
@@ -424,5 +431,108 @@ describe("an overnight tidy", () => {
     expect(line!.message.id).toBe(tidy.id);
     expect(line!.continued).toBe(false);
     expect(trail!.message.parts.map((part) => part.type)).toEqual(["toolCall"]);
+  });
+});
+
+function reply(text: string, runId = "r1"): Envelope {
+  return envelope({
+    runId,
+    from: { kind: "agent", id: "manager" },
+    to: { kind: "human" },
+    parts: [{ type: "text", text }],
+  });
+}
+
+function shapes(rows: Row[]) {
+  return rows.map((row) =>
+    row.kind === "message" ? `message:${row.message.parts.length}` : row.kind,
+  );
+}
+
+describe("the result a conversation ends in", () => {
+  const conversation = () => [
+    envelope({ parts: [{ type: "text", text: "Plan the offsite." }] }),
+    record(send(["Chef", "Scribe"], ok)),
+    reply("I asked them both."),
+    inbound("chef", "Friday works."),
+    inbound("scribe", "Notes are ready."),
+    reply("Friday, with notes from Scribe."),
+  ];
+
+  it("is not drawn while the conversation still runs, so a line on the way is never the result", () => {
+    const rows = transcriptRows(conversation(), lookups);
+    const shown = withResults(rows, new Set(["r1"]));
+    expect(shown.some((row) => row.kind === "result")).toBe(false);
+    expect(shown).toBe(rows);
+  });
+
+  it("is never a failure the turn ended in", () => {
+    const failed = envelope({
+      from: { kind: "agent", id: "manager" },
+      to: { kind: "human" },
+      parts: [{ type: "notice", kind: "upstreamError", text: "The model did not answer." }],
+    });
+    const rows = transcriptRows([envelope({}), failed], lookups);
+    expect(withResults(rows, new Set()).some((row) => row.kind === "result")).toBe(false);
+  });
+
+  it("is never a line said on the way when the conversation then ended in a failure", () => {
+    const failed = envelope({
+      from: { kind: "agent", id: "manager" },
+      to: { kind: "human" },
+      parts: [{ type: "notice", kind: "upstreamError", text: "The model did not answer." }],
+    });
+    const rows = transcriptRows([envelope({}), reply("I asked them both."), failed], lookups);
+    expect(withResults(rows, new Set()).some((row) => row.kind === "result")).toBe(false);
+  });
+
+  it("is the last thing the agent said to the person once the conversation settles", () => {
+    const shown = withResults(transcriptRows(conversation(), lookups), new Set());
+    const results = shown.filter((row) => row.kind === "result");
+    expect(results).toHaveLength(1);
+    const [result] = results;
+    expect(result?.kind === "result" && result.message.parts).toEqual([
+      { type: "text", text: "Friday, with notes from Scribe." },
+    ]);
+    const filler = shown.find(
+      (row) => row.kind === "message" && row.message.parts[0]?.type === "text",
+    );
+    expect(filler?.kind).toBe("message");
+  });
+
+  it("carries the hand-off that led to it, which leaves its earlier place", () => {
+    const shown = withResults(transcriptRows(conversation(), lookups), new Set());
+    expect(shown.map((row) => row.kind)).toEqual(["message", "message", "result"]);
+    const result = shown.at(-1);
+    if (result?.kind !== "result") throw new Error("no result");
+    expect(result.handoff?.peers.map((one) => [one.peer.name, one.sent, one.received])).toEqual([
+      ["Chef", 1, 1],
+      ["Scribe", 1, 1],
+    ]);
+    expect(rowStandsFor(result)).toEqual([result.message.id, ...(result.handoff?.folded ?? [])]);
+    expect(rowStandsFor(result)).toHaveLength(3);
+  });
+
+  it("stands alone when one agent answered without asking anyone", () => {
+    const shown = withResults(transcriptRows([envelope({}), reply("Hello.")], lookups), new Set());
+    expect(shapes(shown)).toEqual(["message:1", "result"]);
+    const result = shown.at(-1);
+    expect(result?.kind === "result" && result.handoff).toBeNull();
+  });
+
+  it("is one per conversation, and an earlier conversation keeps its own", () => {
+    const shown = withResults(
+      transcriptRows(
+        [
+          envelope({}),
+          reply("First answer."),
+          envelope({ runId: "r2" }),
+          reply("Second answer.", "r2"),
+        ],
+        lookups,
+      ),
+      new Set(["r2"]),
+    );
+    expect(shapes(shown)).toEqual(["message:1", "result", "message:1", "message:1"]);
   });
 });
