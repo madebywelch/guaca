@@ -6,6 +6,7 @@ import json
 import socket
 import struct
 import threading
+import time
 import urllib.parse
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -111,7 +112,7 @@ class Slack:
         self.revoked = False
         self._acks: list[str] = []
         self._lock = threading.Lock()
-        self._clock = 1_700_000_000
+        self._last_ts = 0
         self._serial = 0
         self._log = evidence / "slack.jsonl" if evidence else None
         slack = self
@@ -169,8 +170,9 @@ class Slack:
 
     def next_ts(self) -> str:
         with self._lock:
-            self._serial += 1
-            return f"{self._clock}.{self._serial:06}"
+            self._last_ts = max(self._last_ts + 1, time.time_ns() // 1000)
+            seconds, micros = divmod(self._last_ts, 1_000_000)
+            return f"{seconds}.{micros:06}"
 
     def answer(self, method: str, bearer: str, fields: dict) -> tuple[int, dict, dict]:
         token = "app" if bearer.startswith("xapp-") else "bot" if bearer.startswith("xoxb-") else "none"

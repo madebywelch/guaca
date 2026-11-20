@@ -143,7 +143,8 @@ fn link(chars: &[char], at: usize) -> Option<(String, String, usize)> {
     }
     let url_end = (label_end + 2..chars.len()).find(|j| chars[*j] == ')')?;
     let url = collect(chars, label_end + 2, url_end);
-    if url.is_empty() || url.chars().any(char::is_whitespace) {
+    let linkable = ["http://", "https://", "mailto:"].iter().any(|scheme| url.starts_with(scheme));
+    if !linkable || url.chars().any(char::is_whitespace) {
         return None;
     }
     Some((collect(chars, at + 1, label_end), url, url_end))
@@ -202,6 +203,11 @@ mod tests {
         );
         assert_eq!(mrkdwn("[a|b](https://x.dev/p>q)"), "<https://x.dev/p%3Eq|a|b>");
         assert_eq!(mrkdwn("[not a link] (here)"), "[not a link] (here)");
+        assert_eq!(
+            mrkdwn("[hi](!channel) [x](@U1) [y](!subteam^S1)"),
+            "[hi](!channel) [x](@U1) [y](!subteam^S1)"
+        );
+        assert_eq!(mrkdwn("[mail](mailto:a@b.dev)"), "<mailto:a@b.dev|mail>");
     }
 
     #[test]

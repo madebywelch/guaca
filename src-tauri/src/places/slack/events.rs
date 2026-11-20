@@ -7,7 +7,7 @@ pub fn ts_ms(ts: &str) -> Option<i64> {
     let (seconds, fraction) = ts.split_once('.').unwrap_or((ts, ""));
     let seconds: i64 = seconds.parse().ok()?;
     let millis: String = fraction.chars().chain("000".chars()).take(3).collect();
-    Some(seconds * 1000 + millis.parse::<i64>().ok()?)
+    seconds.checked_mul(1000)?.checked_add(millis.parse::<i64>().ok()?)
 }
 
 pub fn ts_order(ts: &str) -> (i64, i64) {
@@ -34,8 +34,8 @@ pub fn split_ref(reference: &str) -> Option<(&str, &str)> {
 pub fn strip_mention(text: &str, bot: Option<&str>) -> String {
     let Some(bot) = bot else { return text.trim().to_string() };
     let mut out = text.replace(&format!("<@{bot}>"), "");
-    let labelled = format!("<@{bot}|");
-    while let Some(start) = out.find(&labelled) {
+    let labeled = format!("<@{bot}|");
+    while let Some(start) = out.find(&labeled) {
         let Some(end) = out[start..].find('>') else { break };
         out.replace_range(start..start + end + 1, "");
     }
@@ -149,6 +149,7 @@ mod tests {
         assert_eq!(ts_ms("1732118400.000100"), Some(1_732_118_400_000));
         assert_eq!(ts_ms("1732118400.9"), Some(1_732_118_400_900));
         assert_eq!(ts_ms("nonsense"), None);
+        assert_eq!(ts_ms("99999999999999999.0"), None);
         assert!(ts_order("1732118400.000100") < ts_order("1732118400.000200"));
         assert!(ts_order("1732118400.9") > ts_order("1732118400.000200"));
     }

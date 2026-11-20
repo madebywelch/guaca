@@ -48,7 +48,7 @@ pub fn render(card: &Card) -> (Vec<Value>, String) {
                 .map(|choice| {
                     let mut button = json!({
                         "type": "button",
-                        "text": { "type": "plain_text", "text": label(&choice.label) },
+                        "text": { "type": "plain_text", "text": label(if choice.label.trim().is_empty() { &choice.id } else { &choice.label }) },
                         "action_id": action_id(ask, &choice.id),
                         "value": choice.id,
                     });
@@ -106,7 +106,12 @@ pub fn sections(text: &str) -> Vec<String> {
                 parts.push(std::mem::take(&mut current));
                 count = 0;
             }
-            parts.push(line.drain(..SECTION_CHARS).collect());
+            let cut = line[..SECTION_CHARS]
+                .iter()
+                .rposition(|c| c.is_whitespace())
+                .filter(|space| *space > SECTION_CHARS / 2)
+                .map_or(SECTION_CHARS, |space| space + 1);
+            parts.push(line.drain(..cut).collect());
         }
         let needed = line.len() + usize::from(count > 0);
         if count > 0 && count + needed > SECTION_CHARS {
@@ -201,6 +206,13 @@ mod tests {
         assert!(parts.iter().all(|part| part.chars().count() <= SECTION_CHARS));
         assert_eq!(parts.concat().replace('\n', ""), long.replace('\n', ""));
         assert!(sections("").is_empty());
+        let words = "word ".repeat(1000);
+        let parts = sections(&words);
+        assert!(parts.iter().all(|part| part.ends_with(' ')), "a long line is cut between words");
+        assert_eq!(parts.concat(), words);
+        let mut blank = card(CardKind::Question);
+        blank.choices[0].label = "  ".into();
+        assert_eq!(render(&blank).0.last().unwrap()["elements"][0]["text"]["text"], "allow");
     }
 
     #[test]
