@@ -6,6 +6,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { AVATAR_PX } from "./avatars/frame";
 import { ROOT_PX } from "./lib/appearance";
+import { contrast } from "./lib/color";
 
 const css = readFileSync(join(process.cwd(), "src/styles.css"), "utf8");
 const signalCss = readFileSync(join(process.cwd(), "src/signal-layout.css"), "utf8");
@@ -1049,18 +1050,6 @@ describe("the waiting count", () => {
   };
   const tokens = (name: string) =>
     [...css.matchAll(new RegExp(`--${name}: (#\\w{6});`, "g"))].map((m) => m[1]?.toLowerCase());
-  const luminance = (hex: string) => {
-    const [r, g, b] = [1, 3, 5].map((at) => {
-      const c = Number.parseInt(hex.slice(at, at + 2), 16) / 255;
-      return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-    });
-    return 0.2126 * (r ?? 0) + 0.7152 * (g ?? 0) + 0.0722 * (b ?? 0);
-  };
-  const contrast = (a: string, b: string) => {
-    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-    return ((hi ?? 0) + 0.05) / ((lo ?? 0) + 0.05);
-  };
-
   it("draws the menu bar glyph in the attention fill, edged in the ink drawn on that fill", () => {
     for (const [name, token] of [
       ["ATTENTION", "attention-fill"],
@@ -1082,7 +1071,7 @@ describe("the waiting count", () => {
     const fill = trayInk("ATTENTION");
     const edge = trayInk("ATTENTION_EDGE");
     expect(Math.max(contrast(fill, bar), contrast(edge, bar))).toBeGreaterThanOrEqual(3);
-    expect(contrast(fill, edge)).toBeGreaterThanOrEqual(3);
+    expect(contrast(fill, edge)).toBeGreaterThanOrEqual(9);
   });
 
   it("rings the waiting glyph's outline in the edge ink and fills its middle with amber", () => {
@@ -1101,16 +1090,20 @@ describe("the waiting count", () => {
       return { hex: `#${raw.subarray(at, at + 3).toString("hex")}`, alpha: raw[at + 3] ?? 0 };
     };
     const edge = trayInk("ATTENTION_EDGE");
+    const fill = trayInk("ATTENTION");
     let rows = 0;
+    let filled = 0;
     for (let y = 0; y < size; y++) {
+      expect(raw[y * (size * 4 + 1)], `row ${y} filter`).toBe(0);
       const solid = [...Array(size).keys()].filter((x) => pixel(x, y).alpha === 255);
       if (solid.length < 4) continue;
       rows++;
       expect(pixel(solid[0] ?? 0, y).hex, `row ${y}`).toBe(edge);
       expect(pixel(solid.at(-1) ?? 0, y).hex, `row ${y}`).toBe(edge);
+      if (solid.some((x) => pixel(x, y).hex === fill)) filled++;
     }
     expect(rows).toBeGreaterThan(size / 2);
-    expect(pixel(size / 2 - 3, size / 2 + 4).hex).toBe(trayInk("ATTENTION"));
+    expect(filled).toBeGreaterThan(rows / 2);
   });
 
   it.each([

@@ -65,9 +65,9 @@ def working(x: float, y: float) -> tuple[int, int, int, int]:
 def attention(x: float, y: float) -> tuple[int, int, int, int]:
     if not inside(x, y, 0.0):
         return (0, 0, 0, 0)
-    if inside(x, y, STROKE) and not in_pit(x, y):
-        return (*ATTENTION, 255)
-    return (*ATTENTION_EDGE, 255)
+    if not inside(x, y, STROKE) or (in_pit(x, y) and inside(x, y, 2 * STROKE)):
+        return (*ATTENTION_EDGE, 255)
+    return (*ATTENTION, 255)
 
 
 def render(sample, size: int) -> bytes:
