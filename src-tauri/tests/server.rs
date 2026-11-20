@@ -218,9 +218,21 @@ async fn a_task_read_follows_selected_root_runs_across_conversations() {
 }
 
 #[tokio::test]
-async fn a_task_read_refuses_to_return_a_partial_history() {
+async fn an_oversized_task_returns_its_result_identity_without_a_partial_history() {
     let (addr, dir) = workspace().await;
-    let channel = AgentId::new();
+    let (_, agent) = call(
+        addr,
+        "create_agent",
+        json!({ "draft": {
+            "name": "Lead",
+            "avatar": "avocado",
+            "color": "#7ab55c",
+            "model": "",
+            "systemPrompt": "Coordinate the work.",
+        }}),
+    )
+    .await;
+    let channel = serde_json::from_value(agent["ok"]["id"].clone()).unwrap();
     let run = RunId::new();
     let args = || json!({ "channelId": channel, "runId": run });
 
@@ -237,18 +249,13 @@ async fn a_task_read_refuses_to_return_a_partial_history() {
     assert_eq!(body["ok"]["messages"].as_array().unwrap().len(), 2_000);
     assert_eq!(body["ok"]["messages"][0]["id"], json!(root.id));
 
-    store
-        .append(&recorded_message(
-            run,
-            Participant::System,
-            to,
-            2_000,
-            Intent::Courtesy,
-            "Last update",
-        ))
-        .unwrap();
+    let result =
+        recorded_message(run, to, Participant::Human, 2_000, Intent::Courtesy, "Final result");
+    store.append(&result).unwrap();
+    store.settle_run_as(run, Settled::Finished, 4).unwrap().unwrap();
     let (_, body) = call(addr, "task_record", args()).await;
-    assert_eq!(body["err"]["kind"], "validation");
+    assert!(body["ok"]["messages"].is_null());
+    assert_eq!(body["ok"]["resultId"], json!(result.id));
 }
 
 #[tokio::test]

@@ -2,12 +2,12 @@
   container: task-pane / size;
 }
 
-.app[data-roster][data-page="agent"] .pane:has(.task-map-stack) {
+.app[data-roster][data-page="agent"] .pane:has(.task-map-stack:not([hidden])) {
   width: 100%;
 }
 
-.pane:has(.task-map-stack) > :is(.pane__header, .agent-tabs),
-.pane:has(.task-map-stack) .pane__body > :not(.task-map-stack) {
+.pane:has(.task-map-stack:not([hidden])) > :is(.pane__header, .agent-tabs),
+.pane:has(.task-map-stack:not([hidden])) .pane__body > :not(.task-map-stack, .offscreen) {
   width: min(var(--column-w), 100%);
   margin-inline: auto;
 }
@@ -16,6 +16,7 @@
   --task-map-height: 40cqb;
   max-height: var(--task-map-height);
   overflow: auto;
+  scrollbar-gutter: stable;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -36,6 +37,11 @@
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+}
+
+.task-map-stack[hidden],
+.task-map-stack .task-map[hidden] {
+  display: none;
 }
 
 .task-map-stack .task-map:has(.task-map__graph) {
@@ -138,7 +144,7 @@
   display: contents;
 }
 
-@container task-pane (width >= 740px) {
+@container task-pane (width >= 46.25rem) {
   .task-map__graph:not([data-compact]) .task-map__root > .task-map__node {
     position: relative;
   }
@@ -180,7 +186,7 @@
   min-width: 0;
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-control);
-  background: var(--surface);
+  background: var(--page);
   box-shadow: inset 0 0 0 1px var(--rule);
   overflow-wrap: anywhere;
 }
@@ -282,7 +288,7 @@
   visibility: hidden;
 }
 
-@container task-pane (width < 740px) {
+@container task-pane (width < 46.25rem) {
   .task-map__graph {
     grid-template-columns: minmax(0, 1fr);
   }

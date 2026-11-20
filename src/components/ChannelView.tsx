@@ -243,7 +243,11 @@ export function ChannelView({
 
       <div className="pane__body" hidden={view !== "conversation" && view !== "now"}>
         {view === "conversation" && (
-          <ActiveTaskMaps maps={taskMaps.filter((map) => map.inFlight)} lookups={lookups} />
+          <ActiveTaskMaps
+            key={channel}
+            maps={taskMaps.filter((map) => map.inFlight)}
+            lookups={lookups}
+          />
         )}
         {agent && view === "now" && (
           <div className="pane__scroll">
@@ -371,7 +375,7 @@ export function ChannelView({
                     {unavailableMap && (
                       <div className="task-map__notice" role="status">
                         {unavailableMap === "oversized"
-                          ? "This task is too large to show on a map. Its messages are still here."
+                          ? "This task is too large to show on a map. You can still read the conversation."
                           : "Could not refresh the task map."}
                         {unavailableMap === "retry" && (
                           <button className="btn btn--compact" type="button" onClick={retry}>

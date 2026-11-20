@@ -403,30 +403,34 @@ impl Store {
         if !belongs {
             return Ok(None);
         }
-        let result_id: Option<String> = tx
+        let result = tx
             .query_row(
-                "SELECT note_id FROM outcomes WHERE run_id=?1 AND status IN ('done','needs_you')",
+                &format!(
+                    "SELECT {ENVELOPE} FROM outcomes o JOIN messages m ON m.id=o.note_id
+                  WHERE o.run_id=?1 AND m.run_id=o.run_id AND o.status IN ('done','needs_you')"
+                ),
                 [&run_id],
-                |row| row.get(0),
+                row_to_envelope,
             )
             .optional()?
-            .flatten();
-        let mut found = Vec::new();
-        for message in messages.query_map(params![run_id, limit], row_to_envelope)? {
-            found.push(message??);
-        }
-        let result_id = found
-            .iter()
-            .find(|message| {
-                result_id.as_ref().is_some_and(|id| id == &message.id.to_string())
-                    && !message.parts.is_empty()
+            .transpose()?;
+        let result_id = result
+            .filter(|message| {
+                !message.parts.is_empty()
                     && message
                         .parts
                         .iter()
                         .all(|part| matches!(part, Part::Text { .. } | Part::File { .. }))
             })
             .map(|message| message.id);
-        Ok(Some(TaskRecord { messages: found, result_id }))
+        let mut found = Vec::new();
+        for message in messages.query_map(params![run_id, limit + 1], row_to_envelope)? {
+            if found.len() == limit {
+                return Ok(Some(TaskRecord { messages: None, result_id }));
+            }
+            found.push(message??);
+        }
+        Ok(Some(TaskRecord { messages: Some(found), result_id }))
     }
 
     pub fn closing_start(

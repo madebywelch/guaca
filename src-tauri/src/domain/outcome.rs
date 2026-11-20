@@ -146,7 +146,7 @@ pub struct Outcome {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskRecord {
-    pub messages: Vec<Envelope>,
+    pub messages: Option<Vec<Envelope>>,
     pub result_id: Option<MessageId>,
 }
 

@@ -1,4 +1,4 @@
-import { type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type KeyboardEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { useDismiss } from "../lib/dismiss";
@@ -30,7 +30,6 @@ const SUMMARY_LENGTH = 64;
 type TaskRead =
   | { kind: "loaded"; record: TaskRecord | null }
   | { kind: "retry"; record: TaskRecord | null }
-  | { kind: "oversized"; record: TaskRecord | null }
   | { kind: "unsupported"; record: null };
 
 function preview(text: string, limit: number): string {
@@ -59,19 +58,23 @@ export function useTaskMaps(
   const [records, setRecords] = useState<
     ReadonlyMap<RunId, TaskRead & { channel: AgentId; running: boolean }>
   >(() => new Map());
-  const localRuns = [
-    ...new Set(
-      [...(local ?? [])]
-        .reverse()
-        .flatMap((message) =>
-          message.parts.some((part) => part.type === "toolCall" && part.name === "send_message")
-            ? [message.runId]
-            : [],
+  const localRuns = useMemo(
+    () =>
+      [
+        ...new Set(
+          [...(local ?? [])]
+            .reverse()
+            .flatMap((message) =>
+              message.parts.some((part) => part.type === "toolCall" && part.name === "send_message")
+                ? [message.runId]
+                : [],
+            ),
         ),
-    ),
-  ]
-    .slice(0, RECENT_TASKS)
-    .join(" ");
+      ]
+        .slice(0, RECENT_TASKS)
+        .join(" "),
+    [local],
+  );
   const pulse = useStore((state) => state.pulses.at(-1)?.id);
   const [attempt, setAttempt] = useState(0);
   const retry = () => setAttempt((value) => value + 1);
@@ -96,8 +99,9 @@ export function useTaskMaps(
       if (
         prior?.channel === channel &&
         (prior.kind === "unsupported" ||
-          prior.kind === "oversized" ||
-          (!running && !prior.running && prior.kind === "loaded"))
+          (prior.kind === "loaded" &&
+            ((!running && !prior.running) ||
+              (running && prior.running && prior.record?.messages === null))))
       )
         continue;
       const update = (read: TaskRead) => {
@@ -116,7 +120,7 @@ export function useTaskMaps(
           if (kind === "unknownCommand") update({ kind: "unsupported", record: null });
           else
             update({
-              kind: kind === "validation" ? "oversized" : "retry",
+              kind: "retry",
               record: prior?.channel === channel ? prior.record : null,
             });
         },
@@ -127,51 +131,59 @@ export function useTaskMaps(
     };
   }, [channel, ownedRuns, localRuns, runs, pulse, attempt]);
 
-  const candidates = new Set(
-    typeof api.taskRecord === "function"
-      ? `${ownedRuns} ${localRuns}`.split(" ").filter(Boolean)
-      : [],
-  );
-  const active = new Set(ownedRuns.split(" "));
-  const delegated = new Set(localRuns.split(" ").filter(Boolean));
-  const recorded = new Map<RunId, TaskRecord>();
-  const results = new Map<RunId, TaskRecord["resultId"]>();
-  const unavailable = new Map<RunId, "retry" | "oversized">();
-  const checking = new Set<RunId>();
-  for (const run of candidates) {
-    const read = records.get(run);
-    if (!read || read.channel !== channel) {
-      if (delegated.has(run)) results.set(run, null);
-      continue;
+  const projection = useMemo(() => {
+    const candidates = new Set(
+      typeof api.taskRecord === "function"
+        ? `${ownedRuns} ${localRuns}`.split(" ").filter(Boolean)
+        : [],
+    );
+    const active = new Set(ownedRuns.split(" "));
+    const delegated = new Set(localRuns.split(" ").filter(Boolean));
+    const recorded = new Map<RunId, TaskRecord>();
+    const results = new Map<RunId, TaskRecord["resultId"]>();
+    const unavailable = new Map<RunId, "retry" | "oversized">();
+    const checking = new Set<RunId>();
+    for (const run of candidates) {
+      const read = records.get(run);
+      if (!read || read.channel !== channel) {
+        if (delegated.has(run)) results.set(run, null);
+        continue;
+      }
+      if (read.kind === "loaded" && read.record?.messages === null) {
+        if (delegated.has(run)) unavailable.set(run, "oversized");
+        results.set(run, read.record.resultId);
+        continue;
+      }
+      if (read.kind === "retry") {
+        if (delegated.has(run)) {
+          unavailable.set(run, read.kind);
+          results.set(run, null);
+        }
+      }
+      if (read.running && !active.has(run)) checking.add(run);
+      if (read.record) recorded.set(run, read.record);
     }
-    if (read.kind === "retry" || read.kind === "oversized") {
-      if (delegated.has(run)) {
-        unavailable.set(run, read.kind);
-        results.set(run, null);
+    const maps =
+      runs === null
+        ? []
+        : taskMaps(
+            channel,
+            [...recorded.values()].flatMap((task) => task.messages ?? []),
+            pending,
+            new Set(runs.split(" ")),
+          );
+    for (const map of maps) {
+      const read = records.get(map.runId);
+      if (read?.kind === "retry") {
+        unavailable.set(map.runId, read.kind);
+        results.set(map.runId, null);
+      } else {
+        results.set(map.runId, recorded.get(map.runId)?.resultId ?? null);
       }
     }
-    if (read.running && !active.has(run)) checking.add(run);
-    if (read.record) recorded.set(run, read.record);
-  }
-  const maps =
-    runs === null
-      ? []
-      : taskMaps(
-          channel,
-          [...recorded.values()].flatMap((task) => task.messages),
-          pending,
-          new Set(runs.split(" ")),
-        );
-  for (const map of maps) {
-    const read = records.get(map.runId);
-    if (read?.kind === "retry" || read?.kind === "oversized") {
-      unavailable.set(map.runId, read.kind);
-      results.set(map.runId, null);
-    } else {
-      results.set(map.runId, recorded.get(map.runId)?.resultId ?? null);
-    }
-  }
-  return { maps, results, unavailable, checking, retry };
+    return { maps, results, unavailable, checking };
+  }, [channel, ownedRuns, localRuns, records, runs, pending]);
+  return { ...projection, retry };
 }
 
 function firstQuestion(map: MapData): Approval | undefined {
@@ -181,6 +193,7 @@ function firstQuestion(map: MapData): Approval | undefined {
 export function ActiveTaskMaps({ maps, lookups }: { maps: MapData[]; lookups: Lookups }) {
   const [folded, setFolded] = useState<ReadonlySet<RunId>>(() => new Set());
   const [selected, setSelected] = useState<RunId | null>(null);
+  const [reading, setReading] = useState<MapData>();
   const ordered = [...maps].sort((a, b) => {
     const x = firstQuestion(a);
     const y = firstQuestion(b);
@@ -188,19 +201,22 @@ export function ActiveTaskMaps({ maps, lookups }: { maps: MapData[]; lookups: Lo
       return (x.lapsesAt ?? Infinity) - (y.lapsesAt ?? Infinity) || x.createdAt - y.createdAt;
     return Number(!!y) - Number(!!x);
   });
-  if (!ordered.length) return null;
+  if (!ordered.length && !reading) return null;
   const opened =
     ordered.find((map) => map.runId === selected && !folded.has(map.runId))?.runId ??
     ordered.find((map) => !folded.has(map.runId) && firstQuestion(map))?.runId ??
     (ordered.length === 1 && !folded.has(ordered[0]!.runId) ? ordered[0]!.runId : null);
+  const retired = reading && !ordered.some((map) => map.runId === reading.runId) ? reading : null;
   return (
-    <section className="task-map-stack" aria-label="Tasks in progress">
-      {ordered.map((map) => (
+    <section className="task-map-stack" aria-label="Tasks in progress" hidden={!ordered.length}>
+      {(retired ? [...ordered, retired] : ordered).map((map) => (
         <TaskMapCard
           key={map.runId}
           map={map}
           lookups={lookups}
           open={opened === map.runId}
+          retired={retired?.runId === map.runId}
+          onReading={setReading}
           onToggle={() => {
             setFolded((old) => {
               const next = new Set(old);
@@ -224,6 +240,8 @@ export function TaskMapCard({
   delivered = false,
   checking = false,
   unavailable,
+  retired = false,
+  onReading,
 }: {
   map: MapData;
   lookups: Lookups;
@@ -232,6 +250,8 @@ export function TaskMapCard({
   delivered?: boolean;
   checking?: boolean;
   unavailable?: "retry" | "oversized";
+  retired?: boolean;
+  onReading?: (map?: MapData) => void;
 }) {
   const [detail, setDetail] = useState<
     "colleagues" | "brief" | { name: string; message: Envelope }
@@ -241,8 +261,16 @@ export function TaskMapCard({
   const graph = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLUListElement>(null);
   const dialog = useRef<HTMLDivElement>(null);
-  const closeDetail = () => setDetail(undefined);
-  useDismiss(closeDetail, open && detail !== undefined);
+  const showDetail = (next: NonNullable<typeof detail>) => {
+    onReading?.(map);
+    setDetail(next);
+  };
+  const closeDetail = () => {
+    onReading?.();
+    setDetail(undefined);
+    if (!open) requestAnimationFrame(focusWriting);
+  };
+  useDismiss(closeDetail, detail !== undefined);
   useLayoutEffect(() => {
     if (detail) dialog.current?.focus();
   }, [detail]);
@@ -255,16 +283,26 @@ export function TaskMapCard({
   const waiting = map.branches.filter((branch) => branch.questions.length).length;
   const answered = map.branches.filter((branch) => branch.reply).length;
   const hidden = Math.max(0, count - fitted);
+  const branchKeys = map.branches
+    .slice(0, DIRECT_BRANCHES)
+    .map((branch) => branch.agentId)
+    .join(" ");
   useLayoutEffect(() => {
     const node = graph.current;
     const branches = list.current;
-    if (!open || !map.inFlight || !node || !branches) return;
+    if (!open || !map.inFlight || !node || !branches || !branchKeys) return;
     const measure = () => {
       if (!node.getClientRects().length) return;
       const candidates = Array.from(branches.querySelectorAll<HTMLElement>(":scope > li"));
       const fitFromStart = () => {
         const bottom =
           node.getBoundingClientRect().bottom - parseFloat(getComputedStyle(node).paddingBottom);
+        if (
+          Array.from(node.querySelectorAll(".task-map__root > .task-map__node")).some(
+            (root) => root.getBoundingClientRect().bottom > bottom + 0.5,
+          )
+        )
+          return 0;
         const firstHidden = candidates.findIndex(
           (branch) => branch.getBoundingClientRect().bottom > bottom + 0.5,
         );
@@ -286,10 +324,11 @@ export function TaskMapCard({
     const observer = new ResizeObserver(measure);
     observer.observe(node);
     observer.observe(branches);
+    for (const branch of branches.children) observer.observe(branch);
     const pane = node.closest(".pane__body");
     if (pane) observer.observe(pane);
     return () => observer.disconnect();
-  }, [open, map]);
+  }, [open, map.inFlight, branchKeys]);
   const onKeyDown = (event: KeyboardEvent) => {
     if (
       event.nativeEvent.isComposing ||
@@ -312,7 +351,13 @@ export function TaskMapCard({
       const option = question.request.options[Number(event.key) - 1];
       if (option !== undefined) {
         event.preventDefault();
-        void answer(question.id, option);
+        void answer(question.id, option).then(() => {
+          if (
+            document.activeElement === document.body ||
+            first.current?.contains(document.activeElement)
+          )
+            focusWriting();
+        });
       }
     }
   };
@@ -324,7 +369,10 @@ export function TaskMapCard({
         type="button"
         className="task-map__person"
         disabled={!agent}
-        onClick={() => void select(id)}
+        onClick={() => {
+          if (detail) closeDetail();
+          void select(id);
+        }}
       >
         {agent && <AgentAvatar avatar={agent.avatar} color={agent.color} size="xs" seed={id} />}
         {name(id)}
@@ -369,7 +417,7 @@ export function TaskMapCard({
             className="btn btn--compact"
             aria-haspopup="dialog"
             onClick={() => {
-              if (branch.reply) setDetail({ name: name(branch.agentId), message: branch.reply });
+              if (branch.reply) showDetail({ name: name(branch.agentId), message: branch.reply });
             }}
           >
             Open {name(branch.agentId)}’s message
@@ -395,6 +443,7 @@ export function TaskMapCard({
     <section
       className="task-map"
       aria-label="Task map"
+      hidden={retired}
       onKeyDown={onKeyDown}
       data-in-flight={map.inFlight || undefined}
     >
@@ -432,7 +481,7 @@ export function TaskMapCard({
                     type="button"
                     className="btn btn--compact"
                     aria-haspopup="dialog"
-                    onClick={() => setDetail("brief")}
+                    onClick={() => showDetail("brief")}
                   >
                     Read brief
                   </button>
@@ -465,57 +514,57 @@ export function TaskMapCard({
                 className="btn btn--compact"
                 aria-haspopup="dialog"
                 data-empty={hidden === 0 || undefined}
-                onClick={() => setDetail("colleagues")}
+                onClick={() => showDetail("colleagues")}
               >
                 Show {hidden} more {hidden === 1 ? "colleague" : "colleagues"}
               </button>
             )}
           </div>
-          {detail &&
-            createPortal(
-              <div className="scrim">
-                <button
-                  type="button"
-                  className="scrim__close"
-                  aria-label="Close dialog"
-                  onClick={closeDetail}
-                />
-                <div
-                  className="dialog dialog--form task-map__detail"
-                  role="dialog"
-                  aria-modal="true"
-                  aria-label={detailTitle}
-                  ref={dialog}
-                  tabIndex={-1}
-                >
-                  <div className="dialog__body">
-                    <h2 className="dialog__title">{detailTitle}</h2>
-                    {detail === "colleagues" ? (
-                      <ul className="task-map__branches">
-                        {map.branches.slice(fitted).map((branch) => renderBranch(branch))}
-                      </ul>
-                    ) : detail === "brief" ? (
-                      <p>{text}</p>
-                    ) : (
-                      <>
-                        <Markdown>{plainText(detail.message)}</Markdown>
-                        {detail.message.parts.flatMap((part) =>
-                          part.type === "file" ? [<FileCard file={part} key={part.digest} />] : [],
-                        )}
-                      </>
-                    )}
-                  </div>
-                  <div className="dialog__foot">
-                    <button type="button" className="btn" onClick={closeDetail}>
-                      Close
-                    </button>
-                  </div>
-                </div>
-              </div>,
-              document.body,
-            )}
         </>
       )}
+      {detail &&
+        createPortal(
+          <div className="scrim">
+            <button
+              type="button"
+              className="scrim__close"
+              aria-label="Close dialog"
+              onClick={closeDetail}
+            />
+            <div
+              className="dialog dialog--form task-map__detail"
+              role="dialog"
+              aria-modal="true"
+              aria-label={detailTitle}
+              ref={dialog}
+              tabIndex={-1}
+            >
+              <div className="dialog__body">
+                <h2 className="dialog__title">{detailTitle}</h2>
+                {detail === "colleagues" ? (
+                  <ul className="task-map__branches">
+                    {map.branches.slice(fitted).map((branch) => renderBranch(branch))}
+                  </ul>
+                ) : detail === "brief" ? (
+                  <p>{text}</p>
+                ) : (
+                  <>
+                    <Markdown>{plainText(detail.message)}</Markdown>
+                    {detail.message.parts.flatMap((part) =>
+                      part.type === "file" ? [<FileCard file={part} key={part.digest} />] : [],
+                    )}
+                  </>
+                )}
+              </div>
+              <div className="dialog__foot">
+                <button type="button" className="btn" onClick={closeDetail}>
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
     </section>
   );
 }

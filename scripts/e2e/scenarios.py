@@ -1357,9 +1357,18 @@ def scenario_handoff(w: World) -> None:
     w.check("an agent opened mid-turn shows its status line without scrolling",
             placed == {"inLog": False, "onScreen": True}, observed=placed)
 
+    ui.click("button", "Open Researcher’s message")
+    w.wait("the colleague's message opens before delivery",
+           lambda: ui.find("dialog", "Message from Researcher"))
     analyst.set()
-    w.wait("the map folds once the result lands", lambda: ui.find(
-        "button", "Hand-off complete", exact=False))
+    w.wait("the map folds once the result lands", lambda: ui.evaluate(
+        "[...document.querySelectorAll('.pane__scroll .task-map__summary')]"
+        ".some(summary => summary.innerText.includes('Hand-off complete'))"))
+    w.check("a colleague's open message stays readable after the pinned task settles",
+            ui.find("dialog", "Message from Researcher")
+            and ui.evaluate("document.querySelector('.task-map__detail .md')?.innerText") == R_SAYS,
+            observed=R_SAYS)
+    ui.click("button", "Close")
     w.check("after the reply the hand-off folds to one line that says both answered",
             not card_text(w) and BOTH_SAID in conversation(w)
             and ui.find("button", "2 of 2 answered", exact=False),
@@ -2652,13 +2661,13 @@ def scenario_firstgroup(w: World) -> None:
     w.check("the record opens onto both answers",
             RESEARCHER_SAYS in card_text(w) and ANALYST_SAYS in card_text(w),
             observed={"researcher": RESEARCHER_SAYS in card_text(w), "analyst": ANALYST_SAYS in card_text(w)}, shot=True)
-    ui.click("button", MARKET)
-    w.wait("the colleague thread opens", lambda: not ui.find("log", f"Conversation with {LEAD}"))
+    ui.press(next(button for button in ui.within("region", "Task map", "button") if label(button) == MARKET))
+    w.wait("the colleague thread opens", lambda: ui.find("log", f"Conversation with {MARKET}"))
     open_agent(w, LEAD)
     w.wait("the current agent row restores the conversation and result",
            lambda: ui.find("article", f"Result from {LEAD}", exact=False))
-    ui.click("button", MARKET)
-    w.wait("the colleague thread is open again", lambda: not ui.find("log", f"Conversation with {LEAD}"))
+    ui.press(next(button for button in ui.within("region", "Task map", "button") if label(button) == MARKET))
+    w.wait("the colleague thread is open again", lambda: ui.find("log", f"Conversation with {MARKET}"))
     ui.click("button", "For you")
     w.wait("Earlier shows the already opened result",
            lambda: ui.evaluate("document.querySelector('.for-you .finished-line[title^=\"Lease,\"]') !== null"))
@@ -2795,6 +2804,11 @@ def scenario_taskmap(w: World) -> None:
     w.check("manually folding a live task keeps it folded while another question is open",
             MAP_LEASE_ASK not in card_text(w) and MAP_BUY_ASK in card_text(w), observed=True, shot=True)
     ui.click("combobox", f"Write to {AGENT}")
+    ui.key("Escape")
+    w.check("Escape from the composer still opens the Questions tray with a branch waiting",
+            ui.find("dialog", "Questions"), observed=True)
+    ui.click("button", "Done")
+    ui.click("combobox", f"Write to {AGENT}")
     ui.key("Tab")
     w.wait("Tab from the empty composer focuses the open branch's question", lambda: ui.evaluate(
         "Boolean(document.activeElement?.closest('.task-map-stack .task-map__question'))"))
@@ -2879,6 +2893,7 @@ SCENARIOS: dict[str, Scenario] = {
         "the colleagues disclosure opens exactly the branches the fan-out map hides",
         "manually folding a live task keeps it folded while another question is open",
         "Tab and a number answer the question on the open branch",
+        "Escape from the composer still opens the Questions tray with a branch waiting",
         "opening the typed answer puts the keyboard in the field",
         "the typed answer and shortcut stay with their recorded questions",
         "a nested hand-off opens the named colleague's conversation",
@@ -2983,6 +2998,7 @@ SCENARIOS: dict[str, Scenario] = {
         "the hand-off keeps to the six type roles, the control family and the radii in light and dark",
         "an agent opened mid-turn shows its status line without scrolling",
         "after the reply the hand-off folds to one line that says both answered",
+        "a colleague's open message stays readable after the pinned task settles",
         "the folded line opens onto both answers",
         "opening a colleague's message shows their recorded words",
         "a hand-off cut short by Stop folds and says who answered, instead of ticking on",

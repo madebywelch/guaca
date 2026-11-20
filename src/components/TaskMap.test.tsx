@@ -1,8 +1,9 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { api } from "../lib/ipc";
 import type { TaskMap } from "../lib/taskMap";
 import type { Envelope } from "../lib/types";
-import { ActiveTaskMaps } from "./TaskMap";
+import { ActiveTaskMaps, useTaskMaps } from "./TaskMap";
 
 const lookups = { byId: () => undefined, byName: () => undefined };
 
@@ -85,4 +86,44 @@ describe("pinned task maps", () => {
       within(screen.getByRole("dialog", { name: "More colleagues" })).getAllByRole("listitem"),
     ).toHaveLength(2);
   });
+
+  it("keeps a reader open through a fold and settlement without reopening it", () => {
+    const current = task("First task", 100, 5);
+    const sooner = task("Next task", 50);
+    const { rerender } = render(<ActiveTaskMaps maps={[current]} lookups={lookups} />);
+    fireEvent.click(screen.getByRole("button", { name: "Show 2 more colleagues" }));
+    rerender(<ActiveTaskMaps maps={[current, sooner]} lookups={lookups} />);
+    expect(document.activeElement).toBe(screen.getByRole("dialog", { name: "More colleagues" }));
+    rerender(<ActiveTaskMaps maps={[sooner]} lookups={lookups} />);
+    expect(document.activeElement).toBe(screen.getByRole("dialog", { name: "More colleagues" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    rerender(<ActiveTaskMaps maps={[current]} lookups={lookups} />);
+    expect(screen.queryByRole("dialog", { name: "More colleagues" })).toBeNull();
+  });
+});
+
+it("keeps the recorded result when the task is too large to map", async () => {
+  const run = task("long-task", 100);
+  const dispatch: Envelope = {
+    ...run.brief,
+    parts: [
+      {
+        type: "toolCall",
+        name: "send_message",
+        arguments: {},
+        outcome: { status: "ok", summary: "" },
+      },
+    ],
+  };
+  const read = vi
+    .spyOn(api, "taskRecord")
+    .mockResolvedValue({ messages: null, resultId: "result" });
+  try {
+    const { result } = renderHook(() => useTaskMaps("lead", [dispatch], ""));
+    await waitFor(() => expect(result.current.results.get(run.runId)).toBe("result"));
+    expect(result.current.maps).toEqual([]);
+    expect(result.current.unavailable.get(run.runId)).toBe("oversized");
+  } finally {
+    read.mockRestore();
+  }
 });

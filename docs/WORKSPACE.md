@@ -78,11 +78,12 @@ the branches taking priority if space is tight. From an empty composer,
 Tab goes to the visible branch question when the agent has not asked one
 directly; a number picks an answer. Escape from the composer still opens
 the Questions tray. A colleague's own hand-off is
-a named link. A colleague's recorded reply opens as a message; only the
-host's recorded result ends the task. The finished map folds immediately
+a named link. A colleague's recorded reply opens as a message and stays
+open if the task finishes while it is being read. The finished map folds immediately
 above that result. When no result was delivered, it says the hand-off ended
 instead. A map that could not refresh keeps its last recorded view and
-offers a retry rather than calling a progress note the result.
+offers a retry rather than calling a progress note the result. A task too
+large to draw still keeps the host's recorded result in the transcript.
 
 The older hand-off record still covers exchanges not rooted in an operator's
 brief and conversations with an older host. `HandoffRow` draws each

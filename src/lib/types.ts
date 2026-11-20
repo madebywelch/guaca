@@ -1045,7 +1045,7 @@ export interface WorkDecision {
 export type OutcomeTrigger = "operator" | "routine" | "event" | "decision" | "retry";
 
 export interface TaskRecord {
-  messages: Envelope[];
+  messages: Envelope[] | null;
   resultId: MessageId | null;
 }
 

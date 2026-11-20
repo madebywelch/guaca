@@ -11,10 +11,12 @@ import { contrast } from "./lib/color";
 const css = readFileSync(join(process.cwd(), "src/styles.css"), "utf8");
 const signalCss = readFileSync(join(process.cwd(), "src/signal-layout.css"), "utf8");
 const composerCss = readFileSync(join(process.cwd(), "src/components/Composer.css"), "utf8");
+const taskMapCss = readFileSync(join(process.cwd(), "src/components/TaskMap.css"), "utf8");
+const componentCss = `${signalCss}\n${composerCss}\n${taskMapCss}`;
 
 beforeAll(() => {
   const style = document.createElement("style");
-  style.textContent = `${css}\n${signalCss}\n${composerCss}`;
+  style.textContent = `${css}\n${componentCss}`;
   document.head.append(style);
 });
 
@@ -594,7 +596,7 @@ describe("the agent's tabs", () => {
 });
 
 function declarations(): { selector: string; property: string; value: string; rule: number }[] {
-  const body = `${css.slice(css.indexOf("\n* {"))}\n${signalCss}\n${composerCss}`.replace(
+  const body = `${css.slice(css.indexOf("\n* {"))}\n${componentCss}`.replace(
     /\/\*[\s\S]*?\*\//g,
     "",
   );
@@ -779,7 +781,7 @@ describe("the menu bar panel", () => {
 
 describe("every token a rule spends exists", () => {
   it("names a property this file declares or a component sets", () => {
-    const rules = `${css}\n${signalCss}\n${composerCss}`.replace(/\/\*[\s\S]*?\*\//g, "");
+    const rules = `${css}\n${componentCss}`.replace(/\/\*[\s\S]*?\*\//g, "");
     const declared = new Set([...rules.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]));
     const root = join(process.cwd(), "src");
     const code = readdirSync(root, { recursive: true, encoding: "utf8" })
