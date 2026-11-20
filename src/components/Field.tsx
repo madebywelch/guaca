@@ -4,7 +4,7 @@ import { AgentAvatar } from "../avatars/AgentAvatar";
 import { useDismiss } from "../lib/dismiss";
 import { addressed, defaultTarget, namedAlone, waitingQuestion, writable } from "../lib/field";
 import { focusWriting } from "../lib/focus";
-import { useHeld } from "../lib/held";
+import { useShown } from "../lib/held";
 import { api } from "../lib/ipc";
 import { bindingFor, FIND_KEY, MENU_KEY } from "../lib/keybinds";
 import { useStore } from "../lib/store";
@@ -22,9 +22,8 @@ type Receipt = { kind: "sent"; agent: AgentCard } | { kind: "answered"; agent: A
 export function Field({ onSearch, onManageGroups, onLeave }: Props) {
   const agents = useStore((state) => state.agents);
   const groups = useStore((state) => state.groups);
-  const heldId = useHeld((state) => state.held?.id);
-  const pending = useStore((state) => state.pending).filter((one) => one.id !== heldId);
-  const waiting = pending.length + useStore((state) => state.stuck).length > 0;
+  const { pending, stuck } = useShown();
+  const waiting = pending.length + stuck.length > 0;
   const lastActive = useStore((state) => state.lastActive);
   const railGroup = useStore((state) => state.railGroup);
   const answer = useStore((state) => state.answerQuestion);

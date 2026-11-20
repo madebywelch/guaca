@@ -290,7 +290,11 @@ describe("Composer", () => {
       target: { value: second.id },
     });
     expect(change).not.toHaveBeenCalled();
-    expect(screen.getByText(/already has a saved draft/)).toBeTruthy();
+    expect(
+      screen.getByText(
+        "That conversation already has a saved draft. Open it before moving this draft.",
+      ),
+    ).toBeTruthy();
     expect((screen.getByPlaceholderText("Message") as HTMLTextAreaElement).value).toBe("My draft");
   });
 
@@ -330,7 +334,11 @@ describe("Composer", () => {
       target: { value: second.id },
     });
     expect(change).not.toHaveBeenCalled();
-    expect(screen.getByText(/has a file being attached/)).toBeTruthy();
+    expect(
+      screen.getByText(
+        "That conversation has a file being attached. Wait for it to finish before moving this draft.",
+      ),
+    ).toBeTruthy();
     expect((screen.getByPlaceholderText("Message") as HTMLTextAreaElement).value).toBe("My draft");
     const file = { ...stored("destination.txt"), digest: "c".repeat(64) };
     await act(async () => resolve({ attached: [file], refused: [] }));

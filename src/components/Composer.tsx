@@ -335,7 +335,7 @@ export function Composer({
                 const held = owners.get(destination)?.get() ?? readDraftState(destination);
                 if (held.staging) {
                   setRefused([
-                    "That channel has a file being attached. Wait for it to finish before moving this draft.",
+                    "That conversation has a file being attached. Wait for it to finish before moving this draft.",
                   ]);
                   return;
                 }
@@ -346,7 +346,7 @@ export function Composer({
                   held.held.length
                 ) {
                   setRefused([
-                    "That channel already has a saved draft. Open it before moving this draft.",
+                    "That conversation already has a saved draft. Open it before moving this draft.",
                   ]);
                   return;
                 }

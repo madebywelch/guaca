@@ -293,19 +293,22 @@ mod tests {
 
     #[test]
     fn what_needs_the_operator_is_titled_so_and_generic_names_nobody() {
-        let asked = item("Pip has a question", "Its turn is parked until you answer.");
+        let asked = item("Pip has a question", "It waits for your answer for up to ten minutes.");
         let said = say(Kind::NeedsYou, &asked, 1, Content::Outcome);
         assert_eq!(said.title, "Needs you");
-        assert_eq!(said.body, "Pip has a question. Its turn is parked until you answer.");
+        assert_eq!(
+            said.body,
+            "Pip has a question. It waits for your answer for up to ten minutes."
+        );
         let generic = say(Kind::NeedsYou, &asked, 1, Content::Generic);
         assert!(!generic.body.contains("Pip"), "{generic:?}");
 
-        let reminder = item("For you", "2 decisions need a review.");
+        let reminder = item("For you", "2 questions in For you. Open it to answer or follow up.");
         for content in [Content::Outcome, Content::Generic] {
             let said = say(Kind::Reminder, &reminder, 1, content);
             assert_eq!(
                 (said.title.as_str(), said.body.as_str()),
-                ("Needs you", "2 decisions need a review.")
+                ("Needs you", "2 questions in For you. Open it to answer or follow up.")
             );
         }
 

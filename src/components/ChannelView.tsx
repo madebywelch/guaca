@@ -4,6 +4,7 @@ import { rememberDismissOpener } from "../lib/dismiss";
 import { waitingQuestion } from "../lib/field";
 import { useFollowBottom } from "../lib/follow";
 import { waitingLine } from "../lib/handoff";
+import { useShown } from "../lib/held";
 import { api } from "../lib/ipc";
 import { runsOn } from "../lib/profile";
 import { thoughtNow } from "../lib/reasoning";
@@ -71,7 +72,7 @@ export function ChannelView({
 }: Props) {
   const lookups = useAgentLookup();
   const messages = useStore((s) => s.messages[channel]);
-  const activity = useStore((s) => s.activity);
+  const { activity } = useShown();
   const showFailure = useStore((s) => s.showFailure);
   const focused = useStore((s) => s.focused);
   const clearFocus = useStore((s) => s.clearFocus);
@@ -86,10 +87,9 @@ export function ChannelView({
   const crew = useStore((s) => s.groups.find((group) => group.id === agent?.groupId)?.name);
   const group = useStore((s) => s.groups.find((entry) => entry.id === agent?.groupId));
   const settings = useStore((s) => s.settings);
-  const asking = useStore((s) => s.pending.some((one) => one.agentId === agent?.id));
-  const question = useStore((s) =>
-    waitingQuestion(s.pending.filter((one) => one.agentId === agent?.id)),
-  );
+  const shownNow = useShown();
+  const asking = shownNow.pending.some((one) => one.agentId === agent?.id);
+  const question = waitingQuestion(shownNow.pending.filter((one) => one.agentId === agent?.id));
   const model = agent && settings ? runsOn(agent, group, settings).model : undefined;
   const answeringId = agent?.id;
   const answeringName = agent?.name;
@@ -558,7 +558,8 @@ function WaitingLine({ agent, asked }: { agent: AgentCard; asked: Asked | null }
   const owned = useStore((s) => s.running.find((one) => one.agentId === agent.id));
   const agents = useStore((s) => s.agents);
   const activeRun = useStore((s) => s.activeRun);
-  const activity = useStore((s) => s.activity[agent.id]);
+  const { activity: everyone, sending } = useShown();
+  const activity = everyone[agent.id];
   const now = useNow(1000);
   if (!owned) return null;
 
@@ -566,7 +567,9 @@ function WaitingLine({ agent, asked }: { agent: AgentCard; asked: Asked | null }
   const waiting =
     mine?.waiting ??
     colleaguesOn(owned, activeRun, (id) => agents.find((one) => one.id === id)?.name);
-  const line = waitingLine(mine?.names ?? [], waiting) ?? runningNote(owned, activity, []);
+  const line =
+    waitingLine(mine?.names ?? [], waiting) ??
+    runningNote(owned, activity, [], sending.includes(agent.id));
 
   return (
     <div className="turn">

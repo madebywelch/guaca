@@ -4,6 +4,22 @@ use serde::{Deserialize, Serialize};
 use super::ids::{AgentId, DecisionId, GroupId, RunId};
 use super::{instant, local};
 
+pub fn questions(count: usize) -> String {
+    if count == 1 {
+        "1 question".to_string()
+    } else {
+        format!("{count} questions")
+    }
+}
+
+pub fn results(count: usize) -> String {
+    if count == 1 {
+        "1 result".to_string()
+    } else {
+        format!("{count} results")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DecisionRequest {

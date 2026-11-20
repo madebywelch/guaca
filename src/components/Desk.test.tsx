@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { useHeld } from "../lib/held";
 import { useStore } from "../lib/store";
 import type { AgentCard, Approval, ApprovalId, Escalation } from "../lib/types";
 import { DEFAULT_GROUP } from "../test-fixtures";
@@ -151,9 +152,9 @@ describe("the desk", () => {
     expect(screen.queryByRole("button", { name: "vendor" })).toBeNull();
   });
 
-  it("counts the queue rather than saying there is one", () => {
+  it("names who is waiting once, however many questions they asked", () => {
     draw([request(), request({ id: "req-2" as ApprovalId })]);
-    expect(screen.getByText("2 turns are waiting on you")).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 3 }).textContent).toBe("Manager is waiting on you");
   });
 
   it("answers the request it was asked about", () => {
@@ -191,7 +192,7 @@ describe("the desk", () => {
   it("opens the channel the request came from", () => {
     draw([request()]);
 
-    fireEvent.click(screen.getByRole("button", { name: "Open channel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open conversation" }));
     expect(openChannel).toHaveBeenCalledWith("Manager");
   });
 
@@ -284,7 +285,7 @@ describe("an escalation on the desk", () => {
   it("is on it with nothing parked, because nothing has to be parked", () => {
     draw([], [stuckOn()]);
     expect(screen.getByText("The deploy needs a key only you have.")).toBeTruthy();
-    expect(screen.getByText("1 agent needs your help")).toBeTruthy();
+    expect(screen.getByText("Manager is waiting on you")).toBeTruthy();
   });
 
   it("says how long it has been true and how many turns have hit it", () => {
@@ -300,15 +301,23 @@ describe("an escalation on the desk", () => {
 
   it("leads with the channel and not with the clear", () => {
     draw([], [stuckOn()]);
-    const open = screen.getByRole("button", { name: "Open channel" });
+    const open = screen.getByRole("button", { name: "Open conversation" });
     expect(open.className).toContain("btn--primary");
     expect(screen.getByRole("button", { name: "Clear" }).className).toContain("btn--quiet");
   });
 
   it("opens the channel of the agent that raised it", () => {
     draw([], [stuckOn()]);
-    fireEvent.click(screen.getByRole("button", { name: "Open channel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open conversation" }));
     expect(openChannel).toHaveBeenCalledWith("Manager");
+  });
+
+  it("leaves out a question whose answer is held, so it cannot be answered twice", () => {
+    useHeld.setState({ held: { id: "ap-held", send: async () => {} }, inFlight: [], notice: null });
+    draw([request({ id: "ap-held" as ApprovalId })]);
+    expect(screen.queryByRole("button", { name: "Allow" })).toBeNull();
+    act(() => useHeld.setState({ held: null }));
+    expect(screen.getByRole("button", { name: "Allow" })).toBeTruthy();
   });
 
   it("clears the one it was asked about", () => {
@@ -335,9 +344,14 @@ describe("an escalation on the desk", () => {
     expect(cards[1]?.getAttribute("data-kind")).toBe("stuck");
   });
 
-  it("counts both kinds in one line without adding them up for the operator", () => {
-    draw([request()], [stuckOn()]);
-    expect(screen.getByText("2 things are waiting on you")).toBeTruthy();
+  it("names everyone waiting in one line, whichever kind they asked", () => {
+    useStore.setState({
+      agents: [agent("Manager"), agent("Scout")],
+      pending: [request({ agentId: "Scout" })],
+      stuck: [stuckOn()],
+    });
+    render(<Desk onOpenChannel={openChannel} />);
+    expect(screen.getByText("Scout and Manager are waiting on you")).toBeTruthy();
   });
 
   it("names the agent as deleted rather than drawing an empty card", () => {

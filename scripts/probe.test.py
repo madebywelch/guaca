@@ -447,7 +447,7 @@ class LapsingHost:
             self.asked_at = self.clock.now
             self.outbox.append({"kind": "needs_you", "title": "Researcher has a question", "status": "delivered"})
             if self.phone is not None:
-                self.phone.push("Needs you", "Researcher has a question. Its turn is parked until you answer.")
+                self.phone.push("Needs you", "Researcher has a question. It waits for your answer for up to ten minutes.")
         elif self.asked_at is not None and not self.answered and self.phone is not None:
             self.outbox.append({"kind": "outcome", "title": agent, "status": "pending"})
         else:

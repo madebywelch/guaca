@@ -57,6 +57,9 @@ beforeEach(() => {
 
 it("shows inherited rules read-only and sends versioned edits and deletes", async () => {
   render(<Permissions groupId="group" />);
+  expect(
+    screen.getByText("Rules answer some questions for you, and a block always wins."),
+  ).toBeTruthy();
   const inherited = (await screen.findByText("Never press a site")).closest(
     ".permissions__row",
   ) as HTMLElement;

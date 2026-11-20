@@ -56,7 +56,7 @@ export function ApprovalRequest({ part, agent }: Props) {
               ? `${asker} is waiting on you. ${NOTHING_YET[part.action]}`
               : state === "expired" && filed
                 ? FILED
-                : (SETTLED[state] ?? "This request is no longer live.")}
+                : (SETTLED[state] ?? "This question is no longer live.")}
           </p>
         </div>
       </div>

@@ -19,7 +19,7 @@ _spec.loader.exec_module(make_icon)
 SIZE = 36
 SUPERSAMPLE = 4
 
-ALARM = (0xD9, 0x5F, 0x43)
+ATTENTION = (0xFF, 0xB3, 0x46)
 
 INK = (0x00, 0x00, 0x00)
 
@@ -61,7 +61,7 @@ def working(x: float, y: float) -> tuple[int, int, int, int]:
 
 
 def attention(x: float, y: float) -> tuple[int, int, int, int]:
-    return (*ALARM, 255) if inside(x, y, 0.0) and not in_pit(x, y) else (0, 0, 0, 0)
+    return (*ATTENTION, 255) if inside(x, y, 0.0) and not in_pit(x, y) else (0, 0, 0, 0)
 
 
 def render(sample, size: int) -> bytes:

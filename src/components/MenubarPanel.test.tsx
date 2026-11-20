@@ -308,12 +308,12 @@ describe("what the panel says at a glance", () => {
     expect(screen.queryByText(/No agents yet/)).toBeNull();
   });
 
-  it("answers a request where it is seen, and sends Open channel to the window", () => {
+  it("answers a request where it is seen, and sends Open conversation to the window", () => {
     useStore.setState({ pending: [waiting()] });
     render(<MenubarPanel ready />);
 
-    expect(screen.getByText("1 waiting on you")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Open channel" }));
+    expect(screen.getByText("1 question waiting on you")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Open conversation" }));
     expect(mocks.openWindow).toHaveBeenCalledWith({ kind: "agent", id: "id-Chef" });
   });
 
@@ -321,8 +321,8 @@ describe("what the panel says at a glance", () => {
     useStore.setState({ decisions: [aDecision(), aDecision({ id: "decision-2" })] });
     render(<MenubarPanel ready />);
 
-    expect(screen.getByText("2 waiting on you")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /2 decisions need you/ }));
+    expect(screen.getByText("2 questions waiting on you")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /2 questions in For you/ }));
     expect(mocks.openWindow).toHaveBeenCalledWith({ kind: "forYou" });
   });
 
@@ -438,7 +438,7 @@ describe("finished work in the panel", () => {
       "Scout Report r3",
       "Scout Report r4",
     ]);
-    expect(screen.getByText("1 waiting on you")).toBeTruthy();
+    expect(screen.getByText("1 question waiting on you")).toBeTruthy();
 
     await act(async () => {
       fireEvent.click(within(finished).getByRole("button", { name: "And 2 more in For you" }));

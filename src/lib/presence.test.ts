@@ -122,14 +122,16 @@ describe("presenceNote", () => {
     [3, QUIET, "3 agents"],
     [1, QUIET, "1 agent"],
     [2, { blocked: 0, working: true }, "2 agents, working"],
-    [2, { blocked: 1, working: false }, "2 agents, 1 turn waiting on you"],
-    [4, { blocked: 3, working: false }, "4 agents, 3 turns waiting on you"],
+    [2, { blocked: 1, working: false }, "2 agents, 1 question waiting on you"],
+    [4, { blocked: 3, working: false }, "4 agents, 3 questions waiting on you"],
   ])("says a crew of %i as words", (count, presence, said) => {
     expect(presenceNote(count, presence)).toBe(said);
   });
 
   it("says waiting rather than working when both are true", () => {
-    expect(presenceNote(2, { blocked: 1, working: true })).toBe("2 agents, 1 turn waiting on you");
+    expect(presenceNote(2, { blocked: 1, working: true })).toBe(
+      "2 agents, 1 question waiting on you",
+    );
   });
 
   it("is what the label says under the name", () => {
@@ -160,13 +162,13 @@ describe("presenceLabel", () => {
 
   it("says how many turns are waiting", () => {
     expect(presenceLabel("Sales", 3, { blocked: 2, working: false })).toBe(
-      "Sales, 3 agents, 2 turns waiting on you",
+      "Sales, 3 agents, 2 questions waiting on you",
     );
   });
 
   it("does not say turns about one turn", () => {
     expect(presenceLabel("Sales", 3, { blocked: 1, working: false })).toBe(
-      "Sales, 3 agents, 1 turn waiting on you",
+      "Sales, 3 agents, 1 question waiting on you",
     );
   });
 

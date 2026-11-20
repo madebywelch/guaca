@@ -117,7 +117,7 @@ const ATTENTION_ROWS: { key: keyof Attention; label: string; hint: string }[] = 
   {
     key: "needsYou",
     label: "Things that need you",
-    hint: "A permission request, a question, an agent that is stuck, and reminders about decisions in For you.",
+    hint: "A question, permission included, an agent that is stuck, and reminders about open questions in For you.",
   },
   {
     key: "failures",
@@ -1166,7 +1166,7 @@ export function SettingsPage({ request, onSection, notices }: Props) {
 
                 <ApiKeyField
                   label="E2B API key"
-                  title="Lets this host rent a computer for an agent: a desktop and a terminal in a sandbox, shown in the corner of its channel. Which agents have one is set on each agent's Computer panel."
+                  title="Lets this host rent a computer for an agent: a desktop and a terminal in a sandbox, shown in the corner of its conversation. Which agents have one is set on each agent's Computer panel."
                   stored={settings?.e2bKeySet ?? false}
                   hint={settings?.e2bKeyHint ?? ""}
                   value={e2bKey}

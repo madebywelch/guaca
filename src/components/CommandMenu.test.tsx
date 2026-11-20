@@ -114,7 +114,7 @@ describe("the command menu", () => {
     expect(chosen()).toBe("Allow");
     fireEvent.keyDown(input, { key: "Enter" });
     expect(decide).not.toHaveBeenCalled();
-    expect(useHeld.getState().notice?.text).toBe("Allowed Dara's request.");
+    expect(useHeld.getState().notice?.text).toBe("Allowed what Dara asked.");
     act(() => vi.advanceTimersByTime(HOLD_MS));
     expect(decide).toHaveBeenCalledExactlyOnceWith(request.id, "allow");
   });

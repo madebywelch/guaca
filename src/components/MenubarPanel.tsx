@@ -20,6 +20,7 @@ import { api } from "../lib/ipc";
 import { exchange, headline, liveReply, panelOrder, said, workingCount } from "../lib/menubar";
 import { finished, moreLine, newestByAgent, PANEL_LINES } from "../lib/outcomes";
 import { groupNamed } from "../lib/presence";
+import { questions } from "../lib/questions";
 import { useLiveAgents, useStore } from "../lib/store";
 import { useNow } from "../lib/time";
 import { BEFORE_RELOAD, workspaceOrigin } from "../lib/transport";
@@ -201,8 +202,8 @@ function Overview({ agents, onOpen }: { agents: AgentCard[]; onOpen: (id: AgentI
           className="menubar__decisions"
           onClick={() => void api.openWindow({ kind: "forYou" })}
         >
-          {open === 1 ? "1 decision needs you" : `${open} decisions need you`}
-          <span className="menubar__decisions-go">Open For you</span>
+          {questions(open)} in For you
+          <span className="menubar__decisions-go">Open</span>
         </button>
       )}
 

@@ -3,7 +3,7 @@ import { Fragment, type KeyboardEvent, useEffect, useMemo, useRef, useState } fr
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { useDismiss } from "../lib/dismiss";
 import { defaultTarget } from "../lib/field";
-import { useHeld } from "../lib/held";
+import { useHeld, useShown } from "../lib/held";
 import { api } from "../lib/ipc";
 import { formatCombo } from "../lib/keybinds";
 import {
@@ -36,20 +36,18 @@ const RETURN = formatCombo({ key: "Enter" });
 export function CommandMenu({ onClose, onPlace, onSection }: Props) {
   const agents = useStore((s) => s.agents);
   const groups = useStore((s) => s.groups);
-  const activity = useStore((s) => s.activity);
+  const shownNow = useShown();
+  const activity = shownNow.activity;
   const lastActive = useStore((s) => s.lastActive);
   const railGroup = useStore((s) => s.railGroup);
   const open = useStore((s) => s.selected);
   const prefs = useStore((s) => s.prefs);
-  const allPending = useStore((s) => s.pending);
-  const allStuck = useStore((s) => s.stuck);
   const select = useStore((s) => s.select);
   const leaveChannel = useStore((s) => s.leaveChannel);
   const setPrefs = useStore((s) => s.setPrefs);
   const decide = useStore((s) => s.decideApproval);
   const answer = useStore((s) => s.answerQuestion);
   const showFailure = useStore((s) => s.showFailure);
-  const heldId = useHeld((s) => s.held?.id);
   const hold = useHeld((s) => s.hold);
   const tell = useHeld((s) => s.tell);
 
@@ -74,8 +72,8 @@ export function CommandMenu({ onClose, onPlace, onSection }: Props) {
     recipient,
     agents: ordered,
     activity,
-    pending: allPending.filter((one) => one.id !== heldId),
-    stuck: allStuck.filter((one) => one.id !== heldId),
+    pending: shownNow.pending,
+    stuck: shownNow.stuck,
     open,
     prefs,
   });
@@ -107,7 +105,7 @@ export function CommandMenu({ onClose, onPlace, onSection }: Props) {
       case "decide":
         hold(
           action.request.id,
-          `${action.decision === "deny" ? "Denied" : "Allowed"} ${nameOf(action.request.agentId)}'s request.`,
+          `${action.decision === "deny" ? "Denied" : "Allowed"} what ${nameOf(action.request.agentId)} asked.`,
           () => decide(action.request.id, action.decision),
         );
         return;

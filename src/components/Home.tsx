@@ -3,10 +3,11 @@ import { AgentAvatar } from "../avatars/AgentAvatar";
 import { ABSENT_ACCENT } from "../avatars/catalog";
 import { needsAnswer } from "../lib/decisions";
 import { focusWriting } from "../lib/focus";
-import { useHeld } from "../lib/held";
+import { useShown } from "../lib/held";
 import { api } from "../lib/ipc";
 import { drawnThrough, finished, statusWord } from "../lib/outcomes";
 import { groupNamed } from "../lib/presence";
+import { questions } from "../lib/questions";
 import { colleaguesOn, runningNote } from "../lib/running";
 import { useStore } from "../lib/store";
 import { clockLabel, elapsed, useNow } from "../lib/time";
@@ -23,14 +24,11 @@ interface Props {
 }
 
 export function Home({ onSearch, onManageGroups }: Props) {
-  const heldId = useHeld((state) => state.held?.id);
-  const pending = useStore((state) => state.pending).filter((one) => one.id !== heldId);
-  const stuck = useStore((state) => state.stuck).filter((one) => one.id !== heldId);
+  const { pending, stuck, activity } = useShown();
   const decisions = useStore((state) => state.decisions);
   const outcomes = useStore((state) => state.outcomes);
   const agents = useStore((state) => state.agents);
   const groups = useStore((state) => state.groups);
-  const activity = useStore((state) => state.activity);
   const select = useStore((state) => state.select);
   const openMessage = useStore((state) => state.openMessage);
   const seeOutcomes = useStore((state) => state.seeOutcomes);
@@ -88,7 +86,10 @@ export function Home({ onSearch, onManageGroups }: Props) {
             }}
             title={
               <>
-                Needs you <span className="home__count">{pending.length + stuck.length}</span>
+                Needs you{" "}
+                <span className="home__count" data-waiting="">
+                  {pending.length + stuck.length}
+                </span>
               </>
             }
           />
@@ -190,7 +191,7 @@ export function Home({ onSearch, onManageGroups }: Props) {
 
 function RunningNow({ running }: { running: Running[] }) {
   const agents = useStore((state) => state.agents);
-  const activity = useStore((state) => state.activity);
+  const { activity, sending } = useShown();
   const activeRun = useStore((state) => state.activeRun);
   const select = useStore((state) => state.select);
   const now = useNow(1000);
@@ -212,6 +213,7 @@ function RunningNow({ running }: { running: Running[] }) {
             run,
             activity[run.agentId],
             colleaguesOn(run, activeRun, nameOf),
+            sending.includes(run.agentId),
           );
           return (
             <li key={run.runId} className="home__run">
@@ -303,7 +305,7 @@ function Quiet({ working, decisions, now }: { working: string[]; decisions: numb
       {(decisions > 0 || (today ?? 0) > 0) && (
         <button type="button" className="home__more" onClick={() => showForYou(true)}>
           {decisions > 0
-            ? `${decisions === 1 ? "1 decision" : `${decisions} decisions`} set aside in For you`
+            ? `${questions(decisions)} set aside in For you`
             : `Today, ${today} finished`}
         </button>
       )}

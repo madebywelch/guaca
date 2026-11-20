@@ -120,9 +120,9 @@ pub enum StoreError {
     PluginToolNotOffered { plugin: String, tool: String },
     #[error("Guaca could not use its own records: the {plugin} tool list is unreadable. Ask the operator to reconnect {plugin}.")]
     PluginToolListUnreadable { plugin: String },
-    #[error("no permission request with id {0}")]
+    #[error("no question with id {0}")]
     ApprovalNotFound(ApprovalId),
-    #[error("that request was already answered ({})", state.as_str())]
+    #[error("that question was already answered ({})", state.as_str())]
     ApprovalSettled { state: ApprovalState },
     #[error("{0} is already used by another credential in this group")]
     DuplicateEnvVar(String),
@@ -7463,10 +7463,20 @@ mod tests {
         let written = asks(&f.store, &manager, &[]);
 
         f.store.answer_approval(written.id, "Northwind").unwrap();
+        let refused = f.store.answer_approval(written.id, "Contoso");
         assert!(matches!(
-            f.store.answer_approval(written.id, "Contoso"),
+            refused,
             Err(StoreError::ApprovalSettled { state: ApprovalState::Answered })
         ));
+        assert_eq!(
+            refused.unwrap_err().to_string(),
+            "that question was already answered (answered)"
+        );
+        let missing = ApprovalId::new();
+        assert_eq!(
+            f.store.answer_approval(missing, "Contoso").unwrap_err().to_string(),
+            format!("no question with id {missing}")
+        );
         assert_eq!(
             f.store.get_approval(written.id).unwrap().unwrap().answer.as_deref(),
             Some("Northwind")

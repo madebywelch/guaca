@@ -1,3 +1,4 @@
+import { questions } from "./questions";
 import type { Activity, AgentCard, AgentId, Escalation, Group, GroupId } from "./types";
 
 export interface Presence {
@@ -56,9 +57,7 @@ export function presenceOf(
 export function presenceNote(count: number, presence: Presence): string {
   const size = count === 1 ? "1 agent" : `${count} agents`;
   if (presence.blocked > 0) {
-    const waiting =
-      presence.blocked === 1 ? "1 turn waiting on you" : `${presence.blocked} turns waiting on you`;
-    return `${size}, ${waiting}`;
+    return `${size}, ${questions(presence.blocked)} waiting on you`;
   }
   if (presence.working) return `${size}, working`;
   return size;

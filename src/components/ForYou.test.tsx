@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useStore } from "../lib/store";
 import type { Outcome, RunId, WorkDecision } from "../lib/types";
-import { aDecision, aGroup } from "../test-fixtures";
+import { aDecision, aGroup, anAgent } from "../test-fixtures";
 import { ForYou } from "./ForYou";
 
 const mocks = vi.hoisted(() => ({
@@ -83,6 +83,7 @@ it("keeps a submitted question until the runtime confirms it, then tracks follow
     render(<ForYou onClose={() => {}} />);
   });
   await waitFor(() => expect(mocks.list).toHaveBeenCalled());
+  expect(screen.queryByText(/in progress after your answer/)).toBeNull();
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "11 AM" }));
   });
@@ -91,7 +92,11 @@ it("keeps a submitted question until the runtime confirms it, then tracks follow
   mocks.list.mockResolvedValue([aDecision({ status: "answered", answer: "11 AM" })]);
   await act(async () => accept());
   await waitFor(() => expect(screen.queryByRole("button", { name: "11 AM" })).toBeNull());
-  fireEvent.click(screen.getByRole("button", { name: "Following through 1" }));
+  expect(
+    screen.getByText("Answer saved for the agent. Its progress is under Answered."),
+  ).toBeTruthy();
+  expect(screen.getByText(/1 in progress after your answer\./)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Answered" }));
   expect(
     screen.getByText("Answer delivered. Awaiting a completion receipt from the agent."),
   ).toBeTruthy();
@@ -132,7 +137,7 @@ it("allows a written answer even when choices were offered", async () => {
   );
 });
 
-it("keeps interrupted follow-through in Needs you and resumes without asking the choice again", async () => {
+it("keeps interrupted work in Waiting on you and resumes without asking the choice again", async () => {
   const interrupted = aDecision({ status: "answered", answer: "11 AM", interrupted: true });
   mocks.list.mockResolvedValue([interrupted]);
   useStore.setState({ decisions: [interrupted] });
@@ -140,21 +145,47 @@ it("keeps interrupted follow-through in Needs you and resumes without asking the
     render(<ForYou onClose={() => {}} />);
   });
   expect(screen.queryByRole("button", { name: "11 AM" })).toBeNull();
+  expect(
+    screen.getByText(
+      "Work after your answer was interrupted. Review what was already done before resuming.",
+    ),
+  ).toBeTruthy();
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "Resume follow-through" }));
+    fireEvent.click(screen.getByRole("button", { name: "Resume work" }));
   });
   await waitFor(() => expect(mocks.resume).toHaveBeenCalledWith("decision-1"));
+  expect(
+    await screen.findByText("Resumed. The agent checks what was already done before going on."),
+  ).toBeTruthy();
+});
+
+it("sets a question aside for an hour and says it still needs an answer", async () => {
+  mocks.snooze.mockResolvedValue(undefined);
+  useStore.setState({ decisions: [aDecision()] });
+  await act(async () => {
+    render(<ForYou onClose={() => {}} />);
+  });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Remind me in 1 hour" }));
+  });
+  expect(
+    await screen.findByText("Set aside for one hour. The question still needs your answer."),
+  ).toBeTruthy();
 });
 
 it("keeps snoozed decisions discoverable and counts them until answered", async () => {
   const later = aDecision({ snoozedUntil: Date.now() + 3600000 });
   mocks.list.mockResolvedValue([later]);
-  useStore.setState({ decisions: [later] });
+  useStore.setState({
+    decisions: [later],
+    agents: [anAgent("assistant", { name: "Executive Assistant" })],
+  });
   await act(async () => {
     render(<ForYou onClose={() => {}} />);
   });
   expect(screen.getByText("Set aside · 1")).toBeTruthy();
-  expect(screen.getByText("1 item needs your attention.")).toBeTruthy();
+  expect(screen.getByText("Executive Assistant is waiting on you.")).toBeTruthy();
+  expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("For you 1 question");
 });
 
 it("does not let an older refresh overwrite a newer answer", async () => {
@@ -201,7 +232,7 @@ it("opens a request's channel behind For you and gets out of the way", async () 
     render(<ForYou onClose={close} />);
   });
 
-  fireEvent.click(screen.getByRole("button", { name: "Open channel" }));
+  fireEvent.click(screen.getByRole("button", { name: "Open conversation" }));
   expect(select).toHaveBeenCalledWith("agent-1");
   expect(close).toHaveBeenCalled();
 });
@@ -247,9 +278,9 @@ describe("Finished", () => {
     expect(
       screen.getByText("Nothing needs your answer. 1 finished since you last looked."),
     ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Needs you" }).getAttribute("aria-pressed")).toBe(
-      "true",
-    );
+    expect(
+      screen.getByRole("button", { name: "Waiting on you" }).getAttribute("aria-pressed"),
+    ).toBe("true");
     const finished = screen.getByRole("region", { name: "Finished" });
     expect(document.querySelector(".for-you__body")?.firstElementChild).toBe(finished);
     expect(within(finished).getByText("Sent the digest to 12 people.")).toBeTruthy();
@@ -257,7 +288,7 @@ describe("Finished", () => {
 
   it("sits under the requests and leaves the count to them", async () => {
     hostHas([outcome("run-1"), outcome("run-2", { finishedAt: NOW - HOUR })]);
-    useStore.setState({ pending: [waiting] });
+    useStore.setState({ pending: [waiting], agents: [anAgent("agent-2", { name: "Scribe" })] });
     await act(async () => {
       render(<ForYou onClose={() => {}} />);
     });
@@ -266,8 +297,9 @@ describe("Finished", () => {
     expect(
       requests.compareDocumentPosition(finished) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("For you 1");
-    expect(screen.getByText("1 item needs your attention.")).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("For you 1 question");
+    expect(screen.getByText("Scribe is waiting on you.")).toBeTruthy();
+    expect(within(requests).queryByRole("heading")).toBeNull();
   });
 
   it("opens the closing note in its channel and marks the run seen", async () => {
@@ -334,7 +366,7 @@ describe("Finished", () => {
     ).toEqual(["Ops", "Research"]);
   });
 
-  it("goes back to Needs you when asked to open while open on another view", async () => {
+  it("goes back to Waiting on you when asked to open while open on another view", async () => {
     hostHas([outcome("run-1")]);
     useStore.setState({ forYou: true });
     await act(async () => {
@@ -346,9 +378,9 @@ describe("Finished", () => {
     await act(async () => {
       useStore.getState().showForYou(true);
     });
-    expect(screen.getByRole("button", { name: "Needs you" }).getAttribute("aria-pressed")).toBe(
-      "true",
-    );
+    expect(
+      screen.getByRole("button", { name: "Waiting on you" }).getAttribute("aria-pressed"),
+    ).toBe("true");
     expect(screen.getByRole("region", { name: "Finished" })).toBeTruthy();
   });
 
@@ -365,4 +397,41 @@ describe("Finished", () => {
     expect(screen.queryByText("Too old.")).toBeNull();
     expect(screen.getByText("Nothing needs your answer right now.")).toBeTruthy();
   });
+});
+
+it("calls a waiting request a question in every tab, footer and section it has", async () => {
+  mocks.list.mockResolvedValue([]);
+  useStore.setState({
+    decisions: [],
+    pending: [],
+    stuck: [],
+    agents: [anAgent("assistant", { name: "Executive Assistant" })],
+  });
+  await act(async () => {
+    render(<ForYou onClose={() => {}} />);
+  });
+  const tabs = screen.getByRole("navigation", { name: "For you views" });
+  expect(
+    within(tabs)
+      .getAllByRole("button")
+      .map((tab) => tab.textContent),
+  ).toEqual(["Waiting on you", "Answered", "History"]);
+  expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("For you ");
+  expect(screen.getByText("When each agent last worked")).toBeTruthy();
+  expect(screen.getByRole("contentinfo").textContent).toMatch(
+    /^Reminders about open questions at 9 AM and 4 PM/,
+  );
+  fireEvent.click(within(tabs).getByRole("button", { name: "Answered" }));
+  expect(screen.getByText("Nothing you answered is still in progress.")).toBeTruthy();
+  fireEvent.click(within(tabs).getByRole("button", { name: "History" }));
+  expect(screen.getByText("Completed and withdrawn questions will appear here.")).toBeTruthy();
+});
+
+it("says a question it could not refresh is a question", async () => {
+  useStore.setState({ decisions: [], decisionError: "offline" });
+  mocks.list.mockRejectedValue(new Error("offline"));
+  await act(async () => {
+    render(<ForYou onClose={() => {}} />);
+  });
+  expect(screen.getByRole("alert").textContent).toMatch(/^Could not refresh questions: offline/);
 });

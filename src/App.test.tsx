@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { expectRestart, forgetRestart } from "./lib/link";
 import { saveFirstTask } from "./lib/onboarding";
 import type { AgentCard, Routine, Settings } from "./lib/types";
-import { aGroup } from "./test-fixtures";
+import { aGroup, anApproval } from "./test-fixtures";
 
 const listGroups = vi.fn(async () => [aGroup({ agentCount: 3 })]);
 const listAgents = vi.fn<() => Promise<AgentCard[]>>(async () => []);
@@ -63,6 +63,13 @@ vi.mock("./lib/ipc", () => ({
       })),
     reportPresence: async () => {},
     reportHost: async () => {},
+    subscriptionStatus: async () => ({
+      signedIn: false,
+      email: "",
+      plan: "",
+      includesCodex: false,
+    }),
+    claudeSigninStatus: async () => ({ signedIn: false }),
     reportView: async () => {},
     capabilities: async () => ({
       loopbackEndpoints: true,
@@ -847,6 +854,22 @@ describe("App", () => {
     },
   );
 
+  it("names the Provider section on the no-key banner once Settings is open", async () => {
+    getSettings.mockResolvedValue({
+      ...(await getSettings()),
+      provider: "compatible",
+      apiKeySet: false,
+    });
+    const first = aGroup({ apiKeySet: false });
+    listGroups.mockResolvedValue([first]);
+    listAgents.mockResolvedValue([agent("Manager")]);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Open settings" }));
+    expect(await screen.findByRole("button", { name: "Go to Provider" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open settings" })).toBeNull();
+    act(() => useStore.getState().closeSettings());
+  });
+
   it.each([
     { provider: "compatible" as const, apiKeySet: true },
     { provider: "chatgpt" as const, apiKeySet: false },
@@ -1280,18 +1303,63 @@ describe("the command menu's shortcut", () => {
     render(<App />);
     const field = await screen.findByRole("textbox", { name: "What do you need?" });
     const send = vi.fn(async () => {});
-    act(() => useHeld.getState().hold("req-1", "Allowed Manager's request.", send));
+    act(() => useHeld.getState().hold("req-1", "Allowed what Manager asked.", send));
     fireEvent.change(field, { target: { value: "half a sentence" } });
     fireEvent.keyDown(field, { key: "z", metaKey: true });
     expect(useHeld.getState().held?.id).toBe("req-1");
     fireEvent.change(field, { target: { value: "" } });
     fireEvent.click(await screen.findByRole("button", { name: /^Undo/ }));
     expect(useHeld.getState().held).toBeNull();
-    act(() => useHeld.getState().hold("req-2", "Allowed Manager's request.", send));
+    act(() => useHeld.getState().hold("req-2", "Allowed what Manager asked.", send));
     fireEvent.keyDown(document.body, { key: "z", metaKey: true });
     expect(useHeld.getState().held).toBeNull();
     expect(screen.queryByRole("status", { name: "" })).toBeNull();
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it("treats a held answer as answered on every surface, and Undo brings the question back everywhere at once", async () => {
+    listAgents.mockResolvedValue([agent("Manager")]);
+    render(<App />);
+    await screen.findByRole("textbox", { name: "What do you need?" });
+    const asking = anApproval({ agentId: "id-Manager", createdAt: Date.now() - 60_000 });
+    act(() =>
+      useStore.setState({
+        pending: [asking],
+        activity: { "id-Manager": { state: "awaitingApproval" } },
+        running: [
+          {
+            runId: asking.runId,
+            agentId: "id-Manager",
+            groupId: asking.groupId,
+            startedAt: Date.now() - 60_000,
+            note: null,
+          },
+        ],
+      }),
+    );
+    const places = screen.getByRole("navigation", { name: "Places" });
+    const waiting = () => {
+      expect(within(places).getByRole("button", { name: "For you, 1 question" })).toBeTruthy();
+      expect(screen.getByText("Waiting for your answer")).toBeTruthy();
+      expect(screen.getByRole("button", { name: /^Manager, needs you/ })).toBeTruthy();
+      expect(screen.getByRole("heading", { name: /^Needs you/ })).toBeTruthy();
+    };
+    waiting();
+
+    const send = vi.fn(async () => {});
+    act(() => useHeld.getState().hold(asking.id, "Allowed what Manager asked.", send));
+    expect(within(places).getByRole("button", { name: "For you" }).textContent).toBe("For you");
+    expect(screen.getByText("Sending your answer")).toBeTruthy();
+    expect(screen.queryByText("Waiting for your answer")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Manager, needs you/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Manager, working now" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: /^Needs you/ })).toBeNull();
+
+    fireEvent.click(await screen.findByRole("button", { name: /^Undo/ }));
+    waiting();
+    expect(screen.queryByText("Sending your answer")).toBeNull();
+    expect(send).not.toHaveBeenCalled();
+    act(() => useStore.setState({ pending: [], activity: {}, running: [] }));
   });
 
   it("opens the agent a number names, in the menu's order, and leaves the next number alone", async () => {

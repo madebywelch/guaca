@@ -651,11 +651,11 @@ describe("groups as places", () => {
       { Reader: { state: "awaitingApproval" } },
     );
 
-    const orb = screen.getByLabelText("research, 1 agent, 1 turn waiting on you");
+    const orb = screen.getByLabelText("research, 1 agent, 1 question waiting on you");
     expect(orb.querySelector(".orb__waiting")?.textContent).toBe("1");
   });
 
-  it("counts the parked turns rather than reporting that there are some", () => {
+  it("counts the questions rather than reporting that there are some", () => {
     draw(
       [group("everyone"), group("research", null, RESEARCH)],
       [
@@ -666,7 +666,7 @@ describe("groups as places", () => {
       { Reader: { state: "awaitingApproval" }, Writer: { state: "awaitingApproval" } },
     );
 
-    const orb = screen.getByLabelText("research, 2 agents, 2 turns waiting on you");
+    const orb = screen.getByLabelText("research, 2 agents, 2 questions waiting on you");
     expect(orb.querySelector(".orb__waiting")?.textContent).toBe("2");
   });
 
@@ -728,9 +728,11 @@ describe("groups as places", () => {
       { Reader: { state: "awaitingApproval" } },
     );
 
-    const orb = screen.getByLabelText("research, 1 agent, 1 turn waiting on you");
+    const orb = screen.getByLabelText("research, 1 agent, 1 question waiting on you");
     fireEvent.pointerEnter(orb);
-    expect(orb.querySelector(".orb__tag-note")?.textContent).toBe("1 agent, 1 turn waiting on you");
+    expect(orb.querySelector(".orb__tag-note")?.textContent).toBe(
+      "1 agent, 1 question waiting on you",
+    );
   });
 
   it("keeps the tag out of the accessibility tree", () => {

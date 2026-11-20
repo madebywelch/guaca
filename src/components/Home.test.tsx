@@ -4,7 +4,7 @@ import { HOLD_MS, useHeld } from "../lib/held";
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import { clockLabel } from "../lib/time";
-import type { Outcome, RunId, Running, WorkDecision } from "../lib/types";
+import type { Escalation, Outcome, RunId, Running, WorkDecision } from "../lib/types";
 import { aDecision, aGroup, anAgent, anApproval } from "../test-fixtures";
 import { Home } from "./Home";
 
@@ -103,7 +103,7 @@ describe("the quiet screen", () => {
     });
     draw({ decisions: [later] });
     expect(screen.getByText("Nothing needs you.")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "1 decision set aside in For you" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "1 question set aside in For you" })).toBeTruthy();
   });
 });
 
@@ -425,9 +425,31 @@ describe("Needs you as a keyboard queue", () => {
     expect(decide).not.toHaveBeenCalled();
     expect(screen.queryByRole("article", { name: /^Dara asks/ })).toBeNull();
     expect(document.activeElement).toBe(card(/^Noor asks/));
-    expect(useHeld.getState().notice?.text).toBe("Allowed Dara's request.");
+    expect(useHeld.getState().notice?.text).toBe("Allowed what Dara asked.");
     act(() => vi.advanceTimersByTime(HOLD_MS));
     expect(decide).toHaveBeenCalledExactlyOnceWith(permission.id, "allow");
+  });
+
+  it("holds a clear and names whose question it cleared", () => {
+    const clear = vi.fn(async () => {});
+    const stuck = {
+      id: "esc-noor",
+      agentId: "agent-2",
+      groupId: noor.groupId,
+      runId: "run-1",
+      summary: "The deploy needs a key only you have.",
+      raisedAt: NOW,
+      saidAt: NOW,
+      times: 1,
+      clearedAt: null,
+    } as unknown as Escalation;
+    drawQueue([]);
+    act(() => useStore.setState({ stuck: [stuck], clearEscalation: clear }));
+    fireEvent.click(within(card(/Noor/)).getByRole("button", { name: "Clear" }));
+    expect(useHeld.getState().notice?.text).toBe("Cleared what Noor asked.");
+    expect(clear).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(HOLD_MS));
+    expect(clear).toHaveBeenCalledExactlyOnceWith("esc-noor");
   });
 
   it("sends nothing at all when the answer is undone in time, and puts the card back", () => {

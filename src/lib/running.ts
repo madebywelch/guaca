@@ -20,7 +20,9 @@ export function runningNote(
   run: Pick<Running, "note">,
   owner: Activity | undefined,
   colleagues: readonly string[],
+  sending = false,
 ): string {
+  if (sending) return "Sending your answer";
   if (run.note) return run.note;
   if (owner?.state === "awaitingApproval") return "Waiting for your answer";
   if (owner?.state === "paused") return "Paused";

@@ -10,8 +10,9 @@ import {
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { ABSENT_ACCENT } from "../avatars/catalog";
-import { useHeld } from "../lib/held";
+import { useHeld, useShown } from "../lib/held";
 import { formatCombo, IS_MAC } from "../lib/keybinds";
+import { askers, whoIsWaiting } from "../lib/questions";
 import { useStore } from "../lib/store";
 import { clockLabel, relativeTime } from "../lib/time";
 import type { AgentCard, AgentId, Approval, Decision, Escalation } from "../lib/types";
@@ -32,19 +33,15 @@ export function Desk({
   queue,
 }: {
   onOpenChannel: (agent: AgentId) => void;
-  title?: ReactNode;
+  title?: ReactNode | null;
   queue?: Queue;
 }) {
-  const allPending = useStore((s) => s.pending);
-  const allStuck = useStore((s) => s.stuck);
+  const { pending, stuck } = useShown();
   const agents = useStore((s) => s.agents);
   const decide = useStore((s) => s.decideApproval);
   const answer = useStore((s) => s.answerQuestion);
   const clear = useStore((s) => s.clearEscalation);
-  const heldId = useHeld((s) => s.held?.id);
   const hold = useHeld((s) => s.hold);
-  const pending = queue ? allPending.filter((request) => request.id !== heldId) : allPending;
-  const stuck = queue ? allStuck.filter((one) => one.id !== heldId) : allStuck;
   const order = [...pending.map((request) => request.id), ...stuck.map((one) => one.id)];
   const selected = queue && order.includes(queue.selected ?? "") ? queue.selected : null;
 
@@ -72,7 +69,7 @@ export function Desk({
   const decideHeld = (request: Approval, decision: Decision) =>
     held(
       request.id,
-      `${decision === "deny" ? "Denied" : "Allowed"} ${nameOf(request.agentId)}'s request.`,
+      `${decision === "deny" ? "Denied" : "Allowed"} what ${nameOf(request.agentId)} asked.`,
       () => decide(request.id, decision),
     );
 
@@ -82,7 +79,7 @@ export function Desk({
     );
 
   const clearHeld = (one: Escalation) =>
-    held(one.id, `Cleared ${nameOf(one.agentId)}'s request for help.`, () => clear(one.id));
+    held(one.id, `Cleared what ${nameOf(one.agentId)} asked.`, () => clear(one.id));
 
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (!queue || event.nativeEvent.isComposing || event.altKey) return;
@@ -146,7 +143,7 @@ export function Desk({
 
   return (
     <section className="for-you__requests" aria-label="Waiting on you" onKeyDown={onKeyDown}>
-      <h3>{title ?? deskSummary(pending.length, stuck.length)}</h3>
+      {title !== null && <h3>{title ?? whoIsWaiting(askers([...pending, ...stuck], nameOf))}</h3>}
       {pending.map((request) => (
         <DeskCard
           key={request.id}
@@ -172,13 +169,6 @@ export function Desk({
       ))}
     </section>
   );
-}
-export function deskSummary(waiting: number, stuck: number): string {
-  if (stuck === 0)
-    return waiting === 1 ? "1 turn is waiting on you" : `${waiting} turns are waiting on you`;
-  if (waiting === 0)
-    return stuck === 1 ? "1 agent needs your help" : `${stuck} agents need your help`;
-  return `${waiting + stuck} things are waiting on you`;
 }
 
 function Key({ shown, label }: { shown: boolean; label: string }) {
@@ -254,7 +244,7 @@ function StuckCard({ escalation, agent, selected, onSelect, onClear, onOpenChann
           aria-keyshortcuts={onSelect ? `${MOD}+Enter` : undefined}
           onClick={onOpenChannel}
         >
-          Open channel
+          Open conversation
           <Key shown={selected} label={ALLOW} />
         </button>
         <button
@@ -331,7 +321,7 @@ function DeskCard({
           <p className="desk__summary">{request.summary}</p>
         </div>
         <button type="button" className="desk__open" onClick={onOpenChannel}>
-          Open channel
+          Open conversation
         </button>
       </header>
 

@@ -13,7 +13,7 @@ export const RULES: Rule[] = [
     mirrors:
       "Refused: the operator's rules never allow this ({what}), so nothing happened and they",
     says: (found) =>
-      `Nothing happened: your rule (${found[1]}) refuses it, so it never reached you as a request.`,
+      `Nothing happened: your rule (${found[1]}) refuses it, so it never reached you as a question.`,
   },
   {
     tool: null,

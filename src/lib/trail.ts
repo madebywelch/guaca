@@ -140,12 +140,12 @@ function describe(tool: string, args: Args): Described {
 
     case "decision": {
       const action = text(args, "action");
-      if (action === "list") return { title: "Checked its decisions", target: null };
+      if (action === "list") return { title: "Checked its questions", target: null };
       if (action === "complete")
-        return { title: "Closed a decision", target: text(args, "outcome") };
+        return { title: "Closed a question", target: text(args, "outcome") };
       if (action === "withdraw")
         return { title: "Withdrew a question", target: text(args, "outcome") };
-      return { title: "Left a decision for you", target: text(args, "question") };
+      return { title: "Left a question for you", target: text(args, "question") };
     }
 
     case "escalate":
@@ -476,7 +476,7 @@ export function callInFlight(name: string, raw: unknown): string {
     case "ask_operator":
       return "Asking you";
     case "decision":
-      return "Working on a decision";
+      return "Working on a question";
     case "read_file":
       return "Reading a saved file";
     case "write_document":
@@ -523,7 +523,7 @@ function manyLabel(group: TrailGroup): string {
     case "settings":
       return `Used the settings ${count} times`;
     case "decision":
-      return `${count} decisions`;
+      return `Worked on its questions ${count} times`;
     case "ask_operator":
       return `Asked you ${count} times`;
     case "update_memory":

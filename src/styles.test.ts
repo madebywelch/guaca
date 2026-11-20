@@ -1038,3 +1038,46 @@ describe("the new window's surfaces", () => {
     expect(ruleOf(css, ".intake__menu")).not.toMatch(/\d+rem/);
   });
 });
+
+describe("the waiting count", () => {
+  it("draws the menu bar glyph in the same amber as the attention fill", () => {
+    const tray = readFileSync(join(process.cwd(), "scripts/make-tray.py"), "utf8");
+    const rgb = /^ATTENTION = \(0x(\w\w), 0x(\w\w), 0x(\w\w)\)$/m.exec(tray);
+    const fills = [...css.matchAll(/--attention-fill: (#\w{6});/g)].map((m) => m[1]?.toLowerCase());
+    expect(rgb).not.toBeNull();
+    expect(fills.length).toBeGreaterThan(0);
+    const glyph = `#${rgb?.slice(1).join("")}`.toLowerCase();
+    expect(fills).toEqual(fills.map(() => glyph));
+  });
+
+  it.each([
+    ".orb__waiting",
+    ".home__count[data-waiting]",
+    ".statusbar__count",
+    ".for-you h2 span",
+    ".menubar__decisions",
+  ])(
+    "draws %s in amber, which means needs you, and never in red, which means failed",
+    (selector) => {
+      const own = declarations().filter((d) => d.selector === selector);
+      const ink = own.filter((d) => d.property === "color");
+      expect(ink.length, selector).toBeGreaterThan(0);
+      for (const d of ink) expect(d.value, selector).toMatch(/^var\(--(on-)?attention(-fill)?\)$/);
+      expect(own.filter((d) => d.value.includes("danger"))).toEqual([]);
+    },
+  );
+
+  it("keeps the counts beside it that wait on nobody out of amber", () => {
+    const counts = declarations().filter(
+      (d) => d.selector === ".home__count" && d.property === "color",
+    );
+    expect(counts.map((d) => d.value)).toEqual(["var(--muted)"]);
+  });
+
+  it("edges a stuck agent's card in amber, since it waits on a person rather than failing", () => {
+    const edge = declarations().find(
+      (d) => d.selector === '.desk__card[data-kind="stuck"]' && d.property === "border-left",
+    );
+    expect(edge?.value).toBe("2px solid var(--attention)");
+  });
+});

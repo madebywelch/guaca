@@ -38,7 +38,7 @@ fn one(conn: &rusqlite::Connection, id: DecisionId) -> Result<WorkDecision, Stor
         row,
     )
     .optional()?
-    .ok_or_else(|| invalid("Decision not found. Refresh For you."))
+    .ok_or_else(|| invalid("Question not found. Refresh For you."))
 }
 
 impl Store {
@@ -235,7 +235,7 @@ fn deliver_in(
     )?;
     if !live {
         return Err(invalid(
-            "The agent responsible for this decision was deleted. Restore it before answering.",
+            "The agent that asked this question was deleted. Restore it before answering.",
         ));
     }
     let message = Envelope {
@@ -275,17 +275,17 @@ impl Store {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let decision = one(&tx, id)?;
         if expected_updated_at.is_some_and(|stamp| stamp != decision.updated_at) {
-            return Err(invalid("This decision changed while you were reading it. Review the refreshed question before answering."));
+            return Err(invalid("This question changed while you were reading it. Review it again before answering."));
         }
         let answer = if resume {
             if decision.status != DecisionStatus::Answered || !decision.interrupted {
-                return Err(invalid("Only interrupted follow-through can be resumed."));
+                return Err(invalid("Only work interrupted after your answer can be resumed."));
             }
             decision.answer.as_deref().unwrap_or_default()
         } else {
             if decision.status != DecisionStatus::Pending {
                 return Err(invalid(
-                    "This decision was already answered or withdrawn. Refresh For you.",
+                    "This question was already answered or withdrawn. Refresh For you.",
                 ));
             }
             answer.trim()
@@ -341,7 +341,7 @@ impl Store {
             DecisionStatus::Answered if decision.delivery_run == Some(failed.run_id) => {
                 (failed.parts.clone(), Some(failed.id))
             }
-            _ => return Err(invalid("Only interrupted follow-through can be resumed.")),
+            _ => return Err(invalid("Only work interrupted after your answer can be resumed.")),
         };
         let message = deliver_in(&tx, &decision, &answer, parts, cause, now)?;
         let result = one(&tx, id)?;
@@ -383,7 +383,7 @@ impl Store {
         }
         let changed = self.conn()?.execute("UPDATE decisions SET snoozed_until=?2,remind_at=?2 WHERE id=?1 AND status IN ('pending','answered')", params![id.to_string(),until])?;
         if changed == 0 {
-            return Err(invalid("This decision is no longer open. Refresh For you."));
+            return Err(invalid("This question is no longer open. Refresh For you."));
         }
         Ok(())
     }
@@ -483,6 +483,70 @@ mod tests {
                 1_700_000_000_000,
             )
             .unwrap()
+    }
+
+    fn told<T: std::fmt::Debug>(result: Result<T, StoreError>) -> String {
+        match result {
+            Err(StoreError::Decision(text)) => text,
+            other => panic!("expected a refusal the operator reads, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_refusal_the_operator_reads_calls_it_a_question() {
+        let (_, s, a) = fixture();
+        let d = make(&s, &a);
+        let lock = RunLock::new(());
+        let at = d.created_at;
+        assert_eq!(
+            told(s.answer_decision(&lock.lock(), DecisionId::new(), "11", false, None, at + 1)),
+            "Question not found. Refresh For you."
+        );
+        assert_eq!(
+            told(s.answer_decision(
+                &lock.lock(),
+                d.id,
+                "11",
+                false,
+                Some(d.updated_at - 1),
+                at + 1
+            )),
+            "This question changed while you were reading it. Review it again before answering."
+        );
+        assert_eq!(
+            told(s.answer_decision(&lock.lock(), d.id, "11", true, None, at + 1)),
+            "Only work interrupted after your answer can be resumed."
+        );
+        let lifecycle: String = s
+            .conn()
+            .unwrap()
+            .query_row("SELECT lifecycle FROM agents WHERE id=?1", [a.id.to_string()], |r| r.get(0))
+            .unwrap();
+        s.conn()
+            .unwrap()
+            .execute("UPDATE agents SET lifecycle='terminated' WHERE id=?1", [a.id.to_string()])
+            .unwrap();
+        assert_eq!(
+            told(s.answer_decision(&lock.lock(), d.id, "11", false, None, at + 1)),
+            "The agent that asked this question was deleted. Restore it before answering."
+        );
+        s.conn()
+            .unwrap()
+            .execute(
+                "UPDATE agents SET lifecycle=?2 WHERE id=?1",
+                params![a.id.to_string(), lifecycle],
+            )
+            .unwrap();
+        s.answer_decision(&lock.lock(), d.id, "11", false, None, at + 2).unwrap();
+        assert_eq!(
+            told(s.answer_decision(&lock.lock(), d.id, "10", false, None, at + 3)),
+            "This question was already answered or withdrawn. Refresh For you."
+        );
+        s.finish_decision(d.id, a.id, DecisionStatus::Completed, "sent", at + 4).unwrap();
+        assert_eq!(
+            told(s.snooze_decision(d.id, at + 3_600_000, at + 5)),
+            "This question is no longer open. Refresh For you."
+        );
     }
 
     #[test]

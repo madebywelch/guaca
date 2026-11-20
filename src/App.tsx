@@ -24,7 +24,7 @@ import { applyAppearance, watchSystemSurface } from "./lib/appearance";
 import { diagnostic } from "./lib/diagnostic";
 import { dismissing } from "./lib/dismiss";
 import { editingText } from "./lib/focus";
-import { useHeld } from "./lib/held";
+import { hiddenNow, useHeld } from "./lib/held";
 import { unreachableHint } from "./lib/host";
 import { api, onRevealRequest } from "./lib/ipc";
 import { bindingFor } from "./lib/keybinds";
@@ -217,7 +217,7 @@ export default function App() {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
     const report = async () => {
-      await reportPresence(presenceOf(useStore.getState()));
+      await reportPresence(presenceOf(useStore.getState(), hiddenNow()));
       if (!stopped) timer = setTimeout(() => void report(), FEED_COALESCE_MS);
     };
     void report();
@@ -335,7 +335,7 @@ export default function App() {
         <div className="banner">
           <span>Add an API key before your agents can reply.</span>
           <button type="button" className="btn" onClick={() => openSettings("provider")}>
-            Open settings
+            {overlay === "settings" ? "Go to Provider" : "Open settings"}
           </button>
         </div>
       )}

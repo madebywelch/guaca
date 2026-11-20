@@ -224,7 +224,9 @@ export function Permissions({ groupId }: { groupId: string | null }) {
   return (
     <>
       <h3 className="settings__title">Permissions</h3>
-      <p className="settings__lede">Rules answer some requests for you, and a block always wins.</p>
+      <p className="settings__lede">
+        Rules answer some questions for you, and a block always wins.
+      </p>
       <details className="disclosure">
         <summary>
           <Icon name="chevron-right" size={16} />
