@@ -1,10 +1,12 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { inflateSync } from "node:zlib";
 
 import { beforeAll, describe, expect, it } from "vitest";
 
 import { AVATAR_PX } from "./avatars/frame";
 import { ROOT_PX } from "./lib/appearance";
+import { contrast } from "./lib/color";
 
 const css = readFileSync(join(process.cwd(), "src/styles.css"), "utf8");
 const signalCss = readFileSync(join(process.cwd(), "src/signal-layout.css"), "utf8");
@@ -1040,14 +1042,68 @@ describe("the new window's surfaces", () => {
 });
 
 describe("the waiting count", () => {
-  it("draws the menu bar glyph in the same amber as the attention fill", () => {
-    const tray = readFileSync(join(process.cwd(), "scripts/make-tray.py"), "utf8");
-    const rgb = /^ATTENTION = \(0x(\w\w), 0x(\w\w), 0x(\w\w)\)$/m.exec(tray);
-    const fills = [...css.matchAll(/--attention-fill: (#\w{6});/g)].map((m) => m[1]?.toLowerCase());
-    expect(rgb).not.toBeNull();
-    expect(fills.length).toBeGreaterThan(0);
-    const glyph = `#${rgb?.slice(1).join("")}`.toLowerCase();
-    expect(fills).toEqual(fills.map(() => glyph));
+  const tray = readFileSync(join(process.cwd(), "scripts/make-tray.py"), "utf8");
+  const trayInk = (name: string) => {
+    const rgb = new RegExp(`^${name} = \\(0x(\\w\\w), 0x(\\w\\w), 0x(\\w\\w)\\)$`, "m").exec(tray);
+    expect(rgb, name).not.toBeNull();
+    return `#${rgb?.slice(1).join("")}`.toLowerCase();
+  };
+  const tokens = (name: string) =>
+    [...css.matchAll(new RegExp(`--${name}: (#\\w{6});`, "g"))].map((m) => m[1]?.toLowerCase());
+  it("draws the menu bar glyph in the attention fill, edged in the ink drawn on that fill", () => {
+    for (const [name, token] of [
+      ["ATTENTION", "attention-fill"],
+      ["ATTENTION_EDGE", "on-attention-fill"],
+    ] as const) {
+      const values = tokens(token);
+      expect(values.length, token).toBeGreaterThan(0);
+      expect(values).toEqual(values.map(() => trayInk(name)));
+    }
+  });
+
+  it.each([
+    ["a white bar", "#ffffff"],
+    ["a light gray bar", "#ececec"],
+    ["a light bar tinted by a blue wallpaper", "#486b94"],
+    ["a dark bar", "#1e1e1e"],
+    ["a black bar", "#000000"],
+  ])("keeps the waiting glyph at 3 to 1 or more on %s", (_, bar) => {
+    const fill = trayInk("ATTENTION");
+    const edge = trayInk("ATTENTION_EDGE");
+    expect(Math.max(contrast(fill, bar), contrast(edge, bar))).toBeGreaterThanOrEqual(3);
+    expect(contrast(fill, edge)).toBeGreaterThanOrEqual(9);
+  });
+
+  it("rings the waiting glyph's outline in the edge ink and fills its middle with amber", () => {
+    const png = readFileSync(join(process.cwd(), "src-tauri/icons/tray-attention.png"));
+    const size = png.readUInt32BE(16);
+    const idat: Buffer[] = [];
+    for (let at = 8; at < png.length; ) {
+      const length = png.readUInt32BE(at);
+      if (png.toString("ascii", at + 4, at + 8) === "IDAT")
+        idat.push(png.subarray(at + 8, at + 8 + length));
+      at += length + 12;
+    }
+    const raw = inflateSync(Buffer.concat(idat));
+    const pixel = (x: number, y: number) => {
+      const at = y * (size * 4 + 1) + 1 + x * 4;
+      return { hex: `#${raw.subarray(at, at + 3).toString("hex")}`, alpha: raw[at + 3] ?? 0 };
+    };
+    const edge = trayInk("ATTENTION_EDGE");
+    const fill = trayInk("ATTENTION");
+    let rows = 0;
+    let filled = 0;
+    for (let y = 0; y < size; y++) {
+      expect(raw[y * (size * 4 + 1)], `row ${y} filter`).toBe(0);
+      const solid = [...Array(size).keys()].filter((x) => pixel(x, y).alpha === 255);
+      if (solid.length < 4) continue;
+      rows++;
+      expect(pixel(solid[0] ?? 0, y).hex, `row ${y}`).toBe(edge);
+      expect(pixel(solid.at(-1) ?? 0, y).hex, `row ${y}`).toBe(edge);
+      if (solid.some((x) => pixel(x, y).hex === fill)) filled++;
+    }
+    expect(rows).toBeGreaterThan(size / 2);
+    expect(filled).toBeGreaterThan(rows / 2);
   });
 
   it.each([
