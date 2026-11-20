@@ -1,7 +1,8 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
-import { rememberDismissOpener } from "../lib/dismiss";
+import { dismissing, rememberDismissOpener } from "../lib/dismiss";
 import { waitingQuestion } from "../lib/field";
+import { focusWriting } from "../lib/focus";
 import { useFollowBottom } from "../lib/follow";
 import { waitingLine } from "../lib/handoff";
 import { useShown } from "../lib/held";
@@ -56,6 +57,8 @@ interface Props {
   onOpenMenu: (agent: AgentCard, at: { x: number; y: number }) => void;
   view?: AgentView;
   onView?: (view: AgentView) => void;
+  onQuestions?: () => boolean;
+  focusRequest?: { id: string } | null;
   onEditProfile?: (agent: AgentCard) => void;
 }
 
@@ -68,6 +71,8 @@ export function ChannelView({
   onOpenMenu,
   view = "conversation",
   onView,
+  onQuestions,
+  focusRequest,
   onEditProfile,
 }: Props) {
   const lookups = useAgentLookup();
@@ -96,6 +101,29 @@ export function ChannelView({
     () => (answeringId && answeringName ? { id: answeringId, name: answeringName } : null),
     [answeringId, answeringName],
   );
+
+  const requestedFocus = useRef<Props["focusRequest"]>(null);
+  useLayoutEffect(() => {
+    if (
+      !focusRequest ||
+      requestedFocus.current === focusRequest ||
+      view !== "conversation" ||
+      !transcript ||
+      !messages ||
+      dismissing()
+    )
+      return;
+    const card = [...(transcript()?.querySelectorAll<HTMLElement>("[data-question]") ?? [])].find(
+      (one) => one.dataset.question === focusRequest.id,
+    );
+    const answer = card?.querySelector<HTMLElement>(":is(button, input):not(:disabled)");
+    if (answer) {
+      requestedFocus.current = focusRequest;
+      answer.focus();
+    } else {
+      focusWriting();
+    }
+  }, [focusRequest, transcript, messages, view]);
 
   useLayoutEffect(follow, [follow, messages]);
 
@@ -292,6 +320,8 @@ export function ChannelView({
           draftKey={channel}
           recipient={agent ? { id: agent.id, name: agent.name } : undefined}
           onRecipientChange={(id) => void select(id)}
+          onQuestions={onQuestions}
+          focusOnOpen={!focusRequest}
           waiting={
             agent && question
               ? {

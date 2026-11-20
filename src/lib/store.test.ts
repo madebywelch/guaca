@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { anApproval } from "../test-fixtures";
 import { expectRestart, forgetRestart } from "./link";
-import type { AgentCard, Envelope, UiEvent } from "./types";
+import type { AgentCard, Envelope, Running, UiEvent } from "./types";
 
 vi.mock("./ipc", () => ({
   api: {
@@ -24,6 +24,7 @@ vi.mock("./ipc", () => ({
     pendingApprovals: async () => [],
     openEscalations: async () => [],
     listDecisions: async () => [],
+    runningRuns: vi.fn(async (): Promise<Running[]> => []),
   },
   onRuntimeEvent: vi.fn(),
 }));
@@ -34,6 +35,7 @@ vi.mock("./transport", async (original) => ({
 }));
 
 const { useStore } = await import("./store");
+const { api } = await import("./ipc");
 const { DEFAULT_PREFS } = await import("./prefs");
 
 function envelope(overrides: Partial<Envelope> = {}): Envelope {
@@ -572,13 +574,13 @@ describe("the channel open when the rail goes inside a crew", () => {
     });
   }
 
-  it("closes when it belongs to the crew being left", async () => {
+  it("keeps the conversation open when management switches groups", async () => {
     twoCrews();
     useStore.setState({ selected: "chef-research" });
 
     await useStore.getState().focusGroup(AGENTS[1]!.groupId);
 
-    expect(useStore.getState().selected).toBeNull();
+    expect(useStore.getState().selected).toBe("chef-research");
     expect(useStore.getState().railGroup).toBe(AGENTS[1]!.groupId);
   });
 
@@ -605,6 +607,43 @@ describe("the channel open when the rail goes inside a crew", () => {
 });
 
 describe("activity", () => {
+  it("waits for the live snapshot read when it supersedes the startup read", async () => {
+    const row = {
+      runId: "r1",
+      agentId: "chef",
+      groupId: AGENTS[1]!.groupId,
+      startedAt: 1,
+      note: null,
+    };
+    let first!: (rows: Running[]) => void;
+    let latest!: (rows: Running[]) => void;
+    vi.mocked(api.runningRuns)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            first = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            latest = resolve;
+          }),
+      );
+    const startup = useStore.getState().refreshRunning();
+    const snapshot = useStore.getState().refreshRunning();
+    first([]);
+    const settled = vi.fn();
+    void startup.then(settled);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    latest([row]);
+    await startup;
+    await snapshot;
+    expect(useStore.getState().running).toEqual([row]);
+  });
+
   it("records the latest state per agent", () => {
     apply({ type: "activityChanged", agentId: "chef", activity: { state: "thinking" } });
     expect(useStore.getState().activity.chef).toEqual({ state: "thinking" });

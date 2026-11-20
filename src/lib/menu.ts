@@ -1,6 +1,7 @@
 import type { IconName } from "../components/Icon";
-import { formatCombo } from "./keybinds";
+import { BINDINGS, formatCombo, keyOf } from "./keybinds";
 import type { Prefs, SurfaceMode, Typeface } from "./prefs";
+import { stepped } from "./rail";
 import { SECTION_LABELS, SECTIONS, type Section } from "./sections";
 import type { Activity, AgentCard, AgentId, Approval, Decision, Escalation } from "./types";
 
@@ -16,7 +17,6 @@ export const MENU_SECTIONS: readonly MenuSection[] = [
 ];
 
 export type Place =
-  | "today"
   | "search"
   | "forYou"
   | "calendar"
@@ -222,15 +222,21 @@ function agentRows(input: MenuInput): MenuRow[] {
 
 function actionRows(input: MenuInput): MenuRow[] {
   const rows: MenuRow[] = [];
-  if (input.open !== null)
+  for (const by of [1, -1] as const) {
+    const target = stepped(input.agents, input.open, by);
+    if (!target || input.agents.length < 2) continue;
+    const previous = by === -1;
+    const combo = BINDINGS.find((binding) => binding.id === "step")?.to?.combo;
     rows.push({
-      id: "place:today",
+      id: previous ? "agent:previous" : "agent:next",
       section: "Actions",
-      title: "Back to Today",
-      icon: "chevron-left",
-      words: "home today back",
-      action: { do: "place", place: "today" },
+      title: previous ? "Previous agent" : "Next agent",
+      detail: target.name,
+      key: previous && combo ? formatCombo(combo) : keyOf("step"),
+      words: "switch open conversation",
+      action: { do: "open", agentId: target.id },
     });
+  }
   for (const action of ACTIONS)
     rows.push({
       id: `place:${action.place}`,

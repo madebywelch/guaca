@@ -18,6 +18,24 @@ FIRST_TASK = "Something else Start with a task in your own words."
 API_KEY = "API key Use OpenRouter or OpenAI, with usage billed to that account."
 WRONG_KEY = "verify-wrong-key"
 HELLO = "Hello. I am ready when you are."
+ROSTER = "Agent conversations"
+STATUSES = ("Idle", "Working", "Has a question", "Has a result", "Needs attention")
+
+
+def roster_entry(accessible_name: str, name: str) -> re.Match | None:
+    return re.fullmatch(rf"{re.escape(name)}, ({'|'.join(STATUSES)})", accessible_name)
+
+
+def roster_rows(w: World) -> list[dict]:
+    return [row for row in reversed(w.ui.within("navigation", ROSTER, "button"))
+            if label(row).rsplit(", ", 1)[-1] in STATUSES]
+
+
+def roster_status(w: World, name: str) -> str:
+    for row in roster_rows(w):
+        if match := roster_entry(label(row), name):
+            return match[1]
+    return ""
 
 
 def first_run(w: World, brief: str = "Say hello.", reply_to_brief: str = HELLO) -> None:
@@ -52,8 +70,7 @@ def conversation(w: World) -> str:
 
 def write(w: World, to: str, text: str) -> None:
     ui = w.ui
-    if ui.find("combobox", "Recipient") and ui.value("combobox", "Recipient") != to:
-        open_agent(w, to)
+    open_agent(w, to)
     ui.fill("combobox", f"Write to {to}", text)
     ui.click("button", "Send")
 
@@ -75,10 +92,18 @@ def new_agent(w: World, name: str, instructions: str) -> None:
 def open_agent(w: World, name: str) -> None:
     if w.ui.find("log", f"Conversation with {name}"):
         return
-    face = w.wait(f"{name} has a face on today's timeline", lambda: [
-        n for n in w.ui.within("list", "Today's timeline", "button") if label(n).startswith(f"{name}, ")])
-    w.ui.press(face[0])
+    rows = w.wait(f"{name} has one roster button", lambda: [
+        row for row in roster_rows(w) if roster_entry(label(row), name)])
+    if len(rows) != 1:
+        raise AssertionError(f"Expected one roster button for {name}, found {[label(row) for row in rows]}")
+    w.ui.press(rows[0])
     w.wait(f"{name}'s conversation opens", lambda: w.ui.find("log", f"Conversation with {name}"))
+
+
+def questions(w: World, count: int) -> None:
+    name = f"{count} {'question' if count == 1 else 'questions'} waiting"
+    w.ui.click("button", name)
+    w.wait("the Questions tray opens", lambda: w.ui.find("dialog", "Questions"))
 
 
 def agent_id(w: World, name: str) -> str:
@@ -186,7 +211,7 @@ def scenario_reply(w: World) -> None:
     write(w, AGENT, "What is two and two?")
     w.wait("the second reply is shown", lambda: "Four." in conversation(w))
     both = settled(w, 2, "the second conversation settles")
-    w.check("a message written in the field is answered in the same conversation",
+    w.check("a message written in the composer is answered in the same conversation",
             said(w, AGENT) == [HELLO, "Four."],
             observed={"outcomes": both, "said": said(w, AGENT)}, shot=True)
     w.check("the page was told about each reply as it happened",
@@ -391,7 +416,7 @@ def scenario_permission(w: World) -> None:
 
 
 LOOK_SURFACES = ("light", "dark")
-LOOK_SCREENS = ("Today", "a conversation", "Settings", "New agent", "the Groups sheet", "Search",
+LOOK_SCREENS = ("Questions", "a conversation", "Settings", "New agent", "the Groups sheet", "Search",
                 "the command menu")
 AGENT_TABS = ("Now", "Memory", "Notebook", "Routines", "Profile")
 SETTINGS_TABS = ("Host", "Provider", "Limits", "Permissions", "Machines", "Account", "Appearance",
@@ -401,10 +426,9 @@ PLACES = ("Artifacts", "Calendar", "For you, 1 question")
 
 def show(w: World, screen: str) -> None:
     ui = w.ui
-    if screen == "Today":
-        if ui.find("button", "Today"):
-            ui.click("button", "Today")
-        w.wait("Today is shown", lambda: ui.find("region", "Today"))
+    if screen == "Questions":
+        if not ui.find("dialog", "Questions"):
+            questions(w, 1)
     elif screen == "a conversation":
         open_agent(w, AGENT)
         w.wait("the request waits in the conversation", lambda: ui.find("button", "Allow"))
@@ -612,7 +636,7 @@ SETTINGS_PAGE = """
     paneScrolls: pane.scrollHeight > pane.clientHeight,
     paneTop: pane.scrollTop,
     inDialog: !!document.querySelector('.settings').closest('[role=dialog], .scrim'),
-    timeline: !!document.querySelector('.ribbon'),
+    roster: !!document.querySelector('.roster'),
     notices: document.querySelectorAll('main .banner').length,
     selectedFill: getComputedStyle(nav.querySelector('[aria-selected=true]')).backgroundColor,
     listFill: getComputedStyle(document.querySelector('.app > main')).backgroundColor,
@@ -654,18 +678,16 @@ def scenario_settings(w: World) -> None:
     first_run(w)
     settled(w, 1)
     ui = w.ui
-    show(w, "Today")
-
     ui.viewport(*look.FRAME)
     gear = ui.one("button", "App settings")
     ui.press(gear)
     w.wait("Settings opens", lambda: ui.find("region", "Settings"))
     page = ui.evaluate(SETTINGS_PAGE)
-    w.check("the gear opens Settings as a page in the window, with the timeline and a back control, and no dialog",
-            not ui.find("dialog", "", exact=False) and not page["inDialog"] and page["timeline"]
-            and bool(ui.find("button", "Today")) and section_shown(w) == "General",
-            observed={"dialogs": ui.names("dialog"), "inDialog": page["inDialog"], "timeline": page["timeline"],
-                      "back": bool(ui.find("button", "Today")), "section": section_shown(w)}, shot=True)
+    w.check("the gear opens Settings as a full-width page with a back control, and no dialog",
+            not ui.find("dialog", "", exact=False) and not page["inDialog"] and not page["roster"]
+            and bool(ui.find("button", AGENT)) and section_shown(w) == "General",
+            observed={"dialogs": ui.names("dialog"), "inDialog": page["inDialog"], "roster": page["roster"],
+                      "back": bool(ui.find("button", AGENT)), "section": section_shown(w)}, shot=True)
 
     fits = {}
     for width, height in SETTINGS_FRAMES:
@@ -707,11 +729,11 @@ def scenario_settings(w: World) -> None:
         if leave == "Escape":
             ui.key("Escape")
         elif leave == "back":
-            ui.click("button", "Today")
+            ui.click("button", AGENT)
         else:
             ui.key(",", mod=True)
         w.wait(f"{leave} leaves Settings", lambda: not ui.find("region", "Settings"))
-        returns[leave] = {"today": bool(ui.find("region", "Today")),
+        returns[leave] = {"conversation": bool(ui.find("log", f"Conversation with {AGENT}")),
                           "focus": w.wait("the focus comes back", lambda: ui.focused()
                                           if ui.focused() == ("button", "App settings") else None)}
     ui.key(",", mod=True)
@@ -719,7 +741,7 @@ def scenario_settings(w: World) -> None:
     ui.key(",", mod=True)
     w.wait("Command-comma again leaves it", lambda: not ui.find("region", "Settings"))
     w.check("Escape, the back control and Command-comma each return to where Settings was opened, with the focus where it was",
-            opened and all(r["today"] and r["focus"] == ("button", "App settings") for r in returns.values()),
+            opened and all(r["conversation"] and r["focus"] == ("button", "App settings") for r in returns.values()),
             observed=returns)
 
     straight = {}
@@ -737,9 +759,9 @@ def scenario_settings(w: World) -> None:
         within[section] = w.wait(f"the page turns to {section}", lambda: section_shown(w) == section) and section_shown(w)
     ui.key("Escape")
     w.wait("Settings closes", lambda: not ui.find("region", "Settings"))
-    w.check("the command menu opens every section straight to itself, from Today and from the page",
+    w.check("the command menu opens every section straight to itself, from a conversation and from Settings",
             all(straight[s] == s for s in SETTINGS_SECTIONS) and all(within[s] == s for s in SETTINGS_SECTIONS),
-            observed={"fromToday": straight, "fromThePage": within})
+            observed={"fromConversation": straight, "fromSettings": within})
 
     open_agent(w, AGENT)
     ui.key(",", mod=True)
@@ -751,7 +773,6 @@ def scenario_settings(w: World) -> None:
             gone and bool(ui.find("log", f"Conversation with {AGENT}")),
             observed={"replaced": gone, "back": bool(ui.find("log", f"Conversation with {AGENT}"))}, shot=True)
 
-    show(w, "Today")
     ui.viewport(900, 700)
     group = w.host.scalar("SELECT name FROM groups ORDER BY rowid LIMIT 1")
     sheets = {}
@@ -1002,13 +1023,12 @@ PICKED_UP = "restarted partway through your turn"
 
 
 def running_text(w: World) -> str:
-    if not w.ui.find("region", "Running", exact=False):
-        return ""
-    return w.ui.evaluate("document.querySelector('.home__running')?.innerText ?? ''") or ""
+    return w.ui.evaluate("document.querySelector('.working')?.innerText ?? ''") or ""
 
 
 def running_for(w: World) -> int | None:
-    found = re.search(r"(?:(\d+)m )?(\d+)s", running_text(w))
+    clock = w.ui.evaluate("document.querySelector('.working__end .working__for')?.textContent ?? ''")
+    found = re.fullmatch(r"(?:(\d+)m )?(\d+)s", clock)
     return int(found.group(1) or 0) * 60 + int(found.group(2)) if found else None
 
 
@@ -1041,47 +1061,55 @@ def scenario_running(w: World) -> None:
     w.start()
     first_run(w)
     settled(w, 1)
-    show(w, "Today")
-    w.check("with nothing running, Today has no Running section",
-            not w.ui.find("region", "Running", exact=False), observed=running_text(w))
-    w.ui.click("button", f"{AGENT}, ", exact=False)
-    w.wait(f"{AGENT}'s conversation opens", lambda: w.ui.find("log", f"Conversation with {AGENT}"))
+    new_agent(w, "Researcher", "Wait to be asked.")
+    open_agent(w, AGENT)
+    w.wait("the settled agent is idle", lambda: roster_status(w, AGENT) == "Idle")
+    w.check("with nothing running, the roster says Idle and the conversation has no Stop",
+            not w.ui.find("button", "Stop") and not running_text(w), observed=roster_status(w, AGENT))
     write(w, AGENT, LOOK_INTO)
-    show(w, "Today")
-    w.wait("Today lists the conversation as running", lambda: READING in running_text(w))
+    w.wait("the roster and conversation show the running work",
+           lambda: roster_status(w, AGENT) == "Working" and READING in running_text(w))
     first = running_for(w)
     marks = started_marks(w)
-    w.check("Running shows the agent, its latest note, the time since the Host started the work, and Stop",
-            AGENT in running_text(w) and first is not None and len(marks) == 1 and marks[0] is not None
-            and w.ui.find("button", f"Stop {AGENT}'s conversation"),
-            observed={"agent": AGENT in running_text(w), "note": READING in running_text(w),
+    w.check("the running conversation shows its latest note, time since the Host started the work, and Stop",
+            first is not None and len(marks) == 1 and marks[0] is not None and w.ui.find("button", "Stop"),
+            observed={"status": roster_status(w, AGENT), "note": READING in running_text(w),
                       "clock": first is not None, "marked": [m is not None for m in marks]},
             detail=running_text(w), shot=True)
     w.wait("the clock ticks past three seconds", lambda: (running_for(w) or 0) >= 3)
-    w.check("the clock on Running ticks while the turn works", (running_for(w) or 0) > (first or 0),
+    w.check("the clock in the conversation ticks while the turn works", (running_for(w) or 0) > (first or 0),
             observed=True, detail={"first": first, "now": running_for(w)})
+
+    open_agent(w, "Researcher")
+    w.ui.evaluate("location.reload()")
+    w.wait("reload opens the running conversation rather than the last open one",
+           lambda: w.ui.find("log", f"Conversation with {AGENT}") and running_for(w))
+    w.check("reload prefers the running conversation to the last open conversation",
+            started_marks(w) == marks and asked(w, LOOK_INTO) == 1,
+            observed={"sameStart": started_marks(w) == marks, "modelCalls": asked(w, LOOK_INTO)})
 
     held_for = running_for(w) or 0
     w.host.stop()
     before.set()
     w.host.start()
     w.open_browser()
-    show(w, "Today")
     w.wait("the next Host picks the turn up", picked.is_set)
-    w.wait("Today lists the conversation again", lambda: AGENT in running_text(w))
-    again = running_for(w)
+    again = w.wait("the window opens on its running conversation with the clock",
+                   lambda: w.ui.find("log", f"Conversation with {AGENT}")
+                   and roster_status(w, AGENT) == "Working" and running_for(w))
     w.check("after a restart mid-turn the clock goes on from the first Host's start rather than from zero",
             started_marks(w) == marks and again is not None and again >= held_for,
             observed={"sameStart": started_marks(w) == marks, "carriedOn": again is not None and again >= held_for},
             detail={"before": held_for, "after": again, "marks": marks}, shot=True)
 
-    w.ui.click("button", f"Stop {AGENT}'s conversation")
+    w.ui.click("button", "Stop")
     after.set()
     ended = settled(w, 2, "the stopped conversation settles")
-    w.wait("Running leaves Today once the conversation ends", lambda: not running_text(w))
-    w.check("Stop ends the conversation, and it leaves Running for Finished",
-            ended[-1]["status"] == "stopped" and not w.ui.find("region", "Running", exact=False)
-            and w.ui.find("region", "Finished", exact=False),
+    w.wait("the conversation shows why work stopped", lambda: "You stopped this conversation" in conversation(w))
+    w.wait("the roster clears Working and the conversation loses Stop",
+           lambda: roster_status(w, AGENT) not in ("", "Working") and not w.ui.find("button", "Stop"))
+    w.check("Stop ends the run and replaces the working controls with the stopped transcript",
+            ended[-1]["status"] == "stopped" and not w.ui.find("button", "Stop"),
             observed={"outcomes": ended}, shot=True)
     no_unscripted(w)
 
@@ -1757,49 +1785,138 @@ def scenario_tabs(w: World) -> None:
     no_unscripted(w)
 
 
-IDLE = ("Researcher", "Critic", "Archivist")
-NAMES_APART = ("(() => { const r = [...document.querySelectorAll('.ribbon__name')]"
-               ".map(e => e.getBoundingClientRect()); for (let i = 0; i < r.length; i++)"
-               " for (let j = i + 1; j < r.length; j++) { const a = r[i], b = r[j];"
-               " if (a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom)"
-               " return false; } return r.length > 0; })()")
-SEEN = ("((name) => { const face = [...document.querySelectorAll('.ribbon__face')]"
-        ".find(f => f.querySelector('.ribbon__name').textContent === name);"
-        " const through = (e) => { let o = 1; for (; e; e = e.parentElement)"
-        " o *= Number(getComputedStyle(e).opacity); return o; };"
-        " return { name: through(face.querySelector('.ribbon__name')),"
-        " portrait: through(face.querySelector('.ribbon__portrait')) }; })(%s)")
+ROSTER_GEOMETRY = """(() => {
+  const roster = document.querySelector('.roster');
+  const scroller = roster.querySelector('.roster__scroll');
+  const before = scroller.scrollTop;
+  const range = document.createRange();
+  const within = (inside, outside) =>
+    inside.left >= outside.left - 1 && inside.right <= outside.right + 1 &&
+    inside.top >= outside.top - 1 && inside.bottom <= outside.bottom + 1;
+  const overlap = (a, b) =>
+    a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+  const rows = [...roster.querySelectorAll('.roster__agent')];
+  const measured = rows.map(row => {
+    row.scrollIntoView({block: 'nearest', inline: 'nearest'});
+    const name = row.querySelector('.roster__name');
+    const status = row.querySelector('.roster__status');
+    const box = row.getBoundingClientRect();
+    range.selectNodeContents(name);
+    const text = range.getBoundingClientRect();
+    const statusBox = status.getBoundingClientRect();
+    return [name.textContent.trim(), name.checkVisibility({opacityProperty: true, visibilityProperty: true})
+      && text.width > 0 && text.height > 0 && within(text, name.getBoundingClientRect())
+      && within(text, box) && within(text, scroller.getBoundingClientRect())
+      && within(text, {left: 0, right: innerWidth, top: 0, bottom: innerHeight})
+      && !overlap(text, statusBox)
+      && rows.every(other => other === row || !overlap(text, other.getBoundingClientRect()))];
+  });
+  scroller.scrollTop = before;
+  return measured;
+})()"""
 
 
-def timeline(w: World) -> list[str]:
-    return w.ui.names_within("list", "Today's timeline", "button")
+def scenario_roster(w: World) -> None:
+    names = (AGENT, MARKET, "Product Manager", "Researcher", "Researcher West", "Critic",
+             "Archivist", "Writer", "Analyst", "Editor", "Observer")
+    asking = names[9]
+    parked = threading.Event()
+    draft = "Keep this draft while switching conversations."
 
+    def script(c: Call) -> Reply | None:
+        if c.speaker == asking and c.last_user.endswith(BOOK_FLIGHT):
+            return held(parked, call("ask_operator", question=WHICH, options=["Early", "Late"]))
+        return hello(c)
 
-def scenario_ribbon(w: World) -> None:
-    w.model.script = hello
+    w.model.script = script
     w.start()
-    w.ui.viewport(*WINDOW)
     first_run(w)
     settled(w, 1)
     ui = w.ui
-    for name in IDLE:
+    for name in names[3:]:
         new_agent(w, name, "Wait to be asked.")
-    w.wait("every new agent has a face on today's timeline",
-           lambda: all(any(n.startswith(f"{name}, ") for n in timeline(w)) for name in IDLE))
-    idle = [n for n in timeline(w) if n.split(", ")[0] in IDLE]
-    w.check("an agent that has done nothing today has a face of its own, named and called idle",
-            sorted(idle) == sorted(f"{name}, idle" for name in IDLE), observed=sorted(idle), shot=True)
-    w.check("no face on the timeline is called asleep, and there is no pile",
-            not [n for n in timeline(w) if "asleep" in n] and not ui.evaluate(
-                "document.querySelector('.ribbon__pile') !== null"),
-            observed=[n for n in timeline(w) if "asleep" in n], detail=timeline(w))
-    w.check("at 1280 wide no two names on the timeline overlap", bool(ui.evaluate(NAMES_APART)),
-            observed=bool(ui.evaluate(NAMES_APART)))
-
     open_agent(w, AGENT)
-    seen = ui.evaluate(SEEN % json.dumps(IDLE[0]))
-    w.check("with another agent's page open, an idle face fades its drawing and not its name",
-            seen["name"] == 1 and seen["portrait"] < 1, observed=seen, shot=True)
+    w.wait("the roster has every agent", lambda: len(roster_rows(w)) == len(names))
+    w.wait("opening the first conversation clears its result", lambda: roster_status(w, AGENT) == "Idle")
+    initial = [label(row) for row in roster_rows(w)]
+    matches = [roster_entry(row, name) for row, name in zip(initial, names)]
+    shortcuts = ui.evaluate("""[...document.querySelectorAll('.roster__agent')].map(row => [
+      row.getAttribute('aria-keyshortcuts'),
+      row.querySelector('kbd')?.checkVisibility() ? row.querySelector('kbd').textContent.trim() : null
+    ])""")
+    w.check("each agent has one ordered row, with shortcuts only for the first nine",
+            all(matches) and all(m[1] == "Idle" for m in matches[1:])
+            and len(shortcuts) == len(names)
+            and all(key == f"Meta+{i} Control+{i}" and shown and shown.endswith(str(i))
+                    for i, (key, shown) in enumerate(shortcuts[:9], 1))
+            and shortcuts[9:] == [[None, None], [None, None]],
+            observed={"buttons": initial, "shortcuts": shortcuts})
+    w.check("the conversation has no Today destination or spare writing field",
+            not ui.find("button", "Today") and not ui.find("region", "Today")
+            and not ui.find("textbox", "What do you need?"),
+            observed=ui.names("navigation"))
+
+    write(w, asking, BOOK_FLIGHT)
+    w.wait("the late row shows Working", lambda: roster_status(w, asking) == "Working")
+    open_agent(w, names[1])
+    ui.fill("combobox", f"Write to {names[1]}", draft)
+    parked.set()
+    w.wait("the late row shows the pending question", lambda: roster_status(w, asking) == "Has a question")
+    current = [label(row) for row in roster_rows(w)]
+    w.check("a new question changes the tenth status without reordering or switching conversations",
+            [row for i, row in enumerate(current) if i != 9] ==
+            [row for i, row in enumerate(initial) if i != 9]
+            and current[9] == f"{asking}, Has a question"
+            and ui.find("log", f"Conversation with {names[1]}") and ui.find("button", "1 question waiting"),
+            observed=current, shot=True)
+
+    readable = {}
+    for width, height in SETTINGS_FRAMES:
+        ui.viewport(width, height)
+        w.wait("roster layout settles", lambda: ui.evaluate(look.SETTLED) and ui.evaluate("document.fonts.status") == "loaded")
+        readable[f"{width}x{height}"] = ui.evaluate(ROSTER_GEOMETRY)
+        w.capture(f"the roster at {width}x{height}")
+    w.check("every roster row scrolls fully into view with its name readable at both sizes",
+            all(rows == [[name, True] for name in names] for rows in readable.values()), observed=readable)
+
+    open_agent(w, names[9])
+    w.wait("the clicked row focuses its question", lambda: ui.focused() == ("button", "Early"))
+    ui.key("Tab", mod=True)
+    w.wait("Control Tab opens the next row", lambda: ui.find("log", f"Conversation with {names[10]}"))
+    ui.key("Tab", mod=True, shift=True)
+    w.wait("Control Shift Tab returns to the question owner", lambda: ui.find("log", f"Conversation with {asking}"))
+    ui.key("2", mod=True)
+    w.wait("the second shortcut opens the exact name", lambda: ui.find("log", f"Conversation with {names[1]}"))
+    w.check("mouse, Control Tab in both directions, and the numbered shortcut keep the draft with its agent",
+            ui.value("combobox", f"Write to {names[1]}") == draft, observed=ui.focused(), shot=True)
+
+    ui.key("k", mod=True)
+    w.wait("Command menu opens", lambda: ui.find("dialog", "Command menu"))
+    ui.type("textbox", "Command menu", "dark")
+    choice = w.wait("the menu chooses a reading surface", lambda: menu_choice(w))
+    ui.key("f", mod=True)
+    w.wait("Search opens above the menu", lambda: ui.find("dialog", "Search", exact=False))
+    ui.key("Tab", mod=True)
+    ui.key("Tab", mod=True, shift=True)
+    ui.key("Tab", mod=True)
+    ui.key("Escape")
+    w.wait("Escape closes only Search", lambda: not ui.find("dialog", "Search", exact=False)
+           and ui.find("dialog", "Command menu"))
+    kept_menu = ui.value("textbox", "Command menu") == "dark" and menu_choice(w) == choice
+    ui.key("Escape")
+    w.wait("Escape then closes the menu", lambda: not ui.find("dialog", "Command menu"))
+    w.check("stacked Search and its keys leave the command menu and underlying draft unchanged",
+            kept_menu and ui.find("log", f"Conversation with {names[1]}")
+            and ui.value("combobox", f"Write to {names[1]}") == draft,
+            observed={"menu": kept_menu, "focus": ui.focused()}, shot=True)
+
+    ui.evaluate("location.reload()")
+    w.wait("reload opens the waiting question's conversation", lambda: ui.find("log", f"Conversation with {asking}")
+           and ui.find("button", "Early"))
+    open_agent(w, names[1])
+    w.check("reload lands on the pending question but keeps the other conversation's draft",
+            ui.value("combobox", f"Write to {names[1]}") == draft,
+            observed=ui.focused(), shot=True)
     no_unscripted(w)
 
 
@@ -1814,7 +1931,8 @@ def scenario_grouptabs(w: World) -> None:
     show(w, "the Groups sheet")
     ui.click("button", f"{group} settings")
     w.wait("the group's settings open", lambda: ui.find("dialog", "Group settings"))
-    ui.click("heading", group)
+    heading, = (node for node in ui.within("dialog", "Group settings", "heading") if label(node) == group)
+    ui.press(heading)
     stops = []
     for _ in range(6):
         ui.key("Tab")
@@ -1987,10 +2105,8 @@ def scenario_menu(w: World) -> None:
     settled(w, 1)
     ui = w.ui
 
-    ui.click("button", "Today")
-    w.wait("Today is shown", lambda: ui.find("region", "Today"))
-    w.check("the focus is in the field on Today",
-            w.wait("the field takes the focus", lambda: ui.focused() == ("textbox", "What do you need?")),
+    w.check("the conversation puts the focus in the composer",
+            w.wait("the composer takes the focus", lambda: ui.focused() == ("combobox", f"Write to {AGENT}")),
             observed=ui.focused())
 
     ui.key("k", mod=True)
@@ -2012,9 +2128,9 @@ def scenario_menu(w: World) -> None:
     before = len(said(w, AGENT))
     ui.type("textbox", "Command menu", QUIET_PLEASE)
     ui.key("Escape")
-    w.check("Escape closes the menu with a sentence in it, sends nothing and gives the field back",
+    w.check("Escape closes the menu with a sentence in it, sends nothing and returns to the composer",
             w.wait("the menu closes", lambda: not ui.find("dialog", "Command menu"))
-            and w.wait("the field takes the focus back", lambda: ui.focused() == ("textbox", "What do you need?"))
+            and w.wait("the composer takes the focus back", lambda: ui.focused() == ("combobox", f"Write to {AGENT}"))
             and len(said(w, AGENT)) == before and not w.host.scalar(
                 "SELECT count(*) FROM messages WHERE parts LIKE ?", f"%{QUIET_PLEASE}%"),
             observed={"focused": ui.focused(), "said": len(said(w, AGENT)) - before})
@@ -2029,6 +2145,8 @@ def scenario_menu(w: World) -> None:
             said(w, AGENT)[-1] == NOTED and not ui.find("dialog", "Command menu"),
             observed={"said": said(w, AGENT)[-2:]})
 
+    new_agent(w, "Editor", "Wait to be asked.")
+    open_agent(w, "Editor")
     ui.key("1", mod=True)
     w.wait("Command 1 opens the first agent", lambda: ui.find("log", f"Conversation with {AGENT}"))
     w.check("Command 1 opens the first agent with the focus in its composer",
@@ -2069,14 +2187,37 @@ def scenario_queue(w: World) -> None:
     ui.key("Enter")
     w.wait(f"{RESEARCHER}'s conversation opens", lambda: ui.find("log", f"Conversation with {RESEARCHER}"))
     write(w, RESEARCHER, BOOK_FLIGHT)
-    w.wait("the question is pending too", lambda: len(approvals(w)) == 2)
+    runs = w.wait("both requests are pending", lambda: rows if len(rows := w.host.rows(
+        "SELECT run_id FROM approvals WHERE state = 'pending' ORDER BY created_at, rowid")) == 2 else None)
+    ui.evaluate("location.reload()")
+    w.wait("reload opens the soonest-due request's conversation",
+           lambda: ui.find("log", f"Conversation with {AGENT}") and ui.find("button", "Allow"))
+    w.check("reload opens the earliest waiting conversation without changing either run",
+            runs == w.host.rows("SELECT run_id FROM approvals WHERE state = 'pending' ORDER BY created_at, rowid"),
+            observed={"originalRuns": len(runs)}, shot=True)
 
-    ui.click("button", "Today")
-    w.wait("Today shows both requests", lambda: ui.find("button", "Allow") and ui.find("button", "Early"))
-    w.wait("the field takes the focus", lambda: ui.focused() == ("textbox", "What do you need?"))
+    open_agent(w, RESEARCHER)
+    composer = ("combobox", f"Write to {RESEARCHER}")
+    draft = "Ask about a seat after the flight is booked."
+    ui.click(*composer)
     ui.key("Escape")
-    first = w.wait("Escape selects the first card", lambda: selected_card(w))
-    w.check("Escape leaves the field and selects the first request, with its keys on its buttons",
+    w.wait("Escape from the empty composer opens Questions", lambda: ui.find("dialog", "Questions"))
+    ui.key("Escape")
+    w.wait("Escape closes Questions", lambda: not ui.find("dialog", "Questions"))
+    ui.fill(*composer, draft)
+    questions(w, 2)
+    ui.key("Escape")
+    w.wait("Escape closes Questions", lambda: not ui.find("dialog", "Questions"))
+    w.check("Escape closes Questions without answering or switching conversations",
+            ui.find("log", f"Conversation with {RESEARCHER}") and ui.value(*composer) == draft
+            and [a["state"] for a in approvals(w)] == ["pending", "pending"],
+            observed=approvals(w))
+
+    questions(w, 2)
+    first = w.wait("Questions selects and focuses the first card",
+                   lambda: ui.focused()[0] == "article" and ui.focused()[1].startswith(AGENT) and selected_card(w))
+    other_keys = ui.evaluate("document.querySelectorAll('.desk__card:not([data-selected]) .desk__key').length")
+    w.check("Questions selects the first request and shows the keys on its buttons",
             ui.focused()[0] == "article" and ui.focused()[1].startswith(AGENT) and "Allow" in first
             and ("⌘↩" in first or "Ctrl+↩" in first),
             observed={"focused": ui.focused(), "card": first}, shot=True)
@@ -2085,18 +2226,19 @@ def scenario_queue(w: World) -> None:
     second = w.wait("J selects the next card", lambda: RESEARCHER in ui.focused()[1] and selected_card(w))
     ui.key("k")
     w.check("J and K move the selection, and an option shows its number only while selected",
-            "Early1" in re.sub(r"\s+", "", second)
+            other_keys == 0 and "Early1" in re.sub(r"\s+", "", second)
             and w.wait("K goes back", lambda: ui.focused()[1].startswith(AGENT)),
             observed={"second": second, "focused": ui.focused()})
 
     ui.key("Enter", mod=True)
-    w.wait("the Allow is held with an Undo", lambda: ui.find("button", "Undo", exact=False))
+    w.wait("the Allow is held with an Undo and the next card takes focus",
+           lambda: ui.find("button", "Undo", exact=False) and RESEARCHER in ui.focused()[1])
     w.check("Command Return holds the Allow with an Undo, sends nothing yet and selects the next request",
             [a["state"] for a in approvals(w)] == ["pending", "pending"] and RESEARCHER in ui.focused()[1],
             observed={"approvals": approvals(w), "focused": ui.focused()}, shot=True)
     ui.key("z", mod=True)
     w.check("Command Z takes the Allow back: the card returns and nothing was sent",
-            w.wait("the card returns", lambda: len(ui.find("button", "Allow")) == 1
+            w.wait("the card returns", lambda: any(label(n) == "Allow" for n in ui.within("dialog", "Questions", "button"))
                    and not ui.find("button", "Undo", exact=False))
             and [a["state"] for a in approvals(w)] == ["pending", "pending"] and operator_name(w) == "",
             observed={"approvals": approvals(w), "operatorName": operator_name(w)})
@@ -2112,9 +2254,20 @@ def scenario_queue(w: World) -> None:
             operator_name(w) == "Robin"
             and w.wait(f"{RESEARCHER} replies with the answer", lambda: "Early" in " ".join(said(w, RESEARCHER))),
             observed={"approvals": approvals(w), "said": said(w, RESEARCHER)[-1:]})
-    w.check("after the last answer the focus is back in the field",
-            w.wait("the field takes the focus back", lambda: ui.focused() == ("textbox", "What do you need?")),
-            observed=ui.focused(), shot=True)
+    w.check("after the last answer Questions closes and the original composer gets its draft and focus back",
+            w.wait("the original composer takes focus back",
+                   lambda: not ui.find("dialog", "Questions") and ui.focused() == composer)
+            and ui.value(*composer) == draft, observed=ui.focused(), shot=True)
+    settled(w, 3)
+    w.check("both answers finish their original runs",
+            {r["run_id"] for r in runs} == {r["run_id"] for r in w.host.rows(
+                "SELECT run_id FROM outcomes WHERE run_id IN (?, ?)", *(r["run_id"] for r in runs))},
+            observed={"runs": len(runs)})
+    ui.evaluate("location.reload()")
+    w.wait("without running or waiting work, reload opens the last conversation",
+           lambda: ui.find("log", f"Conversation with {RESEARCHER}") and ui.find(*composer))
+    w.check("after both runs settle, reload returns to the last conversation and its draft",
+            ui.value(*composer) == draft, observed=ui.focused(), shot=True)
     no_unscripted(w)
 
 
@@ -2259,11 +2412,9 @@ def scenario_firstgroup(w: World) -> None:
     w.check("under the coordinator a status line names both colleagues it waits for",
             working_line(w).startswith(f"Messaged {MARKET} and {FINANCE}, waiting for"),
             observed=re.sub(r"\d+s", "Ns", working_line(w)))
-    show(w, "Today")
-    w.wait("Today lists the coordinator's conversation as running", lambda: LEAD in running_text(w))
-    w.check("behind the conversation, Today shows the group's work as running",
-            LEAD in running_text(w), observed=LEAD in running_text(w), shot=True)
-    open_agent(w, LEAD)
+    w.wait("the roster marks the coordinator Working", lambda: roster_status(w, LEAD) == "Working")
+    w.check("beside the conversation, the roster shows the coordinator working",
+            bool(ui.find("log", f"Conversation with {LEAD}")), observed=roster_status(w, LEAD), shot=True)
 
     researcher.set()
     w.wait("the card shows Market Researcher's answer", lambda: RESEARCHER_SAYS in card_text(w))
@@ -2296,7 +2447,7 @@ SCENARIOS: dict[str, Scenario] = {
         "the right key passes the test and is kept on the Host",
         "Start task opens the conversation while the agent is still answering",
         "the brief reached the agent and its reply is in the conversation",
-        "a message written in the field is answered in the same conversation",
+        "a message written in the composer is answered in the same conversation",
         "the page was told about each reply as it happened",
         "every model call was one the scenario scripted",
     )),
@@ -2350,15 +2501,16 @@ SCENARIOS: dict[str, Scenario] = {
         "Try again sends the cut-short message once more and it is answered",
         "every model call was one the scenario scripted",
     )),
-    "running": Scenario(scenario_running, "Today lists a conversation while it runs, with the agent, its latest note, "
-                        "a clock from when the Host started the work and Stop; a Host restarted mid-turn keeps the "
-                        "clock going from the first start, and Stop moves the conversation to Finished.",
+    "running": Scenario(scenario_running, "The roster shows working status while the conversation shows its note, "
+                        "clock and Stop; a Host restarted mid-turn keeps the clock going from the first start, "
+                        "and Stop leaves the reason in the transcript.",
     (
-        "with nothing running, Today has no Running section",
-        "Running shows the agent, its latest note, the time since the Host started the work, and Stop",
-        "the clock on Running ticks while the turn works",
+        "with nothing running, the roster says Idle and the conversation has no Stop",
+        "the running conversation shows its latest note, time since the Host started the work, and Stop",
+        "the clock in the conversation ticks while the turn works",
+        "reload prefers the running conversation to the last open conversation",
         "after a restart mid-turn the clock goes on from the first Host's start rather than from zero",
-        "Stop ends the conversation, and it leaves Running for Finished",
+        "Stop ends the run and replaces the working controls with the stopped transcript",
         "every model call was one the scenario scripted",
     )),
     "handoff": Scenario(scenario_handoff, "An agent asks two colleagues; a live card shows each face, the question, a "
@@ -2401,7 +2553,7 @@ SCENARIOS: dict[str, Scenario] = {
         "the routine's history shows the one firing",
         "every model call was one the scenario scripted",
     )),
-    "look": Scenario(scenario_look, "Today, a conversation, Settings, New agent, the Groups sheet and Search, in "
+    "look": Scenario(scenario_look, "Questions, a conversation, Settings, New agent, the Groups sheet and Search, in "
                      "light and dark, each keep to the six type roles, eight styles at most, the control heights "
                      "and the radii; a screen with a size, weight, corner or control outside them fails, naming "
                      "the element and the token to use.",
@@ -2410,7 +2562,7 @@ SCENARIOS: dict[str, Scenario] = {
         "every screen in dark keeps to the six type roles, the control family and the radii",
         "every model call was one the scenario scripted",
     )),
-    "scrollbars": Scenario(scenario_scrollbars, "Today, a conversation, Settings, New agent, the Groups sheet, "
+    "scrollbars": Scenario(scenario_scrollbars, "Questions, a conversation, Settings, New agent, the Groups sheet, "
                            "Search and the command menu, in light and dark at 1280x820, put every element in the "
                            "same place whether scroll bars overlay the page or take room beside it, and New agent "
                            "shows its Character grid in two rows either way; a region whose "
@@ -2436,7 +2588,7 @@ SCENARIOS: dict[str, Scenario] = {
                            "says why beside Start, on screen, and hires nobody; Start then hires the three exactly once into a group "
                            "named for the task and opens the coordinator's "
                            "conversation, where the coordinator asks both colleagues at once, the live hand-off "
-                           "card and status line show it, Today shows it running, and one result comes back.",
+                           "card, status line and roster show it running, and one result comes back.",
     (
         "the first step says a task goes to a group of three and keeps Create one agent",
         "the first run shows its steps alone, with no hour ruler or status bar, and focus on the first task",
@@ -2451,7 +2603,7 @@ SCENARIOS: dict[str, Scenario] = {
         "the starter group is named for the task it was hired for, on the agent's page",
         "the coordinator asks both colleagues on its first turn, in one message, and the person sees the card",
         "under the coordinator a status line names both colleagues it waits for",
-        "behind the conversation, Today shows the group's work as running",
+        "beside the conversation, the roster shows the coordinator working",
         "the coordinator comes back with one result after both answered, and the run ends there",
         "every model call was one the scenario scripted",
     )),
@@ -2478,14 +2630,17 @@ SCENARIOS: dict[str, Scenario] = {
         "with nothing waiting, Tab leaves the composer for its own next control",
         "every model call was one the scenario scripted",
     )),
-    "ribbon": Scenario(scenario_ribbon, "Three agents that have done nothing today each get a face of their own "
-                       "on the timeline, named and called idle, with no pile and no name over another at 1280 "
-                       "wide; while another agent's page is open their drawings fade and their names do not.",
+    "roster": Scenario(scenario_roster, "Eleven agents stay readable and ordered at two window sizes, and the tenth "
+                       "can ask without switching the conversation; click, step and jump without losing a draft, "
+                       "keep Search from moving the conversation under the command menu, and reload into the question.",
     (
-        "an agent that has done nothing today has a face of its own, named and called idle",
-        "no face on the timeline is called asleep, and there is no pile",
-        "at 1280 wide no two names on the timeline overlap",
-        "with another agent's page open, an idle face fades its drawing and not its name",
+        "each agent has one ordered row, with shortcuts only for the first nine",
+        "the conversation has no Today destination or spare writing field",
+        "a new question changes the tenth status without reordering or switching conversations",
+        "every roster row scrolls fully into view with its name readable at both sizes",
+        "mouse, Control Tab in both directions, and the numbered shortcut keep the draft with its agent",
+        "stacked Search and its keys leave the command menu and underlying draft unchanged",
+        "reload lands on the pending question but keeps the other conversation's draft",
         "every model call was one the scenario scripted",
     )),
     "grouptabs": Scenario(scenario_grouptabs, "A person opens a group's settings from the Groups sheet, reaches "
@@ -2501,7 +2656,7 @@ SCENARIOS: dict[str, Scenario] = {
         "every model call was one the scenario scripted",
     )),
     "settings": Scenario(scenario_settings, "A person opens Settings from the gear as a page in the window, with the "
-                         "timeline kept and a back control, and its thirteen sections listed without scrolling at "
+                         "roster kept and a back control, and its thirteen sections listed without scrolling at "
                          "1280 by 820 and 900 by 700; a section scrolls on its own with Save kept on screen, Escape, "
                          "the back control and Command-comma each return to where it was opened with the focus back, "
                          "the command menu opens every section straight to itself, and New agent, New group and a "
@@ -2509,12 +2664,12 @@ SCENARIOS: dict[str, Scenario] = {
                          "has a fill of its own, and the list still fits with the no-key banner, the host update "
                          "notice and the unreachable host banner showing.",
     (
-        "the gear opens Settings as a page in the window, with the timeline and a back control, and no dialog",
+        "the gear opens Settings as a full-width page with a back control, and no dialog",
         "at 1280x820 and 900x700 the section list shows all thirteen sections without scrolling",
         "a long section scrolls on its own, and the section list stays where it was",
         "with an unsaved change, Save stays on screen after scrolling to the end of a section",
         "Escape, the back control and Command-comma each return to where Settings was opened, with the focus where it was",
-        "the command menu opens every section straight to itself, from Today and from the page",
+        "the command menu opens every section straight to itself, from a conversation and from Settings",
         "opened from an agent's page, the back control is named for that agent and returns to it",
         "New agent, New group and a group's settings fit a 900x700 window with their actions on screen",
         "the selected section has a fill of its own against the page and keeps its heavier weight",
@@ -2547,28 +2702,32 @@ SCENARIOS: dict[str, Scenario] = {
         "an endpoint that needs no key passes the test with none, and is kept",
         "every model call was one the scenario scripted",
     )),
-    "menu": Scenario(scenario_menu, "A person on Today finds the focus in the field, opens the command menu on "
+    "menu": Scenario(scenario_menu, "A person in a conversation finds the focus in the composer, opens the command menu on "
                      "Command K, switches to dark with one word and Return, writes to an agent with a sentence and "
                      "Return, and opens the first agent on Command 1 with the focus in its composer; a sentence "
                      "left in the menu by Escape is not sent.",
     (
-        "the focus is in the field on Today",
+        "the conversation puts the focus in the composer",
         "one word, dark, and Return switch the reading surface to dark",
-        "Escape closes the menu with a sentence in it, sends nothing and gives the field back",
+        "Escape closes the menu with a sentence in it, sends nothing and returns to the composer",
         "three words or more and Return write to the agent, and its reply arrives",
         "Command 1 opens the first agent with the focus in its composer",
         "every model call was one the scenario scripted",
     )),
-    "queue": Scenario(scenario_queue, "Two agents wait on a person, who answers both from Today by keyboard: "
-                      "Escape selects the first card, J and K move, Command Return allows, a number picks an answer, "
-                      "and the focus returns to the field; an Allow taken back with Command Z is never sent.",
+    "queue": Scenario(scenario_queue, "Reload opens the earliest waiting conversation without replacing a run. "
+                      "Questions selects the first card, J and K move, Command Return allows, a number picks an "
+                      "answer, and focus returns to the composer; Escape sends nothing, and Command Z takes back a held Allow.",
     (
-        "Escape leaves the field and selects the first request, with its keys on its buttons",
+        "reload opens the earliest waiting conversation without changing either run",
+        "Escape closes Questions without answering or switching conversations",
+        "Questions selects the first request and shows the keys on its buttons",
         "J and K move the selection, and an option shows its number only while selected",
         "Command Return holds the Allow with an Undo, sends nothing yet and selects the next request",
         "Command Z takes the Allow back: the card returns and nothing was sent",
         "the held answers are each sent once, and the agents are told",
-        "after the last answer the focus is back in the field",
+        "after the last answer Questions closes and the original composer gets its draft and focus back",
+        "both answers finish their original runs",
+        "after both runs settle, reload returns to the last conversation and its draft",
         "every model call was one the scenario scripted",
     )),
 }

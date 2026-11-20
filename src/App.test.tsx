@@ -1,10 +1,14 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { rememberConversation } from "./lib/frame";
 import { expectRestart, forgetRestart } from "./lib/link";
 import { saveFirstTask } from "./lib/onboarding";
-import type { AgentCard, Routine, Settings } from "./lib/types";
-import { aGroup, anApproval } from "./test-fixtures";
+import type { AgentCard, Approval, Routine, Running, Settings } from "./lib/types";
+import { aGroup, anApproval, anOutcome } from "./test-fixtures";
 
+const pendingApprovals = vi.fn<() => Promise<Approval[]>>(async () => []);
+const runningRuns = vi.fn<() => Promise<Running[]>>(async () => []);
+const markOutcomesSeen = vi.fn(async (target: { runIds?: string[] }) => target.runIds ?? []);
 const listGroups = vi.fn(async () => [aGroup({ agentCount: 3 })]);
 const listAgents = vi.fn<() => Promise<AgentCard[]>>(async () => []);
 const agentLastActive = vi.fn<() => Promise<Record<string, number>>>(async () => ({}));
@@ -47,7 +51,9 @@ vi.mock("./lib/ipc", () => ({
     usageSummary: async () => [],
     approvalStates: async () => ({}),
     approvalAnswers: async () => ({}),
-    pendingApprovals: async () => [],
+    pendingApprovals: () => pendingApprovals(),
+    runningRuns: () => runningRuns(),
+    markOutcomesSeen: (target: { runIds?: string[] }) => markOutcomesSeen(target),
     listDecisions: async () => [],
     openEscalations: async () => [],
     agentLastActive: () => agentLastActive(),
@@ -160,6 +166,9 @@ function railNames(): (string | null)[] {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
+  pendingApprovals.mockResolvedValue([]);
+  runningRuns.mockResolvedValue([]);
   listAgents.mockResolvedValue([]);
   listGroups.mockResolvedValue([aGroup({ agentCount: 3 })]);
   agentLastActive.mockResolvedValue({});
@@ -171,6 +180,12 @@ beforeEach(() => {
     settings: null,
     selected: null,
     railGroup: null,
+    pending: [],
+    stuck: [],
+    decisions: [],
+    outcomes: [],
+    running: [],
+    forYou: false,
     messages: {},
     streams: {},
     pulses: [],
@@ -233,17 +248,57 @@ describe("when the host goes away", () => {
 });
 
 describe("App", () => {
-  it("renders the ribbon and reaches every agent through the Groups sheet", async () => {
+  it("renders the roster and reaches every agent through the Groups sheet", async () => {
     listAgents.mockResolvedValue([agent("Manager")]);
     render(<App />);
-    expect(await screen.findByRole("navigation", { name: /agents/i })).toBeTruthy();
+    expect(await screen.findByRole("navigation", { name: "Agent conversations" })).toBeTruthy();
     expect(within(groupsSheet()).getByText("guaca")).toBeTruthy();
   });
 
-  it("shows neither the hour ruler nor the status bar while the first run is on screen", async () => {
+  it("numbers up to nine without hiding a waiting agent in another group", async () => {
+    const second = aGroup({ id: "second", name: "Research" });
+    listGroups.mockResolvedValue([aGroup(), second]);
+    listAgents.mockResolvedValue([
+      ...Array.from({ length: 9 }, (_, index) => agent(`Agent ${index + 1}`, index)),
+      { ...agent("Market Researcher"), groupId: second.id },
+    ]);
+    render(<App />);
+    await screen.findByRole("combobox", { name: "Write to Agent 1" });
+    const roster = screen.getByRole("navigation", { name: "Agent conversations" });
+    const first = within(roster).getByRole("button", { name: "Agent 1, Idle" });
+    expect(first.getAttribute("aria-keyshortcuts")).toBe("Meta+1 Control+1");
+    act(() => useStore.setState({ pending: [anApproval({ agentId: "id-Market Researcher" })] }));
+    const asking = within(roster).getByRole("button", {
+      name: "Market Researcher, Has a question",
+    });
+    expect(asking.hasAttribute("aria-keyshortcuts")).toBe(false);
+    expect(first.getAttribute("aria-current")).toBe("page");
+    fireEvent.click(within(roster).getByRole("button", { name: "1 question waiting" }));
+    expect(await screen.findByRole("dialog", { name: "Questions" })).toBeTruthy();
+    expect(document.activeElement).toBe(
+      screen.getByRole("article", { name: /^Market Researcher asks/ }),
+    );
+    expect(useStore.getState().selected).toBe("id-Agent 1");
+  });
+
+  it("marks an unread result seen only when its conversation opens", async () => {
+    listAgents.mockResolvedValue([agent("Manager", 0), agent("Writer", 1)]);
+    render(<App />);
+    await screen.findByRole("combobox", { name: "Write to Manager" });
+    act(() =>
+      useStore.setState({ outcomes: [anOutcome({ agentId: "id-Writer", runId: "written" })] }),
+    );
+    const unread = screen.getByRole("button", { name: "Writer, Has a result" });
+    expect(markOutcomesSeen).not.toHaveBeenCalled();
+    fireEvent.click(unread);
+    await screen.findByRole("button", { name: "Writer, Idle" });
+    expect(markOutcomesSeen).toHaveBeenCalledExactlyOnceWith({ runIds: ["written"] });
+  });
+
+  it("shows neither the roster nor the status bar while the first run is on screen", async () => {
     render(<App />);
     await screen.findByRole("heading", { name: "What would you like help with?" });
-    expect(screen.queryByRole("navigation", { name: /agents/i })).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "Agent conversations" })).toBeNull();
     expect(screen.queryByRole("navigation", { name: "Places" })).toBeNull();
     expect(screen.getByRole("button", { name: "App settings" })).toBeTruthy();
   });
@@ -308,7 +363,7 @@ describe("App", () => {
     expect(cafeteria.isConnected).toBe(true);
   });
 
-  it("opens Settings as a page in place of Today, with the timeline kept", async () => {
+  it("opens Settings as a page in place of onboarding", async () => {
     render(<App />);
     const heading = await screen.findByRole("heading", { name: "What would you like help with?" });
     fireEvent.keyDown(window, { key: ",", ctrlKey: true });
@@ -317,7 +372,7 @@ describe("App", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(heading.isConnected).toBe(true);
     expect(screen.queryByRole("heading", { name: "What would you like help with?" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Today" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Workspace" })).toBeTruthy();
   });
 
   it("goes back on Command-comma, Escape and the back control, restoring the focus", async () => {
@@ -333,7 +388,7 @@ describe("App", () => {
       await waitFor(() => expect(document.activeElement).toBe(page));
       if (leave === "comma") fireEvent.keyDown(window, { key: ",", ctrlKey: true });
       if (leave === "escape") fireEvent.keyDown(window, { key: "Escape" });
-      if (leave === "back") fireEvent.click(screen.getByRole("button", { name: "Today" }));
+      if (leave === "back") fireEvent.click(screen.getByRole("button", { name: "Workspace" }));
       expect(screen.queryByRole("region", { name: "Settings" })).toBeNull();
       expect(screen.getByRole("heading", { name: "What would you like help with?" })).toBeTruthy();
       await waitFor(() => expect(document.activeElement).toBe(gear));
@@ -365,14 +420,13 @@ describe("App", () => {
     expect(await screen.findByRole("navigation", { name: "Manager's page" })).toBeTruthy();
   });
 
-  it.each(["openMessage", "leaveChannel"] as const)(
+  it.each(["openMessage", "select"] as const)(
     "leaves the page on %s, keeping the draft and not pulling the focus back to the gear",
     async (how) => {
       listAgents.mockResolvedValue([agent("Manager")]);
       render(<App />);
       await waitFor(() => expect(useStore.getState().agents).toHaveLength(1));
       const id = useStore.getState().agents[0]!.id;
-      if (how === "leaveChannel") await act(async () => useStore.getState().select(id));
       const gear = within(screen.getByRole("navigation", { name: "Window" })).getByRole("button", {
         name: "App settings",
       });
@@ -387,12 +441,10 @@ describe("App", () => {
       elsewhere.focus();
       await act(async () => {
         if (how === "openMessage") await useStore.getState().openMessage(id, "m1");
-        else useStore.getState().leaveChannel();
+        else await useStore.getState().select(id);
       });
       expect(screen.queryByRole("region", { name: "Settings" })).toBeNull();
-      if (how === "openMessage")
-        expect(screen.getByRole("navigation", { name: "Manager's page" })).toBeTruthy();
-      else expect(screen.getByRole("region", { name: "Today" })).toBeTruthy();
+      expect(screen.getByRole("navigation", { name: "Manager's page" })).toBeTruthy();
       await act(async () => {});
       expect(document.activeElement).not.toBe(gear);
       fireEvent.click(gear);
@@ -602,26 +654,59 @@ describe("App", () => {
     expect(lower.isConnected).toBe(false);
   });
 
-  it("opens on today rather than on the first agent's channel", async () => {
+  it("opens the last conversation when there is no question or running work", async () => {
     listAgents.mockResolvedValue([agent("Manager"), agent("Chef")]);
+    rememberConversation("id-Chef");
     render(<App />);
-    await waitFor(() => expect(useStore.getState().agents).toHaveLength(2));
-    await act(async () => {});
-    expect(useStore.getState().selected).toBeNull();
-    expect(screen.queryByRole("navigation", { name: "Manager's page" })).toBeNull();
+    const input = await screen.findByRole("combobox", { name: "Write to Chef" });
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    expect(useStore.getState().selected).toBe("id-Chef");
   });
 
-  it("goes back to today when the open agent is deleted", async () => {
+  it("chooses another conversation when the open agent is deleted", async () => {
     listAgents.mockResolvedValue([agent("Manager"), agent("Chef")]);
+    rememberConversation("id-Manager");
     render(<App />);
-    await waitFor(() => expect(railRow("Manager")).toBeTruthy());
-    fireEvent.click(railRow("Manager"));
     await screen.findByRole("navigation", { name: "Manager's page" });
     listAgents.mockResolvedValue([agent("Chef")]);
     await act(() => useStore.getState().refreshAgents());
-    expect(useStore.getState().selected).toBeNull();
     expect(screen.queryByRole("navigation", { name: "Manager's page" })).toBeNull();
-    expect(screen.queryByRole("navigation", { name: "Chef's page" })).toBeNull();
+    expect(await screen.findByRole("navigation", { name: "Chef's page" })).toBeTruthy();
+  });
+
+  it("opens the task owner and focuses a delegated question that is due first", async () => {
+    listAgents.mockResolvedValue([agent("Manager", 0), agent("Chef", 1), agent("Writer", 2)]);
+    rememberConversation("id-Writer");
+    pendingApprovals.mockResolvedValue([
+      anApproval({
+        id: "later",
+        agentId: "id-Writer",
+        runId: "independent",
+        lapsesAt: Date.now() + 60_000,
+      }),
+      anApproval({
+        id: "first",
+        agentId: "id-Chef",
+        runId: "delegated",
+        lapsesAt: Date.now() + 30_000,
+      }),
+    ]);
+    runningRuns.mockResolvedValue([
+      {
+        runId: "delegated",
+        agentId: "id-Manager",
+        groupId: agent("Manager").groupId,
+        startedAt: 1,
+        note: null,
+      },
+    ]);
+    render(<App />);
+    const tray = await screen.findByRole("dialog", { name: "Questions" });
+    expect(useStore.getState().selected).toBe("id-Manager");
+    expect(document.activeElement).toBe(within(tray).getByRole("article", { name: /^Chef asks/ }));
+    fireEvent.keyDown(document.activeElement as Element, { key: "Escape" });
+    const input = await screen.findByRole("combobox", { name: "Write to Manager" });
+    await waitFor(() => expect(document.activeElement).toBe(input));
   });
 
   it("lands a notification for an agent on that agent's conversation", async () => {
@@ -716,21 +801,18 @@ describe("App", () => {
       expect(currentTab("Manager")).toBe("Conversation");
     });
 
-    it("drops a reveal that Today cancels before it renders, and a later click opens the conversation", async () => {
-      const reveal = await workingWindow();
-
-      act(() => {
-        reveal({ kind: "agent", id: "id-Manager" });
-        useStore.getState().leaveChannel();
-      });
-      expect(useStore.getState().selected).toBeNull();
-      expect(screen.queryByRole("navigation", { name: "Manager's page" })).toBeNull();
-
-      fireEvent.click(railRow("Manager"));
-      expect(currentTab("Manager")).toBe("Conversation");
+    it("keeps the conversation and tab open when a new question arrives elsewhere", async () => {
+      await workingWindow();
+      fireEvent.click(railRow("Chef"));
+      const page = screen.getByRole("navigation", { name: "Chef's page" });
+      fireEvent.click(within(page).getByRole("button", { name: "Memory" }));
+      act(() => useStore.setState({ pending: [anApproval({ agentId: "id-Manager" })] }));
+      expect(currentTab("Chef")).toBe("Memory");
+      expect(screen.queryByRole("dialog", { name: "Questions" })).toBeNull();
+      expect(screen.getByRole("button", { name: "1 question waiting" })).toBeTruthy();
     });
 
-    it("keeps Now a tab the person chooses, and opens the conversation again after Today", async () => {
+    it("keeps Now a tab the person chooses, and opens the conversation again after another agent", async () => {
       await workingWindow();
       fireEvent.click(railRow("Manager"));
       expect(currentTab("Manager")).toBe("Conversation");
@@ -738,7 +820,7 @@ describe("App", () => {
       const page = screen.getByRole("navigation", { name: "Manager's page" });
       fireEvent.click(within(page).getByRole("button", { name: "Now" }));
       expect(currentTab("Manager")).toBe("Now");
-      fireEvent.click(screen.getByRole("button", { name: "Today" }));
+      fireEvent.click(railRow("Chef"));
       expect(screen.queryByRole("navigation", { name: "Manager's page" })).toBeNull();
 
       fireEvent.click(railRow("Manager"));
@@ -842,29 +924,26 @@ describe("App", () => {
   it.each([
     { paid: true, banner: false },
     { paid: false, banner: true },
-  ])(
-    "on Today, asks for a key only when no group with agents can reply: %j",
-    async ({ paid, banner }) => {
-      getSettings.mockResolvedValue({
-        ...(await getSettings()),
-        provider: "compatible",
-        apiKeySet: false,
-      });
-      const first = aGroup({ apiKeySet: paid });
-      const second = aGroup({ id: "other-group", name: "Other", apiKeySet: false });
-      listGroups.mockResolvedValue([first, second]);
-      listAgents.mockResolvedValue([
-        agent("Manager"),
-        { ...agent("Other agent"), groupId: second.id },
-      ]);
-      render(<App />);
-      await waitFor(() => expect(useStore.getState().agents).toHaveLength(2));
-      await waitFor(() => expect(useStore.getState().settings).not.toBeNull());
-      await act(async () => {});
-      expect(useStore.getState().selected).toBeNull();
-      expect(screen.queryByText(/Add an API key/i) !== null).toBe(banner);
-    },
-  );
+  ])("asks for a key if the initial agent cannot reply: %j", async ({ paid, banner }) => {
+    getSettings.mockResolvedValue({
+      ...(await getSettings()),
+      provider: "compatible",
+      apiKeySet: false,
+    });
+    const first = aGroup({ apiKeySet: paid });
+    const second = aGroup({ id: "other-group", name: "Other", apiKeySet: false });
+    listGroups.mockResolvedValue([first, second]);
+    listAgents.mockResolvedValue([
+      agent("Manager"),
+      { ...agent("Other agent"), groupId: second.id },
+    ]);
+    render(<App />);
+    await waitFor(() => expect(useStore.getState().agents).toHaveLength(2));
+    await waitFor(() => expect(useStore.getState().settings).not.toBeNull());
+    await act(async () => {});
+    expect(useStore.getState().selected).toBe("id-Manager");
+    expect(screen.queryByText(/Add an API key/i) !== null).toBe(banner);
+  });
 
   it("names the Provider section on the no-key banner once Settings is open", async () => {
     getSettings.mockResolvedValue({
@@ -967,7 +1046,7 @@ describe("App", () => {
     agentActivity.mockResolvedValue({ "id-Chef": { state: "thinking" } });
     render(<App />);
 
-    await waitFor(() => expect(screen.getByText("Chef")).toBeTruthy());
+    await screen.findByRole("button", { name: "Chef, Working" });
     expect(railNames()).toEqual(["Chef", "Manager", "Host"]);
   });
 
@@ -1045,10 +1124,14 @@ describe("App", () => {
     expect(screen.getByRole("complementary", { name: /Manager: details/i })).toBeTruthy();
   });
 
-  it("still renders the rail when startup fails", async () => {
+  it("still offers workspace controls when startup fails", async () => {
     listAgents.mockRejectedValue({ kind: "storage", message: "disk on fire" });
     render(<App />);
-    expect(await screen.findByRole("navigation", { name: /agents/i })).toBeTruthy();
+    expect(
+      within(screen.getByRole("navigation", { name: "Window" })).getByRole("button", {
+        name: "Agents",
+      }),
+    ).toBeTruthy();
     expect(await screen.findByText(/disk on fire/i)).toBeTruthy();
   });
 });
@@ -1076,7 +1159,7 @@ it("refreshes the roster when the event connection returns", async () => {
   const { onRuntimeEvent } = await import("./lib/ipc");
   listAgents.mockResolvedValue([agent("Manager")]);
   render(<App />);
-  await screen.findByRole("navigation", { name: /agents/i });
+  await screen.findByRole("navigation", { name: "Agent conversations" });
   const before = listAgents.mock.calls.length;
   const calls = vi.mocked(onRuntimeEvent).mock.calls;
   const reconnect = calls[calls.length - 1]?.[1];
@@ -1103,7 +1186,7 @@ describe("when the connection to the host is lost", () => {
   it("says so before anything has been asked for, and marks the page as out of date", async () => {
     listAgents.mockResolvedValue([agent("Ada")]);
     const { container } = render(<App />);
-    await screen.findByRole("navigation", { name: /agents/i });
+    await screen.findByRole("navigation", { name: "Agent conversations" });
     const { lost } = await connection();
 
     act(() => lost(gone));
@@ -1117,7 +1200,7 @@ describe("when the connection to the host is lost", () => {
   it("clears itself when the connection comes back", async () => {
     listAgents.mockResolvedValue([agent("Ada")]);
     const { container } = render(<App />);
-    await screen.findByRole("navigation", { name: /agents/i });
+    await screen.findByRole("navigation", { name: "Agent conversations" });
     const { reconnect, lost } = await connection();
 
     act(() => lost(gone));
@@ -1135,7 +1218,7 @@ describe("when the connection to the host is lost", () => {
     expectRestart();
     listAgents.mockResolvedValue([agent("Ada")]);
     const { container } = render(<App />);
-    await screen.findByRole("navigation", { name: /agents/i });
+    await screen.findByRole("navigation", { name: "Agent conversations" });
     const { lost } = await connection();
 
     act(() => lost(gone));
@@ -1147,8 +1230,8 @@ describe("when the connection to the host is lost", () => {
 });
 
 describe("phone navigation", () => {
-  it("opens the same channel again and preserves its draft across its tabs and Today", async () => {
-    listAgents.mockResolvedValue([agent("Ada")]);
+  it("opens the same channel again and preserves its draft across its tabs and another conversation", async () => {
+    listAgents.mockResolvedValue([agent("Ada"), agent("Lin")]);
     const { container } = render(<App />);
     await waitFor(() => expect(railRow("Ada")).toBeTruthy());
     fireEvent.click(railRow("Ada"));
@@ -1162,7 +1245,7 @@ describe("phone navigation", () => {
     expect(screen.getByRole("complementary", { name: "Ada: details" })).toBeTruthy();
     fireEvent.click(within(page()).getByRole("button", { name: "Conversation" }));
     expect(pane()).toBe("Conversation");
-    fireEvent.click(screen.getByRole("button", { name: "Today" }));
+    fireEvent.click(railRow("Lin"));
     expect(screen.queryByRole("navigation", { name: "Ada's page" })).toBeNull();
     fireEvent.click(railRow("Ada"));
     await screen.findByRole("heading", { name: "Ada" });
@@ -1177,6 +1260,7 @@ describe("phone navigation", () => {
     listGroups.mockResolvedValue([aGroup(), other]);
     listAgents.mockResolvedValue([agent("Ada"), { ...agent("Lin"), groupId: other.id }]);
     render(<App />);
+    await screen.findByRole("combobox", { name: "Write to Ada" });
     await waitFor(() => expect(railRow("Ada")).toBeTruthy());
     fireEvent.change(within(groupsSheet()).getByRole("combobox", { name: "Group" }), {
       target: { value: other.id },
@@ -1236,10 +1320,7 @@ describe("where an agent's page lands", () => {
   });
 
   it.each([
-    [
-      "its face on the timeline",
-      () => fireEvent.click(screen.getByRole("button", { name: /^Manager, / })),
-    ],
+    ["the roster", () => fireEvent.click(screen.getByRole("button", { name: /^Manager, / }))],
     ["the Groups sheet", () => fireEvent.click(railRow("Manager"))],
     ["Command 1", () => fireEvent.keyDown(window, { key: "1", metaKey: true })],
     [
@@ -1279,27 +1360,47 @@ describe("where an agent's page lands", () => {
 });
 
 describe("the command menu's shortcut", () => {
-  it("lands in the field when the window opens on Today", async () => {
+  it("only steps through agents when the command menu is the top layer", async () => {
+    listAgents.mockResolvedValue([agent("Manager", 0), agent("Writer", 1)]);
+    render(<App />);
+    await screen.findByRole("combobox", { name: "Write to Manager" });
+    fireEvent.keyDown(window, { key: "1", ctrlKey: true });
+    await screen.findByRole("combobox", { name: "Write to Manager" });
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    await screen.findByRole("dialog", { name: "Command menu" });
+    fireEvent.keyDown(window, { key: "f", ctrlKey: true });
+    const search = await screen.findByRole("dialog", { name: "Search" });
+    fireEvent.keyDown(search, { key: "Tab", ctrlKey: true });
+    expect(useStore.getState().selected).toBe("id-Manager");
+    expect(screen.getByRole("dialog", { name: "Command menu" })).toBeTruthy();
+    fireEvent.keyDown(search, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Search" })).toBeNull());
+    fireEvent.keyDown(window, { key: "Tab", ctrlKey: true });
+    await screen.findByRole("combobox", { name: "Write to Writer" });
+    expect(screen.queryByRole("dialog", { name: "Command menu" })).toBeNull();
+  });
+
+  it("lands in the composer when the window opens", async () => {
     listAgents.mockResolvedValue([agent("Manager")]);
     render(<App />);
-    const field = await screen.findByRole("textbox", { name: "What do you need?" });
+    const field = await screen.findByRole("combobox", { name: "Write to Manager" });
     await waitFor(() => expect(document.activeElement).toBe(field));
   });
 
   it("does not open the menu from under the Groups sheet", async () => {
     listAgents.mockResolvedValue([agent("Manager")]);
     render(<App />);
-    await screen.findByRole("textbox", { name: "What do you need?" });
+    await screen.findByRole("combobox", { name: "Write to Manager" });
     groupsSheet();
     fireEvent.keyDown(window, { key: "k", ctrlKey: true });
     await act(() => new Promise<void>((done) => requestAnimationFrame(() => done())));
     expect(screen.queryByRole("dialog", { name: "Command menu" })).toBeNull();
   });
 
-  it("opens the menu with its input focused, and Escape gives the field back", async () => {
+  it("opens the menu with its input focused, and Escape gives the composer back", async () => {
     listAgents.mockResolvedValue([agent("Manager")]);
     render(<App />);
-    const field = await screen.findByRole("textbox", { name: "What do you need?" });
+    const field = await screen.findByRole("combobox", { name: "Write to Manager" });
     await waitFor(() => expect(document.activeElement).toBe(field));
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     const menu = await screen.findByRole("dialog", { name: "Command menu" });
@@ -1314,7 +1415,7 @@ describe("the command menu's shortcut", () => {
   it("takes a held answer back on Command Z, and leaves Command Z to a box with words in it", async () => {
     listAgents.mockResolvedValue([agent("Manager")]);
     render(<App />);
-    const field = await screen.findByRole("textbox", { name: "What do you need?" });
+    const field = await screen.findByRole("combobox", { name: "Write to Manager" });
     const send = vi.fn(async () => {});
     act(() => useHeld.getState().hold("req-1", "Allowed what Manager asked.", send));
     fireEvent.change(field, { target: { value: "half a sentence" } });
@@ -1326,14 +1427,14 @@ describe("the command menu's shortcut", () => {
     act(() => useHeld.getState().hold("req-2", "Allowed what Manager asked.", send));
     fireEvent.keyDown(document.body, { key: "z", metaKey: true });
     expect(useHeld.getState().held).toBeNull();
-    expect(screen.queryByRole("status", { name: "" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Undo/ })).toBeNull();
     expect(send).not.toHaveBeenCalled();
   });
 
   it("treats a held answer as answered on every surface, and Undo brings the question back everywhere at once", async () => {
     listAgents.mockResolvedValue([agent("Manager")]);
     render(<App />);
-    await screen.findByRole("textbox", { name: "What do you need?" });
+    await screen.findByRole("combobox", { name: "Write to Manager" });
     const asking = anApproval({ agentId: "id-Manager", createdAt: Date.now() - 60_000 });
     act(() =>
       useStore.setState({
@@ -1353,24 +1454,22 @@ describe("the command menu's shortcut", () => {
     const places = screen.getByRole("navigation", { name: "Places" });
     const waiting = () => {
       expect(within(places).getByRole("button", { name: "For you, 1 question" })).toBeTruthy();
-      expect(screen.getByText("Waiting for your answer")).toBeTruthy();
-      expect(screen.getByRole("button", { name: /^Manager, needs you/ })).toBeTruthy();
-      expect(screen.getByRole("heading", { name: /^Needs you/ })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Manager, Has a question" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "1 question waiting" })).toBeTruthy();
     };
     waiting();
 
     const send = vi.fn(async () => {});
     act(() => useHeld.getState().hold(asking.id, "Allowed what Manager asked.", send));
     expect(within(places).getByRole("button", { name: "For you" }).textContent).toBe("For you");
-    expect(screen.getByText("Sending your answer")).toBeTruthy();
-    expect(screen.queryByText("Waiting for your answer")).toBeNull();
-    expect(screen.queryByRole("button", { name: /^Manager, needs you/ })).toBeNull();
-    expect(screen.getByRole("button", { name: "Manager, working now" })).toBeTruthy();
-    expect(screen.queryByRole("heading", { name: /^Needs you/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Manager, Has a question" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Manager, Working" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "0 questions waiting" }).hasAttribute("disabled"),
+    ).toBe(true);
 
     fireEvent.click(await screen.findByRole("button", { name: /^Undo/ }));
     waiting();
-    expect(screen.queryByText("Sending your answer")).toBeNull();
     expect(send).not.toHaveBeenCalled();
     act(() => useStore.setState({ pending: [], activity: {}, running: [] }));
   });
@@ -1378,9 +1477,10 @@ describe("the command menu's shortcut", () => {
   it("opens the agent a number names, in the menu's order, and leaves the next number alone", async () => {
     listAgents.mockResolvedValue([agent("Manager", 1), agent("Writer", 0)]);
     render(<App />);
-    await screen.findByRole("textbox", { name: "What do you need?" });
+    await screen.findByRole("combobox", { name: "Write to Writer" });
+    fireEvent.click(screen.getByRole("button", { name: /^Manager, / }));
     fireEvent.keyDown(window, { key: "3", metaKey: true });
-    expect(useStore.getState().selected).toBeNull();
+    expect(useStore.getState().selected).toBe("id-Manager");
     fireEvent.keyDown(window, { key: "1", metaKey: true });
     await waitFor(() => expect(useStore.getState().selected).toBe("id-Writer"));
     await waitFor(() =>

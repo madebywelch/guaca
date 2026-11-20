@@ -15,6 +15,7 @@ let approvalRead = 0;
 let escalationRead = 0;
 let outcomeRead = 0;
 let runningRead = 0;
+let runningRequest = Promise.resolve();
 const channelReads = new Map<ChannelKey, { arrivals: Envelope[] }>();
 
 const EVERYTHING: Capabilities = {
@@ -183,7 +184,6 @@ export interface State {
   clearEscalation: (id: EscalationId) => Promise<void>;
   select: (key: ChannelKey, valid?: () => boolean) => Promise<void>;
   focusGroup: (id: GroupId | null) => Promise<void>;
-  leaveChannel: () => void;
   moveAgent: (id: AgentId, at: Placement) => Promise<void>;
   dropAgent: (id: AgentId, target: DropTarget) => Promise<void>;
   dropGroup: (id: GroupId, onto: GroupId) => Promise<void>;
@@ -245,13 +245,6 @@ function keptFocus(state: State, key: ChannelKey): GroupId | null {
   return agent ? agent.groupId : state.railGroup;
 }
 
-function keptChannel(state: State, group: GroupId | null): boolean {
-  const key = state.selected;
-  if (group === null || key === null) return true;
-  const agent = state.agents.find((a) => a.id === key);
-  return agent === undefined || agent.groupId === group;
-}
-
 export const useStore = create<State>((set, get) => ({
   agents: [],
   groups: [],
@@ -273,12 +266,19 @@ export const useStore = create<State>((set, get) => ({
   running: [],
   async refreshRunning(valid = () => true) {
     const read = ++runningRead;
-    try {
-      const running = await api.runningRuns();
-      if (valid() && read === runningRead) set({ running });
-    } catch (error) {
-      console.warn(`Running work could not be read: ${errorMessage(error)}`);
-    }
+    runningRequest = (async () => {
+      try {
+        const running = await api.runningRuns();
+        if (valid() && read === runningRead) set({ running });
+      } catch (error) {
+        console.warn(`Running work could not be read: ${errorMessage(error)}`);
+      }
+    })();
+    let latest: Promise<void>;
+    do {
+      latest = runningRequest;
+      await latest;
+    } while (valid() && latest !== runningRequest);
   },
   async refreshOutcomes(valid = () => true) {
     const read = ++outcomeRead;
@@ -448,12 +448,7 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async focusGroup(id) {
-    const closing = !keptChannel(get(), id);
-    set({ railGroup: id, ...(closing ? { selected: null, focused: null } : {}) });
-  },
-
-  leaveChannel() {
-    set({ selected: null, focused: null, settingsPage: null });
+    set({ railGroup: id });
   },
 
   async moveAgent(id, at) {

@@ -881,7 +881,7 @@ describe("going back", () => {
   it("keeps a draft when it is left any way at all", () => {
     const view = open();
     type(/^Your name/, "Draft name");
-    act(() => useStore.getState().leaveChannel());
+    act(() => useStore.getState().closeSettings());
     view.unmount();
     open();
     expect(field(/^Your name/).value).toBe("Draft name");

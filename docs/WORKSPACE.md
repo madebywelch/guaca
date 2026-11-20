@@ -1076,146 +1076,31 @@ subscription" where a plan is what answers. A row that showed the app's default
 would be a line about settings where the operator is being told who is going to
 answer.
 
-## The window is a timeline over one column
+## The window opens on a conversation
 
-The window is four rows: the top bar, the timeline, one column, and the status
-bar. There is no list of agents down the left edge and no panel beside the
-conversation. Both left the window when the timeline arrived: it says who did
-what and when, which is what the list was mostly read for, and two lists of the
-same agents side by side say it twice. What the list also did, arranging, is in
-the Groups sheet.
+The sidebar lists every live agent by group, with a face, full name and status.
+Its order is the same as Command 1 to 9 and the command menu: pinned agents
+first within each group, then the order the operator set. Activity never moves
+a row. Agents past nine remain in the scrollable list and can be opened by
+name or with the next and previous keys; only the numbers stop at nine. The
+sidebar is 248 px wide and uses 212 px at a 900 px window. Names wrap rather
+than losing their distinguishing words.
 
-The top bar is `TopBar.tsx`. On the left it says where the operator is: the
-day, on Today, or a Today button back to it while an agent is open. On the right
-is a nav of four buttons: Search, the people button, the New menu and Settings.
-The people button opens the Groups sheet and is named "Groups and agents", or
-"Agents" while there is one group, because a sheet with one group in it is a
-list of agents.
+After the workspace is read, the opening conversation is the owner of the
+soonest-due question. A colleague's approval carries the same run ID as the
+owner's running task, so the owner opens even when a colleague asked. Otherwise
+the most recently active running conversation opens, then the last one opened
+on this host, then the first agent. A new question or a result changes the
+sidebar, not the conversation the operator is reading. If the open agent is
+deleted, the same choice picks a live conversation. First run still opens the
+onboarding screen.
 
-The column under the timeline is Today while nobody is open and an agent's page
-while someone is. The status bar closes the window.
-
-**The window opens on Today, and opens nobody.** `bootstrap` reads the
-workspace and selects no agent: whoever needs the operator is drawn first on
-Today, and every agent is one press away on the timeline. Opening someone the
-operator did not name would put a history on screen as a side effect of starting
-the app. For the same reason, when the open agent is deleted `refreshAgents`
-puts the window back on Today rather than on a dead page or on somebody else.
-
-## The timeline puts each agent at a moment of today
-
-`lib/ribbon.ts` lays it out, `Ribbon.tsx` draws it, and `Timeline.tsx` hands it
-the store and the two reads only it needs: every agent's upcoming runs, in one
-call to `upcoming_runs`, and the calendar, both through the end of next week. To
-assistive technology it is a nav named "Agents" holding a list named "Today's
-timeline".
-
-Each agent is one face, placed by the first of these that holds:
-
-1. It has a request waiting on the operator. The face sits at the oldest one and
-   carries an alert mark.
-2. It is working. The face sits at now.
-3. It finished a run nobody has seen. The face sits at that run's end, marked
-   finished or failed.
-4. It did anything today. The face sits at the last of it, unmarked.
-
-An agent none of those hold for is idle, and it gets a face like any other, at
-the left edge in the order the Groups sheet lists it: group by group, pinned
-first, then as the operator arranged them. Its drawing is faded to gray and its
-name is not, and it is named "Dara, idle", or "Dara, paused" when it is paused,
-as the Groups sheet says. Faces that would
-overlap are spread as one cluster centered on where they wanted to be, because
-pushing each one right of the last would drag a crowd past the moment it belongs
-to. When the stretch before now cannot hold every name, the names there are cut
-to the room each face has rather than any agent leaving the strip, and a crowd
-too large even for that is spaced evenly along the stretch. Requests or working
-faces that still do not fit fold into one count, such as "+3 working", which
-opens the Groups sheet. While an agent's page is open the other faces step
-back: their drawings fade and their names stay at full contrast.
-
-A band labeled "Since you last looked" runs from the latest `seenAt` of any
-finished run to now, or from where the oldest unseen run began when that is
-earlier, and is drawn only while something is unseen. Seeing is per run, so
-opening one agent marks its run seen now, and a band that started there would
-leave every older unseen run outside it. A now line carries the
-clock. Right of it are the rest of today and a narrow column for each coming
-day through Sunday, at most four, and on a Sunday the four after it. Upcoming
-routine runs sit there with their owner's face, and calendar dates with a
-calendar glyph. A pending request that will lapse puts a point at its lapse
-time: "Dara stops waiting". A request from an agent the strip does not know has
-no point, since there is nobody to name.
-
-The scale is bent rather than linear. The stretch before the last hour or so is
-compressed, the hours either side of now are wide, the rest of today is narrow,
-and a day column spends its width on 6 AM to 9 PM. A linear day would spend most
-of the strip on hours where nothing happened. The layout takes `now` as input and
-keeps no clock, so `ribbon.test.ts` can stand at 9:12 on a Monday. The clock it is
-handed ticks once a minute, so the layout moves `now` up to the latest run or
-request it is given: what has happened is placed at once, never after the tick.
-`Timeline.tsx` reads today's runs, seen ones included, beside the unseen ones the
-store keeps, because a face rests on the last thing its agent did today. Until
-that read lands the timeline is busy and draws no face, tick or now line, so
-after a reload each face is first drawn where it belongs and never jumps there
-from the left edge under the pointer.
-
-**Each face is a button named with the agent, its state and its time:** "Dara,
-needs you, asked 9:05 AM", "Dara, working now", "Dara, finished 2:56 AM", "Dara,
-last active 11:40 AM", "Dara, idle". The faces are one stop on the Tab key, and
-the arrow keys, Home and End move along the list, so a dozen agents are not a
-dozen stops on the way to the field. Pressing a face opens that agent's page.
-
-A read of today's runs, of upcoming runs or of the calendar that fails leaves the timeline
-drawing what it has, with a warning in the console. It is a picture of the day,
-and a picture with one row missing is better than a banner over it.
-
-## The field writes to someone and leaves you where you are
-
-`Field.tsx` is the first thing in Today's column, and `lib/field.ts` decides
-what it does with what was typed before anything is sent. It has the focus
-whenever Today opens, and an agent's composer has it whenever that agent's page
-opens, so after every move the next key typed lands in the box that writes to
-someone from where the operator is. Nothing takes the focus from under a dialog,
-a menu or the Groups sheet.
-
-It is a field rather than a composer. It sends one message and stays where it
-is, which is the whole of the most common errand: tell someone something, then
-leave. A line under it says who it went to, with a button that opens the
-conversation. A draft, a file or a thread is a conversation, and the
-conversation is one press away with the composer it needs.
-
-**Who it writes to** before the operator picks is whoever was talked to last in
-the group the Groups sheet is inside, else whoever was talked to last at all,
-else the first agent, and never a deleted one. The picker lists agents under
-their group names, with a heading only when more than one group has members,
-and its last row, "Groups and agents", opens the sheet. It is plain buttons rather
-than a listbox, because that last row is not a choice of recipient. It opens on
-whoever the field writes to, the arrow keys, Home and End move through it, and
-Escape or a press anywhere else closes it.
-
-**Tab answers the question that is waiting.** From an empty field, Tab turns the
-field into an answer to the oldest pending question, says whose and what in its
-placeholder, and Escape turns it back. A permission is never answered here: it
-takes a verdict rather than words, and a field that turned a typed sentence
-into Allow would be granting by accident.
-
-On an agent's page the composer does the same for that agent's question, with
-the question's own answers rather than a typed one: from an empty composer, Tab
-moves to the first answer on the question in the conversation, and the line
-under the composer says so. So Command K, Tab and Return answer it from
-anywhere, and with nothing waiting Tab leaves the composer as it always did.
-
-**`@` addresses one agent.** `@Name` at the very start, followed by a space,
-sends to that agent instead of the picked one, for that message. The longest
-name wins, so "@Ines Marie" is not read as Ines when both exist. `@Name` with
-nothing after it is a pick: it changes who the field writes to and sends
-nothing, rather than sending the name as the message. An `@` anywhere
-else is a mention the message carries, which is the composer's business and the
-runtime's.
-
-**With text in it, the field offers to search for it.** A row under it reads
-"Search for" and the text, with the search key beside it, and hands the text to
-search. The search key does the same from the field while it holds text. The field does not search as it is typed into: a sentence meant for an
-agent is not a query, and the row is there for the times it was one.
+Working covers runs still in flight and agents thinking or queued. Has a result
+shows an unread result and clears when its conversation opens. Failed,
+interrupted and stopped work says Needs attention while it is unread. Results
+remain in the conversation and For you. The working line in the conversation
+keeps the host's clock and Stop control. Calendar and an agent's Routines tab
+show scheduled work without an hour ruler in the window.
 
 ## Command K is one box that writes, answers, jumps and sets
 
@@ -1246,53 +1131,24 @@ The menu shows no number keys on a question's answers, because in a box being
 typed into a number is a character.
 
 
-## Today is what needs you, then what finished
+## The question tray is a queue
 
-`Home.tsx` is the column while nobody is open, in the order a person opens the
-window for:
+The count at the top of the sidebar covers all groups. Press it, or press
+Escape in an empty composer, to select the soonest-due live request. The tray
+uses the same cards as For you. Filed questions that are due are still answered
+in For you; if there are no live requests, the count opens it instead.
 
-1. The field.
-2. What needs the operator: requests waiting and agents that cannot go on, the
-   same desk For you draws, answered where they are drawn.
-3. What is running: each conversation the Host still owes and has started, as
-   its owner's face and name, the owner's latest working note (or, without one,
-   who it is waiting for), a clock and Stop. The clock counts from
-   `pending_runs.started_at`, which `runningRuns` reads, so a Host restarted
-   mid-turn carries the conversation on from its first start instead of from
-   zero. A row leaves when the run settles, and its outcome takes its place
-   under Finished.
-4. Filed decisions that are due, three as cards and the rest as a count, each
-   answered in For you.
-5. What finished while they were away, with its count and Mark all seen. A row
-   opens the run's closing note, or the agent's conversation, and marks it
-   seen.
+J and K move through the cards. Command Return allows a request or opens a
+stuck agent's conversation, Command Backspace denies or clears, and 1 to 9
+pick an answer. Keys appear on the selected card only. An answer moves to the
+next card and the last answer gives focus back to the composer. Escape closes
+the tray without answering. The conversation underneath stays at the task,
+including when the selected question came from a colleague.
 
-**Needs you is a queue the keyboard can go through.** Escape from the field
-selects the first card, J and K move the ring, Command Return allows (or, on an
-agent that is stuck, opens it), Command Backspace denies (or clears), and 1 to 9
-pick a question's answer. The keys are drawn on the selected card's buttons and
-on no other card's. After each answer the next card is selected, and after the
-last the focus goes back to the field.
-
-**An answer given on Today waits five seconds before it is sent.** A notice says
-what was answered and offers Undo, with Command Z. An answer an agent has
-already acted on cannot be taken back, so the answer is held in the window
-(`lib/held.ts`) and only sent when the notice goes: Undo always undoes, because
-nothing has left. A second answer sends the first at once, so one Undo never
-stands for two answers. Closing the window sends a held answer rather than
-dropping it. The same holds for answers given from the command menu. For you
-and the menu bar send at once and offer no Undo.
-
-With none of those it is one sentence, "Nothing needs
-you.", with what is running listed under it, or who is still working when
-nothing is, and one way back into what already happened today. That is the
-screen seen most, and it is the one that has to be calm.
-
-The line above the composer carries the same clock for the conversation the
-agent is working in, beside Stop, and says the owner's latest working note in
-place of a bare "is working" when there is one. Running and that line come
-only from the host, so an answer still held for Undo shows no agent as resumed
-until the host has it.
+An answer given from the question tray or command menu waits five seconds
+before it is sent. A notice offers Undo, including Command Z. A second answer
+sends the first at once, and closing the window sends a held answer rather than
+dropping it. For you and the menu bar send immediately.
 
 ## An agent's page is tabs, and opens on its conversation
 
@@ -1332,8 +1188,8 @@ is why the sheet was opened. After Create, the sheet's own unmount puts the focu
 in the new agent's composer, as Command 2 does; the opener the dialog would
 otherwise give it back to is the menu that is already gone.
 
-**Opening an agent lands on Conversation, by every route.** A face on the
-timeline, the Groups sheet, Command 1 to 9, the command menu, search, a
+**Opening an agent lands on Conversation, by every route.** The sidebar, the
+Groups sheet, Command 1 to 9, the command menu, search, a
 notification, the menu bar and Start task on first run all open the
 transcript. It used to land on Now when the agent was working at the instant it
 was opened, so where a person landed depended on a race: after Start task the
@@ -1355,11 +1211,9 @@ group's settings, the groups' column for going inside one, search, the plus for
 making something, and a foot of places. Opening an agent from it closes it.
 Escape or a press outside closes it too.
 
-Three things open it: the people button in the top bar, a count of faces on
-the timeline that had no room, and the last row of the field's picker. Group names are read in
-two places now, here and in that picker, which sets each group's name over its
-agents so the group an agent belongs to is said where the agent is chosen. The timeline draws agents
-by when they did something, not by whose they are.
+The people button in the top bar opens the sheet. The sidebar also reads group
+names, but keeps a fixed reading order. Choose a group in the sheet to manage
+it without changing the conversation beneath it.
 
 The code still calls the sheet's list the rail (`.rail`, `lib/rail.ts`) and its
 column of groups the groups' column (`GroupRail.tsx`, `.grail`). The sections
@@ -1710,18 +1564,10 @@ choice of one is a drop target that cannot move anybody anywhere, and with one
 group the rail *is* that group: every row of it is already on screen saying what
 the badge would.
 
-The group being looked inside is in the store rather than in the sheet, because
-it and the open channel have to agree, and both are in the store. One invariant
-holds them together: the sheet, whenever it is opened, draws the row of whatever
-the page behind it is showing. The same group is where the field's default
-recipient comes from. A
-search hit can land on an agent in another group, and `select` repairs that by
-following the agent into its group. It used to drop out
-to the overview instead, which was the only honest answer while the groups were a
-strip inside the rail: the overview was the one view where every row was
-drawable. With a column that is on screen whichever group you are in, following
-is both possible and less, because one lit circle moves instead of the whole
-rail changing shape.
+The group being managed in the sheet is stored separately from the open
+conversation. Following a link to an agent keeps an already scoped sheet in that
+agent's group; choosing a different management group leaves the conversation
+in place.
 
 `focusGroup` repairs the same invariant from the other end, and lets go rather
 than following. The asymmetry is the point: `select` is the operator naming an
@@ -2055,9 +1901,8 @@ matches by reference, so two arrows leave a listener behind on every open.
 ## The places are at the end of the status bar, and at the foot of the sheet
 
 Artifacts, Calendar and For you: the things in the app an operator goes to
-rather than makes, and which no agent on the timeline already reaches. They are
-the last group on the status bar, a nav named "Places", because the timeline
-above draws who and this end of the window says where. For you carries its
+rather than makes, and which are not agent conversations. They are the last group on the
+status bar, a nav named "Places". For you carries its
 count, `forYouCount` in `lib/store.ts`, which the sheet's foot reads too, so the
 two never disagree about it. A place one of the operator's quick actions
 already opens is drawn once, as that action, rather than as two buttons with one
@@ -2297,7 +2142,7 @@ sweep should never wait behind. Swept once before the first wait, so an app left
 closed for a month empties on the next launch rather than an hour into it.
 
 Compost is a pane in app settings. It is available even when empty and stays
-out of the timeline and the Groups sheet. Each deleted agent has a countdown and controls to
+out of the sidebar and the Groups sheet. Each deleted agent has a countdown and controls to
 restore it or delete it permanently. The pane says once what is still held:
 memory, working notes, schedule and sign-ins. An empty list says there are no
 deleted agents. Restoring selects the agent's channel and keeps settings open,
@@ -2380,7 +2225,7 @@ commitment nobody asked to double.
 
 The workspace is held in two places, so it is matched in two: messages, files,
 links and routines are in SQLite and are matched there, while agents and groups
-are already in the webview's store to draw the timeline and actions are not stored
+are already in the webview's store to draw the sidebar and actions are not stored
 anywhere at all. Reading the transcript into the renderer to search it would
 copy the database across IPC on every keystroke; going to IPC for two agent
 names would make the commonest search the slow one. What must not be split is
@@ -2408,7 +2253,7 @@ An endpoint, a set of limits, a machine's credentials, how large the window
 draws and what is allowed to interrupt you are five different questions, and one
 scroll made the operator read all five to change one. So it is a nav and a pane,
 and it is a page in the window rather than a sheet over it, built like an
-agent's page: the timeline stays, the top bar's back control is named for where
+agent's page: the top bar's back control is named for where
 it was opened from and returns there, and Escape and Command-comma do the same
 and give the focus back to whatever had it. The nav is a left column of compact
 rows that fits a 900 by 700 window without scrolling, and each pane scrolls on
@@ -2721,7 +2566,7 @@ it early.
 
 ## The workspace follows the selected surface
 
-Every preset draws the same window: the top bar, the timeline, one column and
+Every preset draws the same window: the top bar, the sidebar, conversation and
 the status bar, with a raised composer. The light and dark
 surfaces are solved independently, and Match system follows the operating
 system as its appearance changes. `data-surface` is always `light` or `dark`;
@@ -2847,8 +2692,7 @@ outbox, and docs/ATTENTION.md has the table it decides from.
 - **Something that needs the operator**, a parked permission request, a
   question, an agent that cannot go on, or decisions due for review, reaches
   them as it happens, unless the window with focus already shows that agent's
-  channel. Nobody finds a parked turn by noticing a face change on the
-  timeline.
+  conversation. A notification still brings the question to the operator.
 - **A run that failed**, or that a restart cut off, is the same: it interrupts
   unless its channel is the one on screen.
 - **A run that finished** interrupts only an operator who is away, and not one
@@ -3058,10 +2902,13 @@ appears to rebind a key while only moving one of them is worse than no setting.
 The fixed ones are listed as fixed, and the ones listed under *Anywhere* are
 matched from the same table the pane draws, so a key listed there is a key that
 works: Command K opens the command menu, Command 1 to 9 open the agents the menu
-numbers, Command F opens search, Command comma opens settings, Command slash
+numbers, Control Tab and Control Shift Tab step in that same order,
+Command F opens search, Command comma opens settings, Command slash
 opens the list itself, and Command Z takes back an answer while it still offers
 Undo. The keys of the command menu and of Needs you are listed under those two
 surfaces, from the same table, and `keybinds.test.ts` holds that each is there.
+The agent navigation keys act from the top command menu, but do nothing with
+a dialog over it.
 
 `mod` means Command or Control on every platform, both accepted. Only the label
 follows the platform: a label naming a key the keyboard does not have is worse
@@ -3082,13 +2929,12 @@ the run settles. Not read from what `sendMessage` returned, which only knows
 about conversations the operator started — a routine's work and a peer's request
 are exactly as worth stopping.
 
-## A phone gets the same single column
+## The roster fits beside a narrow conversation
 
-Below 48rem, and on touch-only devices in either orientation, the window is the
-same window: the top bar, the timeline, one column and the status bar, at touch
-sizes. There is no bottom tab bar and no set of panes to switch between, because
-the window stopped having more than one column to fit. Today, an agent's page
-and its tabs, the field and the Groups sheet are the ones a desktop draws.
+At phone widths the roster sits above the conversation and scrolls sideways
+so the composer keeps its width. Names and statuses wrap, shortcuts sit under
+them, and the question count stays in reach. Opening an agent brings its row
+into view without moving the conversation.
 
 Groups are chosen by name on a phone: the Groups sheet draws a labeled select
 above the list, and a touch scrolling the agent list never starts a reorder.

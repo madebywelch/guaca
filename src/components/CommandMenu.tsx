@@ -25,6 +25,7 @@ import { Icon } from "./Icon";
 
 interface Props {
   onClose: () => void;
+  onOpenAgent?: (agentId: AgentId) => void;
   onPlace: (place: Place, query?: string) => void;
   onSection: (section: Section) => void;
 }
@@ -33,7 +34,7 @@ const ALLOW = formatCombo({ key: "Enter", mod: true });
 const DENY = formatCombo({ key: "Backspace", mod: true });
 const RETURN = formatCombo({ key: "Enter" });
 
-export function CommandMenu({ onClose, onPlace, onSection }: Props) {
+export function CommandMenu({ onClose, onOpenAgent, onPlace, onSection }: Props) {
   const agents = useStore((s) => s.agents);
   const groups = useStore((s) => s.groups);
   const shownNow = useShown();
@@ -43,7 +44,6 @@ export function CommandMenu({ onClose, onPlace, onSection }: Props) {
   const open = useStore((s) => s.selected);
   const prefs = useStore((s) => s.prefs);
   const select = useStore((s) => s.select);
-  const leaveChannel = useStore((s) => s.leaveChannel);
   const setPrefs = useStore((s) => s.setPrefs);
   const decide = useStore((s) => s.decideApproval);
   const answer = useStore((s) => s.answerQuestion);
@@ -86,7 +86,7 @@ export function CommandMenu({ onClose, onPlace, onSection }: Props) {
       ?.scrollIntoView?.({ block: "nearest" });
   }, [selected]);
 
-  const isTop = useDismiss(onClose);
+  const isTop = useDismiss(onClose, true, "commandMenu");
 
   const nameOf = (agentId: AgentId) =>
     agents.find((agent) => agent.id === agentId)?.name ?? "A deleted agent";
@@ -115,11 +115,11 @@ export function CommandMenu({ onClose, onPlace, onSection }: Props) {
         );
         return;
       case "open":
-        void select(action.agentId);
+        if (onOpenAgent) onOpenAgent(action.agentId);
+        else void select(action.agentId);
         return;
       case "place":
-        if (action.place === "today") leaveChannel();
-        else onPlace(action.place, action.query);
+        onPlace(action.place, action.query);
         return;
       case "section":
         onSection(action.section);

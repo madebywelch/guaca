@@ -23,7 +23,12 @@ function row(table: Binding[], id: string): Binding {
 }
 
 function signature(combo: Combo): string {
-  return [combo.mod ? "mod" : "", combo.shift ? "shift" : "", combo.key].join("+");
+  return [
+    combo.mod ? "mod" : "",
+    combo.ctrl ? "ctrl" : "",
+    combo.shift ? "shift" : "",
+    combo.key,
+  ].join("+");
 }
 
 async function loadedOn(platform: string): Promise<typeof import("./keybinds")> {
@@ -231,6 +236,7 @@ describe("the table", () => {
     for (const binding of global) {
       const event = press(binding.combo.key, {
         metaKey: Boolean(binding.combo.mod),
+        ctrlKey: Boolean(binding.combo.ctrl),
         shiftKey: Boolean(binding.combo.shift),
       });
       expect(bindingFor(event)?.id).toBe(binding.id);
@@ -238,7 +244,7 @@ describe("the table", () => {
   });
 
   it("offers the one global handler exactly the ids it dispatches", () => {
-    expect(GLOBAL).toEqual(["menu", "agent", "search", "settings", "shortcuts", "undo"]);
+    expect(GLOBAL).toEqual(["menu", "agent", "step", "search", "settings", "shortcuts", "undo"]);
     for (const id of GLOBAL) {
       expect(row(BINDINGS, id).where).toBe("Anywhere");
     }
@@ -254,6 +260,13 @@ describe("the keys that name an agent and take an answer back", () => {
     expect(bindingFor(press("0", { metaKey: true }))).toBeUndefined();
     expect(bindingFor(press("1"))).toBeUndefined();
     expect(bindingFor(press("1", { metaKey: true, altKey: true }))).toBeUndefined();
+  });
+
+  it("steps with Control Tab and Control Shift Tab, not plain or Command Tab", () => {
+    expect(bindingFor(press("Tab", { ctrlKey: true }))?.id).toBe("step");
+    expect(bindingFor(press("Tab", { ctrlKey: true, shiftKey: true }))?.id).toBe("step");
+    expect(bindingFor(press("Tab", { metaKey: true }))).toBeUndefined();
+    expect(bindingFor(press("Tab"))).toBeUndefined();
   });
 
   it("takes Command Z as Undo, and leaves Command Shift Z to redo", () => {
@@ -281,7 +294,7 @@ describe("the keys that name an agent and take an answer back", () => {
     expect(BINDINGS.map((binding) => binding.what)).toEqual(
       expect.arrayContaining([
         "Allow the question the selected row belongs to",
-        "Leave the field on Today and select the first question",
+        "From an empty composer, select the first question",
         "Select the next or the previous question",
         "Allow, or the selected question's first button",
         "Deny, or clear the selected question",
@@ -313,6 +326,7 @@ describe("how a shortcut is written down", () => {
     expect(mac.formatCombo({ key: "Enter", shift: true })).toBe("⇧↩");
     expect(mac.comboLabel(row(mac.BINDINGS, "scope"))).toBe("Tab / ⇧Tab");
     expect(mac.comboLabel(row(mac.BINDINGS, "agent"))).toBe("⌘1 to ⌘9");
+    expect(mac.comboLabel(row(mac.BINDINGS, "step"))).toBe("⌃Tab / ⌃⇧Tab");
     expect(mac.formatCombo({ key: "Backspace", mod: true })).toBe("⌘⌫");
 
     const pc = await loadedOn("Win32");

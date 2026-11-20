@@ -8,6 +8,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
+import { dismissing } from "../lib/dismiss";
 import {
   type DraftAction,
   readDraftState,
@@ -18,7 +19,7 @@ import {
 import { fileUrl, previewKind, readableSize } from "../lib/files";
 import { focusWriting } from "../lib/focus";
 import { api, onFileDrop } from "../lib/ipc";
-import { FIND_KEY } from "../lib/keybinds";
+import { FIND_KEY, keyOf } from "../lib/keybinds";
 import { applyMention, matchMentions, mentionAt, splitMentions } from "../lib/mentions";
 import { useLiveAgents, useStore } from "../lib/store";
 import { BEFORE_RELOAD, workspaceOrigin } from "../lib/transport";
@@ -96,6 +97,8 @@ interface Props {
   draftKey?: string;
   recipient?: { id: string; name: string };
   onRecipientChange?: (id: string) => void;
+  onQuestions?: () => boolean;
+  focusOnOpen?: boolean;
   waiting?: { asker: string; answer: () => void };
   group: GroupId | null;
   disabled?: boolean;
@@ -112,6 +115,8 @@ export function Composer({
   draftKey,
   recipient,
   onRecipientChange,
+  onQuestions,
+  focusOnOpen = true,
   waiting,
 }: Props) {
   const storageKey = `guaca.draft:${workspaceOrigin()}:${draftKey ?? group ?? "composer"}`;
@@ -129,8 +134,8 @@ export function Composer({
   const [caret, setCaret] = useState(0);
   const writingTo = recipient?.id ?? draftKey;
   useEffect(() => {
-    if (writingTo !== undefined) focusWriting();
-  }, [writingTo]);
+    if (focusOnOpen && writingTo !== undefined) focusWriting();
+  }, [focusOnOpen, writingTo]);
   const [highlighted, setHighlighted] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [refused, setRefused] = useState<string[]>([]);
@@ -297,7 +302,20 @@ export function Composer({
       }
     }
 
-    if (event.key === "Tab" && !event.shiftKey && waiting && !text && files.length === 0) {
+    if (event.key === "Escape" && !text && files.length === 0 && !dismissing() && onQuestions?.()) {
+      event.preventDefault();
+      return;
+    }
+
+    if (
+      event.key === "Tab" &&
+      !event.shiftKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      waiting &&
+      !text &&
+      files.length === 0
+    ) {
       event.preventDefault();
       waiting.answer();
       return;
@@ -605,10 +623,19 @@ export function Composer({
                 </>
               )}
               <b>@</b> to name an agent
+              {onQuestions && !text && files.length === 0 && (
+                <>
+                  {" "}
+                  · <b>Esc</b> questions
+                </>
+              )}
             </>
           )}
         </span>
-        <span className="composer__keys">{FIND_KEY} search</span>
+        <span className="composer__keys">
+          {recipient && <>{keyOf("step")} next agent · </>}
+          {FIND_KEY} search
+        </span>
       </div>
     </div>
   );
