@@ -100,6 +100,7 @@ interface Props {
   onQuestions?: () => boolean;
   focusOnOpen?: boolean;
   waiting?: { asker: string; answer: () => void };
+  onTaskQuestion?: () => boolean;
   group: GroupId | null;
   disabled?: boolean;
   disabledReason?: string;
@@ -118,6 +119,7 @@ export function Composer({
   onQuestions,
   focusOnOpen = true,
   waiting,
+  onTaskQuestion,
 }: Props) {
   const storageKey = `guaca.draft:${workspaceOrigin()}:${draftKey ?? group ?? "composer"}`;
   const owner = useMemo(() => ownerFor(storageKey, !!draftKey), [storageKey, draftKey]);
@@ -312,12 +314,12 @@ export function Composer({
       !event.shiftKey &&
       !event.ctrlKey &&
       !event.metaKey &&
-      waiting &&
       !text &&
-      files.length === 0
+      files.length === 0 &&
+      (waiting || onTaskQuestion?.())
     ) {
       event.preventDefault();
-      waiting.answer();
+      waiting?.answer();
       return;
     }
 

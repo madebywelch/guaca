@@ -143,6 +143,13 @@ pub struct Outcome {
     pub seen_at: Option<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskRecord {
+    pub messages: Vec<Envelope>,
+    pub result_id: Option<MessageId>,
+}
+
 pub const ELLIPSIS: char = '…';
 
 pub fn headline(note: &str) -> Option<String> {

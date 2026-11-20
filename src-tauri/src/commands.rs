@@ -1692,6 +1692,23 @@ pub async fn pair_messages(
     Ok(state.runtime.store().pair_messages(a, b, limit.unwrap_or(200).min(1000))?)
 }
 
+const MAX_TASK_MESSAGES: usize = 2_000;
+
+pub async fn task_record(
+    state: &AppState,
+    channel_id: AgentId,
+    run_id: RunId,
+) -> Reply<Option<crate::domain::outcome::TaskRecord>> {
+    let record = state.runtime.store().task_record(channel_id, run_id, MAX_TASK_MESSAGES + 1)?;
+    if record.as_ref().is_some_and(|record| record.messages.len() > MAX_TASK_MESSAGES) {
+        return Err(CommandError::new(
+            "validation",
+            "There are too many messages to show this task on a map. Open the conversation transcript instead.",
+        ));
+    }
+    Ok(record)
+}
+
 pub async fn conversation_flow(
     state: &AppState,
     group: GroupId,

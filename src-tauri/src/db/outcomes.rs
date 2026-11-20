@@ -5,7 +5,8 @@ use super::{Store, StoreError};
 use crate::domain::envelope::{Envelope, NoticeKind, Part, Participant};
 use crate::domain::ids::{AgentId, GroupId, MessageId, RunId};
 use crate::domain::outcome::{
-    first_sentence, headline_of, Need, Outcome, Running, Settled, Status, Trigger, NO_NOTE, STOPPED,
+    first_sentence, headline_of, Need, Outcome, Running, Settled, Status, TaskRecord, Trigger,
+    NO_NOTE, STOPPED,
 };
 
 const ENVELOPE: &str = "m.id,m.run_id,m.channel_id,m.from_kind,m.from_agent,m.to_kind,m.to_agent,\
@@ -362,6 +363,72 @@ fn closes<'a>(run: &'a [Envelope], agent: AgentId, batch: &[MessageId]) -> Optio
 }
 
 impl Store {
+    pub fn task_record(
+        &self,
+        channel: AgentId,
+        run: RunId,
+        limit: usize,
+    ) -> Result<Option<TaskRecord>, StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let run_id = run.to_string();
+        let recorded: Option<String> = tx.query_row(
+            "SELECT coalesce(
+                (SELECT m.to_agent FROM pending_runs p JOIN messages m ON m.id=p.message_id
+                  WHERE p.run_id=?1),
+                (SELECT agent_id FROM outcomes WHERE run_id=?1)
+             )",
+            [&run_id],
+            |row| row.get(0),
+        )?;
+        let mut messages = tx.prepare(&format!(
+            "SELECT {ENVELOPE} FROM messages m INDEXED BY messages_run
+              WHERE m.run_id=?1 ORDER BY m.created_at, m.rowid LIMIT ?2"
+        ))?;
+        let belongs = match recorded {
+            Some(id) => id == channel.to_string(),
+            None => messages
+                .query_row(params![run_id, 1], row_to_envelope)
+                .optional()?
+                .transpose()?
+                .is_some_and(|start| {
+                    start.to == Participant::Agent { id: channel }
+                        && (start.from == Participant::Human
+                            || matches!(
+                                Trigger::of(&start),
+                                Some((Trigger::Routine | Trigger::Event | Trigger::Decision, _))
+                            ))
+                }),
+        };
+        if !belongs {
+            return Ok(None);
+        }
+        let result_id: Option<String> = tx
+            .query_row(
+                "SELECT note_id FROM outcomes WHERE run_id=?1 AND status IN ('done','needs_you')",
+                [&run_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+        let mut found = Vec::new();
+        for message in messages.query_map(params![run_id, limit], row_to_envelope)? {
+            found.push(message??);
+        }
+        let result_id = found
+            .iter()
+            .find(|message| {
+                result_id.as_ref().is_some_and(|id| id == &message.id.to_string())
+                    && !message.parts.is_empty()
+                    && message
+                        .parts
+                        .iter()
+                        .all(|part| matches!(part, Part::Text { .. } | Part::File { .. }))
+            })
+            .map(|message| message.id);
+        Ok(Some(TaskRecord { messages: found, result_id }))
+    }
+
     pub fn closing_start(
         &self,
         run: RunId,

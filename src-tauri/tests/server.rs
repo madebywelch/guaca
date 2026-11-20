@@ -3,6 +3,13 @@
 use std::net::SocketAddr;
 
 use futures_util::StreamExt;
+use guac_lib::boot::Paths;
+use guac_lib::db::Store;
+use guac_lib::domain::envelope::{
+    channel_for, Envelope, Intent, NoticeKind, Part, Participant, Trust,
+};
+use guac_lib::domain::ids::{AgentId, MessageId, RunId};
+use guac_lib::domain::outcome::Settled;
 use serde_json::{json, Value};
 
 const TOKEN: &str = "a-token-nobody-guessed";
@@ -83,6 +90,165 @@ async fn a_workspace_on_a_server_answers_the_same_commands_the_window_does() {
     let agents = body["ok"].as_array().expect("a roster");
     assert_eq!(agents.len(), 1, "the agent is on the roster: {body}");
     assert_eq!(agents[0]["name"], "Pip");
+}
+
+fn recorded_message(
+    run_id: RunId,
+    from: Participant,
+    to: Participant,
+    created_at: i64,
+    intent: Intent,
+    text: &str,
+) -> Envelope {
+    Envelope {
+        id: MessageId::new(),
+        run_id,
+        channel_id: channel_for(from, to).unwrap(),
+        from,
+        to,
+        parts: vec![Part::Text { text: text.into() }],
+        trust: match from {
+            Participant::Human => Trust::Operator,
+            Participant::Agent { .. } => Trust::Peer,
+            Participant::System => Trust::System,
+        },
+        hop: u16::from(from.is_agent() && to.is_agent()),
+        expects_reply: intent == Intent::Work,
+        intent,
+        cause: None,
+        created_at,
+    }
+}
+
+#[tokio::test]
+async fn a_task_read_follows_selected_root_runs_across_conversations() {
+    use Intent::{Courtesy, Work};
+    use Participant::{Agent, Human, System};
+
+    let (addr, dir) = workspace().await;
+    let store = Store::open(&Paths::under(dir.path()).db()).unwrap();
+    let (_, lead) = call(
+        addr,
+        "create_agent",
+        json!({ "draft": {
+            "name": "Lead",
+            "avatar": "avocado",
+            "color": "#7ab55c",
+            "model": "",
+            "systemPrompt": "Coordinate the work.",
+        }}),
+    )
+    .await;
+    let channel = serde_json::from_value(lead["ok"]["id"].clone()).unwrap();
+    let lead = Agent { id: channel };
+    let peer = Agent { id: AgentId::new() };
+    let specialist = Agent { id: AgentId::new() };
+    let (first, second, foreign, erased, unknown) =
+        (RunId::new(), RunId::new(), RunId::new(), RunId::new(), RunId::new());
+    let peer_channel = peer.agent_id().unwrap();
+
+    let brief = recorded_message(first, Human, lead, 10, Work, "Compare the options");
+    let handoff = recorded_message(first, lead, peer, 11, Work, "Find prices");
+    let another_brief = recorded_message(second, Human, lead, 12, Work, "Check the dates");
+    let nested = Envelope {
+        id: MessageId::from_uuid(uuid::Uuid::from_u128(2)),
+        ..recorded_message(first, peer, specialist, 13, Work, "Check train prices")
+    };
+    let nested_reply = Envelope {
+        id: MessageId::from_uuid(uuid::Uuid::from_u128(1)),
+        ..recorded_message(first, specialist, peer, 13, Courtesy, "Trains cost $42")
+    };
+    let reply = recorded_message(first, peer, lead, 15, Courtesy, "Train is cheapest");
+    let result = recorded_message(first, lead, Human, 16, Courtesy, "Take the train");
+    let notice = Envelope {
+        parts: vec![Part::Notice {
+            kind: NoticeKind::UpstreamError,
+            text: "Could not reply".into(),
+        }],
+        cause: Some(another_brief.id),
+        ..recorded_message(second, System, lead, 17, Courtesy, "")
+    };
+    let expected = [brief, handoff, another_brief, nested, nested_reply, reply, result, notice];
+    for (i, message) in expected.iter().enumerate() {
+        if i == 0 || i == 2 {
+            store.append_delivery(message).unwrap();
+        } else {
+            store.append(message).unwrap();
+        }
+    }
+    let settled = store.settle_run_as(first, Settled::Finished, 4).unwrap().unwrap();
+    assert_eq!(settled.agent_id, channel);
+    store.settle_run_as(second, Settled::Finished, 4).unwrap().unwrap();
+
+    let unrelated = [
+        recorded_message(foreign, Human, peer, 1, Work, "The peer owns this task"),
+        recorded_message(foreign, peer, lead, 2, Work, "The lead helps with this task"),
+        Envelope {
+            cause: Some(expected[0].id),
+            ..recorded_message(erased, specialist, peer, 4, Work, "A surviving handoff")
+        },
+    ];
+    for message in &unrelated {
+        store.append(message).unwrap();
+    }
+
+    let (status, body) =
+        call(addr, "task_record", json!({ "channelId": channel, "runId": first })).await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        body["ok"]["messages"],
+        json!([&expected[0], &expected[1], &expected[3], &expected[4], &expected[5], &expected[6]])
+    );
+    assert_eq!(body["ok"]["resultId"], json!(expected[6].id));
+
+    let (_, body) =
+        call(addr, "task_record", json!({ "channelId": channel, "runId": second })).await;
+    assert_eq!(body["ok"]["messages"], json!([&expected[2], &expected[7]]));
+    assert!(body["ok"]["resultId"].is_null());
+    let (_, body) =
+        call(addr, "task_record", json!({ "channelId": peer_channel, "runId": foreign })).await;
+    assert_eq!(body["ok"]["messages"], json!(unrelated[..2]));
+    for (owner, run) in
+        [(channel, foreign), (peer_channel, first), (peer_channel, erased), (channel, unknown)]
+    {
+        let (_, body) =
+            call(addr, "task_record", json!({ "channelId": owner, "runId": run })).await;
+        assert!(body["ok"].is_null());
+    }
+}
+
+#[tokio::test]
+async fn a_task_read_refuses_to_return_a_partial_history() {
+    let (addr, dir) = workspace().await;
+    let channel = AgentId::new();
+    let run = RunId::new();
+    let args = || json!({ "channelId": channel, "runId": run });
+
+    let store = Store::open(&Paths::under(dir.path()).db()).unwrap();
+    let to = Participant::Agent { id: channel };
+    let root = recorded_message(run, Participant::Human, to, 0, Intent::Work, "A long task");
+    store.append(&root).unwrap();
+    for at in 1..2_000 {
+        store
+            .append(&recorded_message(run, Participant::System, to, at, Intent::Courtesy, "Update"))
+            .unwrap();
+    }
+    let (_, body) = call(addr, "task_record", args()).await;
+    assert_eq!(body["ok"]["messages"].as_array().unwrap().len(), 2_000);
+    assert_eq!(body["ok"]["messages"][0]["id"], json!(root.id));
+
+    store
+        .append(&recorded_message(
+            run,
+            Participant::System,
+            to,
+            2_000,
+            Intent::Courtesy,
+            "Last update",
+        ))
+        .unwrap();
+    let (_, body) = call(addr, "task_record", args()).await;
+    assert_eq!(body["err"]["kind"], "validation");
 }
 
 #[tokio::test]

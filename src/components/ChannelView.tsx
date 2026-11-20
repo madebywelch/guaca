@@ -37,6 +37,7 @@ import { Answering } from "./HtmlArtifact";
 import { Icon } from "./Icon";
 import { MessageItem, ResultItem, StreamingMessage, WhenRow } from "./MessageItem";
 import { PairThread } from "./PairThread";
+import { ActiveTaskMaps, TaskMapCard, useTaskMaps } from "./TaskMap";
 import { TrailRow } from "./Trail";
 import { TurnWork } from "./TurnWork";
 import { HandoffRow, RefusedRow, WritingRow } from "./WireRow";
@@ -138,10 +139,14 @@ export function ChannelView({
   const runs = useStore((s) =>
     s.runningKnown ? s.running.map((one) => one.runId).join(" ") : null,
   );
-  const shown = useMemo(
-    () => (runs === null ? rows : withResults(rows, new Set(runs.split(" ") as RunId[]))),
-    [rows, runs],
-  );
+  const {
+    maps: taskMaps,
+    results,
+    unavailable,
+    checking,
+    retry,
+  } = useTaskMaps(channel, messages, runs);
+  const shown = runs === null ? rows : withResults(rows, new Set(runs.split(" ")), results);
   const asked = useMemo((): Asked | null => {
     let last: Row | undefined;
     for (const row of rows) if (row.kind === "peers") last = row;
@@ -237,6 +242,9 @@ export function ChannelView({
       )}
 
       <div className="pane__body" hidden={view !== "conversation" && view !== "now"}>
+        {view === "conversation" && (
+          <ActiveTaskMaps maps={taskMaps.filter((map) => map.inFlight)} lookups={lookups} />
+        )}
         {agent && view === "now" && (
           <div className="pane__scroll">
             <AgentPanel agent={agent} section="now" onEditProfile={(one) => onEditProfile?.(one)} />
@@ -262,6 +270,27 @@ export function ChannelView({
             ) : (
               shown.map((row) => {
                 const stands = rowStandsFor(row);
+                const mapped =
+                  row.kind === "peers" && taskMaps.some((map) => map.runId === row.runId);
+                const resultMap =
+                  row.kind === "result"
+                    ? taskMaps.find((map) => map.runId === row.message.runId)
+                    : undefined;
+                const endedMap =
+                  row.kind === "message"
+                    ? taskMaps.find(
+                        (map) =>
+                          !map.inFlight &&
+                          map.brief.id === row.message.id &&
+                          !shown.some(
+                            (one) => one.kind === "result" && one.message.runId === map.runId,
+                          ),
+                      )
+                    : undefined;
+                const unavailableMap =
+                  row.kind === "message" && row.message.from.kind === "human"
+                    ? unavailable.get(row.message.runId)
+                    : undefined;
                 const toggle = (key: string) =>
                   setUnfolded((held) => {
                     const next = new Set(held);
@@ -286,25 +315,48 @@ export function ChannelView({
                       if (button) rememberDismissOpener(button);
                     }}
                   >
-                    {row.kind === "peers" ? (
-                      <HandoffRow
-                        peers={row.peers}
-                        runId={row.runId}
-                        channel={channel}
-                        rowKey={row.key}
-                        open={unfolded.has(row.key)}
-                        onToggle={() => toggle(row.key)}
-                        onOpen={setReading}
-                      />
-                    ) : row.kind === "result" ? (
-                      <ResultItem
-                        row={row}
+                    {endedMap && (
+                      <TaskMapCard
+                        map={endedMap}
                         lookups={lookups}
-                        channel={channel}
-                        open={unfolded}
-                        onToggle={toggle}
-                        onOpen={setReading}
+                        open={unfolded.has(endedMap.runId)}
+                        onToggle={() => toggle(endedMap.runId)}
+                        checking={checking.has(endedMap.runId)}
+                        unavailable={unavailableMap}
                       />
+                    )}
+                    {row.kind === "peers" ? (
+                      mapped ? null : (
+                        <HandoffRow
+                          peers={row.peers}
+                          runId={row.runId}
+                          channel={channel}
+                          rowKey={row.key}
+                          open={unfolded.has(row.key)}
+                          onToggle={() => toggle(row.key)}
+                          onOpen={setReading}
+                        />
+                      )
+                    ) : row.kind === "result" ? (
+                      <>
+                        {resultMap && (
+                          <TaskMapCard
+                            map={resultMap}
+                            lookups={lookups}
+                            delivered
+                            open={unfolded.has(resultMap.runId)}
+                            onToggle={() => toggle(resultMap.runId)}
+                          />
+                        )}
+                        <ResultItem
+                          row={resultMap ? { ...row, handoffs: [] } : row}
+                          lookups={lookups}
+                          channel={channel}
+                          open={unfolded}
+                          onToggle={toggle}
+                          onOpen={setReading}
+                        />
+                      </>
                     ) : row.kind === "refused" ? (
                       <RefusedRow peer={row.peer} at={row.at} body={row.body} reason={row.reason} />
                     ) : row.kind === "when" ? (
@@ -315,6 +367,18 @@ export function ChannelView({
                         lookups={lookups}
                         continued={row.continued}
                       />
+                    )}
+                    {unavailableMap && (
+                      <div className="task-map__notice" role="status">
+                        {unavailableMap === "oversized"
+                          ? "This task is too large to show on a map. Its messages are still here."
+                          : "Could not refresh the task map."}
+                        {unavailableMap === "retry" && (
+                          <button className="btn btn--compact" type="button" onClick={retry}>
+                            Retry task map
+                          </button>
+                        )}
+                      </div>
                     )}
                   </div>
                 );
@@ -343,6 +407,13 @@ export function ChannelView({
           onRecipientChange={(id) => void select(id)}
           onQuestions={onQuestions}
           focusOnOpen={!focusRequest}
+          onTaskQuestion={() => {
+            const next = transcript()?.parentElement?.querySelector<HTMLElement>(
+              ".task-map-stack .task-map__branches > li:not([hidden]) .task-map__question",
+            );
+            next?.focus();
+            return !!next;
+          }}
           waiting={
             agent && question
               ? {

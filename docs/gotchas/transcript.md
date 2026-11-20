@@ -57,6 +57,12 @@ the operator. `docs/WORKSPACE.md`, then `src/lib/reasoning.ts`,
   open, ticking, after a stop or a failure ended the run. `HandoffRow` reads
   `running` for its run: an answer still owed in a run the host no longer
   lists folds to "no answer".
+- **A map belongs to a recorded run, not the open agent.** A task and its
+  colleagues can use several agent conversations, but their envelopes share
+  one run. The task read fetches those envelopes, and `taskMaps` associates
+  each question with its recorded run and branch. If the runtime has already
+  taken a brief into another run, the map must not guess a separate task
+  from the brief's position in the transcript.
 - **A result is found from the transcript and the running list, not from the
   outcome's note.** The store keeps only outcomes nobody has seen, and an open
   conversation marks its outcomes seen, so a card keyed on `noteId` would lose
