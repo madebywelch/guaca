@@ -1,10 +1,12 @@
 import { needsAnswer } from "./decisions";
+import { shown } from "./held";
 import { finished } from "./outcomes";
 import { questions } from "./questions";
 import type { State, StreamBuffer } from "./store";
 import type { Activity, AgentCard, AgentId, Envelope, Presence } from "./types";
 
-export function presenceOf(state: State): Presence {
+export function presenceOf(state: State, heldId?: string): Presence {
+  const view = shown(state.pending, state.stuck, state.activity, heldId);
   const roster: Presence["roster"] = {};
   for (const agent of state.agents) {
     if (agent.lifecycle === "terminated") continue;
@@ -13,9 +15,9 @@ export function presenceOf(state: State): Presence {
   return {
     roster,
     crews: state.groups.map((group) => ({ id: group.id, name: group.name })),
-    activity: state.activity,
-    waiting: state.pending,
-    stuck: state.stuck,
+    activity: view.activity,
+    waiting: view.pending,
+    stuck: view.stuck,
     decisions: state.decisions.filter(needsAnswer),
     session: state.sessionSpend,
     running: Object.values(state.activeRun).filter((run) => run !== undefined).length,

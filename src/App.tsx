@@ -217,7 +217,7 @@ export default function App() {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
     const report = async () => {
-      await reportPresence(presenceOf(useStore.getState()));
+      await reportPresence(presenceOf(useStore.getState(), useHeld.getState().held?.id));
       if (!stopped) timer = setTimeout(() => void report(), FEED_COALESCE_MS);
     };
     void report();

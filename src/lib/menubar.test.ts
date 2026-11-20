@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aDecision, aGroup } from "../test-fixtures";
+import { aDecision, aGroup, anApproval } from "../test-fixtures";
 import {
   exchange,
   headline,
@@ -87,6 +87,22 @@ describe("presenceOf", () => {
     ]);
     expect(presence.running).toBe(1);
     expect(presence.session).toEqual({ prompt: 3, completion: 2, cost: null, calls: 1 });
+  });
+
+  it("hands the icon a held answer as answered, so its amber clears until Undo", () => {
+    const asking = anApproval({ agentId: "id-Chef" });
+    const state = {
+      ...useStore.getState(),
+      agents: [agent("Chef")],
+      pending: [asking],
+      activity: { "id-Chef": { state: "awaitingApproval" as const } },
+    };
+    const held = presenceOf(state, asking.id);
+    expect(held.waiting).toEqual([]);
+    expect(held.activity["id-Chef"]).toEqual({ state: "thinking" });
+    const undone = presenceOf(state);
+    expect(undone.waiting).toEqual([asking]);
+    expect(undone.activity["id-Chef"]).toEqual({ state: "awaitingApproval" });
   });
 
   it("counts unanswered and interrupted decisions, including snoozed ones", () => {
