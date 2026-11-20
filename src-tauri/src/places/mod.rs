@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::domain::place::{
     Abilities, AdapterId, Card, Heard, HeardKey, Mark, OutsideUser, PlaceKey, Posted, RelayTag,
-    Spot,
+    Spot, ThreadKey,
 };
 
 pub type Pending<'a, T> = futures_util::future::BoxFuture<'a, T>;
@@ -14,7 +14,8 @@ pub trait Adapter: Send + Sync + 'static {
     fn catch_up<'a>(
         &'a self,
         place: &'a PlaceKey,
-        after: Option<&'a HeardKey>,
+        recent_threads: &'a [ThreadKey],
+        since_ms: i64,
         ears: &'a Ears,
     ) -> Pending<'a, Result<(), AdapterError>>;
     fn post<'a>(
@@ -67,17 +68,31 @@ pub struct Unheard {
 }
 
 type Hear = dyn Fn(Heard) -> Pending<'static, Result<(), Unheard>> + Send + Sync;
+type Connect = dyn Fn(Ears) -> Pending<'static, Result<(), AdapterError>> + Send + Sync;
 
 #[derive(Clone)]
 pub struct Ears {
     hear: Arc<Hear>,
+    connect: Arc<Connect>,
 }
 
 impl Ears {
     pub fn new(
         hear: impl Fn(Heard) -> Pending<'static, Result<(), Unheard>> + Send + Sync + 'static,
     ) -> Self {
-        Self { hear: Arc::new(hear) }
+        Self { hear: Arc::new(hear), connect: Arc::new(|_| Box::pin(async { Ok(()) })) }
+    }
+
+    pub fn on_connected(
+        mut self,
+        connect: impl Fn(Ears) -> Pending<'static, Result<(), AdapterError>> + Send + Sync + 'static,
+    ) -> Self {
+        self.connect = Arc::new(connect);
+        self
+    }
+
+    pub async fn connected(&self) -> Result<(), AdapterError> {
+        (self.connect)(self.clone()).await
     }
 
     pub async fn heard(&self, heard: Heard) -> Result<(), Unheard> {
