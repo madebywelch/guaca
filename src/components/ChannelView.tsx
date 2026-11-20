@@ -6,7 +6,7 @@ import { useFollowBottom } from "../lib/follow";
 import { waitingLine } from "../lib/handoff";
 import { useShown } from "../lib/held";
 import { api } from "../lib/ipc";
-import { runsOn } from "../lib/profile";
+import { modelName, runsOn } from "../lib/profile";
 import { thoughtNow } from "../lib/reasoning";
 import { colleaguesOn, runningNote } from "../lib/running";
 import { type ChannelKey, useAgentLookup, useStore } from "../lib/store";
@@ -90,7 +90,6 @@ export function ChannelView({
   const shownNow = useShown();
   const asking = shownNow.pending.some((one) => one.agentId === agent?.id);
   const question = waitingQuestion(shownNow.pending.filter((one) => one.agentId === agent?.id));
-  const model = agent && settings ? runsOn(agent, group, settings).model : undefined;
   const answeringId = agent?.id;
   const answeringName = agent?.name;
   const answering = useMemo(
@@ -307,7 +306,6 @@ export function ChannelView({
               : undefined
           }
           placeholder={`Write to ${agent?.name ?? "agent"}…`}
-          model={model}
           group={agent?.groupId ?? null}
           disabled={!agent || agent.lifecycle === "terminated"}
           disabledReason="This agent has been deleted."
@@ -739,8 +737,6 @@ function useTabCounts(agentId: AgentId): Partial<Record<AgentView, number>> {
 
 function answeredBy(agent: AgentCard, group: Group | undefined, settings: Settings | null): string {
   const runs = runsOn(agent, group, settings);
-  if (runs.model === "No model set") return "no model set";
-  if (runs.model === "Claude subscription") return "a Claude subscription";
-  if (runs.inherited) return `${group ? "the group's" : "the app's"} model, ${runs.model}`;
-  return runs.model;
+  if (runs.model === "No model set" || runs.model === "Claude subscription") return runs.model;
+  return modelName(runs.model);
 }

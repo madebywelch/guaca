@@ -43,6 +43,7 @@ function MemoryPage({ agentId }: Props) {
   const { dispatch } = draft;
   const box = useRef<HTMLTextAreaElement>(null);
   const changed = useStore((state) => state.memoryVersion[agentId] ?? 0);
+  const who = useStore((state) => state.agents.find((agent) => agent.id === agentId)?.name);
 
   const load = useCallback(async () => {
     const request = ++draft.generation;
@@ -175,7 +176,7 @@ function MemoryPage({ agentId }: Props) {
           rows={2}
           disabled={loading}
           value={shown}
-          placeholder="Nothing yet."
+          placeholder={`What should ${who ?? "this agent"} always remember?`}
           onChange={(event) => {
             const next = event.target.value;
             dispatch({ type: "change", value: next });
@@ -184,7 +185,10 @@ function MemoryPage({ agentId }: Props) {
       ) : state.phase === "failed" ? null : shown ? (
         <p className="memory__text memory__read">{shown}</p>
       ) : (
-        <p className="detail__empty">Nothing yet.</p>
+        <p className="detail__empty">
+          {who ?? "This agent"} keeps what it should remember between conversations here, and reads
+          it before every reply. It adds to this as it learns, or you can start it with Edit.
+        </p>
       )}
 
       {editing && (

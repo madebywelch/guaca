@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { runsOn } from "./profile";
+import { modelName, runsOn } from "./profile";
 import type { AgentCard, Group, Settings } from "./types";
 
 const agent = (over: Partial<AgentCard> = {}): AgentCard =>
@@ -83,5 +83,24 @@ describe("runsOn", () => {
 
   it("stands an agent with no crew on its own", () => {
     expect(runsOn(agent(), undefined, null).crew).toBe("Independent agent");
+  });
+});
+
+describe("modelName", () => {
+  it("keeps an id it cannot read a name from, rather than showing nothing", () => {
+    expect(modelName("vendor/")).toBe("vendor/");
+    expect(modelName("  ")).toBe("");
+  });
+
+  it("drops the vendor and a variant suffix, and spells the words a person reads", () => {
+    expect(modelName("anthropic/claude-sonnet-4.5")).toBe("Claude Sonnet 4.5");
+    expect(modelName("openai/gpt-4o-mini")).toBe("GPT-4o Mini");
+    expect(modelName("gpt-5.6-luna")).toBe("GPT-5.6 Luna");
+    expect(modelName("meta-llama/llama-3.1-70b-instruct:free")).toBe("Llama 3.1 70B Instruct");
+    expect(modelName("openai/o4-mini")).toBe("o4 Mini");
+    expect(modelName("verify/stand-in")).toBe("Stand In");
+    expect(modelName("claude-sonnet-4-5-20250929")).toBe("Claude Sonnet 4.5");
+    expect(modelName("claude-3-5-haiku")).toBe("Claude 3.5 Haiku");
+    expect(modelName("qwen-2-72b")).toBe("Qwen 2 72B");
   });
 });

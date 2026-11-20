@@ -93,7 +93,6 @@ if (typeof window !== "undefined") {
 
 interface Props {
   placeholder: string;
-  model?: string;
   draftKey?: string;
   recipient?: { id: string; name: string };
   onRecipientChange?: (id: string) => void;
@@ -106,7 +105,6 @@ interface Props {
 
 export function Composer({
   placeholder,
-  model,
   group,
   disabled,
   disabledReason,
@@ -606,7 +604,6 @@ export function Composer({
                   <b>Tab</b> to answer {waiting.asker} ·{" "}
                 </>
               )}
-              {model && `${model} · `}
               <b>@</b> to name an agent
             </>
           )}

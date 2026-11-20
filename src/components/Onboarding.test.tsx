@@ -8,8 +8,14 @@ import type { AgentCard } from "../lib/types";
 import { aGroup } from "../test-fixtures";
 import { Onboarding } from "./Onboarding";
 
-const { hire, send } = vi.hoisted(() => ({ hire: vi.fn(), send: vi.fn() }));
-vi.mock("../lib/ipc", () => ({ api: { hireAgents: hire, sendMessage: send } }));
+const { hire, send, rename } = vi.hoisted(() => ({
+  hire: vi.fn(),
+  send: vi.fn(),
+  rename: vi.fn(),
+}));
+vi.mock("../lib/ipc", () => ({
+  api: { hireAgents: hire, sendMessage: send, updateGroup: rename },
+}));
 const platform = vi.hoisted(() => ({ desktop: true }));
 vi.mock("../lib/transport", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/transport")>()),
@@ -66,10 +72,10 @@ const done = vi.fn();
 const starting = vi.fn();
 const inspecting = vi.fn();
 
-function mount() {
+function mount(starter = aGroup()) {
   return render(
     <Onboarding
-      group={aGroup()}
+      group={starter}
       onStarting={starting}
       onDone={done}
       onInspect={inspecting}
@@ -104,6 +110,7 @@ beforeEach(() => {
   localStorage.clear();
   hire.mockResolvedValue(group);
   send.mockResolvedValue("run-1");
+  rename.mockImplementation(async (_id, draft) => aGroup({ name: draft.name }));
   refresh.mockResolvedValue();
   select.mockResolvedValue();
   useStore.setState({ agents: [], refreshAgents: refresh, select });
@@ -252,6 +259,51 @@ describe("guided first task", () => {
       [],
       hire.mock.calls[0]![2],
     );
+  });
+
+  it("hires nobody and sends nothing when the starter group cannot be named, and keeps the brief", async () => {
+    rename.mockRejectedValueOnce(new Error("The host is restarting."));
+    mount();
+    toReview();
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    expect((await screen.findByRole("alert")).textContent).toBe("The host is restarting.");
+    expect(hire).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    expect(readFirstTask().brief).toBe("Plan our launch next month.");
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    await waitFor(() => expect(done).toHaveBeenCalledOnce());
+    expect(rename).toHaveBeenLastCalledWith(aGroup().id, { name: "Planning" });
+    expect(hire).toHaveBeenCalledOnce();
+  });
+
+  it("names the empty starter group for the task before hiring into it", async () => {
+    mount();
+    toReview();
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    await waitFor(() => expect(done).toHaveBeenCalledOnce());
+    expect(rename).toHaveBeenCalledExactlyOnceWith(aGroup().id, { name: "Planning" });
+    expect(rename.mock.invocationCallOrder[0]!).toBeLessThan(hire.mock.invocationCallOrder[0]!);
+  });
+
+  it("gives a task in the person's own words a plain group name", async () => {
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: /Something else/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Your first brief" }), {
+      target: { value: "Sort out my week." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Connect test provider" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    await waitFor(() => expect(done).toHaveBeenCalledOnce());
+    expect(rename).toHaveBeenCalledExactlyOnceWith(aGroup().id, { name: "My group" });
+  });
+
+  it("leaves the name of a group that already has agents", async () => {
+    mount(aGroup({ name: "Kitchen", agentCount: 2 }));
+    toReview();
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    await waitFor(() => expect(done).toHaveBeenCalledOnce());
+    expect(rename).not.toHaveBeenCalled();
   });
 
   it("sends nothing when the hire fails, and retries the same group under the same key", async () => {

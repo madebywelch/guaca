@@ -15,6 +15,7 @@ export function Notebook({ agentId }: Props) {
   const [error, setError] = useState<string | null>(null);
   const latestRead = useRef(0);
   const changed = useStore((state) => state.notebookVersion[agentId] ?? 0);
+  const who = useStore((state) => state.agents.find((agent) => agent.id === agentId)?.name);
 
   const load = useCallback(async () => {
     try {
@@ -68,7 +69,11 @@ export function Notebook({ agentId }: Props) {
       {entries === null ? (
         <p className="detail__empty">Loading…</p>
       ) : entries.length === 0 ? (
-        <p className="detail__empty">Empty.</p>
+        <p className="detail__empty">
+          {who ?? "This agent"} keeps longer files here, like notes on a project or a draft, and
+          opens one when a task needs it. It starts a file on its own when something is worth
+          keeping.
+        </p>
       ) : (
         <ol className="worknotes__list">
           {entries.map((entry) => (

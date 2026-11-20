@@ -344,12 +344,18 @@ describe("who said what", () => {
 });
 
 describe("what the head says answers", () => {
-  it("names the model, and whose choice it was, without naming a field", () => {
+  it("names the model once, by the name a person reads, and never by its id", () => {
     const { container } = open([envelope({ parts: [{ type: "text", text: "hi" }] })]);
-    const meta = container.querySelector(".pane__meta")?.textContent ?? "";
-    expect(meta).toContain("m");
-    expect(meta).not.toContain("answering as itself");
-    expect(meta).not.toContain("no model of its own");
+    act(() =>
+      useStore.setState((state) => ({
+        agents: state.agents.map((agent) =>
+          agent.id === MANAGER ? { ...agent, model: "anthropic/claude-sonnet-4.5" } : agent,
+        ),
+      })),
+    );
+    expect(container.querySelector(".pane__meta")?.textContent).toBe("Claude Sonnet 4.5");
+    expect(container.textContent).not.toContain("anthropic/claude-sonnet-4.5");
+    expect(container.textContent?.split("Claude Sonnet 4.5")).toHaveLength(2);
   });
 });
 

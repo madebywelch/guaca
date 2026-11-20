@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
 import type { NotebookEntry } from "../lib/types";
+import { anAgent } from "../test-fixtures";
 
 const agentNotebook = vi.fn<(id: string) => Promise<NotebookEntry[]>>();
 const readNotebook = vi.fn<(id: string, path: string) => Promise<string>>();
@@ -22,8 +23,17 @@ const log: NotebookEntry = { path: "log.md", chars: 20, updatedAt: Date.now() };
 describe("Notebook", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    useStore.setState({ notebookVersion: {} });
+    useStore.setState({ notebookVersion: {}, agents: [] });
     agentNotebook.mockResolvedValue([log]);
+  });
+
+  it("says what will appear when empty and what puts it there, naming the agent", async () => {
+    agentNotebook.mockResolvedValue([]);
+    useStore.setState({ agents: [anAgent("a1", { name: "Financial Analyst" })] });
+    render(<Notebook agentId="a1" />);
+    expect((await screen.findByText(/keeps longer files here/)).textContent).toBe(
+      "Financial Analyst keeps longer files here, like notes on a project or a draft, and opens one when a task needs it. It starts a file on its own when something is worth keeping.",
+    );
   });
 
   it("lists what the agent kept, opens a file, and takes one away", async () => {
@@ -37,13 +47,13 @@ describe("Notebook", () => {
     agentNotebook.mockResolvedValue([]);
     fireEvent.click(screen.getByRole("button", { name: "Delete log.md" }));
     await waitFor(() => expect(deleteNotebookFile).toHaveBeenCalledWith("a1", "log.md"));
-    expect(await screen.findByText(/Empty\./)).toBeTruthy();
+    expect(await screen.findByText(/keeps longer files here/)).toBeTruthy();
   });
 
   it("redraws when the agent writes mid-turn", async () => {
     agentNotebook.mockResolvedValue([]);
     render(<Notebook agentId="a1" />);
-    await screen.findByText(/Empty\./);
+    await screen.findByText(/keeps longer files here/);
     agentNotebook.mockResolvedValue([log]);
     act(() => useStore.getState().applyEvent({ type: "notebookChanged", agentId: "a1" }));
     expect(await screen.findByRole("button", { name: "log.md" })).toBeTruthy();
@@ -102,7 +112,7 @@ describe("Notebook", () => {
     fireEvent.click(await screen.findByRole("button", { name: "log.md" }));
     agentNotebook.mockResolvedValue([]);
     fireEvent.click(screen.getByRole("button", { name: "Delete log.md" }));
-    await screen.findByText("Empty.");
+    await screen.findByText(/keeps longer files here/);
     await act(async () => finishRead("late contents"));
     expect(screen.queryByText("late contents")).toBeNull();
   });

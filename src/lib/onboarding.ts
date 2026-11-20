@@ -6,6 +6,7 @@ export const FIRST_TASKS = [
   {
     id: "research",
     title: "Research a decision",
+    groupName: "Research",
     description: "Compare options and make the tradeoffs clear.",
     group: [
       {
@@ -20,6 +21,7 @@ export const FIRST_TASKS = [
   {
     id: "plan",
     title: "Plan a project",
+    groupName: "Planning",
     description: "Turn an idea into a manageable first step.",
     group: [
       {
@@ -37,6 +39,7 @@ export const FIRST_TASKS = [
   {
     id: "write",
     title: "Draft content",
+    groupName: "Writing",
     description: "Find the words for something you need to say.",
     group: [
       {
@@ -54,6 +57,7 @@ export const FIRST_TASKS = [
   {
     id: "own",
     title: "Something else",
+    groupName: "My group",
     description: "Start with a task in your own words.",
     group: [
       {
