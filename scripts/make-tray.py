@@ -21,6 +21,8 @@ SUPERSAMPLE = 4
 
 ATTENTION = (0xFF, 0xB3, 0x46)
 
+ATTENTION_EDGE = (0x16, 0x16, 0x16)
+
 INK = (0x00, 0x00, 0x00)
 
 SPAN = 52.0
@@ -61,7 +63,11 @@ def working(x: float, y: float) -> tuple[int, int, int, int]:
 
 
 def attention(x: float, y: float) -> tuple[int, int, int, int]:
-    return (*ATTENTION, 255) if inside(x, y, 0.0) and not in_pit(x, y) else (0, 0, 0, 0)
+    if not inside(x, y, 0.0):
+        return (0, 0, 0, 0)
+    if inside(x, y, STROKE) and not in_pit(x, y):
+        return (*ATTENTION, 255)
+    return (*ATTENTION_EDGE, 255)
 
 
 def render(sample, size: int) -> bytes:
