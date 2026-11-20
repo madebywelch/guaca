@@ -234,9 +234,18 @@ describe("when the host goes away", () => {
 
 describe("App", () => {
   it("renders the ribbon and reaches every agent through the Groups sheet", async () => {
+    listAgents.mockResolvedValue([agent("Manager")]);
     render(<App />);
     expect(await screen.findByRole("navigation", { name: /agents/i })).toBeTruthy();
     expect(within(groupsSheet()).getByText("guaca")).toBeTruthy();
+  });
+
+  it("shows neither the hour ruler nor the status bar while the first run is on screen", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "What would you like help with?" });
+    expect(screen.queryByRole("navigation", { name: /agents/i })).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "Places" })).toBeNull();
+    expect(screen.getByRole("button", { name: "App settings" })).toBeTruthy();
   });
 
   it("names the top row's settings button App settings, apart from each group's own", async () => {
@@ -447,8 +456,9 @@ describe("App", () => {
   });
 
   it.each(["Calendar", "Artifacts"])("keeps %s open under search", async (name) => {
+    listAgents.mockResolvedValue([agent("Manager")]);
     render(<App />);
-    await screen.findByRole("heading", { name: "What would you like help with?" });
+    await screen.findByRole("navigation", { name: "Places" });
     fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${name}`) }));
     const lower = await screen.findByRole("dialog", { name });
     await waitFor(() => expect(document.activeElement).toBe(lower));
@@ -465,8 +475,9 @@ describe("App", () => {
   it.each([["Search", "f"]])(
     "keeps For you open under %s and restores focus",
     async (upperName, key) => {
+      listAgents.mockResolvedValue([agent("Manager")]);
       render(<App />);
-      await screen.findByRole("heading", { name: "What would you like help with?" });
+      await screen.findByRole("navigation", { name: "Places" });
       const opener = within(screen.getByRole("navigation", { name: "Places" })).getByRole(
         "button",
         {
@@ -492,8 +503,9 @@ describe("App", () => {
   it.each([["Search", "f"]])(
     "keeps the calendar editor under %s and unwinds each layer",
     async (upperName, key) => {
+      listAgents.mockResolvedValue([agent("Manager")]);
       render(<App />);
-      await screen.findByRole("heading", { name: "What would you like help with?" });
+      await screen.findByRole("navigation", { name: "Places" });
       const opener = screen.getByRole("button", { name: /^Calendar/ });
       opener.focus();
       fireEvent.click(opener);
@@ -1062,6 +1074,7 @@ describe("failure surfacing", () => {
 
 it("refreshes the roster when the event connection returns", async () => {
   const { onRuntimeEvent } = await import("./lib/ipc");
+  listAgents.mockResolvedValue([agent("Manager")]);
   render(<App />);
   await screen.findByRole("navigation", { name: /agents/i });
   const before = listAgents.mock.calls.length;

@@ -146,6 +146,18 @@ impl CommandError {
     }
 }
 
+impl From<crate::llm::openrouter::LlmError> for CommandError {
+    fn from(err: crate::llm::openrouter::LlmError) -> Self {
+        let kind = match err {
+            crate::llm::openrouter::LlmError::Auth { status: 401, .. } => "keyRejected",
+            crate::llm::openrouter::LlmError::Transport { .. }
+            | crate::llm::openrouter::LlmError::Timeout { .. } => "endpointUnreachable",
+            _ => "inference",
+        };
+        Self::new(kind, err.to_string())
+    }
+}
+
 impl From<Absent> for CommandError {
     fn from(absent: Absent) -> Self {
         CommandError::new("notHere", absent.sentence())
@@ -1247,11 +1259,7 @@ pub async fn test_group_connection(
 
     let mut config = state.runtime.config();
     config.inference = resolved.apply(&config.inference);
-    state
-        .runtime
-        .probe(&config)
-        .await
-        .map_err(|err| CommandError::new("inference", err.to_string()))
+    state.runtime.probe(&config).await.map_err(CommandError::from)
 }
 
 pub async fn delete_group(state: &AppState, id: GroupId) -> Reply<()> {
@@ -2186,11 +2194,7 @@ pub async fn test_connection(state: &AppState, patch: Option<SettingsPatch>) -> 
     if let Some(patch) = patch {
         apply_patch(state.deployment.capabilities(), &mut config, patch)?;
     }
-    state
-        .runtime
-        .probe(&config)
-        .await
-        .map_err(|err| CommandError::new("inference", err.to_string()))
+    state.runtime.probe(&config).await.map_err(CommandError::from)
 }
 
 pub async fn ranked_models(state: &AppState, category: String) -> Reply<Vec<RankedModel>> {
@@ -2331,6 +2335,25 @@ mod tests {
 
         let corrupt: CommandError = crate::db::StoreError::Corrupt("bad row".into()).into();
         assert_eq!(corrupt.kind, "storage");
+    }
+
+    #[test]
+    fn a_rejected_key_is_distinguishable_from_any_other_failed_test() {
+        use crate::llm::openrouter::LlmError;
+        let rejected: CommandError =
+            LlmError::Auth { status: 401, message: "Incorrect API key provided.".into() }.into();
+        assert_eq!(rejected.kind, "keyRejected");
+
+        let forbidden: CommandError =
+            LlmError::Auth { status: 403, message: "Region not supported.".into() }.into();
+        assert_eq!(forbidden.kind, "inference");
+
+        let silent: CommandError = LlmError::Timeout { secs: 30 }.into();
+        assert_eq!(silent.kind, "endpointUnreachable");
+
+        let limited: CommandError =
+            LlmError::RateLimited { message: "slow down".into(), retry_after_secs: None }.into();
+        assert_eq!(limited.kind, "inference");
     }
 
     #[test]

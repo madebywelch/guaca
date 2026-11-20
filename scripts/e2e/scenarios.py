@@ -1866,10 +1866,14 @@ def scenario_connect(w: World) -> None:
     ui = w.ui
     ui.viewport(*WINDOW)
     to_connect(w)
-    fields = {name: bool(ui.find("textbox", name, exact=False)) and ui.on_screen("textbox", name, exact=False)
-              for name in ("API key", "Inference endpoint", "Default model")}
-    w.check("the key, endpoint and model fields are on screen without scrolling", all(fields.values()),
-            observed=fields, shot=True, stop=False)
+    fields = {}
+    for width, height in ((900, 700), WINDOW):
+        ui.viewport(width, height)
+        for name in ("API key", "Inference endpoint", "Default model"):
+            fields[f"{width}x{height} {name}"] = (bool(ui.find("textbox", name, exact=False))
+                                                  and ui.on_screen("textbox", name, exact=False))
+    w.check("the key, endpoint and model fields are on screen without scrolling at 900x700 and 1280x820",
+            all(fields.values()), observed=fields, shot=True, stop=False)
 
     model = {"value": ui.property("textbox", "Default model", "value"),
              "placeholder": ui.property("textbox", "Default model", "placeholder")}
@@ -1879,9 +1883,24 @@ def scenario_connect(w: World) -> None:
     ui.fill("textbox", "Inference endpoint", w.model.base)
     ui.fill("textbox", "Default model", NEEDS_KEY)
     ui.fill("textbox", "API key", WRONG_KEY, exact=False)
-    said_, shown = refusal(w, "the endpoint refuses the wrong key, and the form says so")
-    w.check("a refusal is shown beside the buttons, not under them", shown,
-            observed={"onScreen": shown}, detail=said_, shot=True)
+    ui.click("button", "Test and continue")
+    said_ = w.wait("the endpoint refuses the wrong key, and the key field says so", lambda: ui.evaluate(
+        "(() => { const a = document.querySelector('.onboarding-endpoint [role=alert]'); return a && a.innerText.trim(); })()"))
+    marked = ui.evaluate(
+        "(() => { const a = document.querySelector('.onboarding-endpoint [role=alert]');"
+        " const key = document.querySelector('input[type=password]'); const r = a.getBoundingClientRect();"
+        " const bar = document.querySelector('.onboarding-actions').getBoundingClientRect();"
+        " const probe = document.createElement('span'); probe.style.color = 'var(--danger)'; a.append(probe);"
+        " const danger = getComputedStyle(probe).color; probe.remove();"
+        " return {onScreen: r.top >= 0 && r.bottom <= bar.top, invalid: key.getAttribute('aria-invalid') === 'true',"
+        " described: key.getAttribute('aria-describedby') === a.id, danger: getComputedStyle(a).color === danger}; })()")
+    plain = {"plain": said_.startswith("This endpoint did not accept that key.") and "HTTP" not in said_,
+             "inBar": bool(ui.evaluate("!!document.querySelector('.onboarding-actions [role=alert]')"))}
+    ui.type("textbox", "API key", "x", exact=False)
+    cleared = not ui.evaluate("!!document.querySelector('.onboarding-endpoint [role=alert]')") and not ui.evaluate(
+        "document.querySelector('input[type=password]').hasAttribute('aria-invalid')")
+    w.check("a rejected key is said at the key field in plain words, as an error that clears on retyping", all(marked.values()) and plain["plain"] and not plain["inBar"] and cleared,
+            observed={**marked, **plain, "cleared": cleared}, detail=said_, shot=True)
 
     ui.fill("textbox", "API key", "", exact=False)
     said_, shown = refusal(w, "the endpoint refuses a request with no key, and the form says so")
@@ -2108,12 +2127,22 @@ def scenario_firstgroup(w: World) -> None:
             "hires a group of three" in ui.text() and bool(ui.find("button", "Create one agent")),
             observed={"group": "hires a group of three" in ui.text(),
                       "alone": bool(ui.find("button", "Create one agent"))}, shot=True)
+    w.check("the first run shows its steps alone, with no hour ruler or status bar, and focus on the first task",
+            ui.names("navigation") == ["Window"] and ui.focused() == ("button", GROUP_TASK),
+            observed={"navigation": ui.names("navigation"), "focus": list(ui.focused())})
     ui.click("button", GROUP_TASK)
     brief = ui.value("textbox", "Your first brief")
     w.check("the suggested brief asks both colleagues at once and does not open by asking the person",
             f"Ask {MARKET} and {FINANCE} at the same time" in brief
             and not brief.lower().startswith("ask me") and brief.lower().count("ask me") == 1,
             observed=brief)
+    task_seen = {}
+    for width, height in ((900, 700), WINDOW):
+        ui.viewport(width, height)
+        task_seen[f"{width}x{height}"] = (ui.on_screen("textbox", "Your first brief")
+                                          and ui.on_screen("button", "Continue"))
+    w.check("the first step shows the brief and Continue without scrolling at 900x700 and 1280x820",
+            all(task_seen.values()), observed=task_seen)
     ui.click("button", "Continue")
     w.wait("the Connect your AI step", lambda: ui.find("button", "Test and continue"))
     ui.click("button", API_KEY)
@@ -2136,6 +2165,12 @@ def scenario_firstgroup(w: World) -> None:
         clear[f"{width}x{height}"] = group_clear(w)
     w.check("the three colleagues and what each is for clear the pinned bar at 900x700 and 1280x820",
             all(clear.values()), observed=clear)
+    ready = {"focus": list(ui.focused())}
+    for width, height in ((900, 700), WINDOW):
+        ui.viewport(width, height)
+        ready[f"{width}x{height}"] = ui.on_screen("textbox", "Your first brief")
+    w.check("the Start step shows the brief it will send without scrolling, with focus on Start task",
+            ready["focus"] == ["button", "Start task"] and ready["900x700"] and ready["1280x820"], observed=ready)
 
     w.host.stop()
     ui.click("button", "Start task")
@@ -2353,9 +2388,12 @@ SCENARIOS: dict[str, Scenario] = {
                            "card and status line show it, Today shows it running, and one result comes back.",
     (
         "the first step says a task goes to a group of three and keeps Create one agent",
+        "the first run shows its steps alone, with no hour ruler or status bar, and focus on the first task",
         "the suggested brief asks both colleagues at once and does not open by asking the person",
+        "the first step shows the brief and Continue without scrolling at 900x700 and 1280x820",
         "the Start step names the three it will hire and what each is for, before any is hired",
         "the three colleagues and what each is for clear the pinned bar at 900x700 and 1280x820",
+        "the Start step shows the brief it will send without scrolling, with focus on Start task",
         "a Start that fails hires nobody and sends nothing, and keeps the brief",
         "a Start that fails says why beside Start, on screen without scrolling at 900x700 and 1280x820",
         "Start hires the group of three exactly once",
@@ -2439,14 +2477,15 @@ SCENARIOS: dict[str, Scenario] = {
         "the tab list is one Tab stop",
         "every model call was one the scenario scripted",
     )),
-    "connect": Scenario(scenario_connect, "A person connects a Custom endpoint in a 1280 by 820 window with the "
-                        "key, endpoint and model fields on screen and no other provider's model suggested, and an "
-                        "endpoint that needs no key passes with none; a refusal is reported beside the buttons, and "
-                        "one for a missing key is about that endpoint rather than another provider or place.",
+    "connect": Scenario(scenario_connect, "A person connects a Custom endpoint with the key, endpoint and model "
+                        "fields on screen at 900 by 700 and 1280 by 820 and no other provider's model suggested, and "
+                        "an endpoint that needs no key passes with none; a rejected key is said in plain words at the "
+                        "key field and clears as it is retyped, and a refusal for a missing key is reported beside "
+                        "the buttons and is about that endpoint rather than another provider or place.",
     (
-        "the key, endpoint and model fields are on screen without scrolling",
+        "the key, endpoint and model fields are on screen without scrolling at 900x700 and 1280x820",
         "a Custom endpoint suggests no other provider's model",
-        "a refusal is shown beside the buttons, not under them",
+        "a rejected key is said at the key field in plain words, as an error that clears on retyping",
         "with no key, the refusal is about this endpoint and names no other provider or place",
         "an endpoint that needs no key passes the test with none, and is kept",
         "every model call was one the scenario scripted",
