@@ -820,8 +820,7 @@ def scenario_settings(w: World) -> None:
     w.host.stop()
     w.wait("the page says the host cannot be reached", lambda: ui.find("button", "Retry"))
     crowd("the no-key banner, the host update notice and the unreachable host banner", 3)
-    w.check("with the no-key banner, then the host update notice, then the unreachable host banner showing, "
-            "the section list still shows all thirteen sections without scrolling at 1280x820 and 900x700",
+    w.check("with the no-key banner, then the host update notice, then the unreachable host banner showing, the section list still shows all thirteen sections without scrolling at 1280x820 and 900x700",
             all(c["fits"] and c["notices"] == c["expected"] for c in crowded.values()), observed=crowded)
     ui.viewport(*look.FRAME)
     no_unscripted(w)
