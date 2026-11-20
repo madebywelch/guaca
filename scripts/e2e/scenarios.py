@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from . import look
-from .browser import label
+from .browser import Browser, label
 from .world import STAND_IN_KEY, STAND_IN_MODEL, Call, Reply, World, call, held, refuse, say, text_of
 
 AGENT = "Chief of Staff"
@@ -1203,6 +1203,21 @@ def hidden_branches(fit: dict) -> int:
     return int(re.match(r"Show (\d+) more", fit["more"])[1]) if fit["more"] else 0
 
 
+def painted_task_map(ui: Browser) -> dict | None:
+    return ui.evaluate(f"""(async () => {{
+      const nextFrame = () => new Promise(resolve => requestAnimationFrame(resolve));
+      const measure = () => {TASK_MAP_FIT};
+      await nextFrame();
+      const first = measure();
+      await nextFrame();
+      const second = measure();
+      await nextFrame();
+      const third = measure();
+      return JSON.stringify(first) === JSON.stringify(second)
+        && JSON.stringify(second) === JSON.stringify(third) ? third : null;
+    }})()""", await_promise=True)
+
+
 def map_matrix(w: World, case: str, surface: str, names: tuple[str, ...], layouts: dict,
                question: bool) -> None:
     ui = w.ui
@@ -1210,7 +1225,7 @@ def map_matrix(w: World, case: str, surface: str, names: tuple[str, ...], layout
     for width, height in frames:
         ui.viewport(width, height)
         fit = w.wait(f"the {case} map settles at {width}x{height}",
-                     lambda: (fit := ui.evaluate(TASK_MAP_FIT)) and fit["viewport"] == [width, height]
+                     lambda: (fit := painted_task_map(ui)) and fit["viewport"] == [width, height]
                      and fit["partial"] == 0 and len(fit["names"]) + hidden_branches(fit) == len(names)
                      and (not question or width == 700 or fit["answerVisible"]) and fit)
         rest = []
@@ -1284,7 +1299,7 @@ def scenario_handoff(w: World) -> None:
     ui = w.ui
     w.wait("the map shows Researcher's answer while Analyst works", lambda: R_SAYS in card_text(w)
            and "waiting for Analyst" in working_line(w))
-    fit = ui.evaluate(TASK_MAP_FIT)
+    fit = w.wait("the live map holds its layout through consecutive paints", lambda: painted_task_map(ui))
     w.check("a pinned branch is fully visible or behind the colleagues control",
             fit["partial"] == 0 and len(fit["names"]) + (1 if fit["more"] == "Show 1 more colleague" else 0) == 2
             and not ui.find("button", "Open task map"), observed=fit)

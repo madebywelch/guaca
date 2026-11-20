@@ -244,7 +244,7 @@ export function ChannelView({
       <div className="pane__body" hidden={view !== "conversation" && view !== "now"}>
         {view === "conversation" && (
           <ActiveTaskMaps
-            key={channel}
+            key={`tasks:${channel}`}
             maps={taskMaps.filter((map) => map.inFlight)}
             lookups={lookups}
           />
