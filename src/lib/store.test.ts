@@ -656,6 +656,36 @@ describe("channelsCleared", () => {
 });
 
 describe("openMessage", () => {
+  it("keeps the recent conversation around a result", async () => {
+    reset({ chef: [] });
+    const { channelMessages } = (await import("./ipc")).api;
+    const handoff = envelope({ id: "handoff" });
+    const result = envelope({ id: "result" });
+    vi.mocked(channelMessages).mockResolvedValueOnce([handoff, result]);
+
+    await useStore.getState().openMessage("chef", result.id, "result");
+
+    expect(channelMessages).toHaveBeenCalledExactlyOnceWith("chef", 300, undefined);
+    expect(useStore.getState().messages.chef).toEqual([handoff, result]);
+    expect(useStore.getState().focused).toBe(result.id);
+  });
+
+  it("can still reach a result outside the recent conversation", async () => {
+    reset({ chef: [] });
+    const { channelMessages } = (await import("./ipc")).api;
+    const newer = envelope({ id: "newer" });
+    const result = envelope({ id: "result" });
+    vi.mocked(channelMessages)
+      .mockResolvedValueOnce([newer])
+      .mockResolvedValueOnce([result, newer]);
+
+    await useStore.getState().openMessage("chef", result.id, "result");
+
+    expect(channelMessages).toHaveBeenNthCalledWith(1, "chef", 300, undefined);
+    expect(channelMessages).toHaveBeenNthCalledWith(2, "chef", 300, result.id);
+    expect(useStore.getState().messages.chef).toEqual([result, newer]);
+  });
+
   it("asks for a window wide enough to hold the message", async () => {
     reset({ chef: [] });
     await useStore.getState().openMessage("chef", "m-old");

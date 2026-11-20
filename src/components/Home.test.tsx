@@ -194,6 +194,17 @@ describe("running work", () => {
     expect(screen.getAllByRole("heading")[0]?.textContent).toBe("Dara, Noor and Sami are working.");
   });
 
+  it("leads with running work even when an older result is unread", () => {
+    draw({
+      running: [run],
+      outcomes: [anOutcome({ agentId: dara.id, headline: "Sent the digest." })],
+    });
+    const headings = screen.getAllByRole("heading").map((one) => one.textContent);
+    expect(headings[0]).toBe("Dara is working.");
+    expect(headings.some((text) => text?.startsWith("Finished"))).toBe(true);
+    expect(screen.getByRole("button", { name: /Sent the digest/ })).toBeTruthy();
+  });
+
   it("leads with what needs you, not with what runs, while something waits", () => {
     draw({
       pending: [anApproval({ agentId: "agent-1", createdAt: ASKED, lapsesAt: LAPSES })],

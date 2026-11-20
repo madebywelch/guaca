@@ -2149,11 +2149,14 @@ CAR_RESULT = ("Lease, if you replace the car within three years. Market Research
 def scenario_firstgroup(w: World) -> None:
     researcher = threading.Event()
     analyst = threading.Event()
+    followup = threading.Event()
 
     def script(c: Call) -> Reply | None:
         if c.last_user == "ping":
             return say("pong")
         if c.speaker == LEAD:
+            if c.last_user.endswith("Check the mileage assumption."):
+                return held(followup, say("The estimate assumes twelve thousand miles a year."))
             if ANALYST_SAYS in c.last_user:
                 return say(CAR_RESULT)
             if RESEARCHER_SAYS in c.last_user:
@@ -2285,7 +2288,14 @@ def scenario_firstgroup(w: World) -> None:
             and row["open"] == "Open",
             observed={"byline": re.sub(r"\d{1,2}:\d{2}.*$", "TIME", row["byline"]), "headline": row["headline"],
                       "open": row["open"]}, shot=True)
-    open_agent(w, LEAD)
+    ui.fill("textbox", "What do you need?", "Check the mileage assumption.")
+    ui.click("button", "Send")
+    w.wait("the next task is running", lambda: LEAD in running_text(w))
+    lead = ui.evaluate(LARGEST_ON_TODAY)["text"]
+    w.check("working stays the lead on Today when an older result is unread",
+            lead == f"{LEAD} is working." and ui.evaluate(TODAY_RESULT)["headline"] == row["headline"],
+            observed={"lead": lead, "olderResult": row["headline"]}, shot=True)
+    ui.click("button", row["headline"], exact=False)
     w.wait("the result reaches the person", lambda: CAR_RESULT in conversation(w))
     ended = settled(w, 1, "the group's conversation settles")
     w.check("the coordinator comes back with one result after both answered, and the run ends there",
@@ -2317,6 +2327,8 @@ def scenario_firstgroup(w: World) -> None:
     w.check("the person's long brief is folded to three lines and opens whole on request",
             folded["lines"] <= 3 and opened["lines"] > 3 and opened["text"].startswith("Help me decide"),
             observed={"folded": folded["lines"] <= 3, "opens": opened["lines"] > 3}, detail={"folded": folded, "opened": opened})
+    followup.set()
+    settled(w, 2, "the second task settles")
     no_unscripted(w)
 
 
@@ -2554,6 +2566,7 @@ SCENARIOS: dict[str, Scenario] = {
         "behind the conversation, Today shows the group's work as running",
         "while the group works and nothing waits, the largest words on Today say who is working",
         "on Today the result names who produced it and who helped, is cut on a boundary, and offers Open",
+        "working stays the lead on Today when an older result is unread",
         "the coordinator comes back with one result after both answered, and the run ends there",
         "the result is a raised card under the coordinator's name, and the brief before it is folded below it in weight",
         "the hand-off settles into a record right above the result that says both answered",

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use unicode_segmentation::UnicodeSegmentation;
 
 use super::cut_to;
 use super::envelope::{Envelope, Part, Participant};
@@ -156,7 +157,16 @@ fn shorten(line: &str) -> String {
     if let Some(end) = sentence_end(line) {
         return line[..end].to_string();
     }
-    format!("{}{ELLIPSIS}", cut_to(line, HEADLINE_MAX - 1).0)
+    let mut chars = 0;
+    let mut end = 0;
+    for (at, segment) in line.split_word_bound_indices() {
+        chars += segment.chars().count();
+        if chars >= HEADLINE_MAX {
+            break;
+        }
+        end = at + segment.len();
+    }
+    format!("{}{ELLIPSIS}", line[..end].trim_end())
 }
 
 fn sentence_end(line: &str) -> Option<usize> {
@@ -486,14 +496,22 @@ mod tests {
     }
 
     #[test]
-    fn a_language_without_spaces_is_cut_on_a_sentence_or_a_character() {
+    fn a_word_that_cannot_fit_is_omitted_even_after_a_short_prefix() {
+        let word = "a".repeat(HEADLINE_MAX + 20);
+        assert_eq!(headline(&format!("Reference {word}")).as_deref(), Some("Reference…"));
+        assert_eq!(headline(&word).as_deref(), Some("…"));
+    }
+
+    #[test]
+    fn a_language_without_spaces_is_cut_on_a_sentence_or_a_unicode_word_boundary() {
         let sentences = "毎朝のダイジェストを十二人に送信しました。".repeat(12);
         let cut = headline(&sentences).unwrap();
         assert!(cut.ends_with('。') && sentences.starts_with(&cut), "{cut:?}");
         let line = "毎朝のダイジェストを十二人に送信しました".repeat(12);
         let cut = headline(&line).unwrap();
-        assert_eq!(cut.chars().count(), HEADLINE_MAX);
-        assert!(line.starts_with(cut.strip_suffix(ELLIPSIS).unwrap()));
+        let kept = cut.strip_suffix(ELLIPSIS).unwrap();
+        assert!(!kept.is_empty() && cut.chars().count() <= HEADLINE_MAX);
+        assert!(line.split_word_bound_indices().any(|(at, _)| at == kept.len()));
     }
 
     #[test]

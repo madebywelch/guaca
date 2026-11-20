@@ -47,12 +47,19 @@ export function Home({ onSearch, onManageGroups }: Props) {
   const due = open.filter((item) => item.snoozedUntil === null || item.snoozedUntil <= now);
   const setAside = open.length - due.length;
   const working = agents.filter((agent) => activity[agent.id]?.state === "thinking");
-  const quiet = pending.length + stuck.length + due.length + news.length === 0;
+  const waiting = pending.length + stuck.length + due.length > 0;
+  const quiet = !waiting && news.length === 0;
+  const underway = !waiting && running.length > 0;
 
   const openOutcome = (outcome: Outcome) => {
     if (outcome.seenAt === null) void seeOutcomes({ runIds: [outcome.runId] });
-    if (outcome.noteId) void openMessage(outcome.agentId, outcome.noteId);
-    else void select(outcome.agentId);
+    if (outcome.noteId) {
+      void openMessage(
+        outcome.agentId,
+        outcome.noteId,
+        outcome.status === "done" ? "result" : undefined,
+      );
+    } else void select(outcome.agentId);
   };
 
   return (
@@ -63,12 +70,13 @@ export function Home({ onSearch, onManageGroups }: Props) {
         onLeave={() => setChosen(pending[0]?.id ?? stuck[0]?.id ?? null)}
       />
 
-      {quiet && running.length > 0 ? (
-        <>
-          <Underway running={running} decisions={setAside} now={now} />
-          <RunningNow running={running} />
-        </>
-      ) : quiet ? (
+      {underway && (
+        <Underway
+          running={running}
+          backInto={quiet ? <BackInto decisions={setAside} now={now} /> : null}
+        />
+      )}
+      {quiet && !underway ? (
         <Quiet working={working.map((agent) => agent.name)} decisions={setAside} now={now} />
       ) : (
         <>
@@ -251,15 +259,7 @@ function RunningNow({ running }: { running: Running[] }) {
   );
 }
 
-function Underway({
-  running,
-  decisions,
-  now,
-}: {
-  running: Running[];
-  decisions: number;
-  now: number;
-}) {
+function Underway({ running, backInto }: { running: Running[]; backInto: React.ReactNode }) {
   const agents = useStore((state) => state.agents);
   const activeRun = useStore((state) => state.activeRun);
   const nameOf = (id: string) => agents.find((agent) => agent.id === id)?.name;
@@ -271,7 +271,7 @@ function Underway({
     <div className="home__underway">
       <h2 className="home__calm">{workingLead(names)}</h2>
       <p className="home__still">Nothing needs you.</p>
-      <BackInto decisions={decisions} now={now} />
+      {backInto}
     </div>
   );
 }
