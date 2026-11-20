@@ -13,7 +13,7 @@ from . import look
 from .browser import label
 from .world import STAND_IN_KEY, STAND_IN_MODEL, Call, Reply, World, call, held, refuse, say, text_of
 
-AGENT = "Executive Assistant"
+AGENT = "Chief of Staff"
 FIRST_TASK = "Something else Start with a task in your own words."
 API_KEY = "API key Use OpenRouter or OpenAI, with usage billed to that account."
 WRONG_KEY = "verify-wrong-key"
@@ -53,7 +53,7 @@ def conversation(w: World) -> str:
 def write(w: World, to: str, text: str) -> None:
     ui = w.ui
     if ui.find("combobox", "Recipient") and ui.value("combobox", "Recipient") != to:
-        ui.choose("combobox", "Recipient", to)
+        open_agent(w, to)
     ui.fill("combobox", f"Write to {to}", text)
     ui.click("button", "Send")
 
@@ -1592,7 +1592,7 @@ def scenario_newagent(w: World) -> None:
     ui.click("button", "Create agent")
     w.check("with no name, a press on Create agent creates nothing and keeps the dialog",
             ui.property("button", "Create agent", "disabled") and bool(ui.find("dialog", "New agent"))
-            and w.host.scalar("SELECT count(*) FROM agents") == 1,
+            and w.host.scalar("SELECT count(*) FROM agents") == 3,
             observed={"disabled": ui.property("button", "Create agent", "disabled"),
                       "dialog": bool(ui.find("dialog", "New agent")),
                       "agents": w.host.scalar("SELECT count(*) FROM agents")})
@@ -2055,6 +2055,120 @@ def unproved(claims: tuple[str, ...], steps: list[dict]) -> list[str]:
     return [claim for claim in claims if claim not in held]
 
 
+GROUP_TASK = "Research a decision Compare options and make the tradeoffs clear."
+LEAD, MARKET, FINANCE = "Chief of Staff", "Market Researcher", "Financial Analyst"
+CAR_Q = "Buy or lease the next car: what do your sources and the numbers say?"
+RESEARCHER_SAYS = "Sources lean to leasing under 12,000 miles a year; buying wins past five years."
+ANALYST_SAYS = "Over three years leasing costs about 2,100 dollars less; past year four buying is cheaper."
+CAR_RESULT = ("Lease, if you replace the car within three years. Market Researcher and Financial Analyst "
+              "agree on the three-year cost and disagree on resale, which matters only past year four.")
+
+
+def scenario_firstgroup(w: World) -> None:
+    researcher = threading.Event()
+    analyst = threading.Event()
+
+    def script(c: Call) -> Reply | None:
+        if c.last_user == "ping":
+            return say("pong")
+        if c.speaker == LEAD:
+            if ANALYST_SAYS in c.last_user:
+                return say(CAR_RESULT)
+            if RESEARCHER_SAYS in c.last_user:
+                return say("Market Researcher answered.")
+            if "buy or lease my next car" in c.last_user:
+                return say("I asked them both.") if c.tool_results() else call(
+                    "send_message", to=[MARKET, FINANCE], text=CAR_Q, intent="work")
+        if c.speaker == MARKET and CAR_Q in c.last_user:
+            return held(researcher, say(RESEARCHER_SAYS))
+        if c.speaker == FINANCE and CAR_Q in c.last_user:
+            return held(analyst, say(ANALYST_SAYS))
+        return None
+
+    w.model.script = script
+    w.start()
+    ui = w.ui
+    ui.viewport(*WINDOW)
+    w.wait("the first visit offers a first task", lambda: ui.find("button", GROUP_TASK))
+    w.check("the first step says a task goes to a group of three and keeps Create one agent",
+            "hires a group of three" in ui.text() and bool(ui.find("button", "Create one agent")),
+            observed={"group": "hires a group of three" in ui.text(),
+                      "alone": bool(ui.find("button", "Create one agent"))}, shot=True)
+    ui.click("button", GROUP_TASK)
+    brief = ui.value("textbox", "Your first brief")
+    w.check("the suggested brief asks both colleagues at once and does not open by asking the person",
+            f"Ask {MARKET} and {FINANCE} at the same time" in brief
+            and not brief.lower().startswith("ask me") and brief.lower().count("ask me") == 1,
+            observed=brief)
+    ui.click("button", "Continue")
+    w.wait("the Connect your AI step", lambda: ui.find("button", "Test and continue"))
+    ui.click("button", API_KEY)
+    ui.choose("combobox", "API provider", "Custom endpoint")
+    w.wait("the endpoint fields", lambda: ui.find("textbox", "Inference endpoint"))
+    ui.fill("textbox", "Inference endpoint", w.model.base)
+    ui.fill("textbox", "Default model", STAND_IN_MODEL)
+    ui.fill("textbox", "API key", STAND_IN_KEY, exact=False)
+    ui.click("button", "Test and continue")
+    w.wait("the endpoint test passes", lambda: ui.find("button", "Start task"))
+    listed = ui.evaluate("[...document.querySelectorAll('.onboarding-group li')].map(li => li.innerText.replace(/\\s+/g, ' ').trim())")
+    w.check("the Start step names the three it will hire and what each is for, before any is hired",
+            bool(ui.find("region", "Your group for this task")) and [row.split(" ")[0] for row in listed]
+            == ["Chief", "Market", "Financial"] and all(len(row.split(" ")) > 4 for row in listed)
+            and not w.host.scalar("SELECT count(*) FROM agents"),
+            observed=listed, shot=True)
+
+    w.host.stop()
+    ui.click("button", "Start task")
+    alert = w.wait("a Start that cannot reach the Host says so", lambda: [
+        t for t in (ui.evaluate("Array.from(document.querySelectorAll('[role=alert]')).map(e=>e.innerText)") or [])
+        if t.strip()])
+    w.check("a Start that fails hires nobody and sends nothing, and keeps the brief",
+            not w.host.scalar("SELECT count(*) FROM agents") and not w.host.scalar("SELECT count(*) FROM messages")
+            and "buy or lease" in ui.value("textbox", "Your first brief"),
+            observed={"agents": w.host.scalar("SELECT count(*) FROM agents"),
+                      "messages": w.host.scalar("SELECT count(*) FROM messages")}, detail=alert, shot=True)
+    w.host.start()
+    w.wait("the page is back with the Host", lambda: ui.find("button", "App settings"))
+    w.wait("Start task is offered again", lambda: ui.find("button", "Start task")
+           and not ui.property("button", "Start task", "disabled"))
+    ui.click("button", "Start task")
+    w.wait("Start task opens the coordinator's conversation", lambda: ui.find("log", f"Conversation with {LEAD}"))
+    hired = sorted(r["name"] for r in w.host.rows("SELECT name FROM agents"))
+    w.check("Start hires the group of three exactly once",
+            hired == sorted([LEAD, MARKET, FINANCE]), observed=hired)
+    w.wait("the coordinator's hand-off is live", lambda: card_text(w).count(CAR_Q) == 2)
+    faces = ui.evaluate("document.querySelectorAll('.handoff__card .avatar').length")
+    talk = between(w)
+    w.check("the coordinator asks both colleagues on its first turn, in one message, and the person sees the card",
+            [(m["from"], m["to"], m["text"]) for m in talk]
+            == [(LEAD, MARKET, CAR_Q), (LEAD, FINANCE, CAR_Q)] and faces == 2
+            and bool(ui.find("region", "Asked 2 colleagues")),
+            observed={"talk": [(m["from"], m["to"]) for m in talk], "faces": faces}, shot=True)
+    w.wait("the status line says who it waits for", lambda: "waiting for" in working_line(w))
+    w.check("under the coordinator a status line names both colleagues it waits for",
+            working_line(w).startswith(f"Messaged {MARKET} and {FINANCE}, waiting for"),
+            observed=re.sub(r"\d+s", "Ns", working_line(w)))
+    show(w, "Today")
+    w.wait("Today lists the coordinator's conversation as running", lambda: LEAD in running_text(w))
+    w.check("behind the conversation, Today shows the group's work as running",
+            LEAD in running_text(w), observed=LEAD in running_text(w), shot=True)
+    open_agent(w, LEAD)
+
+    researcher.set()
+    w.wait("the card shows Market Researcher's answer", lambda: RESEARCHER_SAYS in card_text(w))
+    analyst.set()
+    w.wait("the result reaches the person", lambda: CAR_RESULT in conversation(w))
+    ended = settled(w, 1, "the group's conversation settles")
+    w.check("the coordinator comes back with one result after both answered, and the run ends there",
+            said(w, LEAD)[-1] == CAR_RESULT and ended[-1]["status"] == "done"
+            and [m["from"] for m in between(w)].count(MARKET) == 1
+            and [m["from"] for m in between(w)].count(FINANCE) == 1,
+            observed={"outcome": ended[-1]["status"], "colleagues": sorted(m["from"] for m in between(w)
+                                                                             if m["from"] != LEAD)},
+            detail={"modelCalls": len(w.model.calls), "said": said(w, LEAD)}, shot=True)
+    no_unscripted(w)
+
+
 SCENARIOS: dict[str, Scenario] = {
     "resume": Scenario(scenario_resume, "A person queues two messages while an agent is paused and resumes it; "
                        "paused work calls no model, and Resume answers each message without duplicating its prompt.",
@@ -2206,6 +2320,23 @@ SCENARIOS: dict[str, Scenario] = {
         "when the other update ends, the panel offers main's new build and claims nothing as its own",
         "an updater that does not answer leaves the outcome unknown, and nothing is sent twice",
     ), updater=True),
+    "firstgroup": Scenario(scenario_firstgroup, "A person picks a suggested first task; the Start step names the "
+                           "three agents it will hire and what each is for; a Start that cannot reach the Host "
+                           "hires nobody; Start then hires the three exactly once and opens the coordinator's "
+                           "conversation, where the coordinator asks both colleagues at once, the live hand-off "
+                           "card and status line show it, Today shows it running, and one result comes back.",
+    (
+        "the first step says a task goes to a group of three and keeps Create one agent",
+        "the suggested brief asks both colleagues at once and does not open by asking the person",
+        "the Start step names the three it will hire and what each is for, before any is hired",
+        "a Start that fails hires nobody and sends nothing, and keeps the brief",
+        "Start hires the group of three exactly once",
+        "the coordinator asks both colleagues on its first turn, in one message, and the person sees the card",
+        "under the coordinator a status line names both colleagues it waits for",
+        "behind the conversation, Today shows the group's work as running",
+        "the coordinator comes back with one result after both answered, and the run ends there",
+        "every model call was one the scenario scripted",
+    )),
     "newagent": Scenario(scenario_newagent, "A person opens New agent in a 1280 by 820 window and creates an agent "
                          "with a keyboard press on its one Create agent button, which is on screen without "
                          "scrolling; a press with no name creates nothing.",

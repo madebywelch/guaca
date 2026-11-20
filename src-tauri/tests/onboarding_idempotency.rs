@@ -65,3 +65,63 @@ async fn lost_hire_and_send_replies_return_the_original_receipts() {
     let two = call("hire_agents", legacy_hire).await;
     assert_ne!(one["ok"][0]["id"], two["ok"][0]["id"]);
 }
+
+#[tokio::test]
+async fn a_starter_group_is_hired_whole_once_or_not_at_all() {
+    let dir = tempfile::tempdir().unwrap();
+    let bound = guac_lib::server::bind(guac_lib::server::Settings {
+        root: dir.path().to_path_buf(),
+        bind: "127.0.0.1:0".parse().unwrap(),
+        token: "test-token".into(),
+        web: None,
+        origin: None,
+        updater: None,
+    })
+    .await
+    .unwrap();
+    let addr = bound.addr;
+    tokio::spawn(bound.serve());
+    let client = reqwest::Client::new();
+    let call = |name: &'static str, args: Value| {
+        let client = client.clone();
+        async move {
+            client
+                .post(format!("http://{addr}/v1/call"))
+                .bearer_auth("test-token")
+                .json(&json!({"name": name, "args": args}))
+                .send()
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap()
+        }
+    };
+    let draft = |name: &str| json!({"name": name, "avatar": "avocado", "color": "#7ab55c", "model": "", "systemPrompt": "Help."});
+    let groups = call("list_groups", json!({})).await;
+    let group = groups["ok"][0]["id"].as_str().unwrap();
+    let roster = || async { call("list_agents", json!({})).await["ok"].as_array().unwrap().len() };
+
+    let broken = json!({"groupId": group, "idempotencyKey": "first-group",
+        "drafts": [draft("Lead"), draft(""), draft("Critic")]});
+    assert!(call("hire_agents", broken).await["err"].is_object());
+    assert_eq!(roster().await, 0, "one draft the host refuses hires none of the group");
+
+    let hire = json!({"groupId": group, "idempotencyKey": "first-group",
+        "drafts": [draft("Lead"), draft("Worker"), draft("Critic")]});
+    let (first, retry) = tokio::join!(call("hire_agents", hire.clone()), call("hire_agents", hire));
+    let names = |reply: &Value| -> Vec<String> {
+        reply["ok"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|card| card["name"].as_str().unwrap().into())
+            .collect()
+    };
+    assert_eq!(names(&first), ["Lead", "Worker", "Critic"]);
+    let ids = |reply: &Value| -> Vec<Value> {
+        reply["ok"].as_array().unwrap().iter().map(|card| card["id"].clone()).collect()
+    };
+    assert_eq!(ids(&first), ids(&retry), "a lost reply's retry answers with the same three agents");
+    assert_eq!(roster().await, 3);
+}

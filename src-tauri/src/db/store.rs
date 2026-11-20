@@ -536,42 +536,61 @@ impl Store {
         Ok(card)
     }
 
-    pub fn create_onboarding_agent(
+    pub fn create_onboarding_agents(
         &self,
         key: &str,
         fingerprint: &str,
-        draft: &CleanDraft,
-    ) -> Result<(AgentCard, bool), StoreError> {
+        drafts: &[CleanDraft],
+    ) -> Result<(Vec<AgentCard>, bool), StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let existing: Option<(String, String)> = tx
-            .query_row(
-                "SELECT fingerprint,agent_id FROM onboarding_hires WHERE key=?1",
-                [key],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
+        let stored: Option<String> = tx
+            .query_row("SELECT fingerprint FROM onboarding_hires WHERE key=?1", [key], |row| {
+                row.get(0)
+            })
             .optional()?;
-        if let Some((stored, id)) = existing {
+        if let Some(stored) = stored {
             if stored != fingerprint {
                 return Err(StoreError::Decision(
                     "This idempotency key was already used for another hire.".into(),
                 ));
             }
-            let card = tx.query_row(
-                &format!("SELECT {AGENT_COLUMNS} FROM agents WHERE id=?1"),
-                [id],
-                row_to_card,
-            )??;
-            return Ok((card, false));
+            let ids = tx
+                .prepare(
+                    "SELECT agent_id FROM onboarding_hire_agents WHERE key=?1 ORDER BY position",
+                )?
+                .query_map([key], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            let cards = ids
+                .iter()
+                .map(|id| {
+                    tx.query_row(
+                        &format!("SELECT {AGENT_COLUMNS} FROM agents WHERE id=?1"),
+                        [id],
+                        row_to_card,
+                    )?
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            return Ok((cards, false));
         }
-        let card = new_card(draft, bottom_of_rail(&tx)?, fallback_group(&tx, None)?);
-        insert_agent(&tx, &card)?;
+        let first = bottom_of_rail(&tx)?;
+        let fallback = fallback_group(&tx, None)?;
         tx.execute(
-            "INSERT INTO onboarding_hires (key,fingerprint,agent_id) VALUES (?1,?2,?3)",
-            params![key, fingerprint, card.id.to_string()],
+            "INSERT INTO onboarding_hires (key,fingerprint) VALUES (?1,?2)",
+            params![key, fingerprint],
         )?;
+        let mut cards = Vec::with_capacity(drafts.len());
+        for (position, draft) in drafts.iter().enumerate() {
+            let card = new_card(draft, first.saturating_add(position as i32), fallback);
+            insert_agent(&tx, &card)?;
+            tx.execute(
+                "INSERT INTO onboarding_hire_agents (key,position,agent_id) VALUES (?1,?2,?3)",
+                params![key, position as i64, card.id.to_string()],
+            )?;
+            cards.push(card);
+        }
         tx.commit()?;
-        Ok((card, true))
+        Ok((cards, true))
     }
 
     pub fn create_agents(&self, drafts: &[CleanDraft]) -> Result<Vec<AgentCard>, StoreError> {
@@ -4437,16 +4456,66 @@ mod tests {
     #[test]
     fn onboarding_hire_survives_lost_reply_and_reopen() {
         let f = fixture();
-        let (first, created) =
-            f.store.create_onboarding_agent("hire", "same", &draft("Worker")).unwrap();
+        let group = [draft("Lead"), draft("Worker"), draft("Critic")];
+        let (first, created) = f.store.create_onboarding_agents("hire", "same", &group).unwrap();
         assert!(created);
         let reopened = Store::open(&f._dir.path().join("guac.db")).unwrap();
-        let (again, created) =
-            reopened.create_onboarding_agent("hire", "same", &draft("Worker 2")).unwrap();
+        let (again, created) = reopened
+            .create_onboarding_agents("hire", "same", &[draft("Lead 2"), draft("Worker 2")])
+            .unwrap();
         assert!(!created);
-        assert_eq!(first.id, again.id);
-        assert_eq!(reopened.list_agents().unwrap().len(), 1);
-        assert!(reopened.create_onboarding_agent("hire", "different", &draft("Other")).is_err());
+        assert_eq!(
+            again.iter().map(|card| card.id).collect::<Vec<_>>(),
+            first.iter().map(|card| card.id).collect::<Vec<_>>(),
+            "a retry answers with the same group, in the order it was asked for"
+        );
+        assert_eq!(reopened.list_agents().unwrap().len(), 3);
+        assert!(reopened.create_onboarding_agents("hire", "different", &[draft("Other")]).is_err());
+        assert_eq!(reopened.list_agents().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn an_onboarding_hire_that_fails_part_way_leaves_no_agent_and_no_receipt() {
+        let f = fixture();
+        f.store.create_agent(&draft("Taken")).unwrap();
+        let group = [draft("Lead"), draft("Taken"), draft("Critic")];
+        assert!(f.store.create_onboarding_agents("hire", "same", &group).is_err());
+        assert_eq!(
+            f.store
+                .list_agents()
+                .unwrap()
+                .iter()
+                .map(|card| card.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Taken"],
+            "a group is hired whole or not at all"
+        );
+        let retry = [draft("Lead"), draft("Worker"), draft("Critic")];
+        let (cards, created) = f.store.create_onboarding_agents("hire", "same", &retry).unwrap();
+        assert!(created, "the failed attempt kept no receipt, so the key is still free");
+        assert_eq!(cards.len(), 3);
+    }
+
+    #[test]
+    fn a_receipt_written_before_groups_were_hired_still_answers_its_retry() {
+        let f = fixture();
+        let worker = f.store.create_agent(&draft("Worker")).unwrap();
+        let mut conn = f.store.conn().unwrap();
+        conn.execute_batch(
+            "DROP TABLE onboarding_hire_agents; ALTER TABLE onboarding_hires ADD COLUMN agent_id TEXT; PRAGMA user_version=79;",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO onboarding_hires (key,fingerprint,agent_id) VALUES ('hire','same',?1)",
+            [worker.id.to_string()],
+        )
+        .unwrap();
+        migrations::run(&mut conn).unwrap();
+        drop(conn);
+        let (cards, created) =
+            f.store.create_onboarding_agents("hire", "same", &[draft("Worker 2")]).unwrap();
+        assert!(!created);
+        assert_eq!(cards.iter().map(|card| card.id).collect::<Vec<_>>(), [worker.id]);
     }
 
     #[test]
@@ -4731,7 +4800,7 @@ mod tests {
         f.store.discard_agent(discarded.id, 1_000).unwrap();
         f.store.create_connector(&key_for(mine.group_id, "TOKEN", "private-token")).unwrap();
         let mut conn = f.store.conn().unwrap();
-        conn.execute_batch("ALTER TABLE agents DROP COLUMN tidied_through; ALTER TABLE agents DROP COLUMN last_tidy_at; ALTER TABLE groups DROP COLUMN tidy_since; ALTER TABLE groups DROP COLUMN tidy_hour; ALTER TABLE usage DROP COLUMN cached; ALTER TABLE pending_runs DROP COLUMN started_at; DROP TABLE permission_grants; ALTER TABLE decisions DROP COLUMN origin_ref; ALTER TABLE decisions DROP COLUMN origin; DROP TABLE outbox; DROP TABLE outcomes; ALTER TABLE decisions DROP COLUMN filed_run; DROP TABLE onboarding_hires; DROP TABLE operator_sends; DROP TRIGGER routine_delete_history; DROP TABLE routine_occurrences; ALTER TABLE plugins DROP COLUMN grant_generation; DROP TABLE pending_sandbox_resume; DROP TABLE resource_ledger; DROP TABLE workspace_identity; DROP TABLE approval_policies; ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
+        conn.execute_batch("DROP TABLE onboarding_hire_agents; ALTER TABLE onboarding_hires ADD COLUMN agent_id TEXT; ALTER TABLE agents DROP COLUMN tidied_through; ALTER TABLE agents DROP COLUMN last_tidy_at; ALTER TABLE groups DROP COLUMN tidy_since; ALTER TABLE groups DROP COLUMN tidy_hour; ALTER TABLE usage DROP COLUMN cached; ALTER TABLE pending_runs DROP COLUMN started_at; DROP TABLE permission_grants; ALTER TABLE decisions DROP COLUMN origin_ref; ALTER TABLE decisions DROP COLUMN origin; DROP TABLE outbox; DROP TABLE outcomes; ALTER TABLE decisions DROP COLUMN filed_run; DROP TABLE onboarding_hires; DROP TABLE operator_sends; DROP TRIGGER routine_delete_history; DROP TABLE routine_occurrences; ALTER TABLE plugins DROP COLUMN grant_generation; DROP TABLE pending_sandbox_resume; DROP TABLE resource_ledger; DROP TABLE workspace_identity; DROP TABLE approval_policies; ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
         migrations::run(&mut conn).unwrap();
         drop(conn);
         assert_eq!(f.store.connector_env(mine.id).unwrap().get("TOKEN").unwrap(), "private-token");

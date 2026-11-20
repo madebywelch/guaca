@@ -46,9 +46,33 @@ describe("the first task", () => {
     expect(readFirstTask()).toEqual(draft);
   });
 
-  it("offers one existing preset per task, without inventing a new agent prompt", () => {
+  it("hires three different existing presets per task, led by the same coordinator", () => {
     for (const task of FIRST_TASKS) {
-      expect(HIREABLE.filter((agent) => agent.id === task.agent)).toHaveLength(1);
+      const ids = task.group.map((member) => member.agent);
+      expect(new Set(ids).size, task.id).toBe(3);
+      expect(ids[0], task.id).toBe("chief-of-staff");
+      for (const id of ids)
+        expect(
+          HIREABLE.filter((agent) => agent.id === id),
+          id,
+        ).toHaveLength(1);
     }
+  });
+
+  it("writes each suggested brief so the coordinator asks both colleagues before it asks you", () => {
+    for (const task of FIRST_TASKS.filter((entry) => entry.brief)) {
+      const [, first, second] = task.group.map(
+        (member) => HIREABLE.find((agent) => agent.id === member.agent)!.name,
+      );
+      expect(task.brief, task.id).toContain(`Ask ${first} and ${second} at the same time`);
+      expect(task.brief.match(/\bask me\b/gi) ?? [], task.id).toHaveLength(1);
+      expect(task.brief, task.id).toMatch(
+        /Ask me a question only if you cannot go on without one\.$/,
+      );
+    }
+  });
+
+  it("writes no em dash in anything onboarding shows", () => {
+    for (const task of FIRST_TASKS) expect(JSON.stringify(task), task.id).not.toContain("\u2014");
   });
 });

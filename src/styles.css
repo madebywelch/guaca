@@ -5099,8 +5099,7 @@ input[type="file"]:disabled {
   outline: none;
 }
 
-.onboarding-intro p,
-.onboarding-agent p {
+.onboarding-intro p {
   color: var(--muted);
   line-height: var(--lead-read);
   margin: 0;
@@ -5262,20 +5261,44 @@ input[type="file"]:disabled {
   font-size: var(--type-support);
 }
 
-.onboarding-agent {
-  display: flex;
-  align-items: center;
-  gap: var(--space-6);
-  padding: var(--space-7);
+.onboarding-group {
+  padding: var(--space-6) var(--space-7);
   margin-bottom: var(--space-7);
   border: 1px solid var(--rule);
   border-radius: var(--radius-card);
 }
 
-.onboarding-agent h2 {
-  font-size: var(--type-title);
+.onboarding-group h2 {
+  font-weight: var(--weight-regular);
+  margin: 0 0 var(--space-5);
+}
+
+.onboarding-group ul {
+  display: grid;
+  gap: var(--space-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.onboarding-group li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: var(--space-6);
+  align-items: center;
+}
+
+.onboarding-group li > :first-child {
+  grid-row: span 2;
+}
+
+.onboarding-group strong {
   font-weight: var(--weight-strong);
-  margin: var(--space-2) 0 var(--space-3);
+}
+
+.onboarding-group li span {
+  color: var(--muted);
+  line-height: var(--lead-read);
 }
 
 .onboarding .banner {

@@ -2140,6 +2140,20 @@ ALTER TABLE agents ADD COLUMN last_tidy_at INTEGER;
 ALTER TABLE agents ADD COLUMN tidied_through INTEGER;
 "#,
     ),
+    (
+        80,
+        r#"
+CREATE TABLE onboarding_hire_agents (
+    key TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    agent_id TEXT NOT NULL,
+    PRIMARY KEY (key, position)
+);
+INSERT INTO onboarding_hire_agents (key, position, agent_id)
+    SELECT key, 0, agent_id FROM onboarding_hires;
+ALTER TABLE onboarding_hires DROP COLUMN agent_id;
+"#,
+    ),
 ];
 
 pub const DEFAULT_GROUP_ID: &str = "00000000-0000-4000-8000-000000000001";
@@ -2316,6 +2330,7 @@ mod tests {
         (77, "868e1c3a757dc982e46c4300d6422f5d96991751fb310d6b8c7eb7ffa8be9156"),
         (78, "fc778794fb370b571ac5821e98c871c8172fa9f933bb1bd99ca48b4b6b617b67"),
         (79, "554ec9b4ff4a5bc9998ea33a07febc1abff3b79c452f248276987f15b1105348"),
+        (80, "cfb92921daf974ffd88d8415551947ce65b6214fb8d895b9add4c29de403e54b"),
     ];
 
     fn memory() -> Connection {
