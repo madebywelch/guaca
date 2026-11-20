@@ -4,17 +4,19 @@ mod events;
 pub mod manifest;
 pub mod mrkdwn;
 
+use std::collections::{BTreeSet, VecDeque};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use serde_json::{json, Value};
+use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::Message;
 
 use self::api::{Api, Body, Failure, Token};
 use crate::domain::place::{
     Abilities, AdapterId, Buttons, Card, HeardKey, Mark, OutsideUser, PlaceKey, PostSafety, Posted,
-    RelayTag, Spot,
+    RelayTag, Spot, ThreadKey,
 };
 use crate::places::{Adapter, AdapterError, Ears, Pending, SendError};
 use crate::secrets::Secret;
@@ -30,6 +32,7 @@ const LIMITED_TRIES: usize = 6;
 const LIMITED_WAIT: Duration = Duration::from_secs(1);
 const QUIET: Duration = Duration::from_secs(30);
 const RECONNECT_PAUSE: Duration = Duration::from_secs(1);
+const MAX_BUFFERED_ENVELOPES: usize = 256;
 
 pub struct SlackAdapter {
     api: Api,
@@ -143,10 +146,37 @@ impl SlackAdapter {
             .map_err(Failure::into_adapter)?;
         let url = opened["url"].as_str().ok_or_else(|| Failure::Garbled.into_adapter())?;
         let (mut socket, _) = tokio_tungstenite::connect_async(url).await.map_err(|_| unready())?;
+        let mut sweep: Option<Pending<'_, Result<(), AdapterError>>> = None;
         let mut ready = false;
         let mut pinged = false;
+        let mut deadline = Instant::now() + self.quiet;
+        let mut buffered = VecDeque::new();
         loop {
-            let frame = match tokio::time::timeout(self.quiet, socket.next()).await {
+            if ready && sweep.is_none() {
+                if let Some(envelope) = buffered.pop_front() {
+                    if let Some(ack) = self.ack(&envelope, ears).await {
+                        if socket.send(ack).await.is_err() {
+                            break;
+                        }
+                    }
+                    continue;
+                }
+            }
+            let read = tokio::time::timeout_at(deadline, socket.next());
+            let next = if let Some(pending) = &mut sweep {
+                tokio::select! {
+                    outcome = pending => {
+                        outcome?;
+                        sweep = None;
+                        continue;
+                    }
+                    next = read => next,
+                }
+            } else {
+                read.await
+            };
+            deadline = Instant::now() + self.quiet;
+            let frame = match next {
                 Err(_) if pinged => {
                     tracing::warn!("Slack stopped answering on the socket");
                     break;
@@ -162,27 +192,38 @@ impl SlackAdapter {
                 Ok(_) => break,
             };
             pinged = false;
-            let Message::Text(text) = frame else { continue };
+            let text = match frame {
+                Message::Text(text) => text,
+                Message::Ping(_) => {
+                    if socket.flush().await.is_err() {
+                        break;
+                    }
+                    continue;
+                }
+                Message::Close(_) => break,
+                _ => continue,
+            };
             let Ok(envelope) = serde_json::from_str::<Value>(text.as_str()) else { continue };
             match envelope["type"].as_str() {
-                Some("hello") => ready = true,
+                Some("hello") if !ready => {
+                    ready = true;
+                    sweep = Some(Box::pin(ears.connected()));
+                }
+                Some("hello") => {}
                 Some("disconnect") if envelope["reason"].as_str() == Some("link_disabled") => {
                     return Err(socket_off());
                 }
                 Some("disconnect") => return Ok(Ended::Asked),
-                _ => {
-                    let Some(id) = envelope["envelope_id"].as_str() else { continue };
-                    if !self.take(&envelope, ears).await {
+                _ if envelope["envelope_id"].is_string() => {
+                    if buffered.len() >= MAX_BUFFERED_ENVELOPES {
                         tracing::warn!(
-                            "Guaca did not record a Slack event, so it is not acknowledged and Slack delivers it again"
+                            "Slack sent more events than Guaca could buffer during catch-up"
                         );
-                        continue;
-                    }
-                    let ack = json!({ "envelope_id": id }).to_string();
-                    if socket.send(Message::text(ack)).await.is_err() {
                         break;
                     }
+                    buffered.push_back(envelope);
                 }
+                _ => {}
             }
         }
         if ready {
@@ -190,6 +231,17 @@ impl SlackAdapter {
         } else {
             Err(unready())
         }
+    }
+
+    async fn ack(&self, envelope: &Value, ears: &Ears) -> Option<Message> {
+        let id = envelope["envelope_id"].as_str()?;
+        if self.take(envelope, ears).await {
+            return Some(Message::text(json!({ "envelope_id": id }).to_string()));
+        }
+        tracing::warn!(
+            "Guaca did not record a Slack event, so it is not acknowledged and Slack delivers it again"
+        );
+        None
     }
 
     async fn take(&self, envelope: &Value, ears: &Ears) -> bool {
@@ -323,19 +375,21 @@ impl Adapter for SlackAdapter {
     fn catch_up<'a>(
         &'a self,
         place: &'a PlaceKey,
-        after: Option<&'a HeardKey>,
+        recent_threads: &'a [ThreadKey],
+        since_ms: i64,
         ears: &'a Ears,
     ) -> Pending<'a, Result<(), AdapterError>> {
         Box::pin(async move {
             let (team, channel) = events::split_place(place).ok_or_else(not_slack)?;
-            let oldest =
-                after.and_then(|key| events::split_ref(&key.0)).map(|(_, ts)| ts.to_string());
             let bot = self.bot_user().await.map_err(Failure::into_adapter)?;
-            let mut form = vec![("channel", channel.to_string()), ("limit", PAGE.to_string())];
-            if let Some(oldest) = &oldest {
-                form.push(("oldest", oldest.clone()));
-                form.push(("inclusive", "false".to_string()));
-            }
+            let seconds = since_ms.div_euclid(1000);
+            let micros = since_ms.rem_euclid(1000) * 1000;
+            let form = vec![
+                ("channel", channel.to_string()),
+                ("limit", PAGE.to_string()),
+                ("oldest", format!("{seconds}.{micros:06}")),
+                ("inclusive", "true".into()),
+            ];
             let (mut messages, whole) = self
                 .pages("conversations.history", form.clone(), true)
                 .await
@@ -343,11 +397,7 @@ impl Adapter for SlackAdapter {
             if !whole {
                 return Err(too_much());
             }
-            let parents: Vec<String> = messages
-                .iter()
-                .filter(|message| message["reply_count"].as_u64().unwrap_or_default() > 0)
-                .filter_map(|message| message["ts"].as_str().map(str::to_string))
-                .collect();
+            let parents: BTreeSet<_> = recent_threads.iter().map(|thread| &thread.0).collect();
             for parent in parents {
                 let mut replies_form = form.clone();
                 replies_form.push(("ts", parent.clone()));
@@ -364,14 +414,10 @@ impl Adapter for SlackAdapter {
                         .filter(|reply| reply["ts"].as_str() != Some(parent.as_str())),
                 );
             }
-            let floor = oldest.as_deref().map(events::ts_order);
             let mut heard: Vec<_> = messages
                 .iter()
-                .filter(|message| {
-                    let ts = message["ts"].as_str().map(events::ts_order);
-                    floor.is_none_or(|floor| ts.is_some_and(|ts| ts > floor))
-                })
                 .filter_map(|message| events::from_history(team, channel, message, Some(&bot)))
+                .filter(|heard| heard.at_ms >= since_ms)
                 .collect();
             heard.sort_by_key(|heard| {
                 events::split_ref(&heard.key.0)
