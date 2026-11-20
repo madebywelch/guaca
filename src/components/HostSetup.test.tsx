@@ -352,7 +352,7 @@ describe("a host whose engine is gone for good", () => {
     label: "Docker Desktop",
     action: "Open Docker Desktop",
   };
-  const plan = { from: COLIMA, to: DESKTOP, data: false };
+  const plan = { from: COLIMA, to: DESKTOP, toEngine: "desktop-engine", data: false };
   const way = { name: "Set up a new host in Docker Desktop" };
   async function giveUp() {
     resume.mockRejectedValue(colimaDown);
@@ -422,22 +422,69 @@ describe("a host whose engine is gone for good", () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0);
       });
-      expect(startElsewhere).toHaveBeenCalledWith("desktop-linux");
+      expect(startElsewhere).toHaveBeenCalledWith("desktop-linux", "desktop-engine");
       expect(persist).toHaveBeenCalledWith(LOCAL, "local");
       expect(screen.getByText("Workspace mounted")).toBeTruthy();
     } finally {
       vi.useRealTimers();
     }
   });
-  it("is offered a new host when the person chooses another host while waiting", async () => {
-    elsewhere.mockResolvedValue(plan);
+  it("stops waiting once the person chooses another host, so the old host cannot be attached behind the choice", async () => {
+    vi.useFakeTimers();
+    try {
+      elsewhere.mockResolvedValue(plan);
+      resume.mockRejectedValue(colimaDown);
+      savedLocalHost();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Choose another host" }));
+      const asked = resume.mock.calls.length;
+      resume.mockResolvedValue(LOCAL);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(resume.mock.calls.length).toBe(asked);
+      expect(activate).not.toHaveBeenCalled();
+      expect(screen.queryByText("Workspace mounted")).toBeNull();
+      expect(screen.getByRole("button", way)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("says the new host was set up when it does not answer, and offers it no second time", async () => {
+    vi.useFakeTimers();
+    try {
+      elsewhere.mockResolvedValue(plan);
+      startElsewhere.mockResolvedValue(LOCAL);
+      probe.mockRejectedValue(new Error("nothing answered."));
+      await giveUp();
+      fireEvent.click(screen.getByRole("button", way));
+      fireEvent.click(screen.getByRole("checkbox"));
+      fireEvent.click(screen.getByRole("button", { name: "Set up the new host" }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(
+        screen.getByText(/The new host in Docker Desktop was set up, but it did not answer/),
+      ).toBeTruthy();
+      expect(screen.queryByRole("button", way)).toBeNull();
+      expect(persist).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("says when it could not check the other engines", async () => {
+    elsewhere.mockRejectedValue(new Error("Docker could not finish"));
     resume.mockRejectedValue(colimaDown);
     savedLocalHost();
     fireEvent.click(await screen.findByRole("button", { name: "Choose another host" }));
-    expect(await screen.findByRole("button", way)).toBeTruthy();
+    expect(
+      await screen.findByText("Guaca could not check the other Docker engines on this Mac."),
+    ).toBeTruthy();
   });
   it("says so when no other engine is running", async () => {
-    elsewhere.mockResolvedValue({ from: COLIMA, to: null, data: false });
+    elsewhere.mockResolvedValue({ from: COLIMA, to: null, toEngine: null, data: false });
     resume.mockRejectedValue(colimaDown);
     savedLocalHost();
     fireEvent.click(await screen.findByRole("button", { name: "Choose another host" }));

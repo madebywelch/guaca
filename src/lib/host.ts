@@ -27,6 +27,7 @@ export interface DockerStatus {
 export interface Elsewhere {
   from: Engine | null;
   to: Engine | null;
+  toEngine: string | null;
   data: boolean;
 }
 
@@ -94,8 +95,8 @@ export const localHost = {
   resume: () => invokeLocal<Remote>("local_host_resume"),
   choose: (context: string) => invokeLocal<Remote>("local_host_choose", { context }),
   elsewhere: () => invokeLocal<Elsewhere>("local_host_elsewhere"),
-  startElsewhere: (context: string) =>
-    invokeLocal<Remote>("local_host_start_elsewhere", { context }),
+  startElsewhere: (context: string, engine: string) =>
+    invokeLocal<Remote>("local_host_start_elsewhere", { context, engine }),
   openDocker: (context?: string) => invokeLocal<void>("open_docker", { context: context ?? null }),
 };
 export interface AppSource {

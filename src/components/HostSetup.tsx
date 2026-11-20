@@ -63,12 +63,20 @@ export function StartOver({ onConnected }: { onConnected?: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [imageFailed, setImageFailed] = useState(false);
+  const [looked, setLooked] = useState(true);
+  const [unanswered, setUnanswered] = useState("");
   useEffect(() => {
+    if (!looked) return;
     void localHost
       .elsewhere()
       .then(setPlan)
-      .catch(() => setPlan(null));
-  }, []);
+      .catch(() => setLooked(false));
+  }, [looked]);
+  if (unanswered) return <p role="alert">{unanswered}</p>;
+  if (!looked)
+    return (
+      <p className="field__hint">Guaca could not check the other Docker engines on this Mac.</p>
+    );
   const from = plan?.from;
   if (!from) return null;
   const to = plan.to;
@@ -87,13 +95,22 @@ export function StartOver({ onConnected }: { onConnected?: () => void }) {
     setBusy(true);
     setError("");
     setImageFailed(false);
+    let connection: Remote;
     try {
-      const connection = await localHost.startElsewhere(to.context);
-      await probe(connection);
-      commit(connection, "local", onConnected);
+      connection = await localHost.startElsewhere(to.context, plan.toEngine ?? "");
     } catch (cause) {
       setError(errorMessage(cause));
       setImageFailed(asStall(cause)?.kind === "image");
+      setBusy(false);
+      return;
+    }
+    try {
+      await probe(connection);
+      commit(connection, "local", onConnected);
+    } catch (cause) {
+      setUnanswered(
+        `The new host in ${to.label} was set up, but it did not answer: ${errorMessage(cause)} Go back to your host to try again.`,
+      );
     } finally {
       setBusy(false);
     }
@@ -186,6 +203,7 @@ function LocalReconnect({ onReady }: { onReady: () => void }) {
   const [choosing, setChoosing] = useState<"another" | "new" | null>(null);
   const [opening, setOpening] = useState("");
   useEffect(() => {
+    if (choosing) return;
     let disposed = false;
     let pause: ReturnType<typeof setTimeout> | undefined;
     const waited = () =>
@@ -222,7 +240,7 @@ function LocalReconnect({ onReady }: { onReady: () => void }) {
       disposed = true;
       clearTimeout(pause);
     };
-  }, [attempt, chosen, onReady]);
+  }, [attempt, chosen, choosing, onReady]);
   const retry = () => {
     setChoosing(null);
     setOpening("");

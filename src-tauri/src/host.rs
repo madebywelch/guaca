@@ -135,6 +135,8 @@ pub struct Operation {
     #[serde(default)]
     pub preserved: Option<String>,
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine: Option<String>,
 }
 
 impl Operation {
@@ -170,6 +172,7 @@ pub struct Status {
 pub struct Elsewhere {
     pub from: Option<Named>,
     pub to: Option<Named>,
+    pub to_engine: Option<String>,
     pub data: bool,
 }
 
@@ -570,16 +573,19 @@ impl LocalHost {
             if recorded.as_ref().is_some_and(|engine| engine.id == id) {
                 continue;
             }
-            to = Some((context, endpoint));
+            to = Some(Engine { context, endpoint, id });
             break;
         }
         let data = match &to {
-            Some((_, endpoint)) => self.holds(endpoint).await || self.keeps_data(endpoint).await,
+            Some(engine) => {
+                self.holds(&engine.endpoint).await || self.keeps_data(&engine.endpoint).await
+            }
             None => false,
         };
         Ok(Elsewhere {
             from: recorded.map(|engine| engine.kind().named(&engine.context)),
-            to: to.map(|(context, endpoint)| Kind::of(&context, &endpoint).named(&context)),
+            to_engine: to.as_ref().map(|engine| engine.id.clone()),
+            to: to.map(|engine| engine.kind().named(&engine.context)),
             data,
         })
     }
@@ -590,7 +596,11 @@ impl LocalHost {
             .is_ok_and(|names| names.lines().any(|name| name.trim() == self.spec.volume))
     }
 
-    pub async fn start_elsewhere(&self, context: &str) -> Result<Connection, Stall> {
+    pub async fn start_elsewhere(
+        &self,
+        context: &str,
+        expected: &str,
+    ) -> Result<Connection, Stall> {
         let _lock = self.lock.lock().await;
         let _process_lock = self.process_lock()?;
         let before = self.recorded();
@@ -608,6 +618,9 @@ impl LocalHost {
         let id = self.engine_id(&target.endpoint).await.map_err(|_| Stall::down(&target))?;
         if before.as_ref().is_some_and(|engine| engine.id == id) {
             return Err(recorded_there.into());
+        }
+        if id != expected {
+            return Err("That Docker engine changed since Guaca looked at it. Look again before setting up a new host.".into());
         }
         let target = Engine { id, ..target };
         *self.engine.lock() = Some(target.clone());
@@ -819,8 +832,13 @@ impl LocalHost {
         let Some(path) = &self.journal else {
             return Ok(None);
         };
+        let here = self.recorded().map(|engine| engine.id);
         match std::fs::read(path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).map(Some)
+            Ok(bytes) => serde_json::from_slice::<Operation>(&bytes)
+                .map(|op| match (&op.engine, &here) {
+                    (Some(there), Some(here)) if there != here => None,
+                    _ => Some(op),
+                })
                 .map_err(|_| "The host update journal is unreadable. Review the Docker host and backups before retrying.".into()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(format!("Could not read host update progress: {e}")),
@@ -829,7 +847,11 @@ impl LocalHost {
 
     fn record(&self, operation: &Operation) -> Result<(), String> {
         if let Some(path) = &self.journal {
-            write_journal(path, operation)?;
+            let stamped = Operation {
+                engine: self.recorded().map(|engine| engine.id).or(operation.engine.clone()),
+                ..operation.clone()
+            };
+            write_journal(path, &stamped)?;
         }
         tracing::info!(
             container = %self.spec.name,
@@ -1109,6 +1131,7 @@ impl LocalHost {
             port: None,
             preserved: None,
             error: None,
+            engine: None,
         };
         let result = match self.admit(target, expected_origin, &mut op).await {
             Ok(port) => {
@@ -2039,6 +2062,7 @@ pub(crate) mod tests {
             port: Some(port),
             preserved: None,
             error: None,
+            engine: None,
         };
         host.record(&op).unwrap();
         op
@@ -2143,6 +2167,7 @@ pub(crate) mod tests {
             port: None,
             preserved: None,
             error: None,
+            engine: None,
         })
         .unwrap();
         assert!(host.stuck().unwrap_err().contains("saved-volume"));
@@ -2652,7 +2677,7 @@ pub(crate) mod tests {
         let plan = host.elsewhere().await.unwrap();
         assert_eq!(plan.from.unwrap().label, "Colima");
         assert_eq!(plan.to, None, "no running engine but the recorded one");
-        let refused = host.start_elsewhere("colima").await.err().unwrap();
+        let refused = host.start_elsewhere("colima", "colima-engine").await.err().unwrap();
         assert!(refused.message().contains("recorded in that Docker engine"), "{refused:?}");
         assert_eq!(engines.made_anything(), Vec::<Vec<String>>::new());
         assert_eq!(engines.recorded().unwrap().endpoint, COLIMA);
@@ -2673,7 +2698,7 @@ pub(crate) mod tests {
         let plan = host.elsewhere().await.unwrap();
         assert_eq!(plan.to.as_ref().unwrap().label, "Docker Desktop");
         assert!(plan.data, "Docker Desktop holds a stale volume of the same name");
-        host.start_elsewhere("desktop-linux").await.unwrap();
+        host.start_elsewhere("desktop-linux", "desktop-engine").await.unwrap();
         assert_eq!(
             engines.asked(COLIMA),
             Vec::<Vec<String>>::new(),
@@ -2694,11 +2719,78 @@ pub(crate) mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    async fn the_same_engine_under_another_name_is_not_somewhere_else() {
+        let alias = "unix:///fixture/.colima/default/alias.sock";
+        let engines = Engines::new(|state| {
+            state["contexts"] = json!([["colima", COLIMA], ["colima-alias", alias]]);
+            let same = state["engines"][COLIMA].clone();
+            state["engines"][alias] = same;
+            state["engines"][DESKTOP]["up"] = json!(false);
+        })
+        .await;
+        engines.record("colima", COLIMA, "colima-engine");
+        let host = engines.host(ALIAS);
+        assert_eq!(host.elsewhere().await.unwrap().to, None);
+        let refused = host.start_elsewhere("colima-alias", "colima-engine").await.err().unwrap();
+        assert!(refused.message().contains("recorded in that Docker engine"), "{refused:?}");
+        assert_eq!(engines.made_anything(), Vec::<Vec<String>>::new());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_engine_other_than_the_one_looked_at_is_refused() {
+        let engines = Engines::new(|state| state["engines"][COLIMA]["up"] = json!(false)).await;
+        engines.record("colima", COLIMA, "colima-engine");
+        let refused = engines
+            .host(ALIAS)
+            .start_elsewhere("desktop-linux", "an-earlier-engine")
+            .await
+            .err()
+            .unwrap();
+        assert!(refused.message().contains("changed since Guaca looked at it"), "{refused:?}");
+        assert_eq!(engines.made_anything(), Vec::<Vec<String>>::new());
+        assert_eq!(engines.recorded().unwrap().endpoint, COLIMA);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_old_hosts_update_journal_never_acts_on_the_new_host() {
+        for stage in [Stage::RecoveryNeeded, Stage::Starting, Stage::Verifying, Stage::Restoring] {
+            let engines = Engines::new(|state| {
+                state["engines"][COLIMA]["up"] = json!(false);
+                state["engines"][DESKTOP]["images"] =
+                    json!([image("sha256:aa", &[ALIAS], "abcdef1", env!("CARGO_PKG_VERSION"))]);
+            })
+            .await;
+            engines.record("colima", COLIMA, "colima-engine");
+            let host = engines.host(ALIAS);
+            interrupted(&host, stage, 1);
+            assert_eq!(host.operation().unwrap().unwrap().engine.as_deref(), Some("colima-engine"));
+            host.start_elsewhere("desktop-linux", "desktop-engine").await.unwrap();
+            assert!(host.operation().unwrap().is_none(), "{stage:?}");
+            host.resume().await.unwrap();
+            let touched: Vec<Vec<String>> = engines
+                .asked(DESKTOP)
+                .into_iter()
+                .filter(|call| {
+                    matches!(call[1].as_str(), "rm" | "stop") || call.iter().any(|a| a == "sh")
+                })
+                .collect();
+            assert_eq!(touched, Vec::<Vec<String>>::new(), "{stage:?}");
+            assert!(engines.state()["engines"][DESKTOP]["containers"]["fixture-host"].is_object());
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
     async fn a_new_host_elsewhere_that_fails_leaves_the_record_as_it_was() {
         let engines = Engines::new(|state| state["engines"][COLIMA]["up"] = json!(false)).await;
         engines.record("colima", COLIMA, "colima-engine");
         let host = engines.host(ALIAS);
-        assert!(matches!(host.start_elsewhere("desktop-linux").await, Err(Stall::Image { .. })));
+        assert!(matches!(
+            host.start_elsewhere("desktop-linux", "desktop-engine").await,
+            Err(Stall::Image { .. })
+        ));
         assert_eq!(engines.recorded().unwrap().endpoint, COLIMA);
         assert_eq!(engines.previous(), None);
         assert_eq!(host.engine_endpoint().as_deref(), Some(COLIMA));

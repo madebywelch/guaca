@@ -23,8 +23,9 @@ async fn local_host_elsewhere(state: tauri::State<'_, LocalHost>) -> Result<Else
 async fn local_host_start_elsewhere(
     state: tauri::State<'_, LocalHost>,
     context: String,
+    engine: String,
 ) -> Result<Connection, Stall> {
-    state.start_elsewhere(&context).await
+    state.start_elsewhere(&context, &engine).await
 }
 #[tauri::command]
 async fn local_host_choose(
