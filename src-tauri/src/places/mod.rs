@@ -84,3 +84,4 @@ impl Ears {
         (self.hear)(heard).await
     }
 }
+pub mod slack;
