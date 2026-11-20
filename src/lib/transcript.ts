@@ -281,7 +281,9 @@ export function withResults(rows: Row[], running: ReadonlySet<RunId>): Row[] {
     if (
       parts.some(
         (part) =>
-          part.type === "notice" && (part.kind === "guardStop" || part.kind === "interrupted"),
+          part.type === "notice" &&
+          (part.kind === "interrupted" ||
+            (part.kind === "guardStop" && part.text.startsWith("You stopped this conversation"))),
       )
     ) {
       cutShort.add(runId);

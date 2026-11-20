@@ -60,7 +60,11 @@ export function Markdown({
             return interactive ? content : <div inert>{content}</div>;
           }
         }
-        return <pre className="md__pre">{children}</pre>;
+        return (
+          <pre className="md__pre" tabIndex={interactive ? undefined : -1}>
+            {children}
+          </pre>
+        );
       },
       table: ({ children }) => (
         <div className="md__scroll" tabIndex={interactive ? undefined : -1}>

@@ -510,6 +510,18 @@ describe("the result a conversation ends in", () => {
     expect(withResults(rows, new Set()).some((row) => row.kind === "result")).toBe(false);
   });
 
+  it("shows a closing result after a recoverable tool limit", () => {
+    const limit = envelope({
+      from: { kind: "agent", id: "manager" },
+      to: { kind: "system" },
+      parts: [
+        { type: "notice", kind: "guardStop", text: "Manager reached the limit of tool calls." },
+      ],
+    });
+    const rows = transcriptRows([envelope({}), limit, reply("The work is complete.")], lookups);
+    expect(withResults(rows, new Set()).at(-1)?.kind).toBe("result");
+  });
+
   it("carries the hand-off that led to it, which leaves its earlier place", () => {
     const shown = withResults(transcriptRows(conversation(), lookups), new Set());
     expect(shown.map((row) => row.kind)).toEqual(["message", "message", "result"]);

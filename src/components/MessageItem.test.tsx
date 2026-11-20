@@ -765,7 +765,12 @@ describe("your brief once it is sent", () => {
     render(
       <MessageItem
         message={envelope({
-          parts: [{ type: "text", text: "[Read the research](https://example.com)" }],
+          parts: [
+            {
+              type: "text",
+              text: "[Read the research](https://example.com)\n\n    A very long command",
+            },
+          ],
         })}
         lookups={lookups}
         continued={false}
@@ -773,8 +778,13 @@ describe("your brief once it is sent", () => {
     );
     expect(screen.getByText("Read the research")).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Read the research" })).toBeNull();
+    const code = screen.getByText("A very long command").closest("pre");
+    expect(code?.getAttribute("tabindex")).toBe("-1");
     fireEvent.click(screen.getByRole("button", { name: "Show all" }));
     expect(screen.getByRole("link", { name: "Read the research" })).toBeTruthy();
+    expect(screen.getByText("A very long command").closest("pre")?.hasAttribute("tabindex")).toBe(
+      false,
+    );
   });
 
   it("never folds what an agent wrote", () => {
