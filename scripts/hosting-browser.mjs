@@ -125,6 +125,16 @@ try {
       systemPrompt: "Answer briefly.",
     },
   });
+  await call("create_agent", {
+    draft: {
+      groupId: group.id,
+      name: "Browser check reviewer",
+      avatar: "avocado",
+      color: "#7ab55c",
+      model: "offline-test",
+      systemPrompt: "Answer briefly.",
+    },
+  });
   const profile = path.join(scratch, "chrome");
   const chrome = spawn(
     process.env.CHROME_BIN ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -132,6 +142,7 @@ try {
       "--headless=new",
       "--remote-debugging-port=0",
       `--user-data-dir=${profile}`,
+      "--window-size=1280,820",
       "--no-first-run",
       "--no-default-browser-check",
       "--disable-background-networking",
@@ -186,26 +197,12 @@ try {
     assert.ok(!answer.exceptionDetails, JSON.stringify(answer.exceptionDetails));
     return answer.result.value;
   };
-  const openAgent = (name) =>
-    evaluate(`(async () => {
-      const row = () => [...document.querySelectorAll('.sheet .agent-row')].find((e) => e.textContent.includes(${JSON.stringify(name)}));
-      if (!row()) [...document.querySelectorAll('.topbar__places button')].find((e) => /^(Agents|Groups and agents)$/.test(e.getAttribute('aria-label') || ''))?.click();
-      await new Promise((r) => setTimeout(r, 100));
-      if (!row()) return false;
-      row().click();
-      return true;
-    })()`);
+  const showingAgent = (name) =>
+    evaluate(`document.querySelector(${JSON.stringify(`[role="log"][aria-label="Conversation with ${name}"]`)})?.checkVisibility()`);
   const openClient = async () => {
     tab = (await cdp("Target.createTarget", { url: `${base}/#token=${token}` })).targetId;
     session = (await cdp("Target.attachToTarget", { targetId: tab, flatten: true })).sessionId;
-    await until(() => openAgent("Browser check"), "real app renders its roster");
-    await until(
-      () =>
-        evaluate(
-          "(() => { const tab = [...document.querySelectorAll('.agent-tabs__tab')].find((e) => e.textContent === 'Conversation'); tab?.click(); return !!tab; })()",
-        ),
-      "the conversation tab",
-    );
+    await until(() => showingAgent("Browser check"), "the workspace opens on the first agent's conversation");
   };
   await openClient();
   assert.equal(await evaluate("location.hash"), "", "invitation is removed from the URL");
@@ -244,9 +241,11 @@ try {
     "PASS: partial reply restored; backend finished with no client; transcript restored.",
   );
 
-  const tap = async (selector) => {
+  const tap = async (selector, text = null) => {
     const point = await evaluate(`(() => {
-      const node = document.querySelector(${JSON.stringify(selector)});
+      const text = ${JSON.stringify(text)};
+      const node = [...document.querySelectorAll(${JSON.stringify(selector)})]
+        .find(candidate => text === null || candidate.textContent.trim() === text);
       if (!node) throw new Error('Missing target: ' + ${JSON.stringify(selector)});
       node.scrollIntoView({block:'nearest'});
       const r = node.getBoundingClientRect();
@@ -280,24 +279,24 @@ try {
   };
   const pageTab = (label) => `.agent-tabs__tab:nth-child(${["Now","Conversation"].indexOf(label)+1})`;
   const box = (selector) => evaluate(`(() => { const r=document.querySelector(${JSON.stringify(selector)})?.getBoundingClientRect(); return r ? {left:r.left,right:r.right,top:r.top,bottom:r.bottom,height:r.height} : null; })()`);
-  const ribbonClear = async (where) => {
+  const rosterClear = async (where) => {
+    await fits(".roster");
     const facts = await evaluate(`(() => {
-      const edge = parseFloat(getComputedStyle(document.querySelector('.topbar')).paddingRight);
-      const now = document.querySelector('.ribbon__now').getBoundingClientRect();
-      const nowX = now.left + now.width / 2;
-      const labels = [...document.querySelectorAll('.ribbon__name, .ribbon__item-what, .ribbon__item-when, .ribbon__pile-label, .ribbon__pile-faces')]
-        .filter((n) => n.getClientRects().length)
-        .map((n) => { const r = n.getBoundingClientRect(); return {text:n.textContent, left:r.left, right:r.right, name:n.classList.contains('ribbon__name')}; });
-      return {edge, nowX, vw: innerWidth, labels};
+      const roster = document.querySelector('.roster');
+      const range = document.createRange();
+      return [...roster.querySelectorAll('.roster__agent')].map(row => {
+        const name = row.querySelector('.roster__name');
+        range.selectNodeContents(name);
+        const text = range.getBoundingClientRect(), box = row.getBoundingClientRect(), bounds = name.getBoundingClientRect();
+        return { name: name.textContent.trim(), readable: text.width > 0 && text.height > 0 &&
+          name.checkVisibility({opacityProperty: true, visibilityProperty: true}) &&
+          text.left >= box.left - 1 && text.left >= bounds.left - 1 &&
+          text.right <= box.right + 1 && text.right <= bounds.right + 1 &&
+          text.top >= box.top - 1 && text.bottom <= box.bottom + 1 };
+      });
     })()`);
-    for (const label of facts.labels) {
-      assert.ok(label.left >= facts.edge - 1 && label.right <= facts.vw - facts.edge + 1, `${where}: "${label.text}" is inside the margins: ${JSON.stringify({...label, edge:facts.edge, vw:facts.vw})}`);
-      if (label.text) assert.ok(label.right <= facts.nowX - 1 || label.left >= facts.nowX + 1, `${where}: "${label.text}" is clear of the now line at ${facts.nowX}: ${JSON.stringify(label)}`);
-    }
-    const names = facts.labels.filter((label) => label.text && label.name).sort((a, b) => a.left - b.left);
-    for (let i = 1; i < names.length; i++) {
-      assert.ok(names[i].left >= names[i - 1].right, `${where}: "${names[i - 1].text}" and "${names[i].text}" do not touch: ${JSON.stringify([names[i - 1], names[i]])}`);
-    }
+    assert.deepEqual(facts, [{ name: "Browser check", readable: true }, { name: "Browser check reviewer", readable: true }],
+      `${where}: both conversation names are readable in their rows`);
   };
   for (const width of [320,390,430,768]) {
     await size(width,844);
@@ -308,7 +307,6 @@ try {
     await fits(".pane__scroll");
     await fits(".composer");
     assert.equal(await evaluate("document.querySelector('.app > .rail')"), null, "no rail beside the column");
-    assert.equal(await evaluate("getComputedStyle(document.querySelector('.ribbon')).display"), "none", "the timeline gives way on an agent's page");
     const head = await box(".pane__header");
     assert.ok(head.height <= 60, `the page's head is one line: ${JSON.stringify(head)}`);
     const bar = await box(".statusbar");
@@ -322,13 +320,6 @@ try {
     await until(() => evaluate("!!document.querySelector('.menu')"), "agent actions open by touch");
     await fits(".menu");
     await evaluate("document.querySelector('.menu__scrim').click()");
-    await tap(".topbar__back");
-    await until(() => evaluate("!!document.querySelector('.home')"), "Today opens from the top row");
-    await fits(".home");
-    const day = await evaluate("(() => { const n=document.querySelector('.topbar__day'); return {height:n.getBoundingClientRect().height, line:parseFloat(getComputedStyle(n).lineHeight) || 24}; })()");
-    assert.ok(day.height <= day.line * 1.5, `the day in the top row is one line at ${width}: ${JSON.stringify(day)}`);
-    await fits(".ribbon");
-    await ribbonClear(`Today at ${width}`);
     await tap('.topbar__places button[aria-label="Groups and agents"], .topbar__places button[aria-label="Agents"]');
     await until(() => evaluate("!!document.querySelector('.sheet')"), "the Groups sheet opens");
     await delay(400);
@@ -339,12 +330,18 @@ try {
     await shoot(`chats-${width}`);
     await tap(".sheet__head button");
     await until(() => evaluate("!document.querySelector('.sheet')"), "the Groups sheet closes by its own button");
+    await tap('.topbar__places button[aria-label="Groups and agents"], .topbar__places button[aria-label="Agents"]');
+    await until(() => evaluate("document.querySelectorAll('.sheet .agent-row').length === 2"), "both agents are on the Groups sheet");
+    await tap(".sheet .agent-row__name", "Browser check reviewer");
+    await until(() => showingAgent("Browser check reviewer"), "touch opens the other conversation");
+    assert.equal(await evaluate("document.querySelector('.composer__input').value"), "", "the other agent does not get the draft");
     await tap('.topbar__places button[aria-label="Search"]');
     await until(() => evaluate("!!document.querySelector('.palette__input')"), "search opens from the top row");
     await tap(".palette__input");
     await cdp("Input.insertText", {text:"Browser check"},session);
-    await until(() => evaluate("!!document.querySelector('.palette__row')"), "agent is found");
-    await tap(".palette__row");
+    await until(() => evaluate("[...document.querySelectorAll('.palette__row .palette__title')].some(title => title.textContent === 'Browser check')"), "the exact agent is found");
+    await tap(".palette__row .palette__title", "Browser check");
+    await until(() => showingAgent("Browser check"), "Search returns to the drafted conversation");
     await fits(".pane");
     assert.equal(await evaluate("document.querySelector('.composer__input').value"),"Draft survives navigation");
     await tap(pageTab("Now"));
@@ -361,16 +358,26 @@ try {
     assert.equal(await evaluate("document.querySelector('.composer__input').value"), "Draft survives navigation");
     await size(width,400);
     await fits(".composer");
+    if (width === 320) {
+      for (const height of [355, 320]) {
+        await size(width,height);
+        await fits(".composer__input");
+        await fits(".composer__send");
+        assert.equal(await evaluate("document.querySelector('.roster__compact').getClientRects().length"), 1, "the agent picker is visible with the keyboard up");
+      }
+    }
     await size(width,844);
     await evaluate("document.querySelector('.composer__input').focus()");
     await evaluate(`(() => { const n=document.querySelector('.composer__input');
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(n,'');
       n.dispatchEvent(new Event('input',{bubbles:true})); n.blur(); })()`);
     await tap('.topbar__places button[aria-label="App settings"]');
-    await until(() => evaluate("!!document.querySelector('.dialog--settings')"),"settings opens on phone");
-    await delay(250);
-    await fits(".dialog--settings");
+    await until(() => evaluate("!!document.querySelector('.settings')"),"settings opens on phone");
+    await fits(".settings");
     await fits(".settings__pane");
+    await tap('.settings__pane input[placeholder="Unnamed"]');
+    await cdp("Input.insertText", {text:"Browser operator"},session);
+    await until(() => evaluate("!!document.querySelector('.settings__foot')"), "an edit shows the Settings actions");
     await fits(".settings__foot");
     if (width === 320) {
       const sections = await evaluate("Array.from(document.querySelector('.settings__section select').options).map(o=>o.value)");
@@ -382,7 +389,10 @@ try {
       }
     }
     await shoot(`settings-${width}`);
-    await evaluate("document.querySelector('.scrim__close').click()");
+    await evaluate("document.querySelector('.settings__foot button').click()");
+    await until(() => evaluate("!document.querySelector('.settings__foot')"), "discard clears the unsaved Settings actions");
+    await tap(".topbar__back");
+    await until(() => showingAgent("Browser check"), "Settings back returns to the conversation");
     if (width === 320) {
       for (const [button,dialog] of [[".statusbar__places button:nth-child(1)",".dialog--artifacts"],[".statusbar__places button:nth-child(2)",".dialog--calendar"],[".statusbar__places button:nth-child(3)",".for-you"]]) {
         await tap(button);
@@ -411,16 +421,17 @@ try {
   assert.ok(short >= 0.6, `at 900 by 600, conversation and composer take at least 60% of the height: ${short}`);
   await size(1280,900,false);
   await fits(".topbar");
-  await fits(".ribbon");
+  await rosterClear("the 1280px conversation");
   await fits(".pane");
   assert.equal(await evaluate("document.querySelector('.app > .rail')"), null, "no rail beside the column");
   const draft = { groupId: group.id, name: "Browser check", avatar: "avocado", color: "#7ab55c", systemPrompt: "Answer briefly." };
   const routine = await call("create_routine", { agentId: agent.id, draft: { name: "Morning check", what: "Say good morning.", trigger: "every:86400", inSecs: null, skipIfWorking: false } });
   await call("update_agent", { id: agent.id, draft: { ...draft, model: "offline-test-with-a-long-dated-model-identifier-2026-11-16" } });
   await until(() => evaluate("!!document.querySelector('.agent-tabs__count')"), "the routine count shows on its tab");
-  await until(() => evaluate("document.querySelector('.agent-tabs .pane__meta')?.textContent.includes('long-dated')"), "the long model is in the caption");
+  await until(() => evaluate("document.querySelector('.agent-tabs .pane__meta')?.textContent.includes('Long Dated')"), "the long model is in the caption");
   for (const width of [1280, 900]) {
     await size(width, 900, false);
+    await rosterClear(`the ${width}px conversation`);
     const row = await evaluate(`(() => {
       const list = document.querySelector('.agent-tabs__list'), edge = list.getBoundingClientRect().right;
       const tabs = [...list.querySelectorAll('.agent-tabs__tab')].map((n) => ({ text: n.textContent, right: n.getBoundingClientRect().right, cut: n.scrollWidth - n.clientWidth }));
@@ -434,10 +445,7 @@ try {
   await size(1280, 900, false);
   await call("delete_routine", { id: routine.id });
   await call("update_agent", { id: agent.id, draft: { ...draft, model: "offline-test" } });
-  await tap(".topbar__back");
-  await until(() => evaluate("!!document.querySelector('.home')"), "Today opens on the desktop");
-  await ribbonClear("Today at 1280");
-  console.log("PASS: phone widths, touch navigation and the agent menu, preserved drafts, keyboard-sized viewport, places, timeline margins and desktop layout.");
+  console.log("PASS: phone widths, touch navigation and the agent menu, preserved drafts, keyboard-sized viewport, places, and readable desktop roster names.");
 
   const artifact = await call("frame_artifact", {
     html: `<script>let isolated=false;try{parent.localStorage.getItem('guaca.workspace.token')}catch{isolated=true}guaca.answer({isolated});</script>`,

@@ -182,19 +182,8 @@ describe("the control family", () => {
   });
 });
 
-describe("the timeline's faces", () => {
-  it.each([["--ribbon-face", "md"]] as const)(
-    "sizes %s for the %s avatar drawn in it",
-    (token, size) => {
-      const rem = css.match(new RegExp(`^\\s*${token}: ([\\d.]+)rem;$`, "m"))?.[1];
-      expect(rem, token).toBeDefined();
-      expect(Number(rem) * ROOT_PX).toBe(AVATAR_PX[size]);
-    },
-  );
-});
-
 describe("avatar hit targets", () => {
-  it.each(["picker__item", "orb", "agent-row"])(
+  it.each(["picker__item", "orb", "agent-row", "roster__agent"])(
     "keeps animated artwork out of hit testing inside %s",
     (control) => {
       const button = document.createElement("button");
@@ -337,17 +326,22 @@ describe("the window's columns", () => {
     },
   );
 
-  it("keeps the window still while Today scrolls in its own column, inside the view that Settings hides", () => {
+  it("keeps the window still while the roster scrolls separately and Settings hides the conversation", () => {
     const app = nest("app");
+    app.setAttribute("data-roster", "");
     const main = document.createElement("main");
     const view = document.createElement("div");
-    const home = document.createElement("div");
+    const roster = document.createElement("nav");
+    const rows = document.createElement("div");
     view.className = "app__view";
-    home.className = "home";
-    view.append(home);
+    roster.className = "roster";
+    rows.className = "roster__scroll";
+    roster.append(rows);
+    app.append(roster);
     main.append(view);
     app.append(main);
     expect(getComputedStyle(main).overflow).toBe("hidden");
+    expect(getComputedStyle(rows).overflow).toBe("auto");
     expect(getComputedStyle(view).display).toBe("contents");
     view.hidden = true;
     expect(getComputedStyle(view).display).toBe("none");
@@ -971,27 +965,13 @@ describe("the new window's surfaces", () => {
       .join("\n");
   }
 
-  it("lifts an idle face on a dark ground, where a faded gray all but vanished", () => {
-    const value = (selector: string, token: string) =>
-      Number(ruleOf(css, selector).match(new RegExp(`${token}: ([0-9.]+);`))?.[1]);
-    const paper = ":root";
-    const ink = ':root[data-surface="dark"]';
-    expect(value(ink, "--ribbon-idle-lift")).toBeGreaterThan(value(paper, "--ribbon-idle-lift"));
-    expect(value(ink, "--ribbon-idle")).toBeGreaterThan(value(paper, "--ribbon-idle"));
-    expect(ruleOf(css, '.ribbon__face[data-state="idle"] .ribbon__portrait')).toMatch(
-      /brightness\(var\(--ribbon-idle-lift\)\)/,
-    );
-  });
-
-  it("steps a timeline face back by its drawing, never by its name", () => {
+  it("keeps roster faces and names at full strength even for idle agents", () => {
     const bare = css.replace(/\/\*[\s\S]*?\*\//g, "");
     const fading = [...bare.matchAll(/(^|\n)([^{}@\n][^{}]*)\{([^{}]*)\}/g)]
       .filter((match) => /(^|[;{\s])(opacity|filter)\s*:/.test(match[3] ?? ""))
       .flatMap((match) => (match[2] ?? "").split(",").map((one) => one.trim()))
-      .filter((selector) => /ribbon__(face|name)/.test(selector));
-    expect(fading).toContain('.ribbon__face[data-state="idle"] .ribbon__portrait');
-    expect(fading).toContain(".ribbon[data-open] .ribbon__face:not([data-open]) .ribbon__portrait");
-    for (const selector of fading) expect(selector).toMatch(/ \.ribbon__portrait$/);
+      .filter((selector) => /\.roster\b/.test(selector));
+    expect(fading).toEqual([]);
   });
 
   it("brings the Groups sheet in on the one arrival, with no keyframe of its own", () => {
@@ -1010,34 +990,39 @@ describe("the new window's surfaces", () => {
 
   it("gives the page's tabs, the top bar's buttons and the field's send a finger's room", () => {
     const opener = "@media (max-width: 48rem), (hover: none) and (pointer: coarse) {";
-    const at = css.lastIndexOf(opener);
-    expect(at).toBeGreaterThan(-1);
-    const block = css.slice(at, css.indexOf("\n}\n", at));
+    const blocks = css
+      .split(opener)
+      .slice(1)
+      .map((block) => block.slice(0, block.indexOf("\n}\n")));
+    expect(blocks.length).toBeGreaterThan(0);
     for (const selector of [
       ".agent-tabs__tab",
       ".topbar__button",
-      ".intake__send",
+      ".composer__send",
       ".desk__open",
-      ".intake__target",
-      ".intake__option",
+      ".composer__attach",
     ]) {
-      const sized = [...block.matchAll(/([^{}]*)\{([^{}]*)\}/g)].some(
-        (m) =>
-          (m[1] ?? "")
-            .split(",")
-            .map((s) => s.trim())
-            .includes(selector) &&
-          (m[2] ?? "").includes("min-height: var(--control-touch)") &&
-          (m[2] ?? "").includes("min-width: var(--control-touch)"),
-      );
+      const sized = blocks
+        .flatMap((block) => [...block.matchAll(/([^{}]*)\{([^{}]*)\}/g)])
+        .some(
+          (m) =>
+            (m[1] ?? "")
+              .split(",")
+              .map((s) => s.trim())
+              .includes(selector) &&
+            (m[2] ?? "").includes("min-height: var(--control-touch)") &&
+            (m[2] ?? "").includes("min-width: var(--control-touch)"),
+        );
       expect(sized, `${selector} is not sized for touch`).toBe(true);
     }
   });
 
-  it("spends one column width on the agent panel, and named sizes on the field's picker", () => {
+  it("spends one named column width on the agent panel and a separate one on the roster", () => {
     expect(ruleOf(css, ".agent-panel")).toContain("var(--column-w)");
     expect(ruleOf(css, ".agent-panel")).not.toMatch(/\d+rem/);
-    expect(ruleOf(css, ".intake__menu")).not.toMatch(/\d+rem/);
+    expect(ruleOf(css, ".app[data-roster]")).toContain("var(--roster-w)");
+    expect(ruleOf(css, ".app[data-roster]")).toContain("var(--roster-w-compact)");
+    expect(ruleOf(css, ".app[data-roster]")).not.toMatch(/\d+rem/);
   });
 });
 
@@ -1108,7 +1093,7 @@ describe("the waiting count", () => {
 
   it.each([
     ".orb__waiting",
-    ".home__count[data-waiting]",
+    ".roster__questions",
     ".statusbar__count",
     ".for-you h2 span",
     ".menubar__decisions",
@@ -1125,7 +1110,7 @@ describe("the waiting count", () => {
 
   it("keeps the counts beside it that wait on nobody out of amber", () => {
     const counts = declarations().filter(
-      (d) => d.selector === ".home__count" && d.property === "color",
+      (d) => d.selector === ".roster__questions:disabled" && d.property === "color",
     );
     expect(counts.map((d) => d.value)).toEqual(["var(--muted)"]);
   });

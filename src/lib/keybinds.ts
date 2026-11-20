@@ -1,6 +1,7 @@
 export interface Combo {
   key: string;
   mod?: boolean;
+  ctrl?: boolean;
   shift?: boolean;
 }
 
@@ -39,9 +40,16 @@ export const BINDINGS: Binding[] = [
   },
   {
     id: "agent",
-    what: "Open the agent with that number in the command menu",
+    what: "Open the agent with that number",
     combo: { key: "1", mod: true },
     to: { combo: { key: "9", mod: true }, joint: "range" },
+    where: "Anywhere",
+  },
+  {
+    id: "step",
+    what: "Open the next or previous agent",
+    combo: { key: "Tab", ctrl: true, shift: false },
+    to: { combo: { key: "Tab", ctrl: true, shift: true }, joint: "either" },
     where: "Anywhere",
   },
   {
@@ -101,15 +109,8 @@ export const BINDINGS: Binding[] = [
     fixed: true,
   },
   {
-    id: "field-answer",
-    what: "From the empty field on Today, answer the question that is waiting",
-    combo: { key: "Tab" },
-    where: "Needs you",
-    fixed: true,
-  },
-  {
     id: "queue",
-    what: "Leave the field on Today and select the first question",
+    what: "From an empty composer, select the first question",
     combo: { key: "Escape" },
     where: "Needs you",
     fixed: true,
@@ -146,7 +147,7 @@ export const BINDINGS: Binding[] = [
   },
   {
     id: "queue-leave",
-    what: "Go back to the field",
+    what: "Go back to the composer",
     combo: { key: "Escape" },
     where: "Needs you",
     fixed: true,
@@ -218,7 +219,12 @@ export function matches(event: KeyboardEvent, combo: Combo): boolean {
   const key = combo.key.length === 1 ? event.key.toLowerCase() : event.key;
   if (key !== combo.key) return false;
   if (event.altKey) return false;
-  if (Boolean(combo.mod) !== (event.metaKey || event.ctrlKey)) return false;
+  if (
+    combo.ctrl
+      ? !event.ctrlKey || event.metaKey
+      : Boolean(combo.mod) !== (event.metaKey || event.ctrlKey)
+  )
+    return false;
   if (combo.shift !== undefined && combo.shift !== event.shiftKey) return false;
   return true;
 }
@@ -253,6 +259,7 @@ const NAMED: Record<string, string> = {
 export function formatCombo(combo: Combo): string {
   const parts: string[] = [];
   if (combo.mod) parts.push(IS_MAC ? "⌘" : "Ctrl");
+  if (combo.ctrl) parts.push(IS_MAC ? "⌃" : "Ctrl");
   if (combo.shift) parts.push(IS_MAC ? "⇧" : "Shift");
   parts.push(NAMED[combo.key] ?? combo.key.toUpperCase());
   return IS_MAC ? parts.join("") : parts.join("+");

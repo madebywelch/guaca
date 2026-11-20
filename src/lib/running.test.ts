@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { colleaguesOn, runningNote, together, workingLead } from "./running";
+import { colleaguesOn, runningNote, together } from "./running";
 import type { AgentId, RunId } from "./types";
 
 const run = { runId: "run" as RunId, agentId: "owner" as AgentId };
@@ -60,15 +60,5 @@ describe("runningNote", () => {
     expect(runningNote({ note: "Drafting" }, { state: "thinking" }, ["Analyst"], true)).toBe(
       "Sending your answer",
     );
-  });
-});
-
-describe("the lead on Today while work runs", () => {
-  it("names each agent once, however many conversations it is in", () => {
-    expect(workingLead(["Dara", "Noor", "Dara"])).toBe("Dara and Noor are working.");
-  });
-
-  it("counts instead of naming once the names would not fit a line", () => {
-    expect(workingLead(["Dara", "Noor", "Sami", "Ivo"])).toBe("4 agents are working.");
   });
 });

@@ -18,6 +18,7 @@ import {
   statusWord,
 } from "../lib/outcomes";
 import { askers, DELETED, questions } from "../lib/questions";
+import { together } from "../lib/running";
 import { useStore } from "../lib/store";
 import { relativeTime, useNow } from "../lib/time";
 import { type AgentCard, errorMessage, type Outcome, type WorkDecision } from "../lib/types";
@@ -75,7 +76,7 @@ export function ForYou({ onClose }: { onClose: () => void }) {
   const past = earlier(recent, now);
   const openOutcome = (outcome: Outcome) => {
     if (outcome.seenAt === null) void seeOutcomes({ runIds: [outcome.runId] });
-    if (outcome.noteId) void openMessage(outcome.agentId, outcome.noteId);
+    if (outcome.noteId) void openMessage(outcome.agentId, outcome.noteId, "result");
     else void select(outcome.agentId);
     onClose();
   };
@@ -324,6 +325,13 @@ export function FinishedLine({
 }) {
   const word = statusWord(outcome.status);
   const age = relativeTime(outcome.finishedAt, now);
+  const colleagues = useStore((state) =>
+    together(
+      (outcome.colleagues ?? []).flatMap(
+        (id) => state.agents.find((one) => one.id === id)?.name ?? [],
+      ),
+    ),
+  );
   return (
     <button type="button" className="finished-line" title={outcome.headline} onClick={onOpen}>
       <AgentAvatar
@@ -334,7 +342,10 @@ export function FinishedLine({
         seed={agent?.id ?? outcome.runId}
       />
       <span className="finished-line__text">
-        <span className="finished-line__who">{agent?.name ?? "A deleted agent"}</span>{" "}
+        <span className="finished-line__who">
+          {agent?.name ?? "A deleted agent"}
+          {colleagues && `, with ${colleagues}:`}
+        </span>{" "}
         {outcome.headline}
       </span>
       <span className="finished-line__meta">{word ? `${word} ${age}` : age}</span>

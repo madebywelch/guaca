@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 
-const stack: { dismiss: () => void }[] = [];
+type Layer = { dismiss: () => void; name?: "commandMenu" };
+
+const stack: Layer[] = [];
 let handoff: HTMLElement | null = null;
 let pendingOpener: { element: HTMLElement } | null = null;
 
@@ -35,8 +37,9 @@ function onKey(event: KeyboardEvent) {
   top.dismiss();
 }
 
-export function dismissing(): boolean {
-  return stack.length > 0;
+export function dismissing(except?: Layer["name"]): boolean {
+  const top = stack.at(-1);
+  return top !== undefined && (except === undefined || top.name !== except);
 }
 
 function takeOpener(): HTMLElement | null {
@@ -74,7 +77,7 @@ export function useReturnFocus(returning: () => boolean) {
   );
 }
 
-export function useDismiss(dismiss: () => void, enabled = true) {
+export function useDismiss(dismiss: () => void, enabled = true, name?: Layer["name"]) {
   const latest = useRef(dismiss);
   const current = useRef<{ dismiss: () => void } | null>(null);
   const restore = useRef<HTMLElement | null>(null);
@@ -82,7 +85,7 @@ export function useDismiss(dismiss: () => void, enabled = true) {
   useLayoutEffect(() => {
     if (!enabled) return;
     const previous = takeOpener();
-    const entry = { dismiss: () => latest.current() };
+    const entry = { dismiss: () => latest.current(), name };
     current.current = entry;
     if (stack.length === 0) window.addEventListener("keydown", onKey);
     stack.push(entry);
@@ -97,7 +100,7 @@ export function useDismiss(dismiss: () => void, enabled = true) {
         handoff = previous;
       }
     };
-  }, [enabled]);
+  }, [enabled, name]);
   useEffect(() => {
     if (!enabled) return;
     return () => {

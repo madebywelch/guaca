@@ -59,6 +59,16 @@ export function numbered(agents: AgentCard[], groups: readonly { id: GroupId }[]
   return [...placed, ...live.filter((agent) => !placed.includes(agent))];
 }
 
+export function stepped(
+  order: readonly AgentCard[],
+  from: AgentId | null,
+  by: 1 | -1,
+): AgentCard | undefined {
+  const at = order.findIndex((agent) => agent.id === from);
+  if (at < 0) return by > 0 ? order[0] : order.at(-1);
+  return order[(at + by + order.length) % order.length];
+}
+
 export function landsBefore(
   order: readonly { id: string }[],
   dragged: string,

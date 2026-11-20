@@ -317,7 +317,7 @@ describe("Finished", () => {
       fireEvent.click(line);
     });
     expect(mocks.seen).toHaveBeenCalledWith({ runIds: ["run-1"] });
-    expect(openMessage).toHaveBeenCalledWith("agent-1", "note-1");
+    expect(openMessage).toHaveBeenCalledWith("agent-1", "note-1", "result");
     expect(close).toHaveBeenCalled();
     expect(useStore.getState().outcomes).toEqual([]);
   });

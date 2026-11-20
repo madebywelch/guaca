@@ -878,7 +878,7 @@ describe("groups as places", () => {
     expect(screen.getByText("Manager")).toBeTruthy();
   });
 
-  it("closes a channel from the crew being left, and keeps one from the crew opened", async () => {
+  it("keeps the conversation open when browsing groups and changes it when choosing an agent", async () => {
     draw(
       [group("everyone"), group("research", null, RESEARCH)],
       [agent("Chief"), agent("Chief of research", { groupId: RESEARCH, railOrder: 1 })],
@@ -886,7 +886,8 @@ describe("groups as places", () => {
     useStore.setState({ selected: "Chief" });
 
     fireEvent.click(screen.getByLabelText("research, 1 agent"));
-    await vi.waitFor(() => expect(useStore.getState().selected).toBeNull());
+    await vi.waitFor(() => expect(useStore.getState().railGroup).toBe(RESEARCH));
+    expect(useStore.getState().selected).toBe("Chief");
 
     fireEvent.click(screen.getByLabelText("All groups, 2 agents"));
     fireEvent.click(row("Chief of research"));

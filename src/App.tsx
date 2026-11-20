@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { AgentAvatar } from "./avatars/AgentAvatar";
 import { AgentEditor } from "./components/AgentEditor";
@@ -8,23 +8,30 @@ import { Cafeteria } from "./components/Cafeteria";
 import { Calendar } from "./components/Calendar";
 import { type AgentView, ChannelView } from "./components/ChannelView";
 import { CommandMenu } from "./components/CommandMenu";
+import { ConversationRoster } from "./components/ConversationRoster";
 import { ForYou } from "./components/ForYou";
 import { GroupEditor } from "./components/GroupEditor";
 import { GroupsSheet } from "./components/GroupsSheet";
-import { Home } from "./components/Home";
 import { HostUpdateNotice } from "./components/HostUpdates";
 import { Onboarding } from "./components/Onboarding";
+import { QuestionTray } from "./components/QuestionTray";
 import { Search } from "./components/Search";
 import { SettingsPage } from "./components/SettingsPage";
 import { StatusBar } from "./components/StatusBar";
-import { Timeline } from "./components/Timeline";
 import { Toast } from "./components/Toast";
 import { TopBar } from "./components/TopBar";
 import { applyAppearance, watchSystemSurface } from "./lib/appearance";
 import { diagnostic } from "./lib/diagnostic";
 import { dismissing } from "./lib/dismiss";
-import { editingText } from "./lib/focus";
-import { hiddenNow, useHeld } from "./lib/held";
+import { editingText, focusWriting } from "./lib/focus";
+import {
+  dueQuestions,
+  lastConversation,
+  nextQuestion,
+  openingConversation,
+  rememberConversation,
+} from "./lib/frame";
+import { hiddenNow, shown, useHeld } from "./lib/held";
 import { unreachableHint } from "./lib/host";
 import { api, onRevealRequest } from "./lib/ipc";
 import { bindingFor } from "./lib/keybinds";
@@ -32,13 +39,14 @@ import { FEED_COALESCE_MS, presenceOf, presenceReporter, samePresence } from "./
 import { catchUp, deliver, land } from "./lib/notify";
 import { readFirstTask } from "./lib/onboarding";
 import { inferenceOf, providerFor } from "./lib/providers";
-import { numbered } from "./lib/rail";
+import { numbered, stepped } from "./lib/rail";
 import { useRuntime } from "./lib/runtime";
 import { asSection, type Section } from "./lib/sections";
 import { type Banner, useLiveAgents, useStore } from "./lib/store";
 import { attached, desktop } from "./lib/transport";
 import {
   type AgentCard,
+  type AgentId,
   errorMessage,
   type Group,
   type Overlay,
@@ -57,6 +65,16 @@ const reportPresence = presenceReporter(async (presence: ReturnType<typeof prese
     throw error;
   }
 }, samePresence);
+
+const RUNNING_RETRY_MS = 1_000;
+
+function seeConversationResults(id: AgentId) {
+  const state = useStore.getState();
+  const runIds = state.outcomes
+    .filter((one) => one.agentId === id && one.seenAt === null)
+    .map((one) => one.runId);
+  if (runIds.length) void state.seeOutcomes({ runIds });
+}
 
 export default function App() {
   useEffect(followViewport, []);
@@ -83,6 +101,10 @@ export default function App() {
   const prefs = useStore((s) => s.prefs);
 
   const [agentView, setAgentView] = useState<AgentView>("conversation");
+  const [chosenQuestion, setChosenQuestion] = useState<string | null>(null);
+  const [inlineQuestion, setInlineQuestion] = useState<{ agentId: AgentId; id: string } | null>(
+    null,
+  );
 
   const reveal = useCallback((target: Reveal) => {
     if (target.kind === "agent") diagnostic("reveal.agent", target.id);
@@ -121,11 +143,37 @@ export default function App() {
   const [showCafeteria, setShowCafeteria] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
   const [openSection, setOpenSection] = useState<string | null>(null);
-  const leaveChannel = useStore((state) => state.leaveChannel);
   const focused = useStore((state) => state.focused);
 
+  const closeQuestions = useCallback(() => {
+    setChosenQuestion(null);
+    focusWriting();
+  }, []);
+
+  const openConversation = useCallback((id: AgentId) => {
+    const state = useStore.getState();
+    const order = numbered(state.agents, state.groups);
+    const belongs = (one: { agentId: AgentId; runId: string }) =>
+      one.agentId === id ||
+      state.running.some((run) => run.runId === one.runId && run.agentId === id);
+    const { pending, stuck } = shown(state.pending, state.stuck, state.activity, hiddenNow());
+    const question = nextQuestion(pending.filter(belongs), stuck.filter(belongs));
+    if (!order.some((agent) => agent.id === id)) return;
+    const inline = question?.agentId === id && "request" in question ? question.id : null;
+    setAgentView("conversation");
+    setInlineQuestion(inline ? { agentId: id, id: inline } : null);
+    setChosenQuestion(inline ? null : (question?.id ?? null));
+    void state.select(id).catch(state.showFailure);
+    if (state.selected === id) seeConversationResults(id);
+    if (!question) focusWriting();
+  }, []);
+
   useEffect(() => {
-    if (selected) setAgentView("conversation");
+    if (!selected) return;
+    setAgentView("conversation");
+    setInlineQuestion((current) => (current?.agentId === selected ? current : null));
+    rememberConversation(selected);
+    seeConversationResults(selected);
   }, [selected]);
 
   useEffect(() => {
@@ -138,9 +186,24 @@ export default function App() {
   }, [openingRoutine]);
 
   useEffect(() => {
+    const onStep = (event: KeyboardEvent) => {
+      if (event.isComposing || bindingFor(event)?.id !== "step") return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (dismissing("commandMenu")) return;
+      const state = useStore.getState();
+      const next = stepped(
+        numbered(state.agents, state.groups),
+        state.selected,
+        event.shiftKey ? -1 : 1,
+      );
+      if (!next) return;
+      setShowMenu(false);
+      openConversation(next.id);
+    };
     const onKey = (event: KeyboardEvent) => {
       const binding = bindingFor(event);
-      if (!binding) return;
+      if (!binding || binding.id === "step" || event.isComposing) return;
       if (binding.id === "undo") {
         if (editingText(event.target) || !useHeld.getState().undo()) return;
         event.preventDefault();
@@ -149,29 +212,33 @@ export default function App() {
       event.preventDefault();
 
       if (binding.id === "menu") {
+        if (dismissing("commandMenu")) return;
         if (menuOpen.current) setShowMenu(false);
-        else if (!dismissing()) setShowMenu(true);
+        else setShowMenu(true);
       }
       if (binding.id === "agent") {
         const state = useStore.getState();
         const agent = numbered(state.agents, state.groups)[Number(event.key) - 1];
-        if (!agent || (dismissing() && !menuOpen.current)) return;
+        if (!agent || dismissing("commandMenu")) return;
         setShowMenu(false);
-        setAgentView("conversation");
-        void state.select(agent.id);
+        openConversation(agent.id);
       }
       if (binding.id === "search") setSearching("");
       if (binding.id === "settings" || binding.id === "shortcuts") {
+        if (dismissing("commandMenu")) return;
         if (menuOpen.current) setShowMenu(false);
-        else if (dismissing()) return;
         const state = useStore.getState();
         if (binding.id === "settings" && state.settingsPage) state.closeSettings();
         else state.openSettings(binding.id === "shortcuts" ? "shortcuts" : undefined);
       }
     };
+    window.addEventListener("keydown", onStep, true);
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+    return () => {
+      window.removeEventListener("keydown", onStep, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [openConversation]);
 
   const {
     uiScale,
@@ -329,6 +396,50 @@ export default function App() {
         !groups[0]!.apiKeySet &&
         Object.values(groups[0]!.inference).every((value) => value === null)));
   const welcoming = firstRun && !checkingFirstTask;
+  const showRoster = ready && !firstRun && !settingsPage && agents.length > 0;
+  const runningResolved = useStore((state) => state.runningKnown || state.runningUnavailable);
+  const runningReadFailed = useStore((state) => state.runningReadFailed);
+  const retryOpening = showRoster && !selected && !runningResolved && runningReadFailed;
+
+  useEffect(() => {
+    if (!retryOpening) return;
+    const timer = window.setTimeout(() => {
+      const state = useStore.getState();
+      if (!state.selected && state.runningReadFailed) void state.refreshRunning();
+    }, RUNNING_RETRY_MS);
+    return () => window.clearTimeout(timer);
+  }, [retryOpening]);
+
+  useLayoutEffect(() => {
+    if (!ready || !runningResolved || firstRun || settingsPage || selected || agents.length === 0)
+      return;
+    const state = useStore.getState();
+    if (state.selected) return;
+    const order = numbered(state.agents, state.groups);
+    const { pending, stuck } = shown(state.pending, state.stuck, state.activity, hiddenNow());
+    const id = openingConversation(
+      order,
+      pending,
+      stuck,
+      state.running,
+      state.lastActive,
+      lastConversation(),
+    );
+    if (id) openConversation(id);
+  }, [ready, runningResolved, firstRun, settingsPage, selected, agents.length, openConversation]);
+
+  const openQuestions = () => {
+    const state = useStore.getState();
+    const { pending, stuck } = shown(state.pending, state.stuck, state.activity, hiddenNow());
+    const question = nextQuestion(pending, stuck);
+    if (!question) {
+      if (!dueQuestions(state.decisions, Date.now()).length) return false;
+      state.showForYou(true);
+      return true;
+    }
+    setChosenQuestion(question.id);
+    return true;
+  };
 
   const notices = (
     <>
@@ -366,16 +477,11 @@ export default function App() {
     <div
       className="app"
       data-link={link === "down" ? "down" : undefined}
-      data-page={settingsPage ? "settings" : selected === null ? "today" : "agent"}
+      data-roster={showRoster ? "" : undefined}
+      data-page={settingsPage ? "settings" : selected === null ? "empty" : "agent"}
     >
       <TopBar
-        back={
-          settingsPage
-            ? { to: openAgent?.name ?? "Today", go: closeSettings }
-            : openAgent
-              ? { to: "Today", go: leaveChannel }
-              : null
-        }
+        back={settingsPage ? { to: openAgent?.name ?? "Workspace", go: closeSettings } : null}
         onSearch={() => setSearching("")}
         onGroups={() => setShowGroups(true)}
         onSettings={() => openSettings()}
@@ -384,13 +490,7 @@ export default function App() {
         onOpenCafeteria={() => setShowCafeteria(true)}
       />
 
-      {ready && !welcoming && (
-        <Timeline
-          onOpenAgent={(id) => void select(id)}
-          onOpenGroups={() => setShowGroups(true)}
-          openAgentId={selected}
-        />
-      )}
+      {showRoster && <ConversationRoster onOpen={openConversation} onQuestions={openQuestions} />}
 
       <main>
         {settingsPage ? (
@@ -441,24 +541,46 @@ export default function App() {
                 </button>
               </div>
             </div>
-          ) : selected === null ? (
-            <Home
-              onSearch={(query) => setSearching(query)}
-              onManageGroups={() => setShowGroups(true)}
-            />
-          ) : (
+          ) : selected ? (
             <ChannelView
               channel={selected}
               onOpenMenu={(agent, at) => setMenu({ agent, ...at })}
               view={agentView}
               onView={setAgentView}
+              onQuestions={openQuestions}
+              focusRequest={inlineQuestion?.agentId === selected ? inlineQuestion : null}
               onEditProfile={(agent) => setEditing(agent)}
             />
-          )}
+          ) : retryOpening ? (
+            <div className="empty">
+              <p className="empty__body">
+                Guaca couldn't check which agents are working. Choose an agent or try again.
+              </p>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => void useStore.getState().refreshRunning()}
+              >
+                Retry checking running work
+              </button>
+            </div>
+          ) : null}
         </div>
 
         {ready && !welcoming && <StatusBar onOpen={openPlace} onMessage={sendFromBar} />}
       </main>
+
+      {chosenQuestion && !settingsPage && (
+        <QuestionTray
+          selected={chosenQuestion}
+          onSelect={setChosenQuestion}
+          onClose={closeQuestions}
+          onOpen={(id) => {
+            closeQuestions();
+            if (agents.some((agent) => agent.id === id)) void select(id);
+          }}
+        />
+      )}
 
       {menu && (
         <AgentMenu
@@ -497,6 +619,7 @@ export default function App() {
       {showMenu && (
         <CommandMenu
           onClose={() => setShowMenu(false)}
+          onOpenAgent={openConversation}
           onSection={(section) => openSettings(section)}
           onPlace={(place, query) => {
             if (place === "search") setSearching(query ?? "");
@@ -511,7 +634,7 @@ export default function App() {
         />
       )}
 
-      {ready && <Toast />}
+      {ready && (!chosenQuestion || settingsPage) && <Toast />}
 
       {showGroups && (
         <GroupsSheet

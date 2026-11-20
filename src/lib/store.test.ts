@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { anApproval } from "../test-fixtures";
 import { expectRestart, forgetRestart } from "./link";
-import type { AgentCard, Envelope, UiEvent } from "./types";
+import type { AgentCard, Approval, Envelope, Running, UiEvent } from "./types";
 
 vi.mock("./ipc", () => ({
   api: {
@@ -21,9 +21,11 @@ vi.mock("./ipc", () => ({
     setAgentPinned: vi.fn(async () => null),
     approvalStates: async () => ({ "q-1": "answered" }),
     approvalAnswers: async () => ({ "q-1": "Northwind" }),
-    pendingApprovals: async () => [],
+    pendingApprovals: vi.fn(async (): Promise<Approval[]> => []),
     openEscalations: async () => [],
     listDecisions: async () => [],
+    listOutcomes: async () => [],
+    runningRuns: vi.fn(async (): Promise<Running[]> => []),
   },
   onRuntimeEvent: vi.fn(),
 }));
@@ -34,6 +36,7 @@ vi.mock("./transport", async (original) => ({
 }));
 
 const { useStore } = await import("./store");
+const { api } = await import("./ipc");
 const { DEFAULT_PREFS } = await import("./prefs");
 
 function envelope(overrides: Partial<Envelope> = {}): Envelope {
@@ -572,13 +575,13 @@ describe("the channel open when the rail goes inside a crew", () => {
     });
   }
 
-  it("closes when it belongs to the crew being left", async () => {
+  it("keeps the conversation open when management switches groups", async () => {
     twoCrews();
     useStore.setState({ selected: "chef-research" });
 
     await useStore.getState().focusGroup(AGENTS[1]!.groupId);
 
-    expect(useStore.getState().selected).toBeNull();
+    expect(useStore.getState().selected).toBe("chef-research");
     expect(useStore.getState().railGroup).toBe(AGENTS[1]!.groupId);
   });
 
@@ -605,6 +608,106 @@ describe("the channel open when the rail goes inside a crew", () => {
 });
 
 describe("activity", () => {
+  it("waits for the latest roster even when its first read is superseded twice", async () => {
+    const initial = useStore.getState();
+    let latest!: (rows: AgentCard[]) => void;
+    let earlier!: (rows: AgentCard[]) => void;
+    vi.mocked(api.listAgents)
+      .mockResolvedValueOnce([])
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          earlier = resolve;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          latest = resolve;
+        }),
+      );
+    const ready = vi.fn();
+    const startup = initial.bootstrap().then(ready);
+    const middle = initial.refreshAgents();
+    const newer = initial.refreshAgents();
+    earlier([AGENTS[0]!]);
+    await middle;
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    try {
+      expect(ready).not.toHaveBeenCalled();
+    } finally {
+      latest(AGENTS);
+      await Promise.all([startup, newer]);
+    }
+    expect(useStore.getState().agents).toEqual(AGENTS);
+  });
+
+  it("does not finish bootstrap before a newer question snapshot is applied", async () => {
+    const request = anApproval({ agentId: "chef" });
+    let first!: (rows: Approval[]) => void;
+    let latest!: (rows: Approval[]) => void;
+    vi.mocked(api.pendingApprovals)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            first = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            latest = resolve;
+          }),
+      );
+    const ready = vi.fn();
+    const startup = useStore.getState().bootstrap().then(ready);
+    const newer = useStore.getState().refreshApprovals();
+    first([request]);
+    try {
+      await waitFor(() => expect(useStore.getState().agents).toEqual([]));
+      expect(ready).not.toHaveBeenCalled();
+    } finally {
+      latest([request]);
+      await Promise.all([startup, newer]);
+    }
+    expect(useStore.getState().pending).toEqual([request]);
+  });
+
+  it("waits for the live snapshot read when it supersedes the startup read", async () => {
+    const row = {
+      runId: "r1",
+      agentId: "chef",
+      groupId: AGENTS[1]!.groupId,
+      startedAt: 1,
+      note: null,
+    };
+    let first!: (rows: Running[]) => void;
+    let latest!: (rows: Running[]) => void;
+    vi.mocked(api.runningRuns)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            first = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            latest = resolve;
+          }),
+      );
+    const startup = useStore.getState().refreshRunning();
+    const snapshot = useStore.getState().refreshRunning();
+    first([]);
+    const settled = vi.fn();
+    void startup.then(settled);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    latest([row]);
+    await startup;
+    await snapshot;
+    expect(useStore.getState().running).toEqual([row]);
+  });
+
   it("records the latest state per agent", () => {
     apply({ type: "activityChanged", agentId: "chef", activity: { state: "thinking" } });
     expect(useStore.getState().activity.chef).toEqual({ state: "thinking" });

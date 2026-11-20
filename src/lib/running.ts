@@ -5,14 +5,6 @@ export function together(names: readonly string[]): string {
   return `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
-export const LEAD_NAMES = 3;
-
-export function workingLead(names: readonly string[]): string {
-  const distinct = [...new Set(names)];
-  if (distinct.length > LEAD_NAMES) return `${distinct.length} agents are working.`;
-  return `${together(distinct)} ${distinct.length === 1 ? "is" : "are"} working.`;
-}
-
 export function colleaguesOn(
   run: Pick<Running, "runId" | "agentId">,
   activeRun: Record<AgentId, RunId | undefined>,
