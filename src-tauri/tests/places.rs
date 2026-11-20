@@ -37,6 +37,7 @@ struct World {
     abilities: Mutex<Option<Abilities>>,
     ears: Mutex<Option<Ears>>,
     posts: Mutex<Vec<Post>>,
+    post_calls: Mutex<Vec<RelayTag>>,
     edits: Mutex<Vec<(Posted, Card)>>,
     marks: Mutex<Vec<(HeardKey, Mark)>>,
     tells: Mutex<Vec<(OutsideUser, String)>>,
@@ -138,11 +139,17 @@ impl Adapter for Fake {
         tag: &'a RelayTag,
     ) -> Pending<'a, Result<Posted, SendError>> {
         async move {
+            self.0.post_calls.lock().push(tag.clone());
             if let Some(failure) = self.0.failures.lock().pop_front() {
                 return Err(failure);
             }
             let posted = {
                 let mut posts = self.0.posts.lock();
+                if self.abilities().posts == PostSafety::Idempotent {
+                    if let Some(at) = posts.iter().position(|post| post.tag == tag.0) {
+                        return Ok(Posted(format!("p{}", at + 1)));
+                    }
+                }
                 posts.push(Post { spot: to.clone(), card: card.clone(), tag: tag.0.clone() });
                 Posted(format!("p{}", posts.len()))
             };
@@ -523,8 +530,8 @@ async fn a_crash_between_post_and_mark_on_an_idempotent_provider_posts_again_wit
     h.wait_until("the post to be sent", |h| relay_state(h, &key) == Some(RelayState::Sent)).await;
     let posts = world.posts();
     assert_eq!(world.finds.load(Ordering::SeqCst), 0);
-    assert_eq!(posts.len(), 2);
-    assert!(posts.iter().all(|post| post.tag == key));
+    assert_eq!(posts.len(), 1);
+    assert_eq!(*world.post_calls.lock(), vec![RelayTag(key.clone()), RelayTag(key)]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

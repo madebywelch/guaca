@@ -217,9 +217,10 @@ impl Runtime {
         ask: ApprovalId,
         text: &str,
         no_buttons: bool,
+        heard_at: i64,
     ) -> Result<Option<String>, StoreError> {
         let Some(approval) = self.inner.store.get_approval(ask)? else { return Ok(None) };
-        if approval.state != ApprovalState::Pending {
+        if approval.state != ApprovalState::Pending || heard_at < approval.created_at {
             return Ok(None);
         }
         Ok(match &approval.request {
@@ -277,7 +278,9 @@ impl Runtime {
             return Ok(());
         }
         if let Some((ask, no_buttons)) = store.latest_ask(&id, &heard.spot).map_err(unheard)? {
-            if let Some(answer) = self.reading(ask, text, no_buttons).map_err(unheard)? {
+            if let Some(answer) =
+                self.reading(ask, text, no_buttons, heard.at_ms).map_err(unheard)?
+            {
                 store
                     .record_place_answer(&id, &heard.spot.place, &heard.key, ask, &answer)
                     .map_err(unheard)?;

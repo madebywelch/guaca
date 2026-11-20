@@ -196,11 +196,11 @@ pub fn failed_notice(headline: &str) -> Card {
 }
 
 pub fn stale(at_ms: i64, now: i64) -> bool {
-    now - at_ms > STALE_MS
+    now.saturating_sub(at_ms) > STALE_MS
 }
 
 pub fn late(at_ms: i64, first_post_at: i64) -> bool {
-    first_post_at - at_ms > LATE_MS
+    first_post_at.saturating_sub(at_ms) > LATE_MS
 }
 
 pub fn trust(person: Option<&OutsideUser>, speaker: &OutsideUser) -> Option<Trust> {
