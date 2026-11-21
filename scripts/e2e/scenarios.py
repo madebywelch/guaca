@@ -2265,11 +2265,17 @@ def scenario_search(w: World) -> None:
     w.wait("the command menu finds the message itself", lambda: ui.find("button", reply, exact=False))
     w.capture("the command menu with a matching message")
     ui.click("button", reply, exact=False)
+    landing = """(() => {
+      const dialogs = [...document.querySelectorAll('[role=dialog]')].map(el => el.getAttribute('aria-label'));
+      const highlight = [...document.querySelectorAll('[data-found=true]')].some(
+        el => el.innerText.includes('The ledger is ready.'));
+      return {menuOpen: dialogs.includes('Command menu'), findOpen: dialogs.includes('Search'),
+        groupsOpen: dialogs.includes('Groups and agents'), highlight};
+    })()"""
+    expected = {"menuOpen": False, "findOpen": False, "groupsOpen": False, "highlight": True}
     w.check("the Groups sheet uses the command menu and a message hit opens without another palette",
-            w.wait("the command menu closes", lambda: not ui.find("dialog", "Command menu"))
-            and not ui.find("dialog", "Search") and not ui.find("dialog", "Groups and agents")
-            and ui.evaluate("document.querySelector('[data-found=true]')?.innerText.includes('The ledger is ready.')"),
-            observed={"message": reply, "findOpened": bool(ui.find("dialog", "Search"))})
+            w.wait("the message is highlighted and the search surfaces close",
+                   lambda: ui.evaluate(landing) == expected), observed=expected)
     dismiss(w)
 
     geometry = {}
