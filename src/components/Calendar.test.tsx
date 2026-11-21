@@ -162,12 +162,13 @@ describe("the crews", () => {
   });
 
   it("says which crew every row belongs to, filtered or not", async () => {
-    const { container } = open([occasion({ title: "Deposition", groupId: OTHER_CREW })]);
+    open([occasion({ title: "Deposition", groupId: OTHER_CREW })]);
     await waitFor(() => expect(screen.getByText("Deposition")).toBeTruthy());
 
-    expect(container.querySelector(".occasion__crew")?.textContent).toBe("Legal");
+    const dialog = screen.getByRole("dialog", { name: "Calendar" });
+    expect(dialog.querySelector(".occasion__crew")?.textContent).toBe("Legal");
     fireEvent.click(screen.getByRole("button", { name: /^legal/i }));
-    expect(container.querySelector(".occasion__crew")?.textContent).toBe("Legal");
+    expect(dialog.querySelector(".occasion__crew")?.textContent).toBe("Legal");
   });
 });
 
@@ -272,11 +273,10 @@ describe("staying current", () => {
   });
 
   it("says what this calendar is not, once, at the bottom", async () => {
-    const { container } = open([]);
+    open([]);
     await waitFor(() => expect(calendar).toHaveBeenCalled());
 
-    expect(container.querySelector(".calendar__note")?.textContent).toMatch(
-      /guaca's own calendar/i,
-    );
+    const dialog = screen.getByRole("dialog", { name: "Calendar" });
+    expect(dialog.querySelector(".calendar__note")?.textContent).toMatch(/guaca's own calendar/i);
   });
 });
