@@ -8699,9 +8699,11 @@ button.artifacts__version[aria-pressed="true"] {
 
   .roster__name {
     grid-area: 1 / 2 / 2 / -1;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   .roster__status {
