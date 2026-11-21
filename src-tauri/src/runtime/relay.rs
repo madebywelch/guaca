@@ -207,10 +207,12 @@ impl Runtime {
                 match adapter.find(&row.spot, &RelayTag(row.key.clone())).await {
                     Ok(Some(posted)) => store.relay_sent(&row.key, Some(&posted)),
                     Ok(None) => store.relay_doubt(&row.key, UNCERTAIN),
-                    Err(SendError::Retry { .. }) if now_ms() - row.created_at >= GIVE_UP_MS => {
+                    Err(SendError::Retry { .. } | SendError::Ambiguous { .. })
+                        if now_ms() - row.created_at >= GIVE_UP_MS =>
+                    {
                         store.relay_doubt(&row.key, UNCERTAIN)
                     }
-                    Err(SendError::Retry { after }) => {
+                    Err(SendError::Retry { after } | SendError::Ambiguous { after }) => {
                         let wait = after.unwrap_or_else(|| backoff(row.attempts + 1));
                         store.relay_hold(&row.key, now_ms() + wait.as_millis() as i64, WAITED)
                     }
@@ -238,6 +240,13 @@ impl Runtime {
         let now = now_ms();
         match sent {
             Ok(posted) => store.relay_sent(&row.key, posted.as_ref()),
+            Err(SendError::Ambiguous { .. }) if now - row.created_at >= GIVE_UP_MS => {
+                store.relay_doubt(&row.key, UNCERTAIN)
+            }
+            Err(SendError::Ambiguous { after }) => {
+                let wait = after.unwrap_or_else(|| backoff(row.attempts + 1));
+                store.relay_hold(&row.key, now + wait.as_millis() as i64, UNCERTAIN)
+            }
             Err(SendError::Retry { .. }) if now - row.created_at > GIVE_UP_MS => {
                 store.relay_failed(&row.key, GAVE_UP)
             }

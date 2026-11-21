@@ -48,6 +48,7 @@ struct World {
     hang_posts: AtomicBool,
     finds: AtomicUsize,
     hide_posts: AtomicBool,
+    lose_post_response: AtomicBool,
     runs: AtomicUsize,
     ending: Mutex<Option<AdapterError>>,
 }
@@ -156,6 +157,9 @@ impl Adapter for Fake {
             };
             if self.0.hang_posts.load(Ordering::SeqCst) {
                 futures_util::future::pending::<()>().await;
+            }
+            if self.0.lose_post_response.swap(false, Ordering::SeqCst) {
+                return Err(SendError::Ambiguous { after: Some(Duration::ZERO) });
             }
             Ok(posted)
         }
@@ -610,6 +614,19 @@ async fn a_crash_between_post_and_mark_on_an_idempotent_provider_posts_again_wit
     assert_eq!(world.finds.load(Ordering::SeqCst), 0);
     assert_eq!(posts.len(), 1);
     assert_eq!(*world.post_calls.lock(), vec![RelayTag(key.clone()), RelayTag(key)]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lost_post_response_is_recovered_without_reposting() {
+    let stub = saying("Your report.").await;
+    let Setup { h, world } = linked(&stub, abilities()).await;
+    world.lose_post_response.store(true, Ordering::SeqCst);
+    hear(&world, said("m1", DM, None, PERSON, "Get the report")).await;
+    let run = settled(&h, "m1").await;
+    relayed(&h, run, Mark::Done).await;
+    assert_eq!(world.finds.load(Ordering::SeqCst), 1);
+    assert_eq!(world.post_calls.lock().len(), 1);
+    assert_eq!(texts(&world.posts()), vec!["Your report."]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

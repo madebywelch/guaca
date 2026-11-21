@@ -58,6 +58,7 @@ pub trait Adapter: Send + Sync + 'static {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SendError {
     Retry { after: Option<Duration> },
+    Ambiguous { after: Option<Duration> },
     Refused { reason: String },
     Gone { reason: String },
 }
