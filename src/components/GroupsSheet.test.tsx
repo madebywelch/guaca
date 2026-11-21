@@ -43,7 +43,7 @@ async function sheetOn(desktop: boolean, mac: boolean) {
       onOpenCalendar={noop}
       onOpenArtifacts={noop}
       onOpenSettings={noop}
-      onOpenSearch={noop}
+      onOpenCommandMenu={noop}
       onNewAgent={noop}
       onNewGroup={noop}
       onOpenMenu={noop}

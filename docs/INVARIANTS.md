@@ -148,7 +148,7 @@ title 20/600, from `--type-*` and `--weight-*`. Mono is for code, in the one
 rule that names the code surfaces. Nothing is set in capitals, small capitals or
 italics. A control is 32px, or 28px compact, with a 6px corner; a card has a
 10px corner; full round is for faces, marks and the now pill. Ink is the primary
-action, amber means needs you, red means failed, and violet is the focus ring.
+action, amber means needs you, red means failed, and focus uses a neutral ring.
 `styles.test.ts` holds the tokens and the rules that spend them, and the
 `look` scenario holds what a person sees: it opens every screen in a real
 browser and fails one that shows more than eight type styles, or a size,

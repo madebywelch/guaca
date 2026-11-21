@@ -1044,6 +1044,11 @@ export interface WorkDecision {
 
 export type OutcomeTrigger = "operator" | "routine" | "event" | "decision" | "retry";
 
+export interface TaskRecord {
+  messages: Envelope[] | null;
+  resultId: MessageId | null;
+}
+
 export type OutcomeStatus =
   | "done"
   | "nothingNew"

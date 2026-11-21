@@ -1,5 +1,4 @@
 import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
-
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { ACCENTS, CHARACTERS, suggestAccent, suggestCharacter } from "../avatars/catalog";
 import { useDismiss } from "../lib/dismiss";
@@ -12,6 +11,7 @@ import { GrantList } from "./GrantList";
 import { Icon } from "./Icon";
 import { ModelSuggestions } from "./ModelSuggestions";
 import { SubscriptionModel } from "./ProviderFields";
+import { Scrim } from "./Scrim";
 import { SigninList } from "./SigninList";
 
 interface Props {
@@ -134,7 +134,7 @@ export function AgentEditor({ agent, onClose }: Props) {
   };
 
   return (
-    <div className="scrim">
+    <Scrim>
       <button type="button" className="scrim__close" aria-label="Close dialog" onClick={onClose} />
       <div
         className="dialog dialog--form"
@@ -416,7 +416,7 @@ export function AgentEditor({ agent, onClose }: Props) {
           )}
         </div>
       </div>
-    </div>
+    </Scrim>
   );
 }
 

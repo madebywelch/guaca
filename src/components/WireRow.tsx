@@ -8,6 +8,7 @@ import { type PeerSummary, summaryLabel, type WirePeer } from "../lib/transcript
 import type { AgentId, RunId } from "../lib/types";
 import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
+import { Scrim } from "./Scrim";
 
 export function why(reason: string): string {
   const body = reason.replace(/^Refused:\s*/i, "");
@@ -329,9 +330,9 @@ export function MessageModal({
   useDismiss(onClose);
 
   return (
-    <div className="scrim">
+    <Scrim>
       <button type="button" className="scrim__close" aria-label="Close dialog" onClick={onClose} />
-      <div className="dialog" role="dialog" aria-modal="true" aria-label={title}>
+      <div className="dialog dialog--message" role="dialog" aria-modal="true" aria-label={title}>
         <div className="wire-modal__head">
           <AgentAvatar avatar={peer.avatar} color={peer.color} size="sm" seed={peer.id} />
           {counterpart && (
@@ -372,7 +373,7 @@ export function MessageModal({
           </button>
         </div>
       </div>
-    </div>
+    </Scrim>
   );
 }
 

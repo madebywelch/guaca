@@ -43,17 +43,7 @@ function Workspace({ page }: { page: string }) {
   return (
     <>
       <Markdown>{fence("html", page)}</Markdown>
-      {overlay === "search" && (
-        <Search
-          onClose={() => setOverlay(null)}
-          onEditAgent={() => {}}
-          onEditGroup={() => {}}
-          onNewAgent={() => {}}
-          onNewGroup={() => {}}
-          onOpenCafeteria={() => {}}
-          onOpenSettings={() => {}}
-        />
-      )}
+      {overlay === "search" && <Search onClose={() => setOverlay(null)} />}
     </>
   );
 }
@@ -222,6 +212,19 @@ describe("a page in a message", () => {
     await waitFor(() => expect(container.querySelector("iframe")).toBeTruthy());
     expect(container.querySelector("iframe")?.style.height).not.toBe("");
     expect(screen.getByRole("button", { name: "Open" })).toBeTruthy();
+  });
+
+  it("mounts the HTML reader outside the transcript that opened it", async () => {
+    const { container } = render(
+      <div className="pane__scroll">
+        <Markdown>{fence("html", PAGE)}</Markdown>
+      </div>,
+    );
+    await waitFor(() => expect(container.querySelector("iframe")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    const reader = screen.getByRole("dialog");
+    expect(container.contains(reader)).toBe(false);
+    expect(within(reader).getByRole("button", { name: "Close" })).toBeTruthy();
   });
 
   it("never becomes part of this document", async () => {

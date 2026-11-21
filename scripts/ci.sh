@@ -52,6 +52,7 @@ run_scripts() {
   step "CI runs every part of this gate"
   python3 scripts/check-ci-parts.test.py
   python3 scripts/check-ci-parts.py
+  node --test scripts/recover-lost-runner-jobs.test.mjs scripts/publish-main-channel.test.mjs
 }
 
 run_formal() {

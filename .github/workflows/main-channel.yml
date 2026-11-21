@@ -7,11 +7,15 @@ on:
 
 concurrency:
   group: main-channel
-  cancel-in-progress: false
+  queue: max
 
 permissions:
   contents: write
   packages: write
+
+defaults:
+  run:
+    shell: bash
 
 env:
   IMAGE: ghcr.io/madebywelch/guaca/guacad
@@ -20,6 +24,7 @@ jobs:
   build:
     name: build ${{ matrix.arch }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - arch: amd64
@@ -70,11 +75,12 @@ jobs:
           name: digests-${{ matrix.arch }}
           path: ${{ runner.temp }}/digests/*
           if-no-files-found: error
+          overwrite: true
           retention-days: 1
 
   publish:
     needs: build
-    runs-on: aws-linux-2cpu-4gb
+    runs-on: aws-release-linux-2cpu-4gb
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -85,29 +91,69 @@ jobs:
         with:
           node-version: 22
 
-      - uses: actions/download-artifact@v4
+      - name: Read the feed before changing any tag
+        id: tip
+        run: |
+          ref=$(git ls-remote origin refs/heads/main-feed)
+          if [ -n "$ref" ]; then
+            git fetch --quiet origin refs/heads/main-feed
+            echo "feed=$(git rev-parse FETCH_HEAD)" >> "$GITHUB_OUTPUT"
+            tip=$(git ls-remote --exit-code origin refs/heads/main | cut -f1)
+            if ! manifest=$(git show FETCH_HEAD:guaca-main.json | node --input-type=module -e '
+              import { readFileSync } from "node:fs";
+              import { readMainEnvelope } from "./scripts/release-manifest.mjs";
+              console.log(JSON.stringify(readMainEnvelope(readFileSync(0, "utf8"), readFileSync("main-keys.pub", "utf8"))));
+            '); then
+              if [ "$tip" != "$GITHUB_SHA" ]; then
+                exit 1
+              fi
+              echo "current=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            published=$(jq -er .commit <<< "$manifest")
+            if [ "$published" = "$GITHUB_SHA" ]; then
+              image=$(jq -er .image <<< "$manifest")
+              digest=${image#"$IMAGE@"}
+              [[ "$image" == "$IMAGE@$digest" && "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+              echo "digest=$digest" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if ! git merge-base --is-ancestor "$published" "$GITHUB_SHA" && [ "$tip" != "$GITHUB_SHA" ]; then
+              echo "::notice::$published is already published; not moving the channel back to $GITHUB_SHA."
+              exit 0
+            fi
+          fi
+          echo "current=true" >> "$GITHUB_OUTPUT"
+
+      - if: steps.tip.outputs.current == 'true'
+        uses: actions/download-artifact@v4
         with:
           path: ${{ runner.temp }}/digests
           pattern: digests-*
           merge-multiple: true
 
-      - uses: docker/setup-buildx-action@v3
+      - if: steps.tip.outputs.current == 'true' || steps.tip.outputs.digest != ''
+        uses: docker/setup-buildx-action@v3
 
-      - uses: docker/login-action@v3
+      - if: steps.tip.outputs.current == 'true'
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Tag both architectures as one image
+        if: steps.tip.outputs.current == 'true'
         id: image
         run: |
           cd "$RUNNER_TEMP/digests"
-          # shellcheck disable=SC2046
-          docker buildx imagetools create \
-            --tag "$IMAGE:main" \
-            --tag "$IMAGE:sha-$GITHUB_SHA" \
-            $(printf "$IMAGE@sha256:%s " *)
+          sources=()
+          for digest in *; do
+            [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+            sources+=("$IMAGE@sha256:$digest")
+          done
+          [ "${#sources[@]}" -eq 2 ]
+          docker buildx imagetools create --tag "$IMAGE:sha-$GITHUB_SHA" "${sources[@]}"
           digest=$(docker buildx imagetools inspect "$IMAGE:sha-$GITHUB_SHA" --format '{{json .Manifest}}' | jq -r .digest)
           case "$digest" in
             sha256:*) echo "digest=$digest" >> "$GITHUB_OUTPUT" ;;
@@ -115,29 +161,12 @@ jobs:
           esac
 
       - name: Check that a box can pull it
+        if: steps.tip.outputs.current == 'true'
         run: |
           docker logout ghcr.io
           if ! docker buildx imagetools inspect "$IMAGE@${{ steps.image.outputs.digest }}" > /dev/null; then
             echo "::error::$IMAGE is not public, so no box can pull it. Open https://github.com/madebywelch/guaca/pkgs/container/guaca%2Fguacad, choose Package settings, set the visibility to Public, then re-run this workflow."
             exit 1
-          fi
-
-      - name: Check that this build is newer than the published one
-        id: tip
-        run: |
-          published=""
-          if git fetch --quiet origin main-feed 2> /dev/null; then
-            published=$(git show FETCH_HEAD:guaca-main.json | jq -r .manifest | base64 -d | jq -r .commit)
-          fi
-          tip=$(git ls-remote origin refs/heads/main | cut -f1)
-          if [ "$published" = "$GITHUB_SHA" ]; then
-            echo "::notice::$GITHUB_SHA is already published."
-            echo "current=false" >> "$GITHUB_OUTPUT"
-          elif [ -z "$published" ] || git merge-base --is-ancestor "$published" "$GITHUB_SHA" || [ "$tip" = "$GITHUB_SHA" ]; then
-            echo "current=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::notice::$published is published and newer than $GITHUB_SHA; not moving the feed backward."
-            echo "current=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Sign the feed
@@ -154,9 +183,11 @@ jobs:
 
       - name: Publish the feed
         if: steps.tip.outputs.current == 'true'
+        env:
+          FEED: ${{ steps.tip.outputs.feed }}
         run: |
-          if git fetch --quiet origin main-feed 2> /dev/null; then
-            git switch --quiet --force-create main-feed FETCH_HEAD
+          if [ -n "$FEED" ]; then
+            git switch --quiet --force-create main-feed "$FEED"
           else
             git switch --quiet --orphan main-feed
           fi
@@ -166,3 +197,16 @@ jobs:
             commit --quiet --message "main at $GITHUB_SHA"
           git push --quiet origin main-feed
           echo "Published $GITHUB_SHA as ${{ steps.image.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - if: steps.tip.outputs.current == 'true' || steps.tip.outputs.digest != ''
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Point the main tag at the published digest
+        if: steps.tip.outputs.current == 'true' || steps.tip.outputs.digest != ''
+        env:
+          DIGEST: ${{ steps.tip.outputs.digest || steps.image.outputs.digest }}
+        run: docker buildx imagetools create --tag "$IMAGE:main" "$IMAGE@$DIGEST"

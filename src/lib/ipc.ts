@@ -99,6 +99,7 @@ import type {
   SkillScope,
   Staged,
   SubscriptionStatus,
+  TaskRecord,
   ToolSummary,
   UiEvent,
   UpcomingRun,
@@ -369,6 +370,9 @@ export const api = {
 
   channelMessages: (channelId: AgentId, limit?: number, through?: MessageId) =>
     invoke<Envelope[]>("channel_messages", { channelId, limit, through }),
+
+  taskRecord: (channelId: AgentId, runId: RunId) =>
+    invoke<TaskRecord | null>("task_record", { channelId, runId }),
 
   pairMessages: (a: AgentId, b: AgentId, limit?: number) =>
     invoke<Envelope[]>("pair_messages", { a, b, limit }),

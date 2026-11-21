@@ -216,7 +216,9 @@ describe("Composer", () => {
       />,
     );
     const select = screen.getByRole("combobox", { name: "Recipient" }) as HTMLSelectElement;
-    expect(screen.getByRole("button", { name: "Send" }).textContent).toContain("Send");
+    const send = screen.getByRole("button", { name: "Send" });
+    expect(send.textContent).toBe("");
+    expect(send.querySelector("svg")).not.toBeNull();
     expect(select.selectedOptions[0]?.textContent).toBe("Ines");
     expect(screen.getByRole("group", { name: "Studio" }).textContent).toBe("Ines");
     expect(screen.getByRole("group", { name: "Office" }).textContent).toBe("Ines");

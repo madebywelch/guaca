@@ -16,6 +16,7 @@ import { desktop } from "../lib/transport";
 import { type Attachment, errorMessage } from "../lib/types";
 import { Icon } from "./Icon";
 import { Markdown } from "./Markdown";
+import { Scrim } from "./Scrim";
 
 export function FileCard({ file }: { file: Attachment }) {
   const [open, setOpen] = useState(false);
@@ -203,7 +204,7 @@ export function FilePreview({ file, onClose }: { file: Attachment; onClose: () =
   useDismiss(onClose);
 
   return (
-    <div className="scrim">
+    <Scrim>
       <button type="button" className="scrim__close" aria-label="Close dialog" onClick={onClose} />
       <div className="dialog dialog--file" role="dialog" aria-modal="true" aria-label={file.name}>
         <div className="file-view__head">
@@ -244,7 +245,7 @@ export function FilePreview({ file, onClose }: { file: Attachment; onClose: () =
           )}
         </div>
       </div>
-    </div>
+    </Scrim>
   );
 }
 

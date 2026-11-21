@@ -35,6 +35,7 @@ import { hiddenNow, shown, useHeld } from "./lib/held";
 import { unreachableHint } from "./lib/host";
 import { api, onRevealRequest } from "./lib/ipc";
 import { bindingFor } from "./lib/keybinds";
+import { PLACE_LABELS } from "./lib/menu";
 import { FEED_COALESCE_MS, presenceOf, presenceReporter, samePresence } from "./lib/menubar";
 import { catchUp, deliver, land } from "./lib/notify";
 import { readFirstTask } from "./lib/onboarding";
@@ -135,7 +136,7 @@ export default function App() {
   const settingsPage = useStore((state) => state.settingsPage);
   const openSettings = useStore((state) => state.openSettings);
   const closeSettings = useStore((state) => state.closeSettings);
-  const [searching, setSearching] = useState<string | false>(false);
+  const [searching, setSearching] = useState(false);
   const [showGroups, setShowGroups] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const menuOpen = useRef(false);
@@ -223,7 +224,7 @@ export default function App() {
         setShowMenu(false);
         openConversation(agent.id);
       }
-      if (binding.id === "search") setSearching("");
+      if (binding.id === "search") setSearching(true);
       if (binding.id === "settings" || binding.id === "shortcuts") {
         if (dismissing("commandMenu")) return;
         if (menuOpen.current) setShowMenu(false);
@@ -358,7 +359,7 @@ export default function App() {
     ...(showCafeteria ? ["cafeteria" as const] : []),
     ...(showCalendar ? ["calendar" as const] : []),
     ...(artifactsOpen ? ["artifacts" as const] : []),
-    ...(searching !== false ? ["search" as const] : []),
+    ...(searching ? ["search" as const] : []),
   ];
   const [dialogOrder, setDialogOrder] = useState<Overlay[]>([]);
   const orderedDialogs = [
@@ -482,7 +483,7 @@ export default function App() {
     >
       <TopBar
         back={settingsPage ? { to: openAgent?.name ?? "Workspace", go: closeSettings } : null}
-        onSearch={() => setSearching("")}
+        onSearch={() => setSearching(true)}
         onGroups={() => setShowGroups(true)}
         onSettings={() => openSettings()}
         onNewAgent={() => setEditing("new")}
@@ -534,7 +535,7 @@ export default function App() {
                   className="btn btn--primary"
                   onClick={() => setShowCafeteria(true)}
                 >
-                  Open the cafeteria
+                  {PLACE_LABELS.cafeteria}
                 </button>
                 <button type="button" className="btn" onClick={() => setEditing("new")}>
                   Create one agent
@@ -616,24 +617,6 @@ export default function App() {
         />
       )}
 
-      {showMenu && (
-        <CommandMenu
-          onClose={() => setShowMenu(false)}
-          onOpenAgent={openConversation}
-          onSection={(section) => openSettings(section)}
-          onPlace={(place, query) => {
-            if (place === "search") setSearching(query ?? "");
-            if (place === "forYou") showForYou(true);
-            if (place === "calendar") setShowCalendar(true);
-            if (place === "artifacts") showArtifacts({ id: null });
-            if (place === "groups") setShowGroups(true);
-            if (place === "newAgent") setEditing("new");
-            if (place === "newGroup") setEditingGroup("new");
-            if (place === "cafeteria") setShowCafeteria(true);
-          }}
-        />
-      )}
-
       {ready && (!chosenQuestion || settingsPage) && <Toast />}
 
       {showGroups && (
@@ -645,10 +628,30 @@ export default function App() {
           onOpenArtifacts={() => showArtifacts({ id: null })}
           onEditGroup={(group) => setEditingGroup(group)}
           onOpenSettings={() => openSettings()}
-          onOpenSearch={() => setSearching("")}
+          onOpenCommandMenu={() => setShowMenu(true)}
           onNewAgent={() => setEditing("new")}
           onNewGroup={() => setEditingGroup("new")}
           onOpenMenu={(agent, at) => setMenu({ agent, ...at })}
+        />
+      )}
+
+      {showMenu && (
+        <CommandMenu
+          onClose={() => setShowMenu(false)}
+          onOpenAgent={openConversation}
+          onSection={(section) => openSettings(section)}
+          onNavigate={() => setShowGroups(false)}
+          onEditAgent={setEditing}
+          onEditGroup={setEditingGroup}
+          onPlace={(place) => {
+            if (place === "forYou") showForYou(true);
+            if (place === "calendar") setShowCalendar(true);
+            if (place === "artifacts") showArtifacts({ id: null });
+            if (place === "groups") setShowGroups(true);
+            if (place === "newAgent") setEditing("new");
+            if (place === "newGroup") setEditingGroup("new");
+            if (place === "cafeteria") setShowCafeteria(true);
+          }}
         />
       )}
 
@@ -684,19 +687,7 @@ export default function App() {
           case "artifacts":
             return <Artifacts key={dialog} onClose={() => showArtifacts(null)} />;
           case "search":
-            return (
-              <Search
-                key={dialog}
-                initial={searching === false ? "" : searching}
-                onClose={() => setSearching(false)}
-                onEditAgent={(agent) => setEditing(agent)}
-                onEditGroup={(group) => setEditingGroup(group)}
-                onNewAgent={() => setEditing("new")}
-                onNewGroup={() => setEditingGroup("new")}
-                onOpenCafeteria={() => setShowCafeteria(true)}
-                onOpenSettings={() => openSettings()}
-              />
-            );
+            return <Search key={dialog} onClose={() => setSearching(false)} />;
           default:
             return null;
         }

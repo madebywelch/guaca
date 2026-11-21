@@ -164,13 +164,7 @@ describe("StatusBar", () => {
       within(kind)
         .getAllByRole("option")
         .map((option) => option.textContent),
-    ).toEqual([
-      "Send a message",
-      "Open a conversation",
-      "Open the calendar",
-      "Open For you",
-      "Open Settings",
-    ]);
+    ).toEqual(["Send a message", "Open a conversation", "Calendar", "For you", "App settings"]);
     fireEvent.change(kind, { target: { value: "channel" } });
     expect(screen.getByRole("combobox", { name: "Whose conversation" })).toBeTruthy();
   });

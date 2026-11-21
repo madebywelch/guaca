@@ -116,7 +116,9 @@ export function ConversationRoster({
                       title=""
                     />
                     <span className="roster__label">
-                      <span className="roster__name">{agent.name}</span>
+                      <span className="roster__name" title={agent.name}>
+                        {agent.name}
+                      </span>
                       <span className="roster__status">{status}</span>
                     </span>
                     {key && <kbd>{key}</kbd>}

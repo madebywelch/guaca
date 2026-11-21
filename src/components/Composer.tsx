@@ -100,6 +100,7 @@ interface Props {
   onQuestions?: () => boolean;
   focusOnOpen?: boolean;
   waiting?: { asker: string; answer: () => void };
+  onTaskQuestion?: () => boolean;
   group: GroupId | null;
   disabled?: boolean;
   disabledReason?: string;
@@ -118,6 +119,7 @@ export function Composer({
   onQuestions,
   focusOnOpen = true,
   waiting,
+  onTaskQuestion,
 }: Props) {
   const storageKey = `guaca.draft:${workspaceOrigin()}:${draftKey ?? group ?? "composer"}`;
   const owner = useMemo(() => ownerFor(storageKey, !!draftKey), [storageKey, draftKey]);
@@ -161,6 +163,7 @@ export function Composer({
 
   const ref = useRef<HTMLTextAreaElement>(null);
   const mirror = useRef<HTMLDivElement>(null);
+  const mentionList = useRef<HTMLDivElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const localFiles = useStore((s) => s.capabilities.localFiles);
 
@@ -189,6 +192,7 @@ export function Composer({
   }, [disabled, take]);
 
   const live = useLiveAgents();
+  const recipientAgent = live.find((agent) => agent.id === recipient?.id);
   const groups = useStore((s) => s.groups);
   const crew = useMemo(
     () => (group ? live.filter((agent) => agent.groupId === group) : []),
@@ -207,6 +211,17 @@ export function Composer({
     node.style.height = `${node.scrollHeight}px`;
     if (mirror.current) mirror.current.scrollTop = node.scrollTop;
   }, [text]);
+
+  useEffect(() => {
+    const list = mentionList.current;
+    const choice = list?.children.item(selected);
+    if (!showing || !list || !choice) return;
+    const top = list.getBoundingClientRect().top + list.clientTop;
+    const bottom = top + list.clientHeight;
+    const row = choice.getBoundingClientRect();
+    if (row.top < top) list.scrollTop += row.top - top;
+    else if (row.bottom > bottom) list.scrollTop += row.bottom - bottom;
+  }, [selected, showing]);
 
   const choose = (name: string) => {
     if (!query) return;
@@ -312,12 +327,12 @@ export function Composer({
       !event.shiftKey &&
       !event.ctrlKey &&
       !event.metaKey &&
-      waiting &&
       !text &&
-      files.length === 0
+      files.length === 0 &&
+      (waiting || onTaskQuestion?.())
     ) {
       event.preventDefault();
-      waiting.answer();
+      waiting?.answer();
       return;
     }
 
@@ -337,7 +352,6 @@ export function Composer({
     <div className="composer" data-dragging={dragging || undefined}>
       {recipient && onRecipientChange && (
         <label className="composer__recipient">
-          <span>To</span>
           <select
             aria-label="Recipient"
             value={recipient.id}
@@ -392,6 +406,19 @@ export function Composer({
               );
             })}
           </select>
+          <span className="composer__recipient-label" aria-hidden="true">
+            {recipientAgent && (
+              <AgentAvatar
+                avatar={recipientAgent.avatar}
+                color={recipientAgent.color}
+                size="xs"
+                mood="idle"
+                seed={recipientAgent.id}
+              />
+            )}
+            <span>{recipient.name}</span>
+            <Icon name="chevron-down" />
+          </span>
         </label>
       )}
       {files.length > 0 && (
@@ -493,7 +520,13 @@ export function Composer({
         </ul>
       )}
       {showing && (
-        <div className="mentions" role="listbox" id="mention-list" aria-label="Agents">
+        <div
+          className="mentions"
+          role="listbox"
+          id="mention-list"
+          aria-label="Agents"
+          ref={mentionList}
+        >
           {matches.map((name, index) => {
             const agent = crew.find((a) => a.name === name);
             const active = index === selected;
@@ -608,7 +641,6 @@ export function Composer({
             (text.trim().length === 0 && files.length === 0)
           }
         >
-          <span>Send</span>
           <Icon name="arrow-up" size={16} />
         </button>
       </div>

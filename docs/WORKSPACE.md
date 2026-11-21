@@ -26,10 +26,9 @@ exchange happened; the pair's thread is what it said*, in `ARCHITECTURE.md`.
 A channel is a conversation between a person and agents, so it is drawn as one.
 An audit counted eight different left edges for text within 106 pixels of each
 other: a time gutter, a face lane, vertical rules, footnote numbers and the
-text beside each. Text now starts on two edges, and every row is placed by
-three tokens: `--column-inset` (the face), `--column-face` (the face's lane)
-and `--column-bubble`, which sets a box back by its own padding so the words
-inside it still start on the body's edge.
+text beside each. The brief, result, hand-off, question, and error boxes start
+at `--column-inset`. `--column-face` reserves the face lane so the words in an
+agent's turn and the person's brief share a left edge.
 
 **An agent's turn is its face, name and time on one line.** `.msg__head` is the
 face at `xs`, the name in the strong interface role and the time in meta, and
@@ -63,8 +62,31 @@ the result is decided by `withResults` in `lib/transcript.ts` from the
 transcript and the host's running list, so it agrees with the outcome's note
 without asking for it.
 
-**Tool steps are one quiet line.** See the next section. **A hand-off is shown,
-not footnoted.** When an agent asks colleagues, `HandoffRow` draws a card: each
+**Tool steps are one quiet line.** See the next section. **A delegated brief
+has a task map.** The map uses the recorded run, not the latest conversation
+message. The host reads its original envelopes across the participating
+agents. The map stays pinned above that conversation while the task runs.
+The task with the soonest-due question opens automatically; a
+person can fold it and open another. Three direct colleagues appear first,
+with questions before ongoing work and finished replies last. The map uses
+at most two fifths of the pane. Each visible branch fits in full; open any
+remaining branches from the one colleagues control. The map uses the width beside the roster,
+leaving the transcript in its reading column. At 740 pixels of pane width
+the brief sits above the lead on the left, with connectors branching to
+colleagues on the right. Below that they stack, and finished replies in the
+live map take one line. The branches take priority if space is tight. From an empty composer,
+Tab goes to the visible branch question when the agent has not asked one
+directly; a number picks an answer. Escape from the composer still opens
+the Questions tray. A colleague's own hand-off is
+a named link. A colleague's recorded reply opens as a message and stays
+open if the task finishes while it is being read. The finished map folds immediately
+above that result. When no result was delivered, it says the hand-off ended
+instead. A map that could not refresh keeps its last recorded view and
+offers a retry rather than calling a progress note the result. A task too
+large to draw still keeps the host's recorded result in the transcript.
+
+The older hand-off record still covers exchanges not rooted in an operator's
+brief and conversations with an older host. `HandoffRow` draws each
 colleague's face and name, the question in the interface role, a status word
 with elapsed time (asked, working, writing, waiting its turn, waiting for you,
 or answered in), and the answer at reading size when it lands. The words come
@@ -1079,10 +1101,10 @@ without the operator having scrolled anything.
 
 The composer is a raised, bounded field with a visible send control. Its edge
 uses `--edge-control`, which is solved against the surfaces on both sides.
-Focus adds a distinct boundary without moving the field. The recipient is the
-agent whose channel is open, and selecting another recipient opens that agent's
-channel with the unsent draft. An @mention names an agent in the text; it does
-not change the recipient.
+Focus uses the same inset neutral ring as other fields without moving the
+composer. The recipient is the agent whose channel is open, and selecting
+another recipient opens that agent's channel with the unsent draft. An @mention
+names an agent in the text; it does not change the recipient.
 
 The permanent row names the model that will answer and says that `@` names an
 agent. Its shortcut comes from `FIND_KEY` in `lib/keybinds.ts`, shared with the
@@ -1101,8 +1123,10 @@ Its order is the same as Command 1 to 9 and the command menu: pinned agents
 first within each group, then the order the operator set. Activity never moves
 a row. Agents past nine remain in the scrollable list and can be opened by
 name or with the next and previous keys; only the numbers stop at nine. The
-sidebar is 248 px wide and uses 212 px at a 900 px window. Names wrap rather
-than losing their distinguishing words.
+sidebar is 248 px wide and uses 212 px at a 900 px window. At desktop widths,
+the name has the first line to itself. The status and shortcut share the line
+below it. If the name still does not fit, an ellipsis marks the cut and the
+full name appears on hover.
 
 After the workspace is read, the opening conversation is the owner of the
 soonest-due question. A colleague's approval carries the same run ID as the
@@ -1123,10 +1147,10 @@ show scheduled work without an hour ruler in the window.
 ## Command K is one box that writes, answers, jumps and sets
 
 `CommandMenu.tsx` draws it and `lib/menu.ts` decides its rows. It is one input
-with the recipient beside it, then four sections: Waiting on you, with each
-request's own answers as rows, Agents, Actions and Settings, which holds the
-reading surface, the typeface and every pane. Typing filters every section at
-once.
+with the recipient beside it. Typing filters Waiting on you, Agents, Actions
+and Settings, and looks up saved content in Search results. Open a result
+from the menu without opening another search. The Groups sheet's shortcut
+opens this same menu.
 
 Writing to someone stays three presses: Command K, the sentence, Return. Three
 words or more select "Write to" and the recipient, because a sentence is a
@@ -2227,19 +2251,18 @@ the accounts or the transcript. Two agents holding one sandbox id is two agents
 on one machine, and a copy that inherited a routine would double a standing
 commitment nobody asked to double.
 
-## Search happens in two places and is ranked in one
+## Command K searches the workspace, and Command F finds messages and files
 
 The workspace is held in two places, so it is matched in two: messages, files,
 links and routines are in SQLite and are matched there, while agents and groups
 are already in the webview's store to draw the sidebar and actions are not stored
 anywhere at all. Reading the transcript into the renderer to search it would
-copy the database across IPC on every keystroke; going to IPC for two agent
-names would make the commonest search the slow one. What must not be split is
-the ordering: both halves arrive in `lib/search.ts` as raw matches and are
-scored by one function, because a list where an agent and a message are ordered
-by different rules is a list you have to read twice. A file and a link are the
-same rows as the messages read from a different angle, which is why one scan
-produces all three.
+copy the database across IPC on every keystroke. Command K searches local
+actions immediately and adds saved results once the host answers. Those
+results do not take the selection away from a command or a draft. Command F
+uses the same lookup, shows only messages and files, and never runs a command.
+A file and a link are the same rows as the messages read from a different
+angle, which is why one scan produces all three.
 
 ## A search hit that opens the wrong part of a channel is a search that failed
 
@@ -2629,9 +2652,9 @@ lightness, which is the axis red-green colorblindness keeps.
 
 And it is spent only on attention. It had become the focus ring, the primary
 button, the send button, every toggle that was on, every link, a running job
-and the streaming caret, so "you tabbed here" and "answer me" were one ring. A
-focus ring and a drop target use the system color, and nothing else is filled
-or edged in it: something running is drawn in ink, and the system's chips and
+and the streaming caret, so "you tabbed here" and "answer me" were one ring.
+Focus rings and drop targets use a neutral token independent of the theme's
+system color. Something running is drawn in ink, and the system's chips and
 banners sit on a neutral wash. Primary and send buttons use the action fill
 and its paired text color. `styles.test.ts` fails a focus rule or an on-state
 spelled from the attention color, a fill or an edge in the system color outside
@@ -2909,7 +2932,7 @@ The fixed ones are listed as fixed, and the ones listed under *Anywhere* are
 matched from the same table the pane draws, so a key listed there is a key that
 works: Command K opens the command menu, Command 1 to 9 open the agents the menu
 numbers, Control Tab and Control Shift Tab step in that same order,
-Command F opens search, Command comma opens settings, Command slash
+Command F searches messages and files, Command comma opens settings, Command slash
 opens the list itself, and Command Z takes back an answer while it still offers
 Undo. The keys of the command menu and of Needs you are listed under those two
 surfaces, from the same table, and `keybinds.test.ts` holds that each is there.

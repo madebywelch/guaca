@@ -3,3 +3,4 @@ self-hosted-runner:
     - aws-linux-4cpu-16gb
     - aws-linux-arm-2cpu-4gb
     - aws-linux-2cpu-4gb
+    - aws-release-linux-2cpu-4gb

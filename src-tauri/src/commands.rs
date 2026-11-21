@@ -1692,6 +1692,16 @@ pub async fn pair_messages(
     Ok(state.runtime.store().pair_messages(a, b, limit.unwrap_or(200).min(1000))?)
 }
 
+const MAX_TASK_MESSAGES: usize = 2_000;
+
+pub async fn task_record(
+    state: &AppState,
+    channel_id: AgentId,
+    run_id: RunId,
+) -> Reply<Option<crate::domain::outcome::TaskRecord>> {
+    Ok(state.runtime.store().task_record(channel_id, run_id, MAX_TASK_MESSAGES)?)
+}
+
 pub async fn conversation_flow(
     state: &AppState,
     group: GroupId,

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from . import look
-from .browser import label
+from .browser import Browser, label
 from .world import STAND_IN_KEY, STAND_IN_MODEL, Call, Reply, World, call, held, refuse, say, text_of
 
 AGENT = "Chief of Staff"
@@ -524,6 +524,140 @@ def look_surface(w: World, surface: str) -> None:
     ui.viewport(*look.FRAME)
 
 
+def scenario_controls(w: World) -> None:
+    look_world(w)
+    look_surface(w, "light")
+    ui = w.ui
+    field = ("combobox", f"Write to {AGENT}")
+    ui.fill(*field, "   ")
+    w.check("Send is unavailable for a blank draft",
+            ui.property("button", "Send", "disabled"), stop=False)
+    ui.fill(*field, "")
+    composer = ui.evaluate("""(() => {
+      const box = document.activeElement.closest('.composer');
+      const ring = getComputedStyle(box);
+      return {ring: [ring.outlineColor, ring.outlineWidth, ring.outlineOffset],
+              shadow: ring.boxShadow,
+              send: box.querySelector('button[aria-label="Send"]').textContent.trim(),
+              recipient: box.querySelector('label:has(select) > [aria-hidden="true"]')?.innerText.trim(),
+              face: !!box.querySelector('label:has(select) .avatar')};
+    })()""")
+    w.check("the composer has an icon Send and a recipient pill with a face",
+            composer["send"] == "" and composer["recipient"] == AGENT and composer["face"],
+            observed={k: v for k, v in composer.items() if k not in ("ring", "shadow")}, stop=False)
+
+    edges = """['.composer', '.result', '.msg__bubble', '.ask'].map(
+      selector => document.querySelector(selector)?.getBoundingClientRect().left)"""
+    columns = {}
+    for width, height in (look.FRAME, (390, 700)):
+        ui.viewport(width, height)
+        columns[width] = ui.evaluate(edges)
+    w.check("the composer, result, brief and question start on the same edge",
+            all(None not in values and max(values) - min(values) < 1 for values in columns.values()),
+            observed=columns, stop=False)
+    ui.viewport(*look.FRAME)
+
+    show(w, "Settings")
+    ui.click("tab", "General")
+    ui.click("textbox", "Your name")
+    field_ring = ui.evaluate("""(() => {
+      const s = getComputedStyle(document.activeElement);
+      return [s.outlineColor, s.outlineWidth, s.outlineOffset];
+    })()""")
+    neutral = ui.evaluate("""(() => {
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--faint)';
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    })()""")
+    w.check("the focused composer and name field share one neutral ring without a halo",
+            composer["ring"] == field_ring and field_ring[0] == neutral
+            and field_ring[1] != "0px" and composer["shadow"] == "none",
+            observed={"composer": composer["ring"], "field": field_ring}, stop=False)
+
+    ui.click("tab", "Appearance")
+    short = ui.within("radiogroup", "Reading surface", "radio")
+    long = ui.within("radiogroup", "Reading size", "radio")
+    w.check("short choices are segments and longer choices are visible radios",
+            len(short) == 3 and len(long) == 5 and ui.evaluate("""(() => {
+              const short = document.querySelector('[aria-label="Reading surface: Light"]');
+              const long = document.querySelector('[aria-label="Reading size: 16px"]');
+              return getComputedStyle(short).opacity === '0'
+                && getComputedStyle(long).opacity === '1' && long.checked;
+            })()"""), observed={"surface": len(short), "sizes": len(long)})
+    ui.click("radio", "Reading surface: Light")
+    ui.key("ArrowDown")
+    w.check("one arrow changes the selected segment and applies the new surface",
+            ui.focused() == ("radio", "Reading surface: Dark")
+            and ui.property("radio", "Reading surface: Dark", "checked")
+            and not ui.property("radio", "Reading surface: Light", "checked")
+            and ui.evaluate("document.documentElement.dataset.surface") == "dark")
+    ui.key("Tab")
+    w.check("Tab leaves the radio group instead of stopping on each segment",
+            ui.focused() == ("radio", "Theme: Violet"))
+    ui.click("radio", "Contrast: More")
+    w.check("a custom look does not falsely mark any preset selected",
+            not any(ui.property("radio", label(node), "checked")
+                    for node in ui.within("radiogroup", "Theme presets", "radio")))
+    ui.click("tab", "Notifications")
+    w.check("long notification choices use visible radios even with only two options",
+            len(ui.within("radiogroup", "What a push says", "radio")) == 2
+            and ui.evaluate("""(() => {
+              const options = [...document.querySelectorAll(
+                '[aria-label="Include what finished"], [aria-label="Only say that something finished"]'
+              )];
+              return options.length === 2 && options.every(input => getComputedStyle(input).opacity === '1');
+            })()"""))
+    ui.evaluate("""(() => {
+      const send = window.fetch;
+      window.formatSaves = 0;
+      window.fetch = (url, init) => {
+        if (!String(url).endsWith('/v1/call') || !init?.body ||
+            JSON.parse(init.body).args?.patch?.delivery?.format !== 'json') return send(url, init);
+        window.formatSaves++;
+        return new Promise(resolve => {
+          window.rejectFormatSave = () => {
+            window.fetch = send;
+            resolve(new Response(JSON.stringify({
+              err: {kind: 'storage', message: 'Could not save the notification format.'}
+            }), {status: 500}));
+          };
+        });
+      };
+    })()""")
+    ui.click("radio", "Format: ntfy")
+    ui.key("ArrowDown")
+    w.wait("the first format save is pending", lambda: ui.evaluate("window.formatSaves === 1"))
+    held_focus = ui.focused()
+    ui.key(" ")
+    ui.evaluate("window.rejectFormatSave()")
+    w.wait("the refusal is visible", lambda: "Could not save the notification format." in ui.text())
+    w.check("a refused notification format keeps focus and the saved value without a second write",
+            held_focus == ("radio", "Format: JSON webhook")
+            and ui.focused() == held_focus and ui.evaluate("window.formatSaves") == 1
+            and ui.property("radio", "Format: ntfy", "checked")
+            and w.host.call("get_settings")["delivery"]["format"] == "ntfy",
+            observed={"pendingFocus": held_focus, "afterRefusal": ui.focused(),
+                      "writes": ui.evaluate("window.formatSaves")})
+    ui.key(" ")
+    w.check("a notification format stays selected after the Host saves it",
+            w.wait("the saved format", lambda: w.host.call("get_settings")["delivery"]["format"] == "json"
+                   and ui.property("radio", "Format: JSON webhook", "checked")
+                   and not ui.property("radio", "Format: ntfy", "checked")))
+    dismiss(w)
+    draft = "Keep this as a draft."
+    ui.fill(*field, draft)
+    ui.choose("combobox", "Recipient", "Market Researcher")
+    w.check("the recipient pill moves the unsent draft to the selected conversation",
+            w.wait("the new conversation holds the draft", lambda:
+                   ui.find("combobox", "Write to Market Researcher")
+                   and ui.value("combobox", "Write to Market Researcher") == draft)
+            and w.host.scalar("SELECT count(*) FROM messages WHERE parts LIKE ?", f"%{draft}%") == 0)
+    no_unscripted(w)
+
+
 def scenario_look(w: World) -> None:
     look_world(w)
     ui = w.ui
@@ -669,10 +803,11 @@ def section_shown(w: World) -> str:
 
 def menu_section(w: World, section: str) -> None:
     ui = w.ui
+    title = "App settings" if section == "General" else f"Settings: {section}"
     ui.key("k", mod=True)
     w.wait("the command menu opens", lambda: ui.find("dialog", "Command menu"))
-    ui.type("textbox", "Command menu", f"Settings: {section}")
-    w.wait(f"Settings: {section} is chosen", lambda: menu_choice(w) == f"Settings: {section}")
+    ui.type("textbox", "Command menu", title)
+    w.wait(f"{title} is chosen", lambda: menu_choice(w) == title)
     ui.key("Enter")
     w.wait("the menu closes", lambda: not ui.find("dialog", "Command menu"))
 
@@ -1121,6 +1256,7 @@ def scenario_running(w: World) -> None:
 
 ASK_BOTH = "Ask Researcher and Analyst what changed in the quarterly filings."
 ASK_AGAIN = "Ask them both about the lease note."
+ASK_FAILING = "Ask Analyst for the unavailable figures."
 FILINGS_Q = "What changed in the quarterly filings since last quarter?"
 LEASE_Q = "What does the lease note change?"
 R_SAYS = "Revenue rose four percent."
@@ -1142,16 +1278,154 @@ TWO_EDGES = """(() => {
 
 
 def card_text(w: World) -> str:
-    return w.ui.evaluate("[...document.querySelectorAll('.handoff__card')].at(-1)?.innerText ?? ''") or ""
+    return w.ui.evaluate("[...document.querySelectorAll('.task-map__graph')].at(-1)?.innerText ?? ''") or ""
 
 
 def working_line(w: World) -> str:
     return w.ui.evaluate("document.querySelector('.working')?.innerText ?? ''") or ""
 
 
+TASK_MAP_FIT = """(() => {
+  const stack = document.querySelector('.task-map-stack');
+  const graph = stack?.querySelector('.task-map__graph');
+  if (!graph) return null;
+  const bounds = stack.getBoundingClientRect();
+  const clip = graph.getBoundingClientRect();
+  const branches = [...graph.querySelectorAll('.task-map__branches > li:not([hidden])')];
+  const more = graph.parentElement.querySelector('.task-map__return button');
+  const moreRect = more?.getBoundingClientRect();
+  const option = graph.querySelector('li:not([hidden]) .task-map__actions button');
+  const optionRect = option?.getBoundingClientRect();
+  const rootNodes = [...graph.querySelectorAll('.task-map__root > div')];
+  const roots = rootNodes.map(el => el.getBoundingClientRect());
+  const branchList = graph.querySelector('.task-map__branches');
+  const branchBounds = branchList.getBoundingClientRect();
+  const near = (a, b) => Math.abs(a - b) <= 1;
+  const connector = (el, pseudo, border, length) => {
+    const style = el && getComputedStyle(el, pseudo);
+    return Boolean(style && style.content !== 'none' && parseFloat(style[border]) === 1
+      && parseFloat(style[length]) > 0
+      && style.position === 'absolute');
+  };
+  const split = roots.length === 2 && roots[0].height > 0 && roots[1].height > 0
+    && roots[0].bottom <= roots[1].top;
+  const body = stack.parentElement;
+  const pane = body.getBoundingClientRect();
+  const style = getComputedStyle(body);
+  let column = body.querySelector('[role=log]');
+  while (column && column.parentElement !== body) column = column.parentElement;
+  const names = branches.map(el => el.querySelector('.task-map__person').innerText.trim());
+  return {
+    viewport: [innerWidth, innerHeight],
+    map: bounds.height,
+    pane: pane.height,
+    width: Math.round(body.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)),
+    transcript: column ? Math.round(column.getBoundingClientRect().width) : null,
+    mapWidth: Math.round(graph.closest('.task-map').getBoundingClientRect().width),
+    chip: Boolean(document.querySelector('[role=log] .handoff')),
+    names,
+    partial: branches.filter(el => {
+      const branch = el.getBoundingClientRect();
+      return branch.top < Math.max(bounds.top, clip.top) - 1
+        || branch.bottom > Math.min(bounds.bottom, clip.bottom) + 1
+        || branch.left < clip.left - 1 || branch.right > clip.right + 1;
+    }).length,
+    answerVisible: Boolean(optionRect && optionRect.top >= clip.top && optionRect.bottom <= clip.bottom + 1),
+    more: moreRect && moreRect.top >= bounds.top && moreRect.bottom <= bounds.bottom + 1
+      && getComputedStyle(more).visibility === 'visible' ? more.innerText.trim() : null,
+    horizontal: split && roots[0].left === roots[1].left
+      && roots.every(root => root.right < branches[0]?.getBoundingClientRect().left),
+    connected: connector(rootNodes[0], '::after', 'borderLeftWidth', 'height')
+      && near(roots[0].bottom + parseFloat(getComputedStyle(rootNodes[0], '::after').height), roots[1].top)
+      && connector(rootNodes[1], '::after', 'borderTopWidth', 'width')
+      && near(roots[1].right + parseFloat(getComputedStyle(rootNodes[1], '::after').width), branchBounds.left)
+      && connector(branchList, '::before', 'borderLeftWidth', 'height')
+      && branches.length > 0 && branches.every(branch =>
+        connector(branch, '::before', 'borderTopWidth', 'width')
+        && near(branch.getBoundingClientRect().left - parseFloat(getComputedStyle(branch, '::before').width),
+          branchBounds.left)),
+    centeredLead: split && near(roots[0].top + roots[1].bottom, branchBounds.top + branchBounds.bottom),
+    stacked: split && roots[1].bottom < branches[0]?.getBoundingClientRect().top,
+    leadStatus: rootNodes[1]?.querySelector('p')?.innerText.trim() ?? '',
+    replyOnOneLine: branches.some(branch => {
+      const box = branch.getBoundingClientRect();
+      const name = branch.querySelector('.task-map__person')?.getBoundingClientRect();
+      const state = branch.querySelector('.task-map__branch-head > span')?.getBoundingClientRect();
+      const reply = branch.querySelector('.task-map__reply button')?.getBoundingClientRect();
+      return reply?.height > 0 && [name, state].every(rect => rect?.height > 0
+        && rect.top < reply.bottom && reply.top < rect.bottom && rect.left >= box.left
+        && rect.right <= reply.left) && reply.right <= box.right;
+    }),
+  };
+})()"""
+
+
+TASK_MAP_FRAMES = ((1280, 820), (900, 700), (700, 700))
+TRANSCRIPT_WIDTH = 736
+HORIZONTAL_FROM = 740
+
+
+def hidden_branches(fit: dict) -> int:
+    return int(re.match(r"Show (\d+) more", fit["more"])[1]) if fit["more"] else 0
+
+
+def painted_task_map(ui: Browser) -> dict | None:
+    return ui.evaluate(f"""(async () => {{
+      const nextFrame = () => new Promise(resolve => requestAnimationFrame(resolve));
+      const measure = () => {TASK_MAP_FIT};
+      await nextFrame();
+      const first = measure();
+      await nextFrame();
+      const second = measure();
+      await nextFrame();
+      const third = measure();
+      return JSON.stringify(first) === JSON.stringify(second)
+        && JSON.stringify(second) === JSON.stringify(third) ? third : null;
+    }})()""", await_promise=True)
+
+
+def map_matrix(w: World, case: str, surface: str, names: tuple[str, ...], layouts: dict,
+               question: bool) -> None:
+    ui = w.ui
+    frames = (*TASK_MAP_FRAMES, (900, 820), (900, 560)) if case == "two colleagues" else TASK_MAP_FRAMES
+    for width, height in frames:
+        ui.viewport(width, height)
+        fit = w.wait(f"the {case} map settles at {width}x{height}",
+                     lambda: (fit := painted_task_map(ui)) and fit["viewport"] == [width, height]
+                     and fit["partial"] == 0 and len(fit["names"]) + hidden_branches(fit) == len(names)
+                     and (not question or width == 700 or fit["answerVisible"]) and fit)
+        rest = []
+        if fit["more"]:
+            ui.click("button", fit["more"])
+            w.wait("the colleagues disclosure opens", lambda: ui.find("dialog", "More colleagues"))
+            rest = ui.evaluate("[...document.querySelectorAll('.task-map__detail .task-map__branches > li')]"
+                               ".map(el => el.querySelector('.task-map__person').innerText.trim())")
+            if case == "fan-out" and width == 1280:
+                w.capture(f"{case} colleagues {surface} {width}x{height}")
+            ui.click("button", "Close")
+            w.wait("the colleagues disclosure closes", lambda: not ui.find("dialog", "More colleagues"))
+        w.capture(f"{case} {surface} {width}x{height}")
+        layouts[f"{case} {surface} {width}x{height}"] = {**fit, "rest": rest}
+
+
+def lays_out_by_pane(d: dict, question: bool) -> bool:
+    return (d["partial"] == 0 and d["horizontal"] == (d["width"] >= HORIZONTAL_FROM)
+            and d["connected"] == d["horizontal"] and (not d["horizontal"] or d["centeredLead"])
+            and d["transcript"] is not None and abs(d["transcript"] - min(TRANSCRIPT_WIDTH, d["width"])) <= 1
+            and d["mapWidth"] <= d["width"] and d["map"] <= .4 * d["pane"] + 1 and not d["chip"]
+            and (d["viewport"][0] != 1280 or d["mapWidth"] > d["transcript"])
+            and (d["viewport"] != [900, 820] or d["stacked"])
+            and (not question or d["viewport"][0] == 700 or d["answerVisible"]))
+
+
+def opens_remainder(d: dict, names: tuple[str, ...]) -> bool:
+    return sorted(d["names"] + d["rest"]) == sorted(names) and not set(d["names"]) & set(d["rest"])
+
+
 def scenario_handoff(w: World) -> None:
     analyst = threading.Event()
     never = threading.Event()
+    analyst_failure = threading.Event()
 
     def script(c: Call) -> Reply | None:
         if c.last_user == "ping":
@@ -1168,12 +1442,17 @@ def scenario_handoff(w: World) -> None:
                 return say(BOTH_SAID)
             if R_SAYS in c.last_user:
                 return say("Researcher answered.")
+            if c.last_user.endswith(ASK_FAILING):
+                return say("I asked Analyst to check.") if results else call(
+                    "send_message", to=["Analyst"], text="Find the unavailable figures.", intent="work")
         if c.speaker == "Researcher" and (FILINGS_Q in c.last_user or LEASE_Q in c.last_user):
             return say(R_SAYS)
         if c.speaker == "Analyst" and FILINGS_Q in c.last_user:
             return held(analyst, say(A_SAYS))
         if c.speaker == "Analyst" and LEASE_Q in c.last_user:
             return held(never, say(A_SAYS))
+        if c.speaker == "Analyst" and "Find the unavailable figures." in c.last_user:
+            return held(analyst_failure, refuse(500, "The model is overloaded."))
         return None
 
     w.model.script = script
@@ -1185,17 +1464,28 @@ def scenario_handoff(w: World) -> None:
     open_agent(w, AGENT)
     write(w, AGENT, ASK_BOTH)
     ui = w.ui
-    w.wait("the card shows Researcher's answer while Analyst works", lambda: R_SAYS in card_text(w)
-           and "writing" in card_text(w))
-    answer_px = ui.evaluate("getComputedStyle(document.querySelector('.handoff__answer .md')).fontSize")
-    faces = ui.evaluate("document.querySelectorAll('.handoff__card .avatar').length")
-    w.check("a live card shows each colleague's face, the question, a status word with time, and the answer at reading size",
-            ui.find("region", "Asked 2 colleagues") and faces == 2 and card_text(w).count(FILINGS_Q) == 2
-            and "answered in" in card_text(w) and re.search(r"writing, \d+s", card_text(w))
-            and answer_px == "16px",
-            observed={"faces": faces, "questions": card_text(w).count(FILINGS_Q), "answerSize": answer_px,
-                      "answered": "answered in" in card_text(w)},
+    w.wait("the map shows Researcher's answer while Analyst works", lambda: R_SAYS in card_text(w)
+           and "waiting for Analyst" in working_line(w))
+    fit = w.wait("the live map holds its layout through consecutive paints", lambda: painted_task_map(ui))
+    w.check("a pinned branch is fully visible or behind the colleagues control",
+            fit["partial"] == 0 and len(fit["names"]) + (1 if fit["more"] == "Show 1 more colleague" else 0) == 2
+            and not ui.find("button", "Open task map"), observed=fit)
+    w.check("the pinned map shows each colleague, the work still underway, and the result already sent",
+            ui.find("region", "Tasks in progress") and "Researcher" in fit["names"]
+            and "Sent a message" in card_text(w) and "waiting for Analyst" in working_line(w),
+            observed={"shown": fit["names"], "running": "waiting for Analyst" in working_line(w),
+                      "answered": "Sent a message" in card_text(w)},
             detail=card_text(w), shot=True)
+    if fit["more"]:
+        ui.click("button", fit["more"])
+        w.check("the disclosure reveals the whole hidden colleague branch",
+                ui.find("dialog", "More colleagues") and ui.within("dialog", "More colleagues", "button")
+                and "Analyst" in ui.evaluate("document.querySelector('.task-map__detail').innerText"),
+                observed="Analyst")
+        ui.click("button", "Close")
+    else:
+        w.check("the disclosure reveals the whole hidden colleague branch",
+                "Analyst" in fit["names"], observed="Analyst is already visible")
     w.wait("the status line says who it waits for", lambda: "waiting for Analyst" in working_line(w))
     w.check("under the running turn a status line says what it is doing, for how long, with Stop",
             working_line(w).startswith("Messaged Researcher and Analyst, waiting for Analyst")
@@ -1216,16 +1506,35 @@ def scenario_handoff(w: World) -> None:
     w.check("a turn scrolled under the tabs fades out instead of being cut by them",
             mask.startswith("linear-gradient(rgba(0, 0, 0, 0)"), observed=mask)
     seen: dict[str, look.Verdict] = {}
+    peers = ("Researcher", "Analyst")
+    layouts = {}
     for surface in LOOK_SURFACES:
+        ui.viewport(*look.FRAME)
         ui.evaluate("localStorage.setItem('guac.prefs', JSON.stringify({...JSON.parse("
                     "localStorage.getItem('guac.prefs') || '{}'), surface: '%s', look: 2})); location.reload()"
                     % surface)
         w.wait(f"the page comes back {surface}", lambda: ui.evaluate(
             "document.documentElement.dataset.surface") == surface and ui.find("button", "App settings"))
-        ui.viewport(*look.FRAME)
+        w.wait("the roster restores the running coordinator", lambda: roster_status(w, AGENT) == "Working")
         open_agent(w, AGENT)
-        w.wait("the live card is drawn again", lambda: "writing" in card_text(w))
+        w.wait("the live map is drawn again", lambda: R_SAYS in card_text(w))
+        map_matrix(w, "two colleagues", surface, peers, layouts, question=False)
+        ui.viewport(*look.FRAME)
+        w.wait("the live map is drawn at the measured frame", lambda: R_SAYS in card_text(w)
+               and ui.evaluate(TASK_MAP_FIT)["viewport"] == list(look.FRAME))
         measure(w, f"a hand-off in {surface}", surface, seen)
+    w.check("the two-colleague map lays out by its pane's width in both themes at every frame",
+            all(lays_out_by_pane(d, question=False)
+                and ("Researcher" not in d["names"] or "Analyst" in d["names"][:1])
+                and (not d["horizontal"] or d["leadStatus"] == "Waiting for Analyst")
+                and (d["viewport"] not in ([900, 700], [900, 820]) or
+                     (d["names"] == ["Analyst", "Researcher"] and d["replyOnOneLine"]))
+                and (d["viewport"] != [900, 560] or
+                     (d["names"] == ["Analyst"] and d["rest"] == ["Researcher"]))
+                for d in layouts.values()), observed=layouts)
+    w.check("the colleagues disclosure opens exactly the branches the two-colleague map hides",
+            all(opens_remainder(d, peers) for d in layouts.values()),
+            observed={key: {"shown": d["names"], "rest": d["rest"]} for key, d in layouts.items()})
     faults = [fault for verdict in seen.values() for fault in verdict.faults]
     w.check("the hand-off keeps to the six type roles, the control family and the radii in light and dark",
             not faults, observed={s: v.styles for s, v in seen.items()}, detail=faults or None)
@@ -1237,21 +1546,36 @@ def scenario_handoff(w: World) -> None:
     w.check("an agent opened mid-turn shows its status line without scrolling",
             placed == {"inLog": False, "onScreen": True}, observed=placed)
 
+    ui.click("button", "Open Researcher’s message")
+    w.wait("the colleague's message opens before delivery",
+           lambda: ui.find("dialog", "Message from Researcher"))
     analyst.set()
-    w.wait("the card folds once both have answered", lambda: ui.find(
-        "button", "Asked Researcher and Analyst, both answered", exact=False))
+    w.wait("the map folds once the result lands", lambda: ui.evaluate(
+        "[...document.querySelectorAll('.pane__scroll .task-map__summary')]"
+        ".some(summary => summary.innerText.includes('Hand-off complete'))"))
+    w.check("a colleague's open message stays readable after the pinned task settles",
+            ui.find("dialog", "Message from Researcher")
+            and ui.evaluate("document.querySelector('.task-map__detail .md')?.innerText") == R_SAYS,
+            observed=R_SAYS)
+    ui.click("button", "Close")
     w.check("after the reply the hand-off folds to one line that says both answered",
-            not ui.find("region", "Asked 2 colleagues") and BOTH_SAID in conversation(w),
-            observed={"folded": True, "card": bool(ui.find("region", "Asked 2 colleagues"))}, shot=True)
-    ui.click("button", "Asked Researcher and Analyst, both answered", exact=False)
+            not card_text(w) and BOTH_SAID in conversation(w)
+            and ui.find("button", "2 of 2 answered", exact=False),
+            observed={"folded": not card_text(w), "answered": 2}, shot=True)
+    ui.click("button", "Hand-off complete", exact=False)
     w.check("the folded line opens onto both answers",
             R_SAYS in card_text(w) and A_SAYS in card_text(w), observed=True, detail=card_text(w))
-    ui.click("button", "Asked Researcher and Analyst, both answered", exact=False)
-    w.wait("the opened hand-off folds again", lambda: not ui.find("region", "Asked 2 colleagues"))
+    ui.click("button", "Open Researcher’s message")
+    w.check("opening a colleague's message shows their recorded words",
+            ui.evaluate("document.querySelector('.task-map__detail .md')?.innerText") == R_SAYS,
+            observed=R_SAYS)
+    ui.click("button", "Close")
+    ui.click("button", "Hand-off complete", exact=False)
+    w.wait("the opened hand-off folds again", lambda: not card_text(w))
 
     settled(w, 2)
     write(w, AGENT, ASK_AGAIN)
-    w.wait("the second hand-off is live", lambda: card_text(w).count(LEASE_Q) == 2 and R_SAYS in card_text(w))
+    w.wait("the second hand-off is live", lambda: R_SAYS in card_text(w))
     w.wait("the status line offers Stop", lambda: ui.find("button", "Stop"))
     w.wait("the ongoing hand-off has a start mark", lambda: started_marks(w))
     ui.click("button", "Stop")
@@ -1259,11 +1583,41 @@ def scenario_handoff(w: World) -> None:
     never.set()
     ended = settled(w, 3, "the stopped conversation settles")
     w.wait("the stopped hand-off folds", lambda: ui.find(
-        "button", "Asked Researcher and Analyst, Researcher answered", exact=False))
+        "button", "1 of 2 answered", exact=False))
     w.check("a hand-off cut short by Stop folds and says who answered, instead of ticking on",
-            ended[-1]["status"] == "stopped" and not ui.find("region", "Asked 2 colleagues")
+            ended[-1]["status"] == "stopped" and not card_text(w)
             and not ui.find("button", "Stop"),
             observed={"outcome": ended[-1]["status"]}, shot=True)
+    write(w, AGENT, ASK_FAILING)
+    w.wait("the lead's dispatch note is visible during the delegated work",
+           lambda: "I asked Analyst to check." in conversation(w))
+    w.wait("the failed task already has a live map", lambda: "Analyst" in card_text(w))
+    ui.evaluate("""(() => {
+      const fetchFromHost = window.fetch;
+      window.fetch = (input, options) => {
+        if (String(input).endsWith('/v1/call') && options?.body &&
+            JSON.parse(options.body).name === 'task_record') {
+          return Promise.reject(new TypeError('The task record could not be read.'));
+        }
+        return fetchFromHost(input, options);
+      };
+      window.restoreTaskReads = () => { window.fetch = fetchFromHost; };
+    })()""")
+    analyst_failure.set()
+    failed = settled(w, 4, "the delegated failure is recorded")
+    w.wait("the task offers to retry the failed read", lambda: ui.find("button", "Retry task map"))
+    w.check("a failed map read cannot turn a progress note into a result",
+            not ui.evaluate("[...document.querySelectorAll('.msg--result')].some(el => "
+                            "el.innerText.includes('I asked Analyst to check.'))"), observed=True)
+    ui.evaluate("window.restoreTaskReads()")
+    ui.click("button", "Retry task map")
+    w.wait("the map records that the hand-off ended without a result", lambda: ui.evaluate(
+        "[...document.querySelectorAll('.task-map__summary')].some(el => "
+        "el.innerText.includes('Hand-off ended') && el.innerText.includes('unavailable figures'))"))
+    w.check("a colleague's failure does not promote the lead's progress note to a result",
+            failed[-1]["status"] == "failed" and not ui.evaluate(
+                "[...document.querySelectorAll('.msg--result')].some(el => "
+                "el.innerText.includes('I asked Analyst to check.'))"), observed=failed[-1]["status"])
     no_unscripted(w)
 
 
@@ -1307,6 +1661,10 @@ def scenario_failed(w: World) -> None:
             sorted(o["status"] for o in ended[1:]) == ["failed", "interrupted"]
             and len(w.ui.find("button", "Try again")) == 2,
             observed={"outcomes": ended, "tryAgain": len(w.ui.find("button", "Try again"))}, shot=True)
+    edges = w.ui.evaluate("""['.composer', ...document.querySelectorAll('.wire--notice > .chip')].map(
+      item => (typeof item === 'string' ? document.querySelector(item) : item).getBoundingClientRect().left)""")
+    w.check("both failure notices start at the composer edge",
+            len(edges) == 3 and max(edges) - min(edges) < 1, observed=edges)
     no_unscripted(w)
 
 
@@ -1807,16 +2165,32 @@ ROSTER_GEOMETRY = """(() => {
     row.scrollIntoView({block: 'nearest', inline: 'nearest'});
     const name = row.querySelector('.roster__name');
     const status = row.querySelector('.roster__status');
+    const shortcut = row.querySelector('kbd')?.getBoundingClientRect();
     const box = row.getBoundingClientRect();
     range.selectNodeContents(name);
     const text = range.getBoundingClientRect();
+    const nameBox = name.getBoundingClientRect();
     const statusBox = status.getBoundingClientRect();
-    return [name.textContent.trim(), name.checkVisibility({opacityProperty: true, visibilityProperty: true})
-      && text.width > 0 && text.height > 0 && within(text, name.getBoundingClientRect())
-      && within(text, box) && within(text, scroller.getBoundingClientRect())
-      && within(text, {left: 0, right: innerWidth, top: 0, bottom: innerHeight})
-      && !overlap(text, statusBox)
-      && rows.every(other => other === row || !overlap(text, other.getBoundingClientRect()))];
+    const clipped = name.scrollWidth > name.clientWidth;
+    const visible = clipped ? nameBox : text;
+    const style = getComputedStyle(name);
+    const tooltip = name.title === name.textContent;
+    const fragments = [...range.getClientRects()];
+    return {
+      name: name.textContent.trim(), clipped, tooltip,
+      oneLine: fragments.length > 0 && fragments.every(fragment => Math.abs(fragment.top - text.top) <= 1),
+      ownLine: nameBox.bottom <= statusBox.top + 1 && (!shortcut ||
+        (nameBox.bottom <= shortcut.top + 1 && statusBox.right <= shortcut.left + 1
+          && statusBox.top < shortcut.bottom && shortcut.top < statusBox.bottom
+          && Math.abs(nameBox.right - shortcut.right) <= 1)),
+      visible: name.checkVisibility({opacityProperty: true, visibilityProperty: true})
+        && visible.width > 0 && visible.height > 0 && within(visible, nameBox)
+        && within(visible, box) && within(visible, scroller.getBoundingClientRect())
+        && within(visible, {left: 0, right: innerWidth, top: 0, bottom: innerHeight})
+        && !overlap(visible, statusBox)
+        && rows.every(other => other === row || !overlap(visible, other.getBoundingClientRect()))
+        && (!clipped || (style.textOverflow === 'ellipsis' && style.overflowX === 'hidden')),
+    };
   });
   scroller.scrollTop = before;
   return measured;
@@ -1824,8 +2198,9 @@ ROSTER_GEOMETRY = """(() => {
 
 
 def scenario_roster(w: World) -> None:
+    long_name = "Researcher for International Market Operations"
     names = (AGENT, MARKET, "Product Manager", "Researcher", "Researcher West", "Critic",
-             "Archivist", "Writer", "Analyst", "Editor", "Observer")
+             "Archivist", "Writer", "Analyst", "Editor", long_name)
     asking = names[9]
     parked = threading.Event()
     draft = "Keep this draft while switching conversations."
@@ -1883,25 +2258,57 @@ def scenario_roster(w: World) -> None:
         w.wait("roster layout settles", lambda: ui.evaluate(look.SETTLED) and ui.evaluate("document.fonts.status") == "loaded")
         readable[f"{width}x{height}"] = ui.evaluate(ROSTER_GEOMETRY)
         w.capture(f"the roster at {width}x{height}")
-    w.check("every roster row scrolls fully into view with its name readable at both sizes",
-            all(rows == [[name, True] for name in names] for rows in readable.values()), observed=readable)
+    w.check("each desktop name has its own line above the status and shortcut at both widths",
+            all([row["name"] for row in rows] == list(names)
+                and all(row["visible"] and row["oneLine"] and row["ownLine"]
+                        and (not row["clipped"] or row["tooltip"]) for row in rows)
+                and not rows[0]["clipped"] and rows[-1]["clipped"]
+                for rows in readable.values()) and not readable["1280x820"][1]["clipped"],
+            observed=readable)
 
     open_agent(w, names[9])
     w.wait("the clicked row focuses its question", lambda: ui.focused() == ("button", "Early"))
     compact = {}
+    compact_geometry = {}
     for height in (355, 320):
         ui.viewport(320, height)
         w.wait(f"the app fits the {height}-pixel viewport and the compact picker is visible",
                lambda: ui.evaluate(f"document.querySelector('.app').getBoundingClientRect().height === {height}")
                and ui.find("combobox", "Switch agent") and ui.evaluate(look.SETTLED))
-        compact[str(height)] = ui.on_screen("combobox", f"Write to {asking}") and ui.on_screen("button", "Send")
-    w.check("the composer and Send stay visible with a question at keyboard height",
-            all(compact.values()), observed=compact,
-            detail=ui.evaluate("""Object.fromEntries(['.app', '.roster', '.pane__header', '.agent-tabs',
+        compact[str(height)] = (ui.on_screen("combobox", f"Write to {asking}") and ui.on_screen("button", "Send")
+                                and ui.evaluate("document.querySelector('.composer').getBoundingClientRect().bottom "
+                                                "<= document.querySelector('.app').getBoundingClientRect().bottom"))
+        compact_geometry[str(height)] = ui.evaluate("""Object.fromEntries(['.app', '.roster', '.pane__header', '.agent-tabs',
               '.pane__body', '.working', '.composer', '.composer__input', '.composer__send', '.statusbar'].map(s => {
                 const el = document.querySelector(s), r = el.getBoundingClientRect();
                 return [s, [r.top, r.bottom, getComputedStyle(el).paddingBlock]];
-              }))"""), shot=True)
+              }))""")
+    w.check("the composer and Send stay visible with a question at keyboard height",
+            all(compact.values()), observed=compact, detail=compact_geometry, shot=True)
+    field = ("combobox", f"Write to {asking}")
+    ui.fill(*field, "@")
+    w.wait("the mention picker opens at keyboard height", lambda: ui.find("listbox", "Agents"))
+    for _ in range(5):
+        ui.key("ArrowDown")
+    mention = w.wait("a keyboard-chosen mention stays within the picker and on screen", lambda: ui.evaluate("""
+      (() => {
+        const composer = document.querySelector('.composer');
+        const list = composer.querySelector('.mentions').getBoundingClientRect();
+        const active = composer.querySelector('.mentions__item[aria-selected="true"]');
+        const row = active.getBoundingClientRect();
+        const limit = document.querySelector('.app').getBoundingClientRect();
+        if (composer.getBoundingClientRect().bottom > limit.bottom || list.top < limit.top
+            || row.top < list.top || row.bottom > list.bottom || row.bottom > limit.bottom) return null;
+        return active.querySelector('.mentions__name').textContent;
+      })()
+    """), timeout=4)
+    w.capture("the selected mention stays on screen at keyboard height")
+    ui.key("Enter")
+    w.check("keyboard selection inserts a visible mention without sending at keyboard height",
+            ui.value(*field) == f"@{mention} " and ui.focused() == field
+            and w.host.scalar("SELECT count(*) FROM messages WHERE parts LIKE ?", f"%@{mention}%") == 0,
+            observed=mention)
+    ui.fill(*field, "")
     ui.viewport(900, 700)
     ui.key("Tab", mod=True)
     w.wait("Control Tab opens the next row", lambda: ui.find("log", f"Conversation with {names[10]}"))
@@ -1939,6 +2346,24 @@ def scenario_roster(w: World) -> None:
     w.check("reload lands on the pending question but keeps the other conversation's draft",
             ui.value("combobox", f"Write to {names[1]}") == draft,
             observed=ui.focused(), shot=True)
+    ui.send("Emulation.setUserAgentOverride", {"userAgent": ui.evaluate("navigator.userAgent"), "platform": "MacIntel"})
+    ui.evaluate("location.reload()")
+    w.wait("the Mac platform reload opens the waiting conversation",
+           lambda: ui.find("log", f"Conversation with {asking}") and ui.find("button", "Early"))
+    open_agent(w, AGENT)
+    ui.key("k", mod=True)
+    w.wait("the command menu opens with the platform shortcut labels",
+           lambda: ui.find("dialog", "Command menu"))
+    labels = ui.evaluate("""(() => {
+      const first = document.querySelector('.roster__agent kbd').textContent.trim();
+      const title = document.querySelector('.roster__name').textContent;
+      const menu = [...document.querySelectorAll('.palette__row')].find(
+        row => row.querySelector('.palette__title')?.textContent === title
+      );
+      return [first, [...(menu?.querySelectorAll('kbd') ?? [])].map(key => key.textContent.trim()).at(-1)];
+    })()""")
+    w.check("the roster and command menu both show Command 1 on macOS",
+            labels == ["⌘1", "⌘1"], observed=labels)
     no_unscripted(w)
 
 
@@ -2174,6 +2599,140 @@ def scenario_menu(w: World) -> None:
     w.check("Command 1 opens the first agent with the focus in its composer",
             w.wait("the composer takes the focus", lambda: ui.focused() == ("combobox", f"Write to {AGENT}")),
             observed=ui.focused(), shot=True)
+    no_unscripted(w)
+
+
+def scenario_search(w: World) -> None:
+    brief = "Review the quarterly ledger."
+    reply = "The ledger is ready."
+    attachment = "ledger-notes.txt"
+
+    def script(c: Call) -> Reply | None:
+        if c.last_user.endswith(brief):
+            return say(reply)
+        if c.last_user.startswith(f"The attached file {attachment} contains:"):
+            return say("Noted.")
+        return hello(c)
+
+    w.model.script = script
+    w.start()
+    first_run(w, brief, reply)
+    settled(w, 1)
+    ui = w.ui
+    agent_count = w.host.scalar("SELECT count(*) FROM agents")
+
+    ui.key("f", mod=True)
+    w.wait("Find opens", lambda: ui.find("dialog", "Search"))
+    ui.fill("textbox", "Search Guaca", "new agent")
+    w.wait("Find settles without an action", lambda: "Nothing matching" in ui.text()
+           or ui.find("button", "New agent", exact=False))
+    ui.key("Enter")
+    tabs = [label(one) for one in reversed(ui.within("dialog", "Search", "tab"))]
+    w.check("Find only offers messages and files and cannot run New agent",
+            tabs == ["All", "Messages", "Files"] and not ui.find("dialog", "New agent")
+            and w.host.scalar("SELECT count(*) FROM agents") == agent_count, observed=tabs, shot=True)
+    dismiss(w)
+
+    ui.evaluate("""(() => {
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(new File(["Follow up on the ledger."], "ledger-notes.txt", {type: "text/plain"}));
+      window.dispatchEvent(new DragEvent("drop", {dataTransfer, bubbles: true, cancelable: true}));
+    })()""")
+    w.wait("the file is staged", lambda: ui.find("button", f"Remove {attachment}"))
+    ui.fill("combobox", f"Write to {AGENT}", "Keep these notes.")
+    ui.click("button", "Send")
+    settled(w, 2)
+    ui.key("f", mod=True)
+    w.wait("Find opens again", lambda: ui.find("dialog", "Search"))
+    ui.click("tab", "Files")
+    ui.fill("textbox", "Search Guaca", attachment)
+    w.wait("Find locates the attached file", lambda: any(
+        label(one).startswith(attachment) for one in ui.within("dialog", "Search", "button")))
+    ui.key("Enter")
+    w.check("Find opens the file's message without running an app action",
+            w.wait("Find closes on the file's conversation",
+                   lambda: not ui.find("dialog", "Search") and ui.evaluate(
+                       "document.querySelector('[data-found=true]')?.innerText.includes('Keep these notes.')")),
+            observed={"file": attachment, "conversation": AGENT}, shot=True)
+
+    ui.click("button", f"Open {attachment}")
+    w.wait("the file reader opens", lambda: ui.find("dialog", attachment))
+    w.wait("the reader has finished moving", lambda: ui.evaluate(look.SETTLED))
+    reader = ui.evaluate("""(() => {
+      const dialog = document.querySelector('[aria-label="ledger-notes.txt"][role=dialog]');
+      const close = dialog.querySelector('button[aria-label=Close]');
+      const box = close.getBoundingClientRect();
+      return {
+        backdrop: document.elementFromPoint(4, 4)?.closest('.scrim') === dialog.parentElement,
+        close: document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)?.closest('button') === close,
+      };
+    })()""")
+    ui.key("f", mod=True)
+    w.wait("Find opens above the reader", lambda: ui.find("dialog", "Search"))
+    w.wait("Find has finished moving", lambda: ui.evaluate(look.SETTLED))
+    above = ui.evaluate("""(() => {
+      const input = document.querySelector('input[aria-label="Search Guaca"]');
+      const box = input.getBoundingClientRect();
+      return document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) === input;
+    })()""")
+    ui.key("Escape")
+    w.wait("Escape closes only Find", lambda: not ui.find("dialog", "Search") and ui.find("dialog", attachment))
+    w.check("the file reader covers the window without clipping and Find stacks above it",
+            reader == {"backdrop": True, "close": True} and above,
+            observed={**reader, "findOnTop": above}, shot=True)
+    dismiss(w)
+
+    show(w, "the Groups sheet")
+    ui.click("button", "Command menu", exact=False)
+    w.wait("the Groups sheet opens the command menu", lambda: ui.focused() == ("textbox", "Command menu"))
+    ui.fill("textbox", "Command menu", "ledger is ready")
+    w.wait("the command menu finds the message itself", lambda: ui.find("button", reply, exact=False))
+    w.capture("the command menu with a matching message")
+    ui.click("button", reply, exact=False)
+    landing = """(() => {
+      const dialogs = [...document.querySelectorAll('[role=dialog]')].map(el => el.getAttribute('aria-label'));
+      const highlight = [...document.querySelectorAll('[data-found=true]')].some(
+        el => el.innerText.includes('The ledger is ready.'));
+      return {menuOpen: dialogs.includes('Command menu'), findOpen: dialogs.includes('Search'),
+        groupsOpen: dialogs.includes('Groups and agents'), highlight};
+    })()"""
+    expected = {"menuOpen": False, "findOpen": False, "groupsOpen": False, "highlight": True}
+    w.check("the Groups sheet uses the command menu and a message hit opens without another palette",
+            w.wait("the message is highlighted and the search surfaces close",
+                   lambda: ui.evaluate(landing) == expected), observed=expected)
+    dismiss(w)
+
+    geometry = {}
+    descriptions = {}
+    for name in ("Search", "the command menu", "New agent", "the Groups sheet", "Artifacts", "Calendar", "For you"):
+        if name in ("Artifacts", "Calendar", "For you"):
+            ui.click("button", name, exact=False)
+            w.wait(f"{name} opens", lambda: ui.find("dialog", name))
+        else:
+            show(w, name)
+        w.wait(f"{name} has finished moving", lambda: ui.evaluate(look.SETTLED))
+        geometry[name] = ui.evaluate("""(() => {
+          const dialog = [...document.querySelectorAll('.scrim > [role=dialog]')].at(-1);
+          const box = dialog.getBoundingClientRect();
+          const color = getComputedStyle(dialog.parentElement).backgroundColor;
+          return {top: Math.round(box.top), width: Math.round(box.width), color};
+        })()""")
+        if name == "Calendar":
+            w.wait("the empty calendar is shown", lambda: "Nothing on this calendar" in ui.text())
+            descriptions[name] = ui.text().count("Guaca's own calendar")
+        if name == "Artifacts":
+            w.wait("the empty artifacts list is shown", lambda: "keeps any artifacts yet" in ui.text())
+            descriptions[name] = ui.text().count("Ask an agent for a page")
+            descriptions["Artifacts footer"] = ui.text().count("Pages your agents keep.")
+        dismiss(w)
+    w.check("dialogs and sheets share one top offset, two widths, and a lighter light scrim",
+            len({box["top"] for box in geometry.values()}) == 1
+            and len({box["width"] for box in geometry.values()}) == 2
+            and all(box["color"] == "rgba(11, 11, 10, 0.25)" for box in geometry.values()),
+            observed=geometry)
+    w.check("Calendar and Artifacts explain their empty lists without repeating the description",
+            descriptions == {"Calendar": 1, "Artifacts": 1, "Artifacts footer": 0},
+            observed=descriptions)
     no_unscripted(w)
 
 
@@ -2439,14 +2998,15 @@ def scenario_firstgroup(w: World) -> None:
     w.check("the starter group is named for the task it was hired for, on the agent's page",
             groups == ["Research"], observed={"groups": groups,
                                              "about": ui.evaluate("document.querySelector('.pane__about')?.innerText")})
-    w.wait("the coordinator's hand-off is live", lambda: card_text(w).count(CAR_Q) == 2)
-    faces = ui.evaluate("document.querySelectorAll('.handoff__card .avatar').length")
+    w.wait("the coordinator's hand-off is live", lambda: CAR_Q in card_text(w))
+    fit = ui.evaluate(TASK_MAP_FIT)
     talk = between(w)
     w.check("the coordinator asks both colleagues on its first turn, in one message, and the person sees the card",
             [(m["from"], m["to"], m["text"]) for m in talk]
-            == [(LEAD, MARKET, CAR_Q), (LEAD, FINANCE, CAR_Q)] and faces == 2
-            and bool(ui.find("region", "Asked 2 colleagues")),
-            observed={"talk": [(m["from"], m["to"]) for m in talk], "faces": faces}, shot=True)
+            == [(LEAD, MARKET, CAR_Q), (LEAD, FINANCE, CAR_Q)]
+            and fit["partial"] == 0 and len(fit["names"]) + (1 if fit["more"] == "Show 1 more colleague" else 0) == 2
+            and bool(ui.find("region", "Tasks in progress")),
+            observed={"talk": [(m["from"], m["to"]) for m in talk], "shown": fit["names"]}, shot=True)
     w.wait("the status line says who it waits for", lambda: "waiting for" in working_line(w))
     w.check("under the coordinator a status line names both colleagues it waits for",
             working_line(w).startswith(f"Messaged {MARKET} and {FINANCE}, waiting for"),
@@ -2479,7 +3039,8 @@ def scenario_firstgroup(w: World) -> None:
             observed={"outcome": ended[-1]["status"], "colleagues": sorted(m["from"] for m in between(w)
                                                                              if m["from"] != LEAD)},
             detail={"modelCalls": len(w.model.calls), "said": said(w, LEAD)}, shot=True)
-    w.wait("the result is drawn as a result", lambda: ui.find("article", f"Result from {LEAD}", exact=False))
+    w.wait("the result is drawn with its task map", lambda: ui.find("article", f"Result from {LEAD}", exact=False)
+           and ui.find("button", "Hand-off complete", exact=False))
     frame = ui.evaluate(RESULT_FRAME)
     w.check("the result is a raised card under the coordinator's name, and the brief before it is folded below it in weight",
             frame["name"] == LEAD and frame["raised"] and frame["text"] == CAR_RESULT
@@ -2487,20 +3048,20 @@ def scenario_firstgroup(w: World) -> None:
             observed={"name": frame["name"], "raised": frame["raised"], "fillerRaised": frame["fillerRaised"],
                       "briefShorter": frame["briefHeight"] < frame["resultHeight"]}, detail=frame, shot=True)
     w.check("the hand-off settles into a record right above the result that says both answered",
-            frame["record"] == f"Asked {MARKET} and {FINANCE}, both answered" and frame["recordAbove"],
+            "2 of 2 answered" in frame["record"] and frame["recordAbove"],
             observed={"record": frame["record"], "above": frame["recordAbove"]})
-    ui.click("button", f"Asked {MARKET} and {FINANCE}, both answered", exact=False)
+    ui.click("button", "Hand-off complete", exact=False)
     w.wait("the record opens onto both answers", lambda: ANALYST_SAYS in card_text(w))
     w.check("the record opens onto both answers",
             RESEARCHER_SAYS in card_text(w) and ANALYST_SAYS in card_text(w),
             observed={"researcher": RESEARCHER_SAYS in card_text(w), "analyst": ANALYST_SAYS in card_text(w)}, shot=True)
-    ui.click("button", MARKET)
-    w.wait("the colleague thread opens", lambda: not ui.find("log", f"Conversation with {LEAD}"))
+    ui.press(next(button for button in ui.within("region", "Task map", "button") if label(button) == MARKET))
+    w.wait("the colleague thread opens", lambda: ui.find("log", f"Conversation with {MARKET}"))
     open_agent(w, LEAD)
     w.wait("the current agent row restores the conversation and result",
            lambda: ui.find("article", f"Result from {LEAD}", exact=False))
-    ui.click("button", MARKET)
-    w.wait("the colleague thread is open again", lambda: not ui.find("log", f"Conversation with {LEAD}"))
+    ui.press(next(button for button in ui.within("region", "Task map", "button") if label(button) == MARKET))
+    w.wait("the colleague thread is open again", lambda: ui.find("log", f"Conversation with {MARKET}"))
     ui.click("button", "For you")
     w.wait("Earlier shows the already opened result",
            lambda: ui.evaluate("document.querySelector('.for-you .finished-line[title^=\"Lease,\"]') !== null"))
@@ -2537,6 +3098,163 @@ LONE_RESULT = """(() => {
   };
 })()"""
 
+MAP_LEASE = "Compare the lease options."
+MAP_BUY = "Compare the purchase options."
+MAP_LEASE_ASK = "Which lease term should I compare?"
+MAP_BUY_ASK = "Which purchase term should I compare?"
+
+
+def scenario_taskmap(w: World) -> None:
+    lease = ("Lease Researcher", "Mileage Analyst", "Pricing Analyst", "Car Reviewer")
+    buy = "Purchase Researcher"
+    specialist = "Tax Specialist"
+    finish_support = threading.Event()
+
+    def script(c: Call) -> Reply | None:
+        if c.speaker == AGENT:
+            for brief, names, work in ((MAP_LEASE, lease, "Research the lease."),
+                                       (MAP_BUY, (buy,), "Research the purchase.")):
+                if c.last_user.endswith(brief):
+                    return say("I asked the group.") if c.tool_results() else call(
+                        "send_message", to=list(names), text=work, intent="work")
+            if "analysis is complete." in c.last_user:
+                return say("The comparison is complete.")
+        for name, work, question in ((lease[0], "Research the lease.", MAP_LEASE_ASK),
+                                     (buy, "Research the purchase.", MAP_BUY_ASK)):
+            if c.speaker == name and work in c.last_user:
+                return say("The analysis is complete.") if c.tool_results() else call(
+                    "ask_operator", question=question, options=["Three years", "Five years"])
+        if c.speaker == lease[1] and "Research the lease." in c.last_user and not c.tool_results():
+            return call("send_message", to=[specialist], text="Check the lease tax.", intent="work")
+        if c.speaker in (*lease[1:], specialist):
+            return held(finish_support, say("The supporting analysis is complete."))
+        return hello(c)
+
+    w.model.script = script
+    w.start()
+    ui = w.ui
+    first_run(w)
+    settled(w, 1)
+    w.check("no task map appears for a direct exchange",
+            not ui.find("region", "Task map"), observed=True, shot=True)
+    for name in (*lease, buy, specialist):
+        new_agent(w, name, "Compare purchase and lease options.")
+    open_agent(w, AGENT)
+    write(w, AGENT, MAP_LEASE)
+    w.wait("the first colleague asks on its own branch", lambda: MAP_LEASE_ASK in card_text(w))
+    w.wait("the first dispatch note is recorded", lambda: "I asked the group." in conversation(w))
+    w.wait("the specialist received the nested request", lambda: w.model.by(specialist)
+           and any("Check the lease tax." in call["asked"] for call in w.model.by(specialist)))
+    write(w, AGENT, MAP_BUY)
+    maps = w.wait("two tasks are pinned, both with pending questions", lambda: ui.evaluate("""(() => {
+      const maps = [...document.querySelectorAll('.task-map-stack .task-map')];
+      if (maps.length !== 2 || maps.filter(el => el.innerText.includes('waiting for you')).length !== 2) return null;
+      return { pinned: maps.length, open: maps.filter(el => el.querySelector('.task-map__graph')).length };
+    })()"""))
+    w.check("two pinned maps leave only the task with the earliest question open",
+            maps == {"pinned": 2, "open": 1} and MAP_LEASE_ASK in card_text(w)
+            and MAP_BUY_ASK not in card_text(w), observed=maps, shot=True)
+    fit = ui.evaluate(TASK_MAP_FIT)
+    w.check("the map shows at most three whole branches and offers one control for the rest",
+            fit["partial"] == 0 and 1 <= len(fit["names"]) <= 3
+            and re.match(rf"Show {4 - len(fit['names'])} more colleague", fit["more"] or ""),
+            observed=fit)
+    fanout, asking = {}, {}
+    for surface in LOOK_SURFACES:
+        ui.viewport(1280, 820)
+        ui.evaluate("localStorage.setItem('guac.prefs', JSON.stringify({...JSON.parse("
+                    "localStorage.getItem('guac.prefs') || '{}'), surface: '%s', look: 2})); location.reload()"
+                    % surface)
+        w.wait("the requested surface is shown", lambda: ui.evaluate(
+            "document.documentElement.dataset.surface") == surface and ui.find("button", "2 questions waiting"))
+        open_agent(w, AGENT)
+        w.wait("the pinned questions return", lambda: MAP_LEASE_ASK in card_text(w))
+        if ui.find("dialog", "Questions"):
+            ui.click("button", "Done")
+            w.wait("the startup question tray closes", lambda: not ui.find("dialog", "Questions"))
+        map_matrix(w, "fan-out", surface, lease, fanout, question=True)
+        ui.viewport(1280, 820)
+        ui.click("button", "Hide map", exact=False)
+        w.wait("the question-only task opens", lambda: MAP_BUY_ASK in card_text(w))
+        map_matrix(w, "question only", surface, (buy,), asking, question=True)
+    layouts = {**fanout, **asking}
+    w.check("the pinned maps cover at most two fifths of the pane in both themes and window sizes",
+            all(d["map"] <= .4 * d["pane"] + 1 and d["partial"] == 0
+                and (d["viewport"][0] == 700 or d["answerVisible"]) for d in layouts.values())
+            and all(d["more"] for d in fanout.values()), observed=layouts)
+    w.check("the fan-out and question-only maps lay out by their pane's width in both themes at every frame",
+            all(lays_out_by_pane(d, question=True) for d in layouts.values()),
+            observed={key: {k: d[k] for k in ("viewport", "width", "transcript", "mapWidth", "horizontal",
+                                             "connected", "centeredLead")}
+                      for key, d in layouts.items()})
+    w.check("the colleagues disclosure opens exactly the branches the fan-out map hides",
+            all(opens_remainder(d, lease) for d in fanout.values())
+            and all(opens_remainder(d, (buy,)) for d in asking.values()),
+            observed={key: {"shown": d["names"], "rest": d["rest"]} for key, d in layouts.items()})
+    insets = {}
+    for width, height in (*TASK_MAP_FRAMES, (390, 700)):
+        ui.viewport(width, height)
+        insets[width] = ui.evaluate("""(() => {
+          if (!document.querySelector('.task-map-stack:not([hidden]) .task-map__graph')) return null;
+          return ['.composer', '.msg__bubble', '.result'].map(selector =>
+            document.querySelector(selector)?.getBoundingClientRect().left);
+        })()""")
+    w.check("the composer and transcript share one inset beneath the live task map",
+            all(edges and None not in edges and max(edges) - min(edges) < 1 for edges in insets.values()),
+            observed=insets)
+    ui.viewport(900, 700)
+    ui.click("button", f"Task map {MAP_LEASE}", exact=False)
+    w.wait("the urgent question is back in the map", lambda: MAP_LEASE_ASK in card_text(w))
+    ui.click("button", "Hide map", exact=False)
+    w.wait("the other task opens", lambda: MAP_BUY_ASK in card_text(w))
+    w.check("manually folding a live task keeps it folded while another question is open",
+            MAP_LEASE_ASK not in card_text(w) and MAP_BUY_ASK in card_text(w), observed=True, shot=True)
+    ui.click("combobox", f"Write to {AGENT}")
+    ui.key("Escape")
+    w.check("Escape from the composer still opens the Questions tray with a branch waiting",
+            ui.find("dialog", "Questions"), observed=True)
+    ui.click("button", "Done")
+    ui.click("combobox", f"Write to {AGENT}")
+    ui.key("Tab")
+    w.wait("Tab from the empty composer focuses the open branch's question", lambda: ui.evaluate(
+        "Boolean(document.activeElement?.closest('.task-map-stack .task-map__question'))"))
+    ui.key("1")
+    w.wait("the selected question is answered on the host", lambda: w.host.scalar(
+        "SELECT count(*) FROM approvals WHERE state='answered' AND summary=?", MAP_BUY_ASK))
+    w.check("Tab and a number answer the question on the open branch",
+            w.host.scalar("SELECT count(*) FROM approvals WHERE state='pending' AND summary=?", MAP_LEASE_ASK),
+            observed=True)
+    ui.click("button", f"Task map {MAP_LEASE}", exact=False)
+    w.wait("the lease question is open again", lambda: MAP_LEASE_ASK in card_text(w))
+    ui.click("button", "Type an answer")
+    w.check("opening the typed answer puts the keyboard in the field",
+            ui.evaluate("document.activeElement.getAttribute('aria-label')") == "Type an answer",
+            observed=True)
+    ui.send("Input.insertText", {"text": "Use four years"})
+    ui.key("Enter")
+    w.wait("the typed text is recorded against the lease question", lambda: w.host.scalar(
+        "SELECT answer FROM approvals WHERE state='answered' AND summary=?", MAP_LEASE_ASK) == "Use four years")
+    w.check("the typed answer and shortcut stay with their recorded questions",
+            w.host.scalar("SELECT answer FROM approvals WHERE summary=?", MAP_BUY_ASK) == "Three years",
+            observed={"lease": "Use four years", "purchase": "Three years"})
+    fit = w.wait("the lease map settles after the answer while its colleagues keep working",
+                 lambda: specialist in working_line(w) and MAP_LEASE_ASK not in card_text(w)
+                 and painted_task_map(ui))
+    if not ui.find("button", specialist):
+        ui.click("button", fit["more"])
+    w.wait("the nested colleague's link can be clicked",
+           lambda: ui.find("button", specialist) and ui.on_screen("button", specialist))
+    ui.click("button", specialist)
+    w.wait("the nested specialist's conversation loads the recorded hand-off",
+           lambda: ui.find("log", f"Conversation with {specialist}")
+           and "Check the lease tax." in conversation(w))
+    w.check("a nested hand-off opens the named colleague's conversation",
+            ui.find("heading", specialist) and "Check the lease tax." in conversation(w),
+            observed=specialist)
+    finish_support.set()
+    no_unscripted(w)
+
+
 RESULT_FRAME = """(() => {
   const result = [...document.querySelectorAll('.msg--result')].at(-1);
   const card = result.querySelector('.result');
@@ -2544,7 +3262,7 @@ RESULT_FRAME = """(() => {
   const style = getComputedStyle(card);
   const rows = [...document.querySelectorAll('[role=log] > div[data-message]')];
   const at = rows.findIndex((row) => row.contains(result));
-  const record = rows[at].querySelector('.handoff__fold');
+  const record = rows[at].querySelector('.task-map__summary');
   const filler = rows.slice(0, at).map((row) => row.querySelector('.msg:not([data-operator])')).filter(Boolean).at(-1);
   const brief = document.querySelector('.msg[data-operator] .msg__bubble');
   return {
@@ -2554,7 +3272,7 @@ RESULT_FRAME = """(() => {
     fillerRaised: filler ? getComputedStyle(filler).boxShadow !== 'none' : null,
     resultHeight: card.getBoundingClientRect().height,
     briefHeight: brief.getBoundingClientRect().height,
-    record: record ? record.querySelector('.handoff__line').innerText : null,
+    record: record ? record.innerText : null,
     recordAbove: !!record && !!(record.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING),
   };
 })()"""
@@ -2576,6 +3294,41 @@ FINISHED_RESULT = """(() => {
 
 
 SCENARIOS: dict[str, Scenario] = {
+    "taskmap": Scenario(scenario_taskmap, "Delegated tasks pin their maps independently and answer on a "
+                        "branch; a one-to-one reply has no map.",
+    (
+        "no task map appears for a direct exchange",
+        "two pinned maps leave only the task with the earliest question open",
+        "the map shows at most three whole branches and offers one control for the rest",
+        "the pinned maps cover at most two fifths of the pane in both themes and window sizes",
+        "the fan-out and question-only maps lay out by their pane's width in both themes at every frame",
+        "the colleagues disclosure opens exactly the branches the fan-out map hides",
+        "the composer and transcript share one inset beneath the live task map",
+        "manually folding a live task keeps it folded while another question is open",
+        "Tab and a number answer the question on the open branch",
+        "Escape from the composer still opens the Questions tray with a branch waiting",
+        "opening the typed answer puts the keyboard in the field",
+        "the typed answer and shortcut stay with their recorded questions",
+        "a nested hand-off opens the named colleague's conversation",
+        "every model call was one the scenario scripted",
+    )),
+    "controls": Scenario(scenario_controls, "A person changes an exclusive setting by keyboard and uses the "
+                         "conversation composer; an empty draft cannot send and a custom look selects no preset.",
+    (
+        "Send is unavailable for a blank draft",
+        "the composer has an icon Send and a recipient pill with a face",
+        "the composer, result, brief and question start on the same edge",
+        "the focused composer and name field share one neutral ring without a halo",
+        "short choices are segments and longer choices are visible radios",
+        "one arrow changes the selected segment and applies the new surface",
+        "Tab leaves the radio group instead of stopping on each segment",
+        "a custom look does not falsely mark any preset selected",
+        "long notification choices use visible radios even with only two options",
+        "a refused notification format keeps focus and the saved value without a second write",
+        "a notification format stays selected after the Host saves it",
+        "the recipient pill moves the unsent draft to the selected conversation",
+        "every model call was one the scenario scripted",
+    )),
     "resume": Scenario(scenario_resume, "A person queues two messages while an agent is paused and resumes it; "
                        "paused work calls no model, and Resume answers each message without duplicating its prompt.",
     (
@@ -2663,7 +3416,11 @@ SCENARIOS: dict[str, Scenario] = {
                         "for with Stop, and the transcript keeps two text edges; after the replies the card folds "
                         "to one line; a hand-off cut short by Stop folds and says who answered.",
     (
-        "a live card shows each colleague's face, the question, a status word with time, and the answer at reading size",
+        "the pinned map shows each colleague, the work still underway, and the result already sent",
+        "a pinned branch is fully visible or behind the colleagues control",
+        "the disclosure reveals the whole hidden colleague branch",
+        "the two-colleague map lays out by its pane's width in both themes at every frame",
+        "the colleagues disclosure opens exactly the branches the two-colleague map hides",
         "under the running turn a status line says what it is doing, for how long, with Stop",
         "text in the transcript starts on two left edges",
         "the person's turn sits in a bubble that stands apart from the page",
@@ -2671,8 +3428,12 @@ SCENARIOS: dict[str, Scenario] = {
         "the hand-off keeps to the six type roles, the control family and the radii in light and dark",
         "an agent opened mid-turn shows its status line without scrolling",
         "after the reply the hand-off folds to one line that says both answered",
+        "a colleague's open message stays readable after the pinned task settles",
         "the folded line opens onto both answers",
+        "opening a colleague's message shows their recorded words",
         "a hand-off cut short by Stop folds and says who answered, instead of ticking on",
+        "a colleague's failure does not promote the lead's progress note to a result",
+        "a failed map read cannot turn a progress note into a result",
         "every model call was one the scenario scripted",
     )),
     "failed": Scenario(scenario_failed, "A model call fails while a turn is also working on a second conversation; "
@@ -2680,6 +3441,7 @@ SCENARIOS: dict[str, Scenario] = {
                        "silently with the turn.",
     (
         "a failed model call tells the other conversation the turn acted on at once, with Try again on each",
+        "both failure notices start at the composer edge",
         "every model call was one the scenario scripted",
     )),
     "routine": Scenario(scenario_routine, "A person adds a routine on an event, copies its curl line, reveals its secret and hides it again, and one delivery "
@@ -2789,11 +3551,13 @@ SCENARIOS: dict[str, Scenario] = {
         "each agent has one ordered row, with shortcuts only for the first nine",
         "the conversation has no Today destination or spare writing field",
         "a new question changes the tenth status without reordering or switching conversations",
-        "every roster row scrolls fully into view with its name readable at both sizes",
+        "each desktop name has its own line above the status and shortcut at both widths",
         "the composer and Send stay visible with a question at keyboard height",
+        "keyboard selection inserts a visible mention without sending at keyboard height",
         "mouse, Control Tab in both directions, and the numbered shortcut keep the draft with its agent",
         "stacked Search and its keys leave the command menu and underlying draft unchanged",
         "reload lands on the pending question but keeps the other conversation's draft",
+        "the roster and command menu both show Command 1 on macOS",
         "every model call was one the scenario scripted",
     )),
     "grouptabs": Scenario(scenario_grouptabs, "A person opens a group's settings from the Groups sheet, reaches "
@@ -2854,6 +3618,15 @@ SCENARIOS: dict[str, Scenario] = {
         "with no key, the refusal is about this endpoint and names no other provider or place",
         "an endpoint that needs no key passes the test with none, and is kept",
         "every model call was one the scenario scripted",
+    )),
+    "search": Scenario(scenario_search, "Find opens files and the command menu opens messages and actions; "
+                       "Find cannot run an action and dialogs share their geometry.", (
+        "Find only offers messages and files and cannot run New agent",
+        "Find opens the file's message without running an app action",
+        "the file reader covers the window without clipping and Find stacks above it",
+        "the Groups sheet uses the command menu and a message hit opens without another palette",
+        "dialogs and sheets share one top offset, two widths, and a lighter light scrim",
+        "Calendar and Artifacts explain their empty lists without repeating the description",
     )),
     "menu": Scenario(scenario_menu, "A person in a conversation finds the focus in the composer, opens the command menu on "
                      "Command K, switches to dark with one word and Return, writes to an agent with a sentence and "

@@ -47,6 +47,16 @@ export function trusted(bytes, said, keys) {
     });
 }
 
+export function readMainEnvelope(raw, keys) {
+  const { manifest, signature } = JSON.parse(raw);
+  if (typeof manifest !== "string" || typeof signature !== "string") throw new Error("The main feed envelope is invalid.");
+  const bytes = Buffer.from(manifest, "base64");
+  if (!trusted(bytes, signature, keys)) throw new Error("The main feed signature is invalid.");
+  const value = JSON.parse(bytes.toString("utf8"));
+  if (value.schema !== 1 || value.channel !== "main" || !/^[a-f0-9]{40}$/.test(value.commit) || !/^ghcr\.io\/madebywelch\/guaca\/guacad@sha256:[a-f0-9]{64}$/.test(value.image)) throw new Error("The main feed metadata is invalid.");
+  return value;
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
   const main = args[0] === "--channel" && args[1] === "main";
