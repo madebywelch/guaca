@@ -382,9 +382,7 @@ export function firstChoice(rows: MenuRow[], query: string): string | null {
   const words = wordsIn(query);
   const found = rows.filter((row) => row.section !== null && row.section !== "Search results");
   const named = found.find((row) => wordsIn(row.title).join(" ") === words.join(" "));
-  const titled = found.find((row) =>
-    words.every((word) => row.title.toLowerCase().includes(word)),
-  );
+  const titled = found.find((row) => words.every((word) => row.title.toLowerCase().includes(word)));
   const hit = rows.find((row) => row.section === "Search results");
   return (named ?? titled ?? found[0] ?? hit)?.id ?? null;
 }

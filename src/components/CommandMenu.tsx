@@ -111,7 +111,8 @@ export function CommandMenu({
   const selected = rows.some((row) => row.id === chosen) ? chosen : firstChoice(rows, query);
   const current = requestAt(rows, selected);
   const allow = rows.find(
-    (row) => row.request === current && row.action.do === "decide" && row.action.decision === "allow",
+    (row) =>
+      row.request === current && row.action.do === "decide" && row.action.decision === "allow",
   );
   const write = rows.find((row) => row.action.do === "write");
   const sends = write !== undefined && (selected === write.id || allow === undefined);
