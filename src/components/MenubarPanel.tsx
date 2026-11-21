@@ -194,6 +194,7 @@ function Overview({ agents, onOpen }: { agents: AgentCard[]; onOpen: (id: AgentI
   const stalled = unseen.filter(didNotFinish);
   const news = unseen.filter((outcome) => !didNotFinish(outcome));
   const more = moreLine(news.length, PANEL_LINES);
+  const moreStalled = moreLine(stalled.length, PANEL_LINES);
   const crewOf = (agent: AgentCard) => groupNamed(groups, agent.groupId);
 
   return (
@@ -226,6 +227,15 @@ function Overview({ agents, onOpen }: { agents: AgentCard[]; onOpen: (id: AgentI
               }}
             />
           ))}
+          {moreStalled && (
+            <button
+              type="button"
+              className="menubar__more"
+              onClick={() => void api.openWindow({ kind: "forYou" })}
+            >
+              {moreStalled}
+            </button>
+          )}
         </section>
       )}
 

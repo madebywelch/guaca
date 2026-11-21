@@ -3238,7 +3238,7 @@ impl Runtime {
             tool_parts.push(Part::Notice {
                 kind: NoticeKind::GuardStop,
                 text: format!(
-                    "{} reached the limit of {max_rounds} tool calls in one turn.",
+                    "{} reached the limit of {max_rounds} tool calls before it stopped.",
                     card.name
                 ),
                 detail: None,

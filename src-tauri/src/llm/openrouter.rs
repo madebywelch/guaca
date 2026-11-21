@@ -456,6 +456,11 @@ impl LlmError {
                  ordinary request. Reword the message, or give this group another provider in its \
                  settings."
                 .into(),
+            LlmError::RateLimited { retry_after_secs: Some(secs), .. } if *secs > 90 => format!(
+                "the provider is limiting how often it answers right now. Wait about {} minutes, \
+                 then try again.",
+                secs.div_ceil(60)
+            ),
             LlmError::RateLimited { .. } => {
                 "the provider is limiting how often it answers right now. Wait a minute, then try \
                  again."
@@ -468,10 +473,9 @@ impl LlmError {
             LlmError::Upstream { status, .. } if *status >= 500 || *status == 200 => {
                 "the provider had a problem on its side. Wait a minute, then try again.".into()
             }
-            LlmError::Upstream { .. } => {
-                "the provider turned the request down. Open Details to see why, then try again."
-                    .into()
-            }
+            LlmError::Upstream { .. } => "the provider turned the request down. Read its reason \
+                 under Details in the conversation, then try again."
+                .into(),
             LlmError::Transport { .. } => {
                 "the provider could not be reached. Check the connection, then try again.".into()
             }
@@ -891,7 +895,10 @@ mod tests {
             busy.plainly(),
             "the provider had a problem on its side. Wait a minute, then try again."
         );
-        assert!(refused.plainly().contains("Open Details"), "{}", refused.plainly());
+        assert!(refused.plainly().contains("under Details"), "{}", refused.plainly());
+        let hour =
+            LlmError::RateLimited { message: "slow down".into(), retry_after_secs: Some(3600) };
+        assert!(hour.plainly().contains("about 60 minutes"), "{}", hour.plainly());
     }
 
     use axum::response::IntoResponse;

@@ -37,12 +37,15 @@ export function taskMaps(
       if (brief?.from.kind !== "human" || brief.to.kind !== "agent" || brief.to.id !== lead)
         return [];
       const branches = new Map<AgentId, TaskBranch>();
+      const asks = new Map<AgentId, Set<string>>();
       for (const message of run) {
         const { from, to } = message;
         if (from.kind === "system" && to.kind === "agent") {
           const branch = branches.get(to.id);
           if (
             branch &&
+            message.cause !== null &&
+            asks.get(to.id)?.has(message.cause) &&
             message.parts.some((part) => part.type === "notice" && part.kind === "upstreamError")
           )
             branch.failed = message;
@@ -50,6 +53,7 @@ export function taskMaps(
         }
         if (from.kind !== "agent" || to.kind !== "agent") continue;
         if (from.id === lead && to.id !== lead && message.intent === "work") {
+          asks.set(to.id, (asks.get(to.id) ?? new Set()).add(message.id));
           if (!branches.has(to.id)) {
             branches.set(to.id, {
               agentId: to.id,

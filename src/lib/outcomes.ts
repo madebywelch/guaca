@@ -37,10 +37,21 @@ export const NOT_SENT_AGAIN =
   "This task can no longer be sent again from here. Open the conversation and write it again.";
 
 export async function retryOutcome(outcome: Outcome): Promise<RunId> {
-  const record = outcome.noteId ? await api.taskRecord(outcome.agentId, outcome.runId) : null;
-  const notice = record?.messages?.find((message) => message.id === outcome.noteId);
-  if (!notice?.cause) throw new Error(NOT_SENT_AGAIN);
-  return api.retryTurn(notice.channelId, notice.cause);
+  const messages = outcome.noteId
+    ? ((await api.taskRecord(outcome.agentId, outcome.runId))?.messages ?? [])
+    : [];
+  const notice = messages.find((message) => message.id === outcome.noteId);
+  const asked =
+    notice?.channelId === outcome.agentId
+      ? notice.cause
+      : messages.find(
+          (message) =>
+            message.from.kind !== "agent" &&
+            message.to.kind === "agent" &&
+            message.to.id === outcome.agentId,
+        )?.id;
+  if (!notice || !asked) throw new Error(NOT_SENT_AGAIN);
+  return api.retryTurn(outcome.agentId, asked);
 }
 
 export function statusWord(status: OutcomeStatus): string | null {

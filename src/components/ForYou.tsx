@@ -274,7 +274,28 @@ export function ForYou({ onClose }: { onClose: () => void }) {
           {view === "needs" && past.length > 0 && (
             <details className="for-you__later">
               <summary>Earlier · {past.length}</summary>
-              <FinishedShelves shelves={shelves(past, groups)} now={now} onOpen={openOutcome} />
+              {past.some(didNotFinish) && (
+                <div className="for-you__shelf">
+                  <h4>Did not finish</h4>
+                  {past.filter(didNotFinish).map((outcome) => (
+                    <UnfinishedLine
+                      key={outcome.runId}
+                      outcome={outcome}
+                      agent={agents.find((agent) => agent.id === outcome.agentId)}
+                      now={now}
+                      onOpen={() => openOutcome(outcome)}
+                    />
+                  ))}
+                </div>
+              )}
+              <FinishedShelves
+                shelves={shelves(
+                  past.filter((outcome) => !didNotFinish(outcome)),
+                  groups,
+                )}
+                now={now}
+                onOpen={openOutcome}
+              />
             </details>
           )}
           {view === "needs" && (
@@ -386,26 +407,27 @@ export function UnfinishedLine({
 }) {
   const seeOutcomes = useStore((state) => state.seeOutcomes);
   const showFailure = useStore((state) => state.showFailure);
-  const [sending, setSending] = useState(false);
+  const [state, setState] = useState<"ready" | "sending" | "sent">("ready");
   return (
     <div className="unfinished-line">
       <FinishedLine outcome={outcome} agent={agent} now={now} onOpen={onOpen} />
       <button
         type="button"
         className="btn unfinished-line__retry"
-        disabled={sending}
+        disabled={state !== "ready"}
         onClick={async () => {
-          setSending(true);
+          setState("sending");
           try {
             await retryOutcome(outcome);
+            setState("sent");
             await seeOutcomes({ runIds: [outcome.runId] });
           } catch (error) {
             showFailure(error);
-            setSending(false);
+            setState("ready");
           }
         }}
       >
-        {sending ? "Sending again" : "Try again"}
+        {state === "sent" ? "Sent again" : state === "sending" ? "Sending again" : "Try again"}
       </button>
     </div>
   );

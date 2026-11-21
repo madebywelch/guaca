@@ -352,6 +352,47 @@ describe("Finished", () => {
     ).toBe(false);
   });
 
+  it("sends a lead's task again to the lead when the failure was a colleague's", async () => {
+    const brief: Envelope = {
+      ...notice("brief-1", null),
+      channelId: "agent-1",
+      from: { kind: "human" },
+      to: { kind: "agent", id: "agent-1" },
+      parts: [{ type: "text", text: "Find the figures." }],
+    };
+    mocks.taskRecord.mockResolvedValue({
+      messages: [brief, notice("notice-run-2", "ask-to-colleague")],
+      resultId: null,
+    });
+    mocks.retry.mockResolvedValue("run-3");
+    hostHas([failure("run-2")]);
+    await act(async () => {
+      render(<ForYou onClose={() => {}} />);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    });
+    expect(mocks.retry).toHaveBeenCalledWith("agent-1", "brief-1");
+  });
+
+  it("keeps a failure it has seen under its own heading, with Try again, apart from finished work", async () => {
+    hostHas(
+      [outcome("run-1", { seenAt: NOW - HOUR }), failure("run-2")].map((one) => ({
+        ...one,
+        seenAt: NOW - HOUR,
+      })),
+    );
+    await act(async () => {
+      render(<ForYou onClose={() => {}} />);
+    });
+    const earlier = screen.getByText(/^Earlier/).closest("details") as HTMLElement;
+    const stalled = within(earlier).getByRole("heading", { name: "Did not finish" })
+      .parentElement as HTMLElement;
+    expect(within(stalled).getByText(/could not reply/)).toBeTruthy();
+    expect(within(stalled).getByRole("button", { name: "Try again" })).toBeTruthy();
+    expect(within(stalled).queryByText("Sent the digest to 12 people.")).toBeNull();
+  });
+
   it("files a failed task under Did not finish, never with the finished ones", async () => {
     hostHas([outcome("run-1"), failure("run-2")]);
     await act(async () => {
@@ -371,7 +412,13 @@ describe("Finished", () => {
 
   it("sends a failed task again from where it is listed, then marks it seen", async () => {
     mocks.taskRecord.mockResolvedValue({
-      messages: [notice("notice-run-2", "ask-1")],
+      messages: [
+        {
+          ...notice("notice-run-2", "ask-1"),
+          channelId: "agent-1",
+          to: { kind: "agent", id: "agent-1" },
+        },
+      ],
       resultId: null,
     });
     mocks.retry.mockResolvedValue("run-3");
@@ -383,7 +430,7 @@ describe("Finished", () => {
       fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     });
     expect(mocks.taskRecord).toHaveBeenCalledWith("agent-1", "run-2");
-    expect(mocks.retry).toHaveBeenCalledWith("agent-3", "ask-1");
+    expect(mocks.retry).toHaveBeenCalledWith("agent-1", "ask-1");
     expect(mocks.seen).toHaveBeenCalledWith({ runIds: ["run-2"] });
     expect(screen.queryByRole("region", { name: "Did not finish" })).toBeNull();
   });

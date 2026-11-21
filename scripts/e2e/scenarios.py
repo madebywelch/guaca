@@ -1704,6 +1704,7 @@ NOTICE_INK = """(() => {
     .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
   const [high, low] = [light(ink), light(back)].sort((a, b) => b - a);
   const retry = [...chip.querySelectorAll('button')].find(b => b.innerText.startsWith('Try again'));
+  if (!retry) return null;
   const probe = document.createElement('div');
   probe.style.height = 'var(--control-h)';
   document.body.append(probe);
@@ -1772,7 +1773,7 @@ def scenario_failure(w: World) -> None:
     ui.click("button", "Conversation")
 
     write(w, "Analyst", FIGURES)
-    w.wait("Analyst's model call is in the air", lambda: w.host.scalar(
+    w.wait("the message to Analyst is recorded", lambda: w.host.scalar(
         "SELECT count(*) FROM messages WHERE parts LIKE ?", f"%{FIGURES}%"))
     open_agent(w, AGENT)
     analyst.set()

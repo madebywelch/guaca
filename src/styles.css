@@ -6351,6 +6351,11 @@ input[type="file"]:disabled {
   color: var(--danger);
 }
 
+.menu__item[data-tone="danger"]:hover,
+.menu__item[data-tone="danger"]:focus-visible {
+  background: color-mix(in oklab, var(--danger) 4%, transparent);
+}
+
 .menu__item {
   display: block;
   width: 100%;

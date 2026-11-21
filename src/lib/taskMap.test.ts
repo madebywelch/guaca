@@ -64,6 +64,24 @@ describe("task map", () => {
     ]);
   });
 
+  it("does not take a failed errand the colleague sent for its own failure", () => {
+    const brief = message("run-1", 1, person, lead, "Find the figures.");
+    const asked = message("run-1", 2, lead, analyst, "Find the unavailable figures.");
+    const errand: Envelope = {
+      ...message("run-1", 3, { kind: "system" }, analyst, ""),
+      parts: [
+        {
+          type: "notice",
+          kind: "upstreamError",
+          text: "An errand Analyst sent could not reach the model.",
+        },
+      ],
+      cause: "run-1:elsewhere",
+    };
+    const [map] = taskMaps("lead", [brief, asked, errand], [], new Set());
+    expect(map?.branches[0]?.failed).toBeNull();
+  });
+
   it("does not take a guard notice to a colleague for a failure", () => {
     const brief = message("run-1", 1, person, lead, "Find the figures.");
     const asked = message("run-1", 2, lead, analyst, "Find the unavailable figures.");
