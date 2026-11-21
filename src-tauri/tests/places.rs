@@ -10,7 +10,8 @@ use parking_lot::Mutex;
 
 use guac_lib::db::RelayState;
 use guac_lib::domain::approval::ApprovalState;
-use guac_lib::domain::ids::{ApprovalId, RunId};
+use guac_lib::domain::envelope::{Envelope, Intent, Part, Participant, Trust};
+use guac_lib::domain::ids::{ApprovalId, MessageId, RunId};
 use guac_lib::domain::now_ms;
 use guac_lib::domain::place::{
     self, Abilities, AdapterId, Buttons, Card, CardKind, Heard, HeardKey, Mark, OutsideUser,
@@ -42,12 +43,14 @@ struct World {
     edits: Mutex<Vec<(Posted, Card)>>,
     marks: Mutex<Vec<(HeardKey, Mark)>>,
     tells: Mutex<Vec<(OutsideUser, String)>>,
+    tell_error: Mutex<Option<SendError>>,
     history: Mutex<Vec<Heard>>,
     caught: Mutex<Vec<(PlaceKey, Vec<ThreadKey>, i64)>>,
     failures: Mutex<VecDeque<SendError>>,
     hang_posts: AtomicBool,
     finds: AtomicUsize,
     hide_posts: AtomicBool,
+    lose_post_response: AtomicBool,
     runs: AtomicUsize,
     ending: Mutex<Option<AdapterError>>,
 }
@@ -157,6 +160,9 @@ impl Adapter for Fake {
             if self.0.hang_posts.load(Ordering::SeqCst) {
                 futures_util::future::pending::<()>().await;
             }
+            if self.0.lose_post_response.swap(false, Ordering::SeqCst) {
+                return Err(SendError::Ambiguous { after: Some(Duration::ZERO) });
+            }
             Ok(posted)
         }
         .boxed()
@@ -214,6 +220,9 @@ impl Adapter for Fake {
         text: &'a str,
     ) -> Pending<'a, Result<(), SendError>> {
         async move {
+            if let Some(err) = self.0.tell_error.lock().take() {
+                return Err(err);
+            }
             self.0.tells.lock().push((who.clone(), text.to_string()));
             Ok(())
         }
@@ -375,6 +384,83 @@ async fn a_stranger_gets_one_line_and_nothing_is_stored_or_spent() {
     assert_eq!(runs(&h), 0);
     assert_eq!(stub.calls.load(Ordering::SeqCst), 0);
     assert!(!h.runtime.store().heard_before("outside:fake:s1").unwrap());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_private_refusal_that_could_not_be_sent_is_not_acknowledged() {
+    let stub = saying("Hello.").await;
+    let Setup { h, world } = linked(&stub, abilities()).await;
+    *world.tell_error.lock() = Some(SendError::Retry { after: None });
+    let stranger = said("stranger", DM, None, STRANGER, "hello");
+    let ears = world.ears.lock().clone().unwrap();
+    assert!(ears.heard(stranger.clone()).await.is_err());
+    assert!(world.told(STRANGER).is_empty());
+    ears.heard(stranger).await.unwrap();
+    assert_eq!(world.told(STRANGER), vec![place::STRANGER]);
+    assert_eq!(runs(&h), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_queued_desktop_message_cannot_join_a_direct_turn_or_its_reply() {
+    let stub = serve(|body| {
+        let outside = anyone_said(body, "direct-only input");
+        let desktop = anyone_said(body, "desktop-only input");
+        let said = match (outside, desktop) {
+            (true, false) => "The direct reply.",
+            (false, true) => "The desktop reply.",
+            _ => "Mixed inputs.",
+        };
+        Script::Say(said.into())
+    })
+    .await;
+    let Setup { h, world } = linked(&stub, abilities()).await;
+    h.pause("Pip");
+    hear(&world, said("outside", DM, None, PERSON, "direct-only input")).await;
+    let desktop = h.runtime.send_from_human(h.id("Pip"), "desktop-only input").unwrap();
+    h.resume("Pip");
+    let outer = settled(&h, "outside").await;
+    h.settle(desktop).await;
+    relayed(&h, outer, Mark::Done).await;
+    assert_eq!(texts(&world.posts()), vec!["The direct reply."]);
+    assert!(h.channel_texts("Pip").iter().any(|text| text.contains("The desktop reply.")));
+    assert_eq!(stub.calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn outside_history_excludes_other_spots_but_keeps_the_same_thread() {
+    let stub = serve(|body| {
+        let direct = anyone_said(body, "private direct history");
+        let thread = anyone_said(body, "channel thread history");
+        Script::Say(format!("Direct: {direct}. Thread: {thread}."))
+    })
+    .await;
+    let Setup { h, world } = linked(&stub, abilities()).await;
+    let pip = h.runtime.store().get_agent(h.id("Pip")).unwrap().unwrap();
+    h.runtime
+        .store()
+        .bind_place(&adapter(), &PlaceKey(CHANNEL.into()), pip.group_id, pip.id, false)
+        .unwrap();
+    hear(&world, said("direct", DM, None, PERSON, "private direct history")).await;
+    let direct = settled(&h, "direct").await;
+    relayed(&h, direct, Mark::Done).await;
+    hear(&world, said("channel", CHANNEL, Some("root"), PERSON, "channel thread history")).await;
+    let channel = settled(&h, "channel").await;
+    relayed(&h, channel, Mark::Done).await;
+    hear(&world, said("follow", CHANNEL, Some("root"), PERSON, "same thread")).await;
+    let follow = settled(&h, "follow").await;
+    relayed(&h, follow, Mark::Done).await;
+    hear(&world, said("elsewhere", CHANNEL, Some("other"), PERSON, "another thread")).await;
+    let elsewhere = settled(&h, "elsewhere").await;
+    relayed(&h, elsewhere, Mark::Done).await;
+    assert_eq!(
+        texts(&world.posts()),
+        vec![
+            "Direct: true. Thread: false.",
+            "Direct: false. Thread: true.",
+            "Direct: false. Thread: true.",
+            "Direct: false. Thread: false.",
+        ]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -610,6 +696,61 @@ async fn a_crash_between_post_and_mark_on_an_idempotent_provider_posts_again_wit
     assert_eq!(world.finds.load(Ordering::SeqCst), 0);
     assert_eq!(posts.len(), 1);
     assert_eq!(*world.post_calls.lock(), vec![RelayTag(key.clone()), RelayTag(key)]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lost_post_response_is_recovered_without_reposting() {
+    let stub = saying("Your report.").await;
+    let Setup { h, world } = linked(&stub, abilities()).await;
+    world.lose_post_response.store(true, Ordering::SeqCst);
+    hear(&world, said("m1", DM, None, PERSON, "Get the report")).await;
+    let run = settled(&h, "m1").await;
+    relayed(&h, run, Mark::Done).await;
+    assert_eq!(world.finds.load(Ordering::SeqCst), 1);
+    assert_eq!(world.post_calls.lock().len(), 1);
+    assert_eq!(texts(&world.posts()), vec!["Your report."]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_stale_notice_cannot_overtake_earlier_replies_with_equal_timestamps() {
+    let stub = serve(|_| Script::Hang).await;
+    let Setup { h, world } = linked(&stub, abilities()).await;
+    hear(&world, said("working", DM, None, PERSON, "Go")).await;
+    let run = run_for(&h, "working").unwrap();
+    h.runtime.detach_adapter(&adapter());
+    let created_at = now_ms();
+    for (id, text) in [(u128::MAX, "First committed."), (1, "Second committed.")] {
+        h.runtime
+            .store()
+            .append(&Envelope {
+                id: MessageId::from_uuid(uuid::Uuid::from_u128(id)),
+                run_id: run,
+                channel_id: h.id("Pip"),
+                from: Participant::Agent { id: h.id("Pip") },
+                to: Participant::Human,
+                parts: vec![Part::Text { text: text.into() }],
+                trust: Trust::Peer,
+                hop: 0,
+                expects_reply: false,
+                intent: Intent::Courtesy,
+                cause: None,
+                created_at,
+            })
+            .unwrap();
+    }
+    hear(
+        &world,
+        Heard {
+            at_ms: now_ms() - place::STALE_MS - 60_000,
+            ..said("old", DM, None, PERSON, "The stale request")
+        },
+    )
+    .await;
+    attach(&h, &world).await;
+    h.wait_until("committed replies and the stale notice", |_| world.posts().len() == 3).await;
+    let posts = texts(&world.posts());
+    assert_eq!(posts[..2], ["First committed.", "Second committed."]);
+    assert!(posts[2].contains("The stale request"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -979,6 +1120,34 @@ async fn free_text_in_the_spot_of_a_pending_question_answers_it_once_even_when_r
     let run = settled(&h, "m1").await;
     relayed(&h, run, Mark::Done).await;
     hear(&world, answer).await;
+    assert_eq!(
+        h.runtime.store().get_approval(ask).unwrap().unwrap().answer.as_deref(),
+        Some("after lunch")
+    );
+    assert_eq!(runs(&h), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_typed_answer_and_its_receipt_are_retried_together_if_the_commit_fails() {
+    let stub = asking().await;
+    let Setup { h, world } = linked(&stub, abilities()).await;
+    hear(&world, said("m1", DM, None, PERSON, "Release?")).await;
+    let ask = asked(&h).await;
+    posted_ask(&h, ask).await;
+    let conn = h.runtime.store().conn().unwrap();
+    conn.execute_batch(
+        "CREATE TRIGGER reject_decision BEFORE UPDATE ON approvals
+         BEGIN SELECT RAISE(ABORT, 'test rollback'); END;",
+    )
+    .unwrap();
+    let answer = said("answer", DM, None, PERSON, "after lunch");
+    let ears = world.ears.lock().clone().unwrap();
+    assert!(ears.heard(answer.clone()).await.is_err());
+    assert!(!h.runtime.store().place_answered(&adapter(), &answer.key).unwrap());
+    conn.execute_batch("DROP TRIGGER reject_decision").unwrap();
+    drop(conn);
+    ears.heard(answer.clone()).await.unwrap();
+    ears.heard(answer).await.unwrap();
     assert_eq!(
         h.runtime.store().get_approval(ask).unwrap().unwrap().answer.as_deref(),
         Some("after lunch")

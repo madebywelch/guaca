@@ -122,6 +122,8 @@ pub enum StoreError {
     PluginToolListUnreadable { plugin: String },
     #[error("no question with id {0}")]
     ApprovalNotFound(ApprovalId),
+    #[error("this answer was already received from the outside conversation")]
+    PlaceAnswerRecorded,
     #[error("that question was already answered ({})", state.as_str())]
     ApprovalSettled { state: ApprovalState },
     #[error("{0} is already used by another credential in this group")]
@@ -1510,11 +1512,22 @@ impl Store {
         id: ApprovalId,
         state: ApprovalState,
     ) -> Result<Approval, StoreError> {
-        self.settle_approval_with(id, state, None)
+        self.settle_approval_with(id, state, None, None)
     }
 
     pub fn answer_approval(&self, id: ApprovalId, answer: &str) -> Result<Approval, StoreError> {
-        self.settle_approval_with(id, ApprovalState::Answered, Some(answer))
+        self.settle_approval_with(id, ApprovalState::Answered, Some(answer), None)
+    }
+
+    pub fn settle_place_answer(
+        &self,
+        id: ApprovalId,
+        state: ApprovalState,
+        answer: Option<&str>,
+        adapter: &crate::domain::place::AdapterId,
+        heard: &crate::domain::place::Heard,
+    ) -> Result<Approval, StoreError> {
+        self.settle_approval_with(id, state, answer, Some((adapter, heard)))
     }
 
     fn settle_approval_with(
@@ -1522,9 +1535,15 @@ impl Store {
         id: ApprovalId,
         state: ApprovalState,
         answer: Option<&str>,
+        outside: Option<(&crate::domain::place::AdapterId, &crate::domain::place::Heard)>,
     ) -> Result<Approval, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some((adapter, heard)) = outside {
+            if !super::places::record_answer(&tx, adapter, heard, id)? {
+                return Err(StoreError::PlaceAnswerRecorded);
+            }
+        }
         let changed = tx.execute(
             "UPDATE approvals SET state=?2, decided_at=?3, answer=?4
               WHERE id=?1 AND state='pending'",
@@ -3330,6 +3349,16 @@ impl Store {
         through: i64,
         limit: u32,
     ) -> Result<Vec<Envelope>, StoreError> {
+        self.turn_history(agent, through, limit, None)
+    }
+
+    pub fn turn_history(
+        &self,
+        agent: AgentId,
+        through: i64,
+        limit: u32,
+        run: Option<RunId>,
+    ) -> Result<Vec<Envelope>, StoreError> {
         const SHOWN: &str = "EXISTS (
                  SELECT 1 FROM json_each(parts) AS part
                   WHERE json_extract(part.value, '$.type') IN ('file', 'routine', 'decision')
@@ -3337,18 +3366,28 @@ impl Store {
                          AND trim(json_extract(part.value, '$.text'),
                                   ' ' || char(9) || char(10) || char(13)) <> '')
              )";
+        const SAME_PLACE: &str = "(
+                    NOT EXISTS (SELECT 1 FROM origin)
+                    AND NOT EXISTS (SELECT 1 FROM place_runs p WHERE p.run_id=messages.run_id)
+                    OR EXISTS (
+                        SELECT 1 FROM place_runs p JOIN origin o
+                          ON p.adapter=o.adapter AND p.place=o.place AND p.thread IS o.thread
+                         WHERE p.run_id=messages.run_id
+                    )
+                 )";
         let conn = self.conn()?;
         let mut stmt = conn.prepare(&format!(
-            "WITH visible AS (
+            "WITH origin AS (SELECT adapter,place,thread FROM place_runs WHERE run_id=?4),
+             visible AS (
                  SELECT id, created_at FROM (
                      SELECT id, created_at FROM messages
-                      WHERE {READ_BY_AGENT} AND created_at<=?2 AND {SHOWN}
+                      WHERE {READ_BY_AGENT} AND created_at<=?2 AND {SHOWN} AND {SAME_PLACE}
                       ORDER BY created_at DESC, id DESC LIMIT ?3
                  )
                  UNION
                  SELECT id, created_at FROM (
                      SELECT id, created_at FROM messages
-                      WHERE {WRITTEN_BY_AGENT} AND {SHOWN}
+                      WHERE {WRITTEN_BY_AGENT} AND {SHOWN} AND {SAME_PLACE}
                       ORDER BY created_at DESC, id DESC LIMIT ?3
                  )
              ), recent AS (
@@ -3358,7 +3397,10 @@ impl Store {
                FROM messages JOIN recent USING (id)
               ORDER BY created_at DESC, id DESC"
         ))?;
-        let rows = stmt.query_map(params![agent.to_string(), through, limit], row_to_envelope)?;
+        let rows = stmt.query_map(
+            params![agent.to_string(), through, limit, run.map(|run| run.to_string())],
+            row_to_envelope,
+        )?;
         let mut out = Vec::new();
         for row in rows {
             out.push(row??);
@@ -4514,7 +4556,10 @@ mod tests {
 
     fn remove_place_tables(conn: &rusqlite::Connection) {
         conn.execute_batch(
-            "DROP TABLE relay; DROP TABLE place_answers; DROP TABLE place_links;
+            "DROP TRIGGER place_relay_reply; DROP TRIGGER place_relay_started;
+             DROP TRIGGER place_relay_ask; DROP TRIGGER place_relay_settle;
+             DROP TRIGGER place_relay_outcome; DROP TABLE place_relay_order;
+             DROP TABLE relay; DROP TABLE place_answers; DROP TABLE place_links;
              DROP TABLE place_runs; DROP TABLE place_threads; DROP TABLE places; DROP TABLE adapters;",
         )
         .unwrap();

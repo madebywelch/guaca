@@ -100,6 +100,7 @@ pub struct RelayRow {
     pub next_at: i64,
     pub last_error: Option<String>,
     pub created_at: i64,
+    pub order: (i64, u8, usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,10 +111,12 @@ pub struct NewRelay<'a> {
     pub run: Option<RunId>,
     pub state: RelayState,
     pub item: &'a Outgoing,
+    pub order: (i64, u8, usize),
 }
 
 const RELAY_COLUMNS: &str =
-    "seq,key,adapter,place,thread,run_id,state,item,posted,attempts,next_at,last_error,created_at";
+    "seq,key,adapter,place,thread,run_id,state,item,posted,attempts,next_at,last_error,created_at,
+     source_seq,rank,chunk";
 
 fn corrupt(what: &str) -> impl Fn(String) -> StoreError + '_ {
     move |err| StoreError::Corrupt(format!("bad {what}: {err}"))
@@ -141,6 +144,7 @@ fn relay_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<RelayRow, Store
             next_at: row.get(10)?,
             last_error: row.get(11)?,
             created_at: row.get(12)?,
+            order: (row.get(13)?, row.get(14)?, row.get(15)?),
         })
     })();
     Ok(parsed)
@@ -175,6 +179,22 @@ pub(super) fn land(
         )?;
     }
     raise(tx, &landing.adapter, &landing.spot.place, &landing.heard)
+}
+
+pub(super) fn record_answer(
+    tx: &Connection,
+    adapter: &AdapterId,
+    heard: &Heard,
+    approval: ApprovalId,
+) -> Result<bool, StoreError> {
+    let inserted = tx.execute(
+        "INSERT OR IGNORE INTO place_answers (adapter,heard_key,approval_id) VALUES (?1,?2,?3)",
+        params![adapter.0, heard.key.0, approval.to_string()],
+    )? > 0;
+    if inserted {
+        raise(tx, adapter, &heard.spot.place, &heard.key)?;
+    }
+    Ok(inserted)
 }
 
 fn raise(
@@ -400,46 +420,16 @@ impl Store {
         Ok(found)
     }
 
-    pub fn place_answer(
+    pub fn place_answered(
         &self,
         adapter: &AdapterId,
         heard: &HeardKey,
-    ) -> Result<Option<(ApprovalId, String)>, StoreError> {
-        let conn = self.conn()?;
-        let found: Option<(String, String)> = conn
-            .query_row(
-                "SELECT approval_id,answer FROM place_answers WHERE adapter=?1 AND heard_key=?2",
-                params![adapter.0, heard.0],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        found
-            .map(|(id, answer)| {
-                Ok((
-                    id.parse().map_err(|e: uuid::Error| corrupt("approval id")(e.to_string()))?,
-                    answer,
-                ))
-            })
-            .transpose()
-    }
-
-    pub fn record_place_answer(
-        &self,
-        adapter: &AdapterId,
-        place: &PlaceKey,
-        heard: &HeardKey,
-        approval: ApprovalId,
-        answer: &str,
-    ) -> Result<(), StoreError> {
-        let mut conn = self.conn()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute(
-            "INSERT OR IGNORE INTO place_answers (adapter,heard_key,approval_id,answer) VALUES (?1,?2,?3,?4)",
-            params![adapter.0, heard.0, approval.to_string(), answer],
-        )?;
-        raise(&tx, adapter, place, heard)?;
-        tx.commit()?;
-        Ok(())
+    ) -> Result<bool, StoreError> {
+        Ok(self.conn()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM place_answers WHERE adapter=?1 AND heard_key=?2)",
+            params![adapter.0, heard.0],
+            |row| row.get(0),
+        )?)
     }
 
     pub fn place_run(&self, run: RunId) -> Result<Option<PlaceRun>, StoreError> {
@@ -447,6 +437,17 @@ impl Store {
         let mut stmt = conn.prepare(&format!("{PLACE_RUN_SELECT} WHERE p.run_id=?1"))?;
         let found = stmt.query_row([run.to_string()], place_run_row).optional()?;
         found.transpose()
+    }
+
+    pub fn shares_intake(&self, run: RunId, other: RunId) -> Result<bool, StoreError> {
+        if run == other {
+            return Ok(true);
+        }
+        Ok(self.conn()?.query_row(
+            "SELECT NOT EXISTS (SELECT 1 FROM place_runs WHERE run_id IN (?1,?2))",
+            params![run.to_string(), other.to_string()],
+            |row| row.get(0),
+        )?)
     }
 
     pub fn open_place_runs(&self, adapter: &AdapterId) -> Result<Vec<PlaceRun>, StoreError> {
@@ -491,7 +492,12 @@ impl Store {
     ) -> Result<bool, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let written = insert_relay(&tx, new, true)?;
+        tx.execute("INSERT OR IGNORE INTO place_relay_order (key) VALUES (?1)", [new.key])?;
+        let seq =
+            tx.query_row("SELECT seq FROM place_relay_order WHERE key=?1", [new.key], |row| {
+                row.get(0)
+            })?;
+        let written = insert_relay(&tx, &NewRelay { order: (seq, 0, 0), ..new.clone() }, true)?;
         raise(&tx, new.adapter, &new.spot.place, heard)?;
         tx.commit()?;
         Ok(written)
@@ -502,6 +508,24 @@ impl Store {
         insert_relay(&conn, new, false)
     }
 
+    pub fn relay_order(
+        &self,
+        run: RunId,
+    ) -> Result<std::collections::HashMap<String, i64>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare("SELECT key,seq FROM place_relay_order WHERE run_id=?1")?;
+        let rows = stmt.query_map([run.to_string()], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    pub fn relay_watermark(&self) -> Result<i64, StoreError> {
+        Ok(self.conn()?.query_row(
+            "SELECT coalesce(max(seq),0) FROM place_relay_order",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+
     pub fn relay_rows(&self, adapter: &AdapterId) -> Result<Vec<RelayRow>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(&format!(
@@ -509,7 +533,7 @@ impl Store {
               WHERE adapter=?1
                 AND (state IN ('queued','sending')
                      OR run_id IN (SELECT run_id FROM place_runs WHERE adapter=?1 AND relayed=0))
-              ORDER BY seq"
+              ORDER BY source_seq,rank,chunk,seq"
         ))?;
         let rows = stmt.query_map([&adapter.0], relay_row)?;
         rows.map(|row| row?).collect()
@@ -529,10 +553,11 @@ impl Store {
         let conn = self.conn()?;
         let found: Option<(String, String)> = conn
             .query_row(
-                "SELECT substr(key,5),item FROM relay
-                  WHERE adapter=?1 AND place=?2 AND key LIKE 'ask:%'
-                    AND thread IS ?3 AND state='sent'
-                  ORDER BY seq DESC LIMIT 1",
+                "SELECT a.id,r.item FROM relay r
+                   JOIN approvals a ON r.key='ask:'||a.id
+                  WHERE r.adapter=?1 AND r.place=?2 AND r.thread IS ?3
+                    AND r.state='sent' AND r.posted IS NOT NULL AND a.state='pending'
+                  ORDER BY r.seq DESC LIMIT 1",
                 params![adapter.0, spot.place.0, spot.thread.as_ref().map(|t| t.0.as_str())],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -608,7 +633,9 @@ impl Store {
                 AND NOT EXISTS (
                     SELECT 1 FROM relay prior WHERE prior.adapter=head.adapter
                       AND prior.place=head.place AND prior.thread IS head.thread
-                      AND prior.seq<head.seq AND prior.state IN ('queued','sending')
+                      AND (prior.source_seq,prior.rank,prior.chunk,prior.seq) <
+                          (head.source_seq,head.rank,head.chunk,head.seq)
+                      AND prior.state IN ('queued','sending')
                 )",
             [&adapter.0],
             |row| row.get(0),
@@ -686,8 +713,8 @@ fn insert_relay(conn: &Connection, new: &NewRelay<'_>, ignore: bool) -> Result<b
     let verb = if ignore { "INSERT OR IGNORE" } else { "INSERT" };
     let written = conn.execute(
         &format!(
-            "{verb} INTO relay (key,adapter,place,thread,run_id,state,item,created_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)"
+            "{verb} INTO relay (key,adapter,place,thread,run_id,state,item,created_at,source_seq,rank,chunk)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"
         ),
         params![
             new.key,
@@ -698,6 +725,9 @@ fn insert_relay(conn: &Connection, new: &NewRelay<'_>, ignore: bool) -> Result<b
             new.state.as_str(),
             item,
             now_ms(),
+            new.order.0,
+            new.order.1,
+            new.order.2,
         ],
     )?;
     Ok(written > 0)

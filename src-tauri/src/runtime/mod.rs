@@ -2391,10 +2391,7 @@ impl Runtime {
         };
 
         let approval = self.inner.store.settle_approval(id, decision.into())?;
-        if let Some(waiter) = self.inner.waiting.lock().remove(&id) {
-            let _ = waiter.send(());
-        }
-        self.inner.events.emit(UiEvent::ApprovalSettled { approval_id: id, state: approval.state });
+        self.approval_settled(&approval);
         Ok(approval)
     }
 
@@ -2408,11 +2405,17 @@ impl Runtime {
         }
 
         let approval = self.inner.store.answer_approval(id, answer)?;
-        if let Some(waiter) = self.inner.waiting.lock().remove(&id) {
+        self.approval_settled(&approval);
+        Ok(approval)
+    }
+
+    fn approval_settled(&self, approval: &Approval) {
+        if let Some(waiter) = self.inner.waiting.lock().remove(&approval.id) {
             let _ = waiter.send(());
         }
-        self.inner.events.emit(UiEvent::ApprovalSettled { approval_id: id, state: approval.state });
-        Ok(approval)
+        self.inner
+            .events
+            .emit(UiEvent::ApprovalSettled { approval_id: approval.id, state: approval.state });
     }
 
     fn stopped(&self, run: RunId) -> bool {
@@ -2712,6 +2715,14 @@ impl Runtime {
                 return;
             }
         };
+        if !batch.iter().chain(&carried).chain(&absorbed).all(|envelope| {
+            self.inner.store.shares_intake(run_id, envelope.run_id).unwrap_or(false)
+        }) {
+            self.notice(agent_id, run_id, cause, NoticeKind::Interrupted,
+                "This conversation could not resume without mixing messages from different places. Start it again in the place you want answered.".into());
+            self.finish_turn(agent_id, run_id, batch.len(), &carried);
+            return;
+        }
 
         let starting: Vec<_> = batch.iter().map(|envelope| envelope.id).collect();
         if let Err(err) = self.inner.store.start_deliveries(&starting, run_id) {
@@ -2805,6 +2816,14 @@ impl Runtime {
                 return;
             }
         };
+        if !before.iter().all(|envelope| {
+            self.inner.store.shares_intake(run_id, envelope.run_id).unwrap_or(false)
+        }) {
+            self.notice(agent_id, run_id, cause, NoticeKind::Interrupted,
+                "This conversation could not read its earlier work without mixing places. Start it again in the place you want answered.".into());
+            self.finish_turn(agent_id, run_id, batch.len(), &carried);
+            return;
+        }
 
         let group_limits = self.limits_for(&card);
         let (limits, has_budget) = {
@@ -2836,7 +2855,7 @@ impl Runtime {
         let history = self
             .inner
             .store
-            .agent_history(agent_id, newest, HISTORY_WINDOW)
+            .turn_history(agent_id, newest, HISTORY_WINDOW, Some(run_id))
             .unwrap_or_else(|err| {
                 tracing::warn!(%agent_id, %err, "could not read this agent's conversation history");
                 Vec::new()
@@ -3541,7 +3560,8 @@ impl Runtime {
             let takeable = matches!(next.from, Participant::Human | Participant::System)
                 && !next.is_tidy()
                 && !self.stopped(next.run_id)
-                && !self.inner.resuming.lock().contains_key(&next.id);
+                && !self.inner.resuming.lock().contains_key(&next.id)
+                && self.inner.store.shares_intake(run, next.run_id).unwrap_or(false);
             if !takeable {
                 intake.carry.push_front(next);
                 break;

@@ -122,24 +122,16 @@ Ack(m) ==
     /\ UNCHANGED <<up, ends, inflight, landing, catching, fresh, awaiting, disk, ghosts>>
 
 Answer(m) ==
-    /\ up /\ m = "m1" /\ m \in claimed /\ m \notin replied
+    /\ up /\ m = "m1" /\ m \in claimed /\ m \notin replied /\ approval = "decided"
     /\ replied' = replied \cup {m}
-    /\ UNCHANGED <<up, ends, acked, memory, claimed, placeRun, high, made, rs, approval, ghosts>>
+    /\ made' = IF m \in placeRun THEN Append(made, "reply") ELSE made
+    /\ UNCHANGED <<up, ends, acked, memory, claimed, placeRun, high, rs, approval, ghosts>>
 
 Asks ==
     /\ up /\ "m1" \in claimed /\ approval = "none"
     /\ approval' = "pending"
-    /\ UNCHANGED <<up, ends, acked, memory, claimed, placeRun, high, replied, made, rs, ghosts>>
-
-Relayable(i) ==
-    \/ i = "reply" /\ "m1" \in replied /\ "m1" \in placeRun /\ "settle" \in Range(made)
-    \/ i = "ask" /\ approval # "none" /\ "m1" \in placeRun
-    \/ i = "settle" /\ approval = "decided" /\ rs["ask"] \in Terminal
-
-Make(i) ==
-    /\ up /\ i \notin Range(made) /\ Relayable(i)
-    /\ made' = Append(made, i)
-    /\ UNCHANGED <<up, ends, acked, memory, claimed, placeRun, high, replied, rs, approval, ghosts>>
+    /\ made' = IF "m1" \in placeRun THEN Append(made, "ask") ELSE made
+    /\ UNCHANGED <<up, ends, acked, memory, claimed, placeRun, high, replied, rs, ghosts>>
 
 HeadFree(i) ==
     \A j \in Range(made) : Pos(made, j) < Pos(made, i) => rs[j] \in Terminal
@@ -175,6 +167,10 @@ Post(i) ==
        \/ /\ rs' = [rs EXCEPT ![i] = "failed"]
           /\ fresh' = fresh \ {i}
           /\ UNCHANGED <<shown, seq, awaiting>>
+       \/ /\ shown' = [shown EXCEPT ![i] = @ + 1]
+          /\ seq' = Append(seq, i)
+          /\ fresh' = fresh \ {i}
+          /\ UNCHANGED <<rs, awaiting>>
     /\ UNCHANGED <<up, ends, acked, inflight, committed, landing, catching,
                    claimed, placeRun, high, replied, made, approval, told, runs, decisions>>
 
@@ -200,21 +196,22 @@ Decide ==
     /\ approval = "pending"
     /\ approval' = "decided"
     /\ decisions' = decisions + 1
+    /\ made' = IF "ask" \in Range(made) THEN Append(made, "settle") ELSE made
 
 Press ==
     /\ up /\ shown["ask"] > 0
-    /\ IF approval = "pending" THEN Decide ELSE UNCHANGED <<approval, decisions>>
-    /\ UNCHANGED <<up, ends, acked, memory, claimed, placeRun, high, replied, made, rs,
+    /\ IF approval = "pending" THEN Decide ELSE UNCHANGED <<approval, decisions, made>>
+    /\ UNCHANGED <<up, ends, acked, memory, claimed, placeRun, high, replied, rs,
                    told, runs, shown, seq>>
 
 AppAnswer ==
     /\ up /\ Decide
-    /\ UNCHANGED <<up, ends, acked, memory, claimed, placeRun, high, replied, made, rs,
+    /\ UNCHANGED <<up, ends, acked, memory, claimed, placeRun, high, replied, rs,
                    told, runs, shown, seq>>
 
 Lapse ==
     /\ up /\ Decide
-    /\ UNCHANGED <<up, ends, acked, memory, claimed, placeRun, high, replied, made, rs,
+    /\ UNCHANGED <<up, ends, acked, memory, claimed, placeRun, high, replied, rs,
                    told, runs, shown, seq>>
 
 End ==
@@ -235,7 +232,7 @@ Next ==
     \/ \E m \in Heard, via \in Vias : Commit(m, via)
     \/ \E m \in Said : Land(m) \/ Answer(m)
     \/ Asks
-    \/ \E i \in Items : Make(i) \/ Insert(i) \/ Requeue(i) \/ GiveUp(i) \/ Post(i)
+    \/ \E i \in Items : Insert(i) \/ Requeue(i) \/ GiveUp(i) \/ Post(i)
                         \/ MarkSent(i) \/ Recover(i)
     \/ Press \/ AppAnswer \/ Lapse
     \/ End \/ Start
@@ -244,7 +241,6 @@ Fair ==
     /\ WF_vars(Start)
     /\ WF_vars(Lapse)
     /\ \A i \in Items :
-        /\ WF_vars(Make(i))
         /\ WF_vars(Insert(i))
         /\ WF_vars(Post(i))
         /\ WF_vars(MarkSent(i))
