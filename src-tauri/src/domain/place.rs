@@ -144,6 +144,10 @@ pub enum Outgoing {
 }
 
 pub const STRANGER: &str = "This Guaca answers its owner.";
+pub const QUESTION_CLOSED: &str =
+    "That question had already closed, so Guaca did not take this answer.";
+pub const UNREADABLE: &str = "Guaca could not read what this conversation should receive.";
+pub const UNLINKED: &str = "This conversation is no longer linked.";
 pub const UNBOUND: &str =
     "This conversation is not connected to a group yet. Connect it in Guaca's Settings.";
 pub const CODE_IN_CHANNEL: &str =
@@ -159,6 +163,7 @@ pub const DENY: &str = "deny";
 pub const LATE_MS: i64 = 5 * 60 * 1000;
 pub const STALE_MS: i64 = 24 * 60 * 60 * 1000;
 pub const LINK_CODE_MS: i64 = 10 * 60 * 1000;
+pub const LINK_CODE_TRIES: u32 = 5;
 const QUOTE_CHARS: usize = 60;
 
 pub fn linked(agent: &str) -> String {

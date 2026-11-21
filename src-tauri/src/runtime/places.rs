@@ -35,6 +35,7 @@ pub(super) struct LinkCode {
     code: String,
     agent: AgentId,
     expires_at: i64,
+    misses: u32,
 }
 
 fn unheard(err: impl std::fmt::Display) -> Unheard {
@@ -92,7 +93,12 @@ impl Runtime {
         let code = format!("{drawn:06}");
         self.inner.link_codes.lock().insert(
             adapter.clone(),
-            LinkCode { code: code.clone(), agent, expires_at: now_ms() + place::LINK_CODE_MS },
+            LinkCode {
+                code: code.clone(),
+                agent,
+                expires_at: now_ms() + place::LINK_CODE_MS,
+                misses: 0,
+            },
         );
         Ok(code)
     }
@@ -151,9 +157,14 @@ impl Runtime {
         if self.inner.store.link_was_heard(adapter, &heard.key)? {
             return Ok(Some(String::new()));
         }
-        let Some(code) = codes.get(adapter).filter(|code| code.code == said) else {
+        let Some(code) = codes.get_mut(adapter) else { return Ok(None) };
+        if code.code != said {
+            code.misses += 1;
+            if code.misses >= place::LINK_CODE_TRIES {
+                codes.remove(adapter);
+            }
             return Ok(None);
-        };
+        }
         if heard.at_ms < code.expires_at - place::LINK_CODE_MS {
             return Ok(Some(String::new()));
         }
@@ -238,7 +249,7 @@ impl Runtime {
         match &heard.said {
             Said::Choice { .. } if history => Ok(()),
             Said::Choice { ask, choice } => self.press(adapter, &heard, ask, choice).await,
-            Said::Text { text } => self.take_text(adapter, &heard, text, trust).await,
+            Said::Text { text } => self.take_text(adapter, &heard, text, trust, history).await,
         }
     }
 
@@ -334,7 +345,21 @@ impl Runtime {
         };
         match store.settle_place_answer(id, state, answer, adapter, heard) {
             Ok(approval) => self.approval_settled(&approval),
-            Err(StoreError::PlaceAnswerRecorded | StoreError::ApprovalSettled { .. }) => {}
+            Err(StoreError::PlaceAnswerRecorded) => {}
+            Err(StoreError::ApprovalSettled { .. }) => {
+                let key = format!("notice:{}/{}:closed", adapter.0, heard.key.0);
+                let item = Outgoing::Post { card: place::notice(place::QUESTION_CLOSED.into()) };
+                store.queue_place_notice(&NewRelay {
+                    key: &key,
+                    adapter,
+                    spot: &heard.spot,
+                    run: None,
+                    state: RelayState::Queued,
+                    item: &item,
+                    order: (0, 0, 0),
+                })?;
+                self.wake_relay();
+            }
             Err(err) => return Err(err),
         }
         Ok(())
@@ -374,13 +399,16 @@ impl Runtime {
         heard: &Heard,
         text: &str,
         trust: Trust,
+        caught: bool,
     ) -> Result<(), Unheard> {
         let id = adapter.id();
         let store = &self.inner.store;
         let key = format!("outside:{}:{}", id.0, heard.key.0);
         let stale_key = format!("notice:{}/{}:stale", id.0, heard.key.0);
+        let closed_key = format!("notice:{}/{}:closed", id.0, heard.key.0);
         if store.heard_before(&key).map_err(unheard)?
             || store.heard_before(&stale_key).map_err(unheard)?
+            || store.heard_before(&closed_key).map_err(unheard)?
         {
             return Ok(());
         }
@@ -406,7 +434,7 @@ impl Runtime {
                 item: &item,
                 order: (0, 0, 0),
             };
-            store.queue_place_notice(&notice, &heard.key).map_err(unheard)?;
+            store.queue_place_notice(&notice).map_err(unheard)?;
             self.wake_relay();
             return Ok(());
         }
@@ -435,10 +463,10 @@ impl Runtime {
             .is_some_and(|card| card.group_id == bound.group && card.lifecycle.is_discoverable())
         {
             self.tell(adapter, heard, place::AGENT_UNAVAILABLE).await?;
-            return store.raise_high_water(&id, &heard.spot.place, &heard.key).map_err(unheard);
+            return Ok(());
         }
         if body.is_empty() {
-            return store.raise_high_water(&id, &heard.spot.place, &heard.key).map_err(unheard);
+            return Ok(());
         }
         let landing = Landing {
             adapter: id.clone(),
@@ -446,6 +474,7 @@ impl Runtime {
             heard: heard.key.clone(),
             heard_at: heard.at_ms,
             direct: heard.direct,
+            caught,
             agent,
         };
         let fingerprint = format!("{:x}", Sha256::digest(body.as_bytes()));
@@ -459,8 +488,7 @@ impl Runtime {
                 Err(unheard(err))
             }
             Err(RuntimeError::UnknownAgent(_) | RuntimeError::AgentTerminated(_)) => {
-                self.tell(adapter, heard, place::AGENT_UNAVAILABLE).await?;
-                store.raise_high_water(&id, &heard.spot.place, &heard.key).map_err(unheard)
+                self.tell(adapter, heard, place::AGENT_UNAVAILABLE).await
             }
             Err(err) => Err(unheard(err)),
         }

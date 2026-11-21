@@ -16,6 +16,7 @@ pub struct Landing {
     pub heard: HeardKey,
     pub heard_at: i64,
     pub direct: bool,
+    pub caught: bool,
     pub agent: AgentId,
 }
 
@@ -43,7 +44,7 @@ pub struct PlaceRun {
     pub heard_at: i64,
     pub direct: bool,
     pub message: MessageId,
-    pub started_at: Option<i64>,
+    pub caught: bool,
     pub created_at: i64,
 }
 
@@ -158,8 +159,8 @@ pub(super) fn land(
 ) -> Result<(), StoreError> {
     let thread = landing.spot.thread.as_ref().map(|thread| thread.0.as_str());
     tx.execute(
-        "INSERT INTO place_runs (run_id,adapter,place,thread,heard_key,heard_at,direct,message_id,created_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        "INSERT INTO place_runs (run_id,adapter,place,thread,heard_key,heard_at,direct,message_id,caught,created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
         params![
             run.to_string(),
             landing.adapter.0,
@@ -169,6 +170,7 @@ pub(super) fn land(
             landing.heard_at,
             landing.direct,
             message.to_string(),
+            landing.caught,
             now_ms(),
         ],
     )?;
@@ -178,7 +180,7 @@ pub(super) fn land(
             params![landing.adapter.0, landing.spot.place.0, thread, landing.agent.to_string()],
         )?;
     }
-    raise(tx, &landing.adapter, &landing.spot.place, &landing.heard)
+    Ok(())
 }
 
 pub(super) fn record_answer(
@@ -191,23 +193,7 @@ pub(super) fn record_answer(
         "INSERT OR IGNORE INTO place_answers (adapter,heard_key,approval_id) VALUES (?1,?2,?3)",
         params![adapter.0, heard.key.0, approval.to_string()],
     )? > 0;
-    if inserted {
-        raise(tx, adapter, &heard.spot.place, &heard.key)?;
-    }
     Ok(inserted)
-}
-
-fn raise(
-    tx: &Connection,
-    adapter: &AdapterId,
-    place: &PlaceKey,
-    heard: &HeardKey,
-) -> Result<(), StoreError> {
-    tx.execute(
-        "UPDATE places SET high_water=?3 WHERE adapter=?1 AND place=?2",
-        params![adapter.0, place.0, heard.0],
-    )?;
-    Ok(())
 }
 
 impl Store {
@@ -255,10 +241,6 @@ impl Store {
                 params![adapter.0, old, reason],
             )?;
             tx.execute(
-                "UPDATE place_runs SET relayed=1 WHERE adapter=?1 AND place=?2",
-                params![adapter.0, old],
-            )?;
-            tx.execute(
                 "DELETE FROM place_threads WHERE adapter=?1 AND place=?2",
                 params![adapter.0, old],
             )?;
@@ -278,7 +260,6 @@ impl Store {
             "INSERT INTO place_links (adapter,heard_key) VALUES (?1,?2)",
             params![adapter.0, heard.key.0],
         )?;
-        raise(&tx, adapter, place, &heard.key)?;
         tx.commit()?;
         Ok(())
     }
@@ -364,32 +345,6 @@ impl Store {
         Ok(places)
     }
 
-    pub fn high_water(
-        &self,
-        adapter: &AdapterId,
-        place: &PlaceKey,
-    ) -> Result<Option<HeardKey>, StoreError> {
-        let conn = self.conn()?;
-        let found: Option<Option<String>> = conn
-            .query_row(
-                "SELECT high_water FROM places WHERE adapter=?1 AND place=?2",
-                params![adapter.0, place.0],
-                |row| row.get(0),
-            )
-            .optional()?;
-        Ok(found.flatten().map(HeardKey))
-    }
-
-    pub fn raise_high_water(
-        &self,
-        adapter: &AdapterId,
-        place: &PlaceKey,
-        heard: &HeardKey,
-    ) -> Result<(), StoreError> {
-        let conn = self.conn()?;
-        raise(&conn, adapter, place, heard)
-    }
-
     pub fn thread_agent(
         &self,
         adapter: &AdapterId,
@@ -430,13 +385,6 @@ impl Store {
             params![adapter.0, heard.0],
             |row| row.get(0),
         )?)
-    }
-
-    pub fn place_run(&self, run: RunId) -> Result<Option<PlaceRun>, StoreError> {
-        let conn = self.conn()?;
-        let mut stmt = conn.prepare(&format!("{PLACE_RUN_SELECT} WHERE p.run_id=?1"))?;
-        let found = stmt.query_row([run.to_string()], place_run_row).optional()?;
-        found.transpose()
     }
 
     pub fn shares_intake(&self, run: RunId, other: RunId) -> Result<bool, StoreError> {
@@ -485,11 +433,7 @@ impl Store {
             .collect()
     }
 
-    pub fn queue_place_notice(
-        &self,
-        new: &NewRelay<'_>,
-        heard: &HeardKey,
-    ) -> Result<bool, StoreError> {
+    pub fn queue_place_notice(&self, new: &NewRelay<'_>) -> Result<bool, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute("INSERT OR IGNORE INTO place_relay_order (key) VALUES (?1)", [new.key])?;
@@ -497,15 +441,36 @@ impl Store {
             tx.query_row("SELECT seq FROM place_relay_order WHERE key=?1", [new.key], |row| {
                 row.get(0)
             })?;
-        let written = insert_relay(&tx, &NewRelay { order: (seq, 0, 0), ..new.clone() }, true)?;
-        raise(&tx, new.adapter, &new.spot.place, heard)?;
+        let written = insert_relay(&tx, &NewRelay { order: (seq, 0, 0), ..new.clone() })?;
         tx.commit()?;
         Ok(written)
     }
 
     pub fn insert_relay(&self, new: &NewRelay<'_>) -> Result<bool, StoreError> {
         let conn = self.conn()?;
-        insert_relay(&conn, new, false)
+        insert_relay(&conn, new)
+    }
+
+    pub fn fail_place_run(&self, run: &PlaceRun, reason: &str) -> Result<(), StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let key = format!("unreadable:{}", run.run);
+        insert_relay(
+            &tx,
+            &NewRelay {
+                key: &key,
+                adapter: &run.adapter,
+                spot: &run.spot,
+                run: Some(run.run),
+                state: RelayState::Failed,
+                item: &Outgoing::Skip,
+                order: (0, 0, 0),
+            },
+        )?;
+        tx.execute("UPDATE relay SET last_error=?2 WHERE key=?1", params![key, reason])?;
+        tx.execute("UPDATE place_runs SET relayed=1 WHERE run_id=?1", [run.run.to_string()])?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn relay_order(
@@ -574,10 +539,11 @@ impl Store {
             .transpose()
     }
 
-    pub fn relay_to(&self, key: &str, state: RelayState) -> Result<(), StoreError> {
+    pub fn relay_claim(&self, key: &str) -> Result<bool, StoreError> {
         let conn = self.conn()?;
-        conn.execute("UPDATE relay SET state=?2 WHERE key=?1", params![key, state.as_str()])?;
-        Ok(())
+        Ok(conn
+            .execute("UPDATE relay SET state='sending' WHERE key=?1 AND state='queued'", [key])?
+            == 1)
     }
 
     pub fn relay_sent(&self, key: &str, posted: Option<&Posted>) -> Result<(), StoreError> {
@@ -659,8 +625,8 @@ impl Store {
 
 const PLACE_RUN_SELECT: &str =
     "SELECT p.run_id,p.adapter,p.place,p.thread,p.heard_key,p.heard_at,p.direct,p.message_id,
-            r.started_at,p.created_at
-       FROM place_runs p LEFT JOIN pending_runs r ON r.run_id=p.run_id";
+            p.caught,p.created_at
+       FROM place_runs p";
 
 fn place_run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<PlaceRun, StoreError>> {
     let run: String = row.get(0)?;
@@ -671,7 +637,7 @@ fn place_run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<PlaceRun, S
     let heard = HeardKey(row.get(4)?);
     let heard_at: i64 = row.get(5)?;
     let direct: bool = row.get(6)?;
-    let started_at: Option<i64> = row.get(8)?;
+    let caught: bool = row.get(8)?;
     let created_at: i64 = row.get(9)?;
     Ok((|| {
         Ok(PlaceRun {
@@ -684,7 +650,7 @@ fn place_run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<PlaceRun, S
             message: message
                 .parse()
                 .map_err(|e: uuid::Error| corrupt("message id")(e.to_string()))?,
-            started_at,
+            caught,
             created_at,
         })
     })())
@@ -708,14 +674,11 @@ fn bind(
     Ok(())
 }
 
-fn insert_relay(conn: &Connection, new: &NewRelay<'_>, ignore: bool) -> Result<bool, StoreError> {
+fn insert_relay(conn: &Connection, new: &NewRelay<'_>) -> Result<bool, StoreError> {
     let item = serde_json::to_string(new.item).expect("a relay item serializes");
-    let verb = if ignore { "INSERT OR IGNORE" } else { "INSERT" };
     let written = conn.execute(
-        &format!(
-            "{verb} INTO relay (key,adapter,place,thread,run_id,state,item,created_at,source_seq,rank,chunk)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)"
-        ),
+        "INSERT OR IGNORE INTO relay (key,adapter,place,thread,run_id,state,item,created_at,source_seq,rank,chunk)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
         params![
             new.key,
             new.adapter.0,

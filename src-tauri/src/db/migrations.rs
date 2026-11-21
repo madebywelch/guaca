@@ -2170,7 +2170,6 @@ CREATE TABLE places (
     agent_id TEXT NOT NULL,
     direct INTEGER NOT NULL,
     bound_at INTEGER NOT NULL,
-    high_water TEXT,
     PRIMARY KEY (adapter, place)
 );
 CREATE TABLE place_threads (
@@ -2189,6 +2188,7 @@ CREATE TABLE place_runs (
     heard_at INTEGER NOT NULL,
     direct INTEGER NOT NULL,
     message_id TEXT NOT NULL,
+    caught INTEGER NOT NULL,
     relayed INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
 );
@@ -2438,7 +2438,7 @@ mod tests {
         (78, "fc778794fb370b571ac5821e98c871c8172fa9f933bb1bd99ca48b4b6b617b67"),
         (79, "554ec9b4ff4a5bc9998ea33a07febc1abff3b79c452f248276987f15b1105348"),
         (80, "cfb92921daf974ffd88d8415551947ce65b6214fb8d895b9add4c29de403e54b"),
-        (81, "2f929b6106ce8032e62bc18c8cf1c287b8a07b8344e5ed51c110edf30bfad808"),
+        (81, "863c9979c767a13930786d907c3b12cfd2abcea0b2efc3cc6390dee86b10bfe6"),
     ];
 
     fn memory() -> Connection {

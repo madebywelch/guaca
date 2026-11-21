@@ -130,7 +130,16 @@ impl Runtime {
         let mut wants = Vec::new();
         for run in &runs {
             let before = wants.len();
-            let finished = self.wants_for(run, &abilities, &known, now, &mut wants)?;
+            let finished = match self.wants_for(run, &abilities, &known, now, &mut wants) {
+                Ok(finished) => finished,
+                Err(StoreError::Corrupt(err)) => {
+                    tracing::warn!(%err, run = %run.run, "a conversation's relay journal is unreadable");
+                    wants.truncate(before);
+                    store.fail_place_run(run, place::UNREADABLE)?;
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
             let open = rows.iter().any(|row| row.run == Some(run.run) && row.state.open());
             if finished && wants.len() == before && !open {
                 store.finish_place_run(run.run)?;
@@ -161,7 +170,7 @@ impl Runtime {
                 .filter(|head| want.is_none_or(|want| head.order <= (want.at, want.rank, want.sub)))
             {
                 if store.bound(&id, &spot.place)?.is_none() {
-                    store.relay_failed(&head.key, "This conversation is no longer linked.")?;
+                    store.relay_failed(&head.key, place::UNLINKED)?;
                     progressed = true;
                     continue;
                 }
@@ -171,18 +180,23 @@ impl Runtime {
                 match head.state {
                     RelayState::Sending => self.recover(adapter, &abilities, head).await?,
                     _ => {
-                        store.relay_to(&head.key, RelayState::Sending)?;
-                        self.send_out(adapter, head).await?;
+                        if store.relay_claim(&head.key)? {
+                            self.send_out(adapter, head).await?;
+                        }
                     }
                 }
                 progressed = true;
                 continue;
             }
             let Some(want) = want else { continue };
-            let skip =
-                matches!(want.item, Outgoing::Skip) || store.bound(&id, &spot.place)?.is_none();
-            let state = if skip { RelayState::Skipped } else { RelayState::Sending };
-            store.insert_relay(&NewRelay {
+            let skip = matches!(want.item, Outgoing::Skip);
+            let unlinked = store.bound(&id, &spot.place)?.is_none();
+            let state = match (skip, unlinked) {
+                (true, _) => RelayState::Skipped,
+                (false, true) => RelayState::Queued,
+                (false, false) => RelayState::Sending,
+            };
+            let written = store.insert_relay(&NewRelay {
                 key: &want.key,
                 adapter: &id,
                 spot: &want.spot,
@@ -191,7 +205,7 @@ impl Runtime {
                 item: &want.item,
                 order: (want.at, want.rank, want.sub),
             })?;
-            if !skip {
+            if written && state == RelayState::Sending {
                 let row = store.relay_row(&want.key)?.ok_or_else(|| {
                     StoreError::Corrupt(format!("relay row {} vanished after its insert", want.key))
                 })?;
@@ -486,7 +500,10 @@ impl Runtime {
         let first_in_spot =
             posts.iter().filter(|want| want.spot == run.spot).map(|want| want.at).min();
         if let Some(first) = first_in_spot.filter(|_| {
-            fresh(&offline, wants) && posted_at.is_none() && place::late(run.heard_at, now)
+            run.caught
+                && fresh(&offline, wants)
+                && posted_at.is_none()
+                && place::late(run.heard_at, now)
         }) {
             let text = store.get_message(run.message)?.map(|m| texts(&m.parts)).unwrap_or_default();
             let item = Outgoing::Post { card: place::offline_notice(&text) };

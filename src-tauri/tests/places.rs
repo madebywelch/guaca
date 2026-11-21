@@ -8,14 +8,14 @@ use std::time::Duration;
 use futures_util::FutureExt;
 use parking_lot::Mutex;
 
-use guac_lib::db::RelayState;
+use guac_lib::db::{NewRelay, RelayState};
 use guac_lib::domain::approval::ApprovalState;
 use guac_lib::domain::envelope::{Envelope, Intent, Part, Participant, Trust};
 use guac_lib::domain::ids::{ApprovalId, MessageId, RunId};
 use guac_lib::domain::now_ms;
 use guac_lib::domain::place::{
-    self, Abilities, AdapterId, Buttons, Card, CardKind, Heard, HeardKey, Mark, OutsideUser,
-    PlaceKey, PostSafety, Posted, RelayTag, Said, Spot, ThreadKey,
+    self, Abilities, AdapterId, Buttons, Card, CardKind, Heard, HeardKey, Mark, Outgoing,
+    OutsideUser, PlaceKey, PostSafety, Posted, RelayTag, Said, Spot, ThreadKey,
 };
 use guac_lib::places::{Adapter, AdapterError, Ears, Pending, SendError};
 use guac_lib::runtime::guard::GuardLimits;
@@ -500,12 +500,9 @@ async fn a_redelivered_message_makes_one_run_and_one_reply() {
     let run = settled(&h, "m1").await;
     relayed(&h, run, Mark::Done).await;
     hear(&world, heard).await;
+    let before = world.caught.lock().len();
     attach(&h, &world).await;
-    h.wait_until("catch-up to read past the message", |h| {
-        h.runtime.store().high_water(&adapter(), &PlaceKey(DM.into())).unwrap()
-            == Some(HeardKey("m1".into()))
-    })
-    .await;
+    assert_eq!(world.caught.lock().len(), before + 1);
     assert_eq!(runs(&h), 1);
     assert_eq!(stub.calls.load(Ordering::SeqCst), 1);
     assert_eq!(texts(&world.posts()), vec!["Here you go."]);
@@ -1003,9 +1000,11 @@ async fn a_message_older_than_a_day_gets_one_line_and_no_run() {
 async fn an_answer_to_a_message_from_while_guaca_was_off_is_introduced_by_guaca() {
     let stub = saying("Booked.").await;
     let Setup { h, world } = linked(&stub, abilities()).await;
+    linked_an_hour_ago(&h);
     let late =
         Heard { at_ms: now_ms() - 10 * 60_000, ..said("late", DM, None, PERSON, "Book the room") };
-    hear(&world, late).await;
+    world.history.lock().push(late);
+    attach(&h, &world).await;
     let run = settled(&h, "late").await;
     relayed(&h, run, Mark::Done).await;
     h.wait_until("both posts", |_| world.posts().len() == 2).await;
@@ -1014,6 +1013,30 @@ async fn an_answer_to_a_message_from_while_guaca_was_off_is_introduced_by_guaca(
     assert!(posts[0].card.text.contains("Guaca was offline when you sent \"Book the room\""));
     assert_eq!(posts[1].card.from.as_deref(), Some("Pip"));
     assert_eq!(posts[1].card.text, "Booked.");
+}
+
+fn linked_an_hour_ago(h: &Harness) {
+    h.runtime
+        .store()
+        .conn()
+        .unwrap()
+        .execute_batch(
+            "UPDATE adapters SET linked_at=linked_at-3600000;
+             UPDATE places SET bound_at=bound_at-3600000;",
+        )
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_slow_live_message_is_answered_without_an_offline_line() {
+    let stub = saying("Booked.").await;
+    let Setup { h, world } = linked(&stub, abilities()).await;
+    let slow =
+        Heard { at_ms: now_ms() - 10 * 60_000, ..said("slow", DM, None, PERSON, "Book the room") };
+    hear(&world, slow).await;
+    let run = settled(&h, "slow").await;
+    relayed(&h, run, Mark::Done).await;
+    assert_eq!(texts(&world.posts()), vec!["Booked."]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1268,4 +1291,115 @@ async fn a_decision_typed_as_a_number_settles_a_permission() {
     relayed(&h, run, Mark::Done).await;
     assert_eq!(h.runtime.store().get_approval(ask).unwrap().unwrap().state, ApprovalState::Deny);
     assert!(h.agent_named("Chief of Product").is_none());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_row_another_round_already_claimed_cannot_be_claimed_again() {
+    let stub = saying("Hello.").await;
+    let Setup { h, .. } = linked(&stub, abilities()).await;
+    let store = h.runtime.store();
+    let item = Outgoing::Post { card: place::notice("Hello.".into()) };
+    let spot = Spot { place: PlaceKey(DM.into()), thread: None };
+    store
+        .insert_relay(&NewRelay {
+            key: "notice:claim",
+            adapter: &adapter(),
+            spot: &spot,
+            run: None,
+            state: RelayState::Queued,
+            item: &item,
+            order: (0, 0, 0),
+        })
+        .unwrap();
+    assert!(store.relay_claim("notice:claim").unwrap());
+    assert!(!store.relay_claim("notice:claim").unwrap());
+    assert_eq!(relay_state(&h, "notice:claim"), Some(RelayState::Sending));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn after_a_relink_what_the_old_run_says_fails_where_settings_can_see_it() {
+    let stub = asking().await;
+    let Setup { h, world } = linked(&stub, abilities()).await;
+    hear(&world, said("m1", DM, None, PERSON, "Release?")).await;
+    let ask = asked(&h).await;
+    posted_ask(&h, ask).await;
+    let code = h.runtime.link_code(&adapter(), h.id("Ada")).unwrap();
+    hear(&world, said("relink", OTHER_DM, None, STRANGER, &code)).await;
+    h.runtime.answer_question(ask, "Ship it").unwrap();
+    let run = run_for(&h, "m1").unwrap();
+    h.settle(run).await;
+    let message = h.runtime.store().replies_in_run(run).unwrap().pop().unwrap();
+    let key = format!("message:{}", message.id);
+    h.wait_until("the old owner's reply to fail", |h| {
+        relay_state(h, &key) == Some(RelayState::Failed)
+    })
+    .await;
+    assert_eq!(
+        h.runtime.adapter_status(&adapter()).unwrap().last_relay_error.as_deref(),
+        Some("This conversation is no longer linked.")
+    );
+    assert!(texts(&world.posts()).iter().all(|text| text != "Shipping it."));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn five_wrong_codes_retire_the_pairing_code() {
+    let stub = saying("Hello.").await;
+    let h = harness_in_groups(&stub, &[("Pip", Some("Home"))], GuardLimits::default());
+    let world = World::new(abilities());
+    attach(&h, &world).await;
+    let code = h.runtime.link_code(&adapter(), h.id("Pip")).unwrap();
+    let real: u32 = code.parse().unwrap();
+    for attempt in 1..=5u32 {
+        let wrong = format!("{:06}", (real + attempt) % 1_000_000);
+        hear(&world, said(&format!("guess{attempt}"), DM, None, STRANGER, &wrong)).await;
+    }
+    hear(&world, said("right", DM, None, STRANGER, &code)).await;
+    assert_eq!(h.runtime.store().linked(&adapter()).unwrap(), None);
+    assert!(!world.told(STRANGER).contains(&place::linked("Pip")));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_run_with_a_broken_journal_fails_alone_and_the_next_run_still_arrives() {
+    let stub = saying("Your report.").await;
+    let Setup { h, world } = linked(&stub, abilities()).await;
+    h.runtime.detach_adapter(&adapter());
+    hear(&world, said("broken", DM, None, PERSON, "First")).await;
+    let broken = settled(&h, "broken").await;
+    h.runtime
+        .store()
+        .conn()
+        .unwrap()
+        .execute("DELETE FROM place_relay_order WHERE run_id=?1", [broken.to_string()])
+        .unwrap();
+    hear(&world, said("fine", DM, None, PERSON, "Second")).await;
+    let fine = settled(&h, "fine").await;
+    attach(&h, &world).await;
+    relayed(&h, fine, Mark::Done).await;
+    assert_eq!(texts(&world.posts()), vec!["Your report."]);
+    assert_eq!(
+        h.runtime.adapter_status(&adapter()).unwrap().last_relay_error.as_deref(),
+        Some(place::UNREADABLE)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_typed_answer_that_loses_to_the_lapse_is_told_the_question_closed() {
+    let stub = asking().await;
+    let Setup { h, world } = linked(&stub, abilities()).await;
+    hear(&world, said("m1", DM, None, PERSON, "Release?")).await;
+    let ask = asked(&h).await;
+    posted_ask(&h, ask).await;
+    let conn = h.runtime.store().conn().unwrap();
+    conn.execute_batch(
+        "CREATE TRIGGER lapse_first AFTER INSERT ON place_answers
+         BEGIN UPDATE approvals SET state='expired' WHERE id=NEW.approval_id; END;",
+    )
+    .unwrap();
+    drop(conn);
+    hear(&world, said("late-answer", DM, None, PERSON, "after lunch")).await;
+    h.wait_until("the closed line", |_| {
+        texts(&world.posts()).iter().any(|text| text == place::QUESTION_CLOSED)
+    })
+    .await;
+    assert_eq!(runs(&h), 1);
 }
