@@ -54,7 +54,7 @@ The daemon, a browser as a client, and the boot that opens a workspace.
   a flag cannot be cleared by a host that never comes back, and the banner for a
   host that never comes back is the whole point.
 - **The last-heard time is written once, on the close, not on every event.** It is
-  read by the status bar's host row, and a field written on every event would
+  read by the host row in the sidebar's foot, and a field written on every event would
   redraw that row on every frame of a streaming turn. `useRuntime` keeps it in the
   subscription's own closure and hands it to the store when the socket is gone.
 - **A host that is gone is the one failure with a control, and it is the store

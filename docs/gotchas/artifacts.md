@@ -83,9 +83,9 @@ Pages a group keeps. *An artifact is a page a group keeps* in
 - **Delete is the operator's only.** Agents have `update`, which keeps what it
   replaced. What the operator keeps is theirs to throw away.
 
-## On the status bar
+## On the sidebar's foot
 
-*The status bar holds pages the groups keep, and a click on one is the bar's* in
+*The sidebar's foot holds pages the groups keep, and a click on one is the foot's* in
 `docs/WORKSPACE.md`, then `domain/widget.rs`, `src/lib/widget.ts` and
 `PinnedPage` in `src/components/StatusBar.tsx`.
 

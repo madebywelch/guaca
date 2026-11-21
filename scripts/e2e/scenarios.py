@@ -11,7 +11,7 @@ from typing import Callable
 
 from . import look
 from .browser import Browser, label
-from .world import STAND_IN_KEY, STAND_IN_MODEL, Call, Reply, World, call, held, refuse, say, text_of
+from .world import STAND_IN_KEY, STAND_IN_MODEL, Call, Reply, World, admitted, call, held, refuse, say, text_of
 
 AGENT = "Chief of Staff"
 FIRST_TASK = "Something else Start with a task in your own words."
@@ -1318,6 +1318,7 @@ TASK_MAP_FIT = """(() => {
   return {
     viewport: [innerWidth, innerHeight],
     map: bounds.height,
+    open: graph.closest('.task-map').getBoundingClientRect().height,
     pane: pane.height,
     width: Math.round(body.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)),
     transcript: column ? Math.round(column.getBoundingClientRect().width) : null,
@@ -1387,7 +1388,7 @@ def painted_task_map(ui: Browser) -> dict | None:
 def map_matrix(w: World, case: str, surface: str, names: tuple[str, ...], layouts: dict,
                question: bool) -> None:
     ui = w.ui
-    frames = (*TASK_MAP_FRAMES, (900, 820), (900, 560)) if case == "two colleagues" else TASK_MAP_FRAMES
+    frames = (*TASK_MAP_FRAMES, (900, 820), (900, 920), (900, 560)) if case == "two colleagues" else TASK_MAP_FRAMES
     for width, height in frames:
         ui.viewport(width, height)
         fit = w.wait(f"the {case} map settles at {width}x{height}",
@@ -1414,7 +1415,7 @@ def lays_out_by_pane(d: dict, question: bool) -> bool:
             and d["transcript"] is not None and abs(d["transcript"] - min(TRANSCRIPT_WIDTH, d["width"])) <= 1
             and d["mapWidth"] <= d["width"] and d["map"] <= .4 * d["pane"] + 1 and not d["chip"]
             and (d["viewport"][0] != 1280 or d["mapWidth"] > d["transcript"])
-            and (d["viewport"] != [900, 820] or d["stacked"])
+            and (d["viewport"] != [900, 920] or d["stacked"])
             and (not question or d["viewport"][0] == 700 or d["answerVisible"]))
 
 
@@ -1911,7 +1912,7 @@ def scenario_update(w: World) -> None:
     ui = w.ui
     ui.answer("*/v1/updates*", release)
     ui.evaluate("location.reload()")
-    w.wait("the page is back with the release check answered", lambda: ui.find("button", "App settings"))
+    w.wait("the page is back with the release check answered", lambda: admitted(ui))
 
     def reviewing() -> bool:
         if ui.find("button", UPDATE):
@@ -2282,7 +2283,7 @@ def scenario_roster(w: World) -> None:
         compact[str(height)] = (ui.on_screen("combobox", f"Write to {asking}") and ui.on_screen("button", "Send")
                                 and ui.evaluate("document.querySelector('.composer').getBoundingClientRect().bottom "
                                                 "<= document.querySelector('.app').getBoundingClientRect().bottom"))
-        compact_geometry[str(height)] = ui.evaluate("""Object.fromEntries(['.app', '.roster', '.pane__header', '.agent-tabs',
+        compact_geometry[str(height)] = ui.evaluate("""Object.fromEntries(['.app', '.roster', '.pane__header', '.agent-tabs__list',
               '.pane__body', '.working', '.composer', '.composer__input', '.composer__send', '.statusbar'].map(s => {
                 const el = document.querySelector(s), r = el.getBoundingClientRect();
                 return [s, [r.top, r.bottom, getComputedStyle(el).paddingBlock]];
@@ -2959,8 +2960,8 @@ def scenario_firstgroup(w: World) -> None:
             "hires a group of three" in ui.text() and bool(ui.find("button", "Create one agent")),
             observed={"group": "hires a group of three" in ui.text(),
                       "alone": bool(ui.find("button", "Create one agent"))}, shot=True)
-    w.check("the first run shows its steps alone, with no hour ruler or status bar, and focus on the first task",
-            ui.names("navigation") == ["Window"] and ui.focused() == ("button", GROUP_TASK),
+    w.check("the first run shows its steps alone, with no window buttons, sidebar or places, and focus on the first task",
+            ui.names("navigation") == [] and ui.focused() == ("button", GROUP_TASK),
             observed={"navigation": ui.names("navigation"), "focus": list(ui.focused())})
     ui.click("button", GROUP_TASK)
     brief = ui.value("textbox", "Your first brief")
@@ -3021,7 +3022,7 @@ def scenario_firstgroup(w: World) -> None:
     w.check("a Start that fails says why beside Start, on screen without scrolling at 900x700 and 1280x820",
             all(seen["alert"] and seen["group"] for seen in shown.values()), observed=shown, shot=True)
     w.host.start()
-    w.wait("the page is back with the Host", lambda: ui.find("button", "App settings"))
+    w.wait("the page is back with the Host", lambda: admitted(ui))
     w.wait("Start task is offered again", lambda: ui.find("button", "Start task")
            and not ui.property("button", "Start task", "disabled"))
     ui.click("button", "Start task")
@@ -3215,8 +3216,8 @@ def scenario_taskmap(w: World) -> None:
         w.wait("the question-only task opens", lambda: MAP_BUY_ASK in card_text(w))
         map_matrix(w, "question only", surface, (buy,), asking, question=True)
     layouts = {**fanout, **asking}
-    w.check("the pinned maps cover at most two fifths of the pane in both themes and window sizes",
-            all(d["map"] <= .4 * d["pane"] + 1 and d["partial"] == 0
+    w.check("the open task map covers at most three tenths of the pane in both themes and window sizes",
+            all(d["open"] <= .3 * d["pane"] + 1 and d["partial"] == 0
                 and (d["viewport"][0] == 700 or d["answerVisible"]) for d in layouts.values())
             and all(d["more"] for d in fanout.values()), observed=layouts)
     w.check("the fan-out and question-only maps lay out by their pane's width in both themes at every frame",
@@ -3292,6 +3293,118 @@ def scenario_taskmap(w: World) -> None:
     no_unscripted(w)
 
 
+OFFSITE = "Plan the team offsite in Lisbon."
+OFFSITE_ASK = "Find a venue and a budget for a two-day offsite in Lisbon."
+OFFSITE_BUDGET = "Keep the venue under 12,000 euros?"
+ROOM_FRAMES = ((1280, 820), (900, 700))
+
+ROOM = """(() => {
+  const log = document.querySelector('[role=log]').getBoundingClientRect();
+  const header = document.querySelector('.pane__header');
+  const foot = document.querySelector('.roster__foot');
+  return {
+    window: [innerWidth, innerHeight],
+    share: log.height / innerHeight,
+    header: Math.round(header.getBoundingClientRect().height),
+    title: getComputedStyle(header.querySelector('.pane__title')).fontSize,
+    tabsInHeader: !!header.querySelector('nav'),
+    rowsAbove: [...document.querySelectorAll('.app > :not(.roster, main)')].filter(el => {
+      const box = el.getBoundingClientRect();
+      return box.width > innerWidth / 2 && box.height > 0;
+    }).length,
+    bar: !!document.querySelector('main .statusbar'),
+    footDate: foot ? /day,/.test(foot.innerText) || foot.innerText.includes(new Date().toLocaleDateString([], { month: 'short', day: 'numeric' })) : false,
+  };
+})()"""
+
+FOCUSED_QUESTION = """(() => {
+  const here = document.activeElement?.closest('[data-question]');
+  return here && here.matches('.task-map-stack .task-map__question') ? here.dataset.question : null;
+})()"""
+
+
+def room(w: World) -> dict:
+    ui = w.ui
+    seen = {}
+    for width, height in ROOM_FRAMES:
+        ui.viewport(width, height)
+        w.wait("the frame settles", lambda: ui.evaluate(look.SETTLED) and painted_task_map(ui))
+        seen[f"{width}x{height}"] = ui.evaluate(ROOM)
+    return seen
+
+
+def holds_room(seen: dict) -> bool:
+    return all(d["share"] >= .4 and d["tabsInHeader"] and d["title"] == "20px" and d["rowsAbove"] == 0
+               and not d["bar"] and d["footDate"] for d in seen.values())
+
+
+def scenario_room(w: World) -> None:
+    planner = "Product Manager"
+    asking = threading.Event()
+    budgeting = threading.Event()
+
+    def script(c: Call) -> Reply | None:
+        if c.speaker == AGENT and c.last_user.endswith(OFFSITE):
+            return say("I asked them both.") if c.tool_results() else call(
+                "send_message", to=[MARKET, planner], text=OFFSITE_ASK, intent="work")
+        if c.speaker == MARKET and OFFSITE_ASK in c.last_user:
+            if c.tool_results():
+                return say("Venue held under budget.")
+            return held(asking, call("ask_operator", question=OFFSITE_BUDGET, options=["Under 12,000", "Up to 15,000"]))
+        if c.speaker == planner and OFFSITE_ASK in c.last_user:
+            return held(budgeting, say("Budget drafted."))
+        if c.speaker == AGENT and ("Venue held" in c.last_user or "Budget drafted." in c.last_user):
+            return say("The offsite is planned.")
+        return hello(c)
+
+    w.model.script = script
+    w.start()
+    ui = w.ui
+    first_run(w)
+    settled(w, 1)
+    write(w, AGENT, OFFSITE)
+    w.wait("both colleagues are working on the map", lambda: "Working" in card_text(w)
+           and "waiting for" in working_line(w))
+    working = room(w)
+    w.check("while the group works the transcript keeps two fifths of the window, under a one-row header and no status bar",
+            holds_room(working), observed={k: {"room": d["share"] >= .4, "header": d["header"] < 80} for k, d in working.items()},
+            detail=working, shot=True)
+
+    asking.set()
+    w.wait("the colleague's question is on its branch", lambda: OFFSITE_BUDGET in card_text(w))
+    question = room(w)
+    w.check("with a question on the map the transcript keeps two fifths of the window at 1280x820 and 900x700",
+            holds_room(question), observed={k: d["share"] >= .4 for k, d in question.items()}, detail=question, shot=True)
+
+    pending = lambda: w.host.scalar("SELECT count(*) FROM approvals WHERE state='pending' AND summary=?", OFFSITE_BUDGET)
+    asked = w.host.scalar("SELECT id FROM approvals WHERE summary=?", OFFSITE_BUDGET)
+    launches = {}
+    for width, height in ROOM_FRAMES:
+        ui.viewport(width, height)
+        ui.evaluate("location.reload()")
+        w.wait("the page is back", lambda: admitted(ui) and ui.find("log", f"Conversation with {AGENT}"))
+        focus = w.wait("focus lands on the question's branch", lambda: ui.evaluate(FOCUSED_QUESTION), timeout=10)
+        launches[f"{width}x{height}"] = {"focus": focus == asked, "tray": bool(ui.find("dialog", "Questions"))}
+    w.check("launch opens the asking task's conversation with focus on its branch and no Questions tray",
+            all(one["focus"] and not one["tray"] for one in launches.values()), observed=launches, shot=True)
+
+    ui.key("Escape")
+    kept = ui.evaluate(FOCUSED_QUESTION) == asked and not ui.find("dialog", "Questions")
+    ui.click("combobox", f"Write to {AGENT}")
+    ui.key("Escape")
+    found = w.wait("Escape from the composer focuses the question on its branch",
+                   lambda: ui.evaluate(FOCUSED_QUESTION) == asked, timeout=5)
+    ui.key("1")
+    w.wait("the number answers the question on the host", lambda: not pending())
+    w.check("Escape focuses the waiting question wherever it is, and 1 answers it",
+            kept and found and not ui.find("dialog", "Questions")
+            and w.host.scalar("SELECT answer FROM approvals WHERE id=?", asked) == "Under 12,000",
+            observed={"kept": kept, "found": bool(found)})
+    budgeting.set()
+    w.wait("the lead answers with the plan", lambda: "The offsite is planned." in conversation(w))
+    no_unscripted(w)
+
+
 RESULT_FRAME = """(() => {
   const result = [...document.querySelectorAll('.msg--result')].at(-1);
   const card = result.querySelector('.result');
@@ -3331,13 +3444,23 @@ FINISHED_RESULT = """(() => {
 
 
 SCENARIOS: dict[str, Scenario] = {
+    "room": Scenario(scenario_room, "The conversation keeps two fifths of the window while a group works and while a "
+                     "question waits on the map, under a one-row header with no status bar; launch focuses the "
+                     "waiting question where it sits, without the Questions tray, and Escape then 1 answers it.",
+    (
+        "while the group works the transcript keeps two fifths of the window, under a one-row header and no status bar",
+        "with a question on the map the transcript keeps two fifths of the window at 1280x820 and 900x700",
+        "launch opens the asking task's conversation with focus on its branch and no Questions tray",
+        "Escape focuses the waiting question wherever it is, and 1 answers it",
+        "every model call was one the scenario scripted",
+    )),
     "taskmap": Scenario(scenario_taskmap, "Delegated tasks pin their maps independently and answer on a "
                         "branch; a one-to-one reply has no map.",
     (
         "no task map appears for a direct exchange",
         "two pinned maps leave only the task with the earliest question open",
         "the map shows at most three whole branches and offers one control for the rest",
-        "the pinned maps cover at most two fifths of the pane in both themes and window sizes",
+        "the open task map covers at most three tenths of the pane in both themes and window sizes",
         "the fan-out and question-only maps lay out by their pane's width in both themes at every frame",
         "the colleagues disclosure opens exactly the branches the fan-out map hides",
         "the composer and transcript share one inset beneath the live task map",
@@ -3535,7 +3658,7 @@ SCENARIOS: dict[str, Scenario] = {
                            "card, status line and roster show it running, and one result comes back.",
     (
         "the first step says a task goes to a group of three and keeps Create one agent",
-        "the first run shows its steps alone, with no hour ruler or status bar, and focus on the first task",
+        "the first run shows its steps alone, with no window buttons, sidebar or places, and focus on the first task",
         "the suggested brief asks both colleagues at once and does not open by asking the person",
         "the first step shows the brief and Continue without scrolling at 900x700 and 1280x820",
         "the Start step names the three it will hire and what each is for, before any is hired",

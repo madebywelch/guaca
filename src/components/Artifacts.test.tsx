@@ -185,7 +185,7 @@ describe("the status bar, from the page", () => {
 
   it("puts a page with a condensed view on the bar at a width, and takes it off", async () => {
     await openOne(kept({ condensed: true }));
-    const bar = await screen.findByRole("combobox", { name: "Status bar" });
+    const bar = await screen.findByRole("combobox", { name: "Sidebar" });
     expect((bar as HTMLSelectElement).value).toBe("");
     const pinned = {
       widgets: [
@@ -204,7 +204,7 @@ describe("the status bar, from the page", () => {
 
   it("shows the row for a page with no condensed view, with the reason it cannot be used", async () => {
     await openOne(kept());
-    const bar = await screen.findByRole("combobox", { name: "Status bar" });
+    const bar = await screen.findByRole("combobox", { name: "Sidebar" });
     const options = [...bar.querySelectorAll("option")];
     expect(options.map((option) => option.disabled)).toEqual([false, true, true]);
     const why = screen.getByText("No condensed view yet; ask Rae to add one.");
@@ -213,7 +213,7 @@ describe("the status bar, from the page", () => {
 
   it("says any agent can add the missing view when the page has no owner", async () => {
     await openOne(kept({ owner: null }));
-    const bar = await screen.findByRole("combobox", { name: "Status bar" });
+    const bar = await screen.findByRole("combobox", { name: "Sidebar" });
     const why = screen.getByText("No condensed view yet; any agent in its group can add one.");
     expect(bar.getAttribute("aria-describedby")).toBe(why.id);
   });
@@ -224,7 +224,7 @@ describe("the status bar, from the page", () => {
     act(() => useStore.setState({ settings: {} as unknown as Settings }));
     fireEvent.click(await screen.findByRole("button", { name: /Pipeline by stage/ }));
     await waitFor(() => expect(artifactPage).toHaveBeenCalled());
-    expect(screen.queryByRole("combobox", { name: "Status bar" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Sidebar" })).toBeNull();
   });
 
   it("can only take a pinned page off once its version has no condensed view", async () => {
@@ -236,11 +236,11 @@ describe("the status bar, from the page", () => {
         } as unknown as Settings,
       }),
     );
-    const bar = await screen.findByRole("combobox", { name: "Status bar" });
+    const bar = await screen.findByRole("combobox", { name: "Sidebar" });
     const options = [...bar.querySelectorAll("option")];
     expect(options.map((option) => option.disabled)).toEqual([false, true, true]);
     expect(
-      screen.getByText("This version has no condensed view; it can be taken off the bar."),
+      screen.getByText("This version has no condensed view; it can be taken off the sidebar."),
     ).toBeTruthy();
   });
 });

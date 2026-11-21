@@ -69,15 +69,18 @@ agents. The map stays pinned above that conversation while the task runs.
 The task with the soonest-due question opens automatically; a
 person can fold it and open another. Three direct colleagues appear first,
 with questions before ongoing work and finished replies last. The map uses
-at most two fifths of the pane. Each visible branch fits in full; open any
+at most three tenths of the pane, so the transcript under it keeps at least two
+fifths of the window at 1280 by 820 and 900 by 700. Each visible branch fits in full; open any
 remaining branches from the one colleagues control. The map uses the width beside the roster,
 leaving the transcript in its reading column. At 740 pixels of pane width
 the brief sits above the lead on the left, with connectors branching to
 colleagues on the right. Below that they stack, and finished replies in the
 live map take one line. The branches take priority if space is tight. From an empty composer,
 Tab goes to the visible branch question when the agent has not asked one
-directly; a number picks an answer. Escape from the composer still opens
-the Questions tray. A colleague's own hand-off is
+directly; a number picks an answer. Escape focuses the soonest-due question
+where the conversation draws it, on its branch or its card, and stays there
+when it already has it, so Escape then 1 answers. Only a question the open
+conversation does not draw opens the Questions tray. A colleague's own hand-off is
 a named link. A colleague's recorded reply opens as a message and stays
 open if the task finishes while it is being read. The finished map folds immediately
 above that result. When no result was delivered, it says the hand-off ended
@@ -1118,6 +1121,13 @@ answer.
 
 ## The window opens on a conversation
 
+The frame is one row of chrome. The sidebar's head holds the window's four
+actions (Search, Groups, the plus and App settings) and is the drag region
+beside the traffic lights on a Mac; the agent's header beside it is one row
+with the name on the title size, the tabs and the actions menu, and is a drag
+region too. The sidebar's foot holds the places, the quick actions, any pinned
+page, the host and today's date. There is no status bar under the work.
+
 The sidebar lists every live agent by group, with a face, full name and status.
 Its order is the same as Command 1 to 9 and the command menu: pinned agents
 first within each group, then the order the operator set. Activity never moves
@@ -1132,7 +1142,11 @@ After the workspace is read, the opening conversation is the owner of the
 soonest-due question. A colleague's approval carries the same run ID as the
 owner's running task, so the owner opens even when a colleague asked. Otherwise
 the most recently active running conversation opens, then the last one opened
-on this host, then the first agent. A new question or a result changes the
+on this host, then the first agent. Focus lands on the waiting question where
+that conversation draws it: its map branch, where 1 to 9 answers, or its card.
+The Questions tray does not open over a question that is already on screen; it
+opens at launch only for one the conversation does not draw, such as a
+colleague's permission request. A new question or a result changes the
 sidebar, not the conversation the operator is reading. If the open agent is
 deleted, the same choice picks a live conversation. First run still opens the
 onboarding screen.
@@ -1178,8 +1192,9 @@ typed into a number is a character.
 
 ## The question tray is a queue
 
-The count at the top of the sidebar covers all groups. Press it, or press
-Escape in an empty composer, to select the soonest-due live request. The tray
+The count at the top of the sidebar covers all groups. Press it to select the
+soonest-due live request. Escape in an empty composer opens it only when the
+open conversation does not draw that request. The tray
 uses the same cards as For you. Filed questions that are due are still answered
 in For you; if there are no live requests, the count opens it instead.
 
@@ -1262,7 +1277,7 @@ group's settings, the groups' column for going inside one, search, the plus for
 making something, and a foot of places. Opening an agent from it closes it.
 Escape or a press outside closes it too.
 
-The people button in the top bar opens the sheet. The sidebar also reads group
+The people button at the head of the sidebar opens the sheet. The sidebar also reads group
 names, but keeps a fixed reading order. Choose a group in the sheet to manage
 it without changing the conversation beneath it.
 
@@ -1901,7 +1916,7 @@ fails on a byte of difference, so a theme that re-solves the rail fails the gate
 until the marks are drawn again. `make.sh` reaches fontTools through `uv`, or
 through `pipx run uv` on a machine that has only pipx.
 
-## Making something is one plus, in the top bar
+## Making something is one plus, at the head of the sidebar
 
 The rail's footer used to carry four rows: the cafeteria, a new agent, a new
 group, and settings. Two of those are places you go and two are things you make,
@@ -1909,8 +1924,8 @@ and the two kinds sat together because the footer was where there was room. It
 also grew by a row every time something new became makeable, which is a footer
 that gets worse as the app gets better.
 
-Now there is one plus, `NewMenu`, and it lists what can be made. It is in the
-top bar between the people button and Settings, and the same menu heads the
+Now there is one plus, `NewMenu`, and it lists what can be made. It is at the
+head of the sidebar between the people button and Settings, and the same menu heads the
 Groups sheet beside the icon's pair. The cafeteria is on it too, though
 it spent a while in the footer as a place: nothing is ever left in it, and an
 operator goes in to come out with agents, so what it is for is making them.
@@ -1923,19 +1938,21 @@ at the far right of the reading column, beside the agent's own actions menu, is
 not somewhere anybody looks at all. The channel header was also the one place
 the plus could not be drawn on an empty workspace, because there is no channel
 open to hang a header on, and that is the state where making an agent is the
-only thing left to do. The top bar is drawn whatever is open, including
-nothing.
+only thing left to do. The window's actions are drawn whatever is open,
+including nothing: at the head of the sidebar beside a conversation, and in the
+top row when there is no sidebar. The first run is the one exception, since
+nothing they open is any use before the first agent.
 
 It is the shared menu, so it closes on Escape, on a click that lands away from
 it, and on anything that moves the button underneath it. The listeners are bound
 by name rather than as inline arrows, which is not a style point: `removeEventListener`
 matches by reference, so two arrows leave a listener behind on every open.
 
-## The places are at the end of the status bar, and at the foot of the sheet
+## The places are at the foot of the sidebar, and at the foot of the sheet
 
 Artifacts, Calendar and For you: the things in the app an operator goes to
-rather than makes, and which are not agent conversations. They are the last group on the
-status bar, a nav named "Places". For you carries its
+rather than makes, and which are not agent conversations. They head the
+sidebar's foot, a nav named "Places". For you carries its
 count, `forYouCount` in `lib/store.ts`, which the sheet's foot reads too, so the
 two never disagree about it. A place one of the operator's quick actions
 already opens is drawn once, as that action, rather than as two buttons with one
@@ -2016,9 +2033,10 @@ tall, so the Start step's three colleagues, what each is for and the brief
 clear the bar at 900 by 700. The bar is painted with the page's own ground, so it reads as the
 foot of the step rather than a slab over it.
 
-While the first run is on screen, the window shows the steps and the top row
-only. The hour ruler and the status bar have nothing to say before there is an
-agent, so they are not drawn until the first run ends. Each step puts focus on
+While the first run is on screen, the window shows the steps only. The
+sidebar, its places and the window's actions have nothing to offer before there
+is an agent, so they are not drawn until the first run ends; on a Mac an empty
+top row stays as the drag region and the traffic lights' clearance. Each step puts focus on
 the first control a person uses there: the first task, the chosen way to pay
 (or the first sign-in this Mac already has), and Start task.
 
@@ -2447,14 +2465,15 @@ pushed into every prompt: the screen changes far more often than a turn starts,
 and a line that changed on every click would cost the prompt cache on every
 turn for a fact most turns do not need.
 
-## The status bar holds pages the groups keep, and a click on one is the bar's
+## The sidebar's foot holds pages the groups keep, and a click on one is the foot's
 
-The last row of the reading column names the host this window shows, marks it
-when its build and this window's are not one build, holds the pages pinned to
-it, and the operator's quick actions. Both are settings on the host, so every
-window draws the same bar and a change reaches them through `settingsChanged`.
-The places end it: *The places are at the end of the status bar, and at the
-foot of the sheet*.
+The sidebar's foot (`StatusBar.tsx`, which was a bar under the reading column
+until the frame lost that row) names the host this window shows, marks it when
+its build and this window's are not one build, holds the pages pinned to it,
+and the operator's quick actions. Both are settings on the host, so every
+window draws the same foot and a change reaches them through
+`settingsChanged`. The places head it: *The places are at the foot of the
+sidebar, and at the foot of the sheet*.
 
 **The host's name is the status, and its version is a click away.** The item
 read `Host 0.2.0`, which is the least useful half of what it knows: a version
@@ -2568,7 +2587,7 @@ which is the same fact earlier and without anybody asking. `transport.ts` hands
 the close up as the same `unreachable` refusal a call uses, so it is
 `Store::linkDown` that turns it into the banner a failed call would have raised —
 the address, `Retry`, and the way to Host settings — and `linkUp` that takes
-it back when a redial answers. The status bar names the host, so it is where a
+it back when a redial answers. The sidebar's foot names the host, so it is where a
 person reads *since when*: `Remote host · last heard 14:32`, in the quiet ink a
 note is set in. The page is also drawn as an earlier one: `data-link="down"` on
 the window reduces the transcript's ink and leaves its place, because a column
@@ -2598,8 +2617,8 @@ it early.
 
 ## The workspace follows the selected surface
 
-Every preset draws the same window: the top bar, the sidebar, conversation and
-the status bar, with a raised composer. The light and dark
+Every preset draws the same window: the sidebar with its head and foot, and
+the conversation under its one-row header, with a raised composer. The light and dark
 surfaces are solved independently, and Match system follows the operating
 system as its appearance changes. `data-surface` is always `light` or `dark`;
 the system preference is resolved before it reaches the document.

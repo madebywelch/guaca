@@ -1,6 +1,15 @@
-import { fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { api } from "../lib/ipc";
+import { useStore } from "../lib/store";
 import type { TaskMap } from "../lib/taskMap";
 import type { Envelope } from "../lib/types";
 import { ActiveTaskMaps, useTaskMaps } from "./TaskMap";
@@ -126,4 +135,22 @@ it("keeps the recorded result when the task is too large to map", async () => {
   } finally {
     read.mockRestore();
   }
+});
+
+it("keeps Escape on the waiting question, so Escape then 1 answers it", async () => {
+  const answerQuestion = vi.fn(async () => {});
+  useStore.setState({ answerQuestion });
+  const { container } = render(
+    <>
+      <ActiveTaskMaps maps={[task("Lisbon", 100)]} lookups={lookups} />
+      <textarea aria-label="Write to the lead" data-field="" />
+    </>,
+  );
+  const question = container.querySelector<HTMLElement>(".task-map__question") as HTMLElement;
+  question.focus();
+  fireEvent.keyDown(question, { key: "Escape" });
+  await act(() => new Promise<void>((done) => requestAnimationFrame(() => done())));
+  expect(document.activeElement).toBe(question);
+  fireEvent.keyDown(document.activeElement as Element, { key: "1" });
+  expect(answerQuestion).toHaveBeenCalledExactlyOnceWith("Lisbon", "Yes");
 });

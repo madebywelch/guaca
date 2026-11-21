@@ -1,13 +1,11 @@
 import { IS_MAC } from "../lib/keybinds";
 import { APP_SETTINGS, groupsLabel } from "../lib/menu";
 import { useStore } from "../lib/store";
-import { useNow } from "../lib/time";
 import { desktop } from "../lib/transport";
 import { Icon } from "./Icon";
 import { NewMenu } from "./NewMenu";
 
-interface Props {
-  back: { to: string; go: () => void } | null;
+export interface WindowActionsProps {
   onSearch: () => void;
   onGroups: () => void;
   onSettings: () => void;
@@ -16,75 +14,68 @@ interface Props {
   onOpenCafeteria: () => void;
 }
 
-const LIGHTS = desktop && IS_MAC;
+export const LIGHTS = desktop && IS_MAC;
 
-export function TopBar({
-  back,
+export function WindowActions({
   onSearch,
   onGroups,
   onSettings,
   onNewAgent,
   onNewGroup,
   onOpenCafeteria,
-}: Props) {
-  const now = useNow(30_000);
+}: WindowActionsProps) {
   const groups = useStore((state) => state.groups);
-  const day = new Date(now).toLocaleDateString([], {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  });
-  const short = new Date(now).toLocaleDateString([], {
-    month: "short",
-    day: "numeric",
-  });
+  return (
+    <nav className="topbar__places" aria-label="Window">
+      <button
+        type="button"
+        className="topbar__button"
+        aria-label="Search"
+        title="Search"
+        onClick={onSearch}
+      >
+        <Icon name="search" />
+      </button>
+      <button
+        type="button"
+        className="topbar__button"
+        aria-label={groupsLabel(groups.length)}
+        title={groupsLabel(groups.length)}
+        onClick={onGroups}
+      >
+        <Icon name="group" />
+      </button>
+      <NewMenu onNewAgent={onNewAgent} onNewGroup={onNewGroup} onOpenCafeteria={onOpenCafeteria} />
+      <button
+        type="button"
+        className="topbar__button"
+        aria-label={APP_SETTINGS}
+        title={APP_SETTINGS}
+        onClick={onSettings}
+      >
+        <Icon name="gear" />
+      </button>
+    </nav>
+  );
+}
+
+export function TopBar({
+  back,
+  actions,
+}: {
+  back: { to: string; go: () => void } | null;
+  actions: WindowActionsProps | null;
+}) {
+  if (!back && !actions && !LIGHTS) return null;
   return (
     <header className="topbar" data-lights={LIGHTS || undefined} data-tauri-drag-region>
-      {back ? (
+      {back && (
         <button type="button" className="topbar__back" onClick={back.go}>
           <Icon name="chevron-left" />
           {back.to}
         </button>
-      ) : (
-        <p className="topbar__day" data-tauri-drag-region>
-          <span className="topbar__day-long">{day}</span>
-          <span className="topbar__day-short">{short}</span>
-        </p>
       )}
-      <nav className="topbar__places" aria-label="Window">
-        <button
-          type="button"
-          className="topbar__button"
-          aria-label="Search"
-          title="Search"
-          onClick={onSearch}
-        >
-          <Icon name="search" />
-        </button>
-        <button
-          type="button"
-          className="topbar__button"
-          aria-label={groupsLabel(groups.length)}
-          title={groupsLabel(groups.length)}
-          onClick={onGroups}
-        >
-          <Icon name="group" />
-        </button>
-        <NewMenu
-          onNewAgent={onNewAgent}
-          onNewGroup={onNewGroup}
-          onOpenCafeteria={onOpenCafeteria}
-        />
-        <button
-          type="button"
-          className="topbar__button"
-          aria-label={APP_SETTINGS}
-          title={APP_SETTINGS}
-          onClick={onSettings}
-        >
-          <Icon name="gear" />
-        </button>
-      </nav>
+      {actions && <WindowActions {...actions} />}
     </header>
   );
 }
