@@ -12,6 +12,10 @@
   margin-inline: auto;
 }
 
+.pane:has(.task-map-stack:not([hidden])) .pane__body > .composer {
+  width: calc(min(var(--column-w), 100%) - 2 * var(--column-inset));
+}
+
 .task-map-stack {
   --task-map-height: 40cqb;
   max-height: var(--task-map-height);
