@@ -252,8 +252,23 @@ try {
       if (!r.width || !r.height) throw new Error('Hidden target');
       return {x:r.x+r.width/2,y:r.y+r.height/2};
     })()`);
+    await touch(point);
+  };
+  const touch = async (point) => {
     await cdp("Input.dispatchTouchEvent", {type:"touchStart", touchPoints:[point]}, session);
     await cdp("Input.dispatchTouchEvent", {type:"touchEnd", touchPoints:[]}, session);
+  };
+  const byRole = async (role, name, within) => {
+    const scope = within ? {backendNodeId:within.backendDOMNodeId} : {nodeId:(await cdp("DOM.getDocument", {depth:0}, session)).root.nodeId};
+    const { nodes } = await cdp("Accessibility.queryAXTree", {...scope, role}, session);
+    return nodes.find((node) => !node.ignored && (name instanceof RegExp ? name.test(node.name?.value) : node.name?.value === name));
+  };
+  const tapRole = async (role, name, within) => {
+    const node = await byRole(role, name, within);
+    if (!node) throw new Error(`Missing ${role} named ${name}`);
+    await cdp("DOM.scrollIntoViewIfNeeded", {backendNodeId:node.backendDOMNodeId}, session);
+    const [left, top, , , right, bottom] = (await cdp("DOM.getBoxModel", {backendNodeId:node.backendDOMNodeId}, session)).model.border;
+    await touch({x:(left+right)/2, y:(top+bottom)/2});
   };
   const fits = async (selector) => {
     const bounds = await evaluate(`(() => {
@@ -342,13 +357,16 @@ try {
     await tap(".sheet .agent-row__name", "Browser check reviewer");
     await until(() => showingAgent("Browser check reviewer"), "touch opens the other conversation");
     assert.equal(await evaluate("document.querySelector('.composer__input').value"), "", "the other agent does not get the draft");
-    await tap('.topbar__places button[aria-label="Search"]');
-    await until(() => evaluate("!!document.querySelector('.palette__input')"), "search opens from the top row");
-    await tap(".palette__input");
+    await tapRole("button", "Groups and agents");
+    await until(() => byRole("dialog", "Groups and agents"), "the Groups sheet opens again");
+    await tapRole("button", "Command menu");
+    await until(async () => (await byRole("textbox", "Command menu"))?.properties?.some((p) => p.name === "focused" && p.value.value),
+      "the command menu opens from the sheet, ready to type");
     await cdp("Input.insertText", {text:"Browser check"},session);
-    await until(() => evaluate("[...document.querySelectorAll('.palette__row .palette__title')].some(title => title.textContent === 'Browser check')"), "the exact agent is found");
-    await tap(".palette__row .palette__title", "Browser check");
-    await until(() => showingAgent("Browser check"), "Search returns to the drafted conversation");
+    const menu = await byRole("dialog", "Command menu");
+    await until(() => byRole("button", /^Browser check(?! reviewer)/, menu), "the exact agent is found");
+    await tapRole("button", /^Browser check(?! reviewer)/, menu);
+    await until(() => showingAgent("Browser check"), "the command menu returns to the drafted conversation");
     await fits(".pane");
     assert.equal(await evaluate("document.querySelector('.composer__input').value"),"Draft survives navigation");
     await tap(pageTab("Now"));

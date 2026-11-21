@@ -167,7 +167,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib \
 ```sh
 ./scripts/ci.sh          # lint, typecheck, build, every test suite, the icons, the scenarios
 ./scripts/ci.sh rust     # Rust only: desktop, then daemon
-./scripts/ci.sh e2e      # the end-to-end scenarios: scripts/verify.py --build
+./scripts/ci.sh e2e      # scripts/verify.py --build, then scripts/hosting-browser.mjs
 ./scripts/image.sh       # the daemon's image: build it, run it, prove it answers
 scripts/probe.py         # on a Mac: what only a Mac does, see docs/PROBE.md
 GUAC_LOG=guac=debug pnpm app
@@ -232,7 +232,7 @@ exactly what `./scripts/ci.sh` with no argument runs.
 | rust daemon (no Tauri, no frontend) | `ci.sh daemon`: Clippy and every test built as the daemon | Rust only, so a dependency on Tauri or `dist/` fails here |
 | formal (TLA+ model check) | `ci.sh formal`: the conversation recovery model | Java, and the TLA+ tools jar, cached by its pinned version |
 | images (Dockerfile.ci and the daemon image) | builds `Dockerfile.ci`, then `./scripts/image.sh` | Docker |
-| end-to-end scenarios (guacad, headless Chromium, stand-in model) | `ci.sh e2e`: builds `dist/` and `guacad`, then drives every scenario in `scripts/e2e/scenarios.py` once | Rust, Node 22 and pnpm, the runner's Chrome |
+| end-to-end scenarios (guacad, headless Chromium, stand-in model) | `ci.sh e2e`: builds `dist/` and `guacad`, then drives every scenario in `scripts/e2e/scenarios.py` once and runs `scripts/hosting-browser.mjs` | Rust, Node 22 and pnpm, the runner's Chrome |
 | gate | passes only when every job above passed | nothing |
 
 Each job starts on a fresh GitHub-hosted Ubuntu 24.04 machine, never on one of

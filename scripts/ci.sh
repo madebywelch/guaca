@@ -66,6 +66,11 @@ run_e2e() {
 
   step "End-to-end scenarios"
   python3 scripts/verify.py --build
+
+  step "Hosted browser: phone widths, touch, recovery and artifact isolation"
+  GUACAD="$PWD/src-tauri/target/verify/bin/guacad" \
+    CHROME_BIN="$(python3 -c 'import sys; sys.path.insert(0, "scripts"); from e2e.browser import find_chromium; print(find_chromium() or "")')" \
+    node scripts/hosting-browser.mjs
 }
 
 run_connector() {
