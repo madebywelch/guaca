@@ -2894,9 +2894,12 @@ def scenario_taskmap(w: World) -> None:
     w.wait("the nested colleague's link can be clicked",
            lambda: ui.find("button", specialist) and ui.on_screen("button", specialist))
     ui.click("button", specialist)
-    w.wait("the nested specialist's conversation opens", lambda: ui.find("heading", specialist))
+    w.wait("the nested specialist's conversation loads the recorded hand-off",
+           lambda: ui.find("log", f"Conversation with {specialist}")
+           and "Check the lease tax." in conversation(w))
     w.check("a nested hand-off opens the named colleague's conversation",
-            "Check the lease tax." in conversation(w), observed=specialist)
+            ui.find("heading", specialist) and "Check the lease tax." in conversation(w),
+            observed=specialist)
     finish_support.set()
     no_unscripted(w)
 
