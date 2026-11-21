@@ -253,7 +253,21 @@ impl SlackAdapter {
                 }
                 let bot = self.bot_user.lock().clone();
                 let team = payload["team_id"].as_str().unwrap_or_default();
-                events::from_event(team, &payload["event"], bot.as_deref()).into_iter().collect()
+                let event = &payload["event"];
+                let Some(heard) = events::from_event(team, event, bot.as_deref()) else {
+                    return true;
+                };
+                if !heard.direct && !events::addressed(event, bot.as_deref()) {
+                    if !event["thread_ts"].is_string() {
+                        return true;
+                    }
+                    match ears.knows_thread(&heard.spot) {
+                        Ok(true) => {}
+                        Ok(false) => return true,
+                        Err(_) => return false,
+                    }
+                }
+                vec![heard]
             }
             (Some("interactive"), Some("block_actions")) => events::from_press(payload),
             _ => Vec::new(),
@@ -397,10 +411,11 @@ impl Adapter for SlackAdapter {
             if !whole {
                 return Err(too_much());
             }
-            let parents: BTreeSet<_> = recent_threads.iter().map(|thread| &thread.0).collect();
-            for parent in parents {
+            let parents: BTreeSet<_> =
+                recent_threads.iter().map(|thread| thread.0.as_str()).collect();
+            for &parent in &parents {
                 let mut replies_form = form.clone();
-                replies_form.push(("ts", parent.clone()));
+                replies_form.push(("ts", parent.to_string()));
                 let (replies, whole) = self
                     .pages("conversations.replies", replies_form, true)
                     .await
@@ -409,13 +424,16 @@ impl Adapter for SlackAdapter {
                     return Err(too_much());
                 }
                 messages.extend(
-                    replies
-                        .into_iter()
-                        .filter(|reply| reply["ts"].as_str() != Some(parent.as_str())),
+                    replies.into_iter().filter(|reply| reply["ts"].as_str() != Some(parent)),
                 );
             }
             let mut heard: Vec<_> = messages
                 .iter()
+                .filter(|message| {
+                    channel.starts_with('D')
+                        || events::addressed(message, Some(&bot))
+                        || message["thread_ts"].as_str().is_some_and(|root| parents.contains(root))
+                })
                 .filter_map(|message| events::from_history(team, channel, message, Some(&bot)))
                 .filter(|heard| heard.at_ms >= since_ms)
                 .collect();
@@ -455,10 +473,12 @@ impl Adapter for SlackAdapter {
                 .api
                 .call("chat.postMessage", Token::Bot, Body::Json(body))
                 .await
-                .map_err(Failure::into_send)?;
+                .map_err(Failure::into_post)?;
             match (posted["channel"].as_str(), posted["ts"].as_str()) {
-                (Some(channel), Some(ts)) => Ok(Posted(format!("{channel}/{ts}"))),
-                _ => Err(Failure::Garbled.into_send()),
+                (Some(found), Some(ts)) if found == channel && events::ts_ms(ts).is_some() => {
+                    Ok(Posted(format!("{channel}/{ts}")))
+                }
+                _ => Err(Failure::Garbled.into_post()),
             }
         })
     }

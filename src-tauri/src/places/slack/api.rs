@@ -115,6 +115,22 @@ impl Failure {
         }
     }
 
+    pub fn into_post(self) -> SendError {
+        let ambiguous = match &self {
+            Failure::Limited(_) => false,
+            Failure::Status(status) => {
+                !matches!(status, 400 | 401 | 403 | 404 | 405 | 413 | 415 | 422)
+            }
+            Failure::Code(code) => self.passing() || code.as_str() == "unknown_error",
+            Failure::Unreachable | Failure::Garbled => true,
+        };
+        if ambiguous {
+            SendError::Ambiguous { after: None }
+        } else {
+            self.into_send()
+        }
+    }
+
     pub fn into_adapter(self) -> AdapterError {
         AdapterError { retry: self.passing(), reason: self.reason() }
     }
@@ -175,8 +191,10 @@ impl Api {
             return Err(Failure::Status(status.as_u16()));
         }
         let value: Value = response.json().await.map_err(|_| Failure::Garbled)?;
-        if value["ok"].as_bool() == Some(true) {
-            return Ok(value);
+        match value["ok"].as_bool() {
+            Some(true) => return Ok(value),
+            Some(false) => {}
+            None => return Err(Failure::Garbled),
         }
         let raw = value["error"].as_str().unwrap_or_default();
         let code = if [&self.bot, &self.app]

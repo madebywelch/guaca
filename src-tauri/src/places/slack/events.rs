@@ -42,6 +42,20 @@ pub fn strip_mention(text: &str, bot: Option<&str>) -> String {
     out.trim().to_string()
 }
 
+pub fn addressed(event: &Value, bot: Option<&str>) -> bool {
+    if event["type"].as_str() == Some("app_mention") {
+        return true;
+    }
+    let Some(bot) = bot else { return false };
+    event["text"].as_str().is_some_and(|text| {
+        text.contains(&format!("<@{bot}>"))
+            || text
+                .split(&format!("<@{bot}|"))
+                .skip(1)
+                .any(|tail| tail.split_once('>').is_some_and(|(label, _)| !label.contains('<')))
+    })
+}
+
 pub fn from_event(team: &str, event: &Value, bot: Option<&str>) -> Option<Heard> {
     let channel = event["channel"].as_str()?;
     let direct = match event["type"].as_str()? {

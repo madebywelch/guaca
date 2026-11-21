@@ -121,5 +121,13 @@ impl Ears {
     pub async fn heard(&self, heard: Heard) -> Result<(), Unheard> {
         self.runtime.hear(&self.adapter, heard, self.history).await
     }
+
+    pub(crate) fn knows_thread(&self, spot: &Spot) -> Result<bool, Unheard> {
+        self.runtime
+            .store()
+            .thread_agent(&self.adapter.id(), spot)
+            .map(|agent| agent.is_some())
+            .map_err(|_| Unheard { reason: "Guaca could not read this thread yet.".into() })
+    }
 }
 pub mod slack;
