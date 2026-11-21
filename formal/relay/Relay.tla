@@ -6,7 +6,11 @@ CONSTANTS
     AckAfterCommit,
     FindFirst,
     CatchUpKeyed,
-    PlaceRunOneCommit
+    PlaceRunOneCommit,
+    AmbiguousHeld,
+    OrderedByCommit,
+    PressChecked,
+    Relinks
 
 Said == {"m1"}
 Stranger == "s"
@@ -15,6 +19,7 @@ Index(m) == IF m = "m1" THEN 1 ELSE 0
 Items == {"reply", "ask", "settle"}
 Terminal == {"sent", "failed", "doubt"}
 Vias == {"live", "catch"}
+People == {"a", "b"}
 Range(s) == {s[i] : i \in 1..Len(s)}
 Pos(s, x) == CHOOSE i \in 1..Len(s) : s[i] = x
 
@@ -39,12 +44,16 @@ VARIABLES
     runs,
     shown,
     seq,
-    decisions
+    decisions,
+    owner,
+    askSpot,
+    misPressed
 
 memory == <<inflight, committed, landing, catching, fresh, awaiting>>
 disk == <<claimed, placeRun, high, replied, made, rs, approval>>
 ghosts == <<told, runs, shown, seq, decisions>>
-vars == <<up, ends, acked, memory, disk, ghosts>>
+link == <<owner, askSpot, misPressed>>
+vars == <<up, ends, acked, memory, disk, ghosts, link>>
 
 Init ==
     /\ up = TRUE /\ ends = 0
@@ -61,6 +70,7 @@ Init ==
     /\ shown = [i \in Items |-> 0]
     /\ seq = <<>>
     /\ decisions = 0
+    /\ owner = "a" /\ askSpot = "none" /\ misPressed = FALSE
 
 TypeOK ==
     /\ up \in BOOLEAN /\ ends \in 0..MaxEnds
@@ -75,11 +85,13 @@ TypeOK ==
     /\ fresh \subseteq Items /\ awaiting \subseteq Items
     /\ approval \in {"none", "pending", "decided"}
     /\ told \subseteq Heard
+    /\ owner \in People /\ askSpot \in People \cup {"none"} /\ misPressed \in BOOLEAN
 
 Deliver(m) ==
     /\ up /\ m \notin acked /\ <<m, "live">> \notin inflight
     /\ inflight' = inflight \cup {<<m, "live">>}
     /\ UNCHANGED <<up, ends, acked, committed, landing, catching, fresh, awaiting, disk, ghosts>>
+    /\ UNCHANGED link
 
 Catch(m) ==
     /\ up /\ m \in catching
@@ -87,6 +99,7 @@ Catch(m) ==
     /\ inflight' = inflight \cup {<<m, "catch">>}
     /\ catching' = catching \ {m}
     /\ UNCHANGED <<up, ends, acked, committed, landing, fresh, awaiting, disk, ghosts>>
+    /\ UNCHANGED link
 
 Commit(m, via) ==
     /\ up /\ <<m, via>> \in inflight
@@ -106,6 +119,7 @@ Commit(m, via) ==
             /\ UNCHANGED told
     /\ UNCHANGED <<up, ends, acked, catching, fresh, awaiting, replied, made, rs, approval,
                    shown, seq, decisions>>
+    /\ UNCHANGED link
 
 Land(m) ==
     /\ up /\ m \in landing
@@ -113,6 +127,7 @@ Land(m) ==
     /\ landing' = landing \ {m}
     /\ UNCHANGED <<up, ends, acked, inflight, committed, catching, fresh, awaiting,
                    claimed, high, replied, made, rs, approval, ghosts>>
+    /\ UNCHANGED link
 
 Ack(m) ==
     /\ up /\ m \notin acked
@@ -120,28 +135,38 @@ Ack(m) ==
     /\ acked' = acked \cup {m}
     /\ committed' = committed \ {m}
     /\ UNCHANGED <<up, ends, inflight, landing, catching, fresh, awaiting, disk, ghosts>>
+    /\ UNCHANGED link
 
 Answer(m) ==
     /\ up /\ m = "m1" /\ m \in claimed /\ m \notin replied /\ approval = "decided"
     /\ replied' = replied \cup {m}
     /\ made' = IF m \in placeRun THEN Append(made, "reply") ELSE made
     /\ UNCHANGED <<up, ends, acked, memory, claimed, placeRun, high, rs, approval, ghosts>>
+    /\ UNCHANGED link
 
 Asks ==
     /\ up /\ "m1" \in claimed /\ approval = "none"
     /\ approval' = "pending"
+    /\ askSpot' = owner
     /\ made' = IF "m1" \in placeRun THEN Append(made, "ask") ELSE made
-    /\ UNCHANGED <<up, ends, acked, memory, claimed, placeRun, high, replied, rs, ghosts>>
+    /\ UNCHANGED <<up, ends, acked, memory, claimed, placeRun, high, replied, rs, ghosts,
+                   owner, misPressed>>
+
+Relink ==
+    /\ up /\ Relinks /\ owner = "a"
+    /\ owner' = "b"
+    /\ UNCHANGED <<up, ends, acked, memory, disk, ghosts, askSpot, misPressed>>
 
 HeadFree(i) ==
     \A j \in Range(made) : Pos(made, j) < Pos(made, i) => rs[j] \in Terminal
 
 Insert(i) ==
-    /\ up /\ i \in Range(made) /\ rs[i] = "none" /\ HeadFree(i)
+    /\ up /\ i \in Range(made) /\ rs[i] = "none" /\ (HeadFree(i) \/ ~OrderedByCommit)
     /\ rs' = [rs EXCEPT ![i] = "sending"]
     /\ fresh' = fresh \cup {i}
     /\ UNCHANGED <<up, ends, acked, inflight, committed, landing, catching, awaiting,
                    claimed, placeRun, high, replied, made, approval, ghosts>>
+    /\ UNCHANGED link
 
 Requeue(i) ==
     /\ up /\ rs[i] = "queued"
@@ -149,11 +174,13 @@ Requeue(i) ==
     /\ fresh' = fresh \cup {i}
     /\ UNCHANGED <<up, ends, acked, inflight, committed, landing, catching, awaiting,
                    claimed, placeRun, high, replied, made, approval, ghosts>>
+    /\ UNCHANGED link
 
 GiveUp(i) ==
     /\ up /\ rs[i] = "queued"
     /\ rs' = [rs EXCEPT ![i] = "failed"]
     /\ UNCHANGED <<up, ends, acked, memory, claimed, placeRun, high, replied, made, approval, ghosts>>
+    /\ UNCHANGED link
 
 Post(i) ==
     /\ up /\ i \in fresh /\ i \notin awaiting /\ rs[i] = "sending"
@@ -170,9 +197,11 @@ Post(i) ==
        \/ /\ shown' = [shown EXCEPT ![i] = @ + 1]
           /\ seq' = Append(seq, i)
           /\ fresh' = fresh \ {i}
-          /\ UNCHANGED <<rs, awaiting>>
+          /\ rs' = IF AmbiguousHeld THEN rs ELSE [rs EXCEPT ![i] = "queued"]
+          /\ UNCHANGED awaiting
     /\ UNCHANGED <<up, ends, acked, inflight, committed, landing, catching,
                    claimed, placeRun, high, replied, made, approval, told, runs, decisions>>
+    /\ UNCHANGED link
 
 MarkSent(i) ==
     /\ up /\ i \in awaiting
@@ -181,6 +210,7 @@ MarkSent(i) ==
     /\ fresh' = fresh \ {i}
     /\ UNCHANGED <<up, ends, acked, inflight, committed, landing, catching,
                    claimed, placeRun, high, replied, made, approval, ghosts>>
+    /\ UNCHANGED link
 
 Recover(i) ==
     /\ up /\ rs[i] = "sending" /\ i \notin fresh
@@ -191,6 +221,7 @@ Recover(i) ==
        ELSE fresh' = fresh \cup {i} /\ UNCHANGED rs
     /\ UNCHANGED <<up, ends, acked, inflight, committed, landing, catching, awaiting,
                    claimed, placeRun, high, replied, made, approval, ghosts>>
+    /\ UNCHANGED link
 
 Decide ==
     /\ approval = "pending"
@@ -198,21 +229,28 @@ Decide ==
     /\ decisions' = decisions + 1
     /\ made' = IF "ask" \in Range(made) THEN Append(made, "settle") ELSE made
 
-Press ==
+Rightful(who, where) == who = owner /\ where = askSpot /\ askSpot = owner
+
+Press(who, where) ==
     /\ up /\ shown["ask"] > 0
-    /\ IF approval = "pending" THEN Decide ELSE UNCHANGED <<approval, decisions, made>>
+    /\ PressChecked => Rightful(who, where)
+    /\ IF approval = "pending"
+       THEN Decide /\ misPressed' = ~Rightful(who, where)
+       ELSE UNCHANGED <<approval, decisions, made, misPressed>>
     /\ UNCHANGED <<up, ends, acked, memory, claimed, placeRun, high, replied, rs,
-                   told, runs, shown, seq>>
+                   told, runs, shown, seq, owner, askSpot>>
 
 AppAnswer ==
     /\ up /\ Decide
     /\ UNCHANGED <<up, ends, acked, memory, claimed, placeRun, high, replied, rs,
                    told, runs, shown, seq>>
+    /\ UNCHANGED link
 
 Lapse ==
     /\ up /\ Decide
     /\ UNCHANGED <<up, ends, acked, memory, claimed, placeRun, high, replied, rs,
                    told, runs, shown, seq>>
+    /\ UNCHANGED link
 
 End ==
     /\ up /\ ends < MaxEnds
@@ -220,12 +258,14 @@ End ==
     /\ inflight' = {} /\ committed' = {} /\ landing' = {} /\ catching' = {}
     /\ fresh' = {} /\ awaiting' = {}
     /\ UNCHANGED <<acked, disk, ghosts>>
+    /\ UNCHANGED link
 
 Start ==
     /\ ~up
     /\ up' = TRUE
     /\ catching' = Heard
     /\ UNCHANGED <<ends, acked, inflight, committed, landing, fresh, awaiting, disk, ghosts>>
+    /\ UNCHANGED link
 
 Next ==
     \/ \E m \in Heard : Deliver(m) \/ Catch(m) \/ Ack(m)
@@ -234,7 +274,8 @@ Next ==
     \/ Asks
     \/ \E i \in Items : Insert(i) \/ Requeue(i) \/ GiveUp(i) \/ Post(i)
                         \/ MarkSent(i) \/ Recover(i)
-    \/ Press \/ AppAnswer \/ Lapse
+    \/ \E who, where \in People : Press(who, where)
+    \/ Relink \/ AppAnswer \/ Lapse
     \/ End \/ Start
 
 Fair ==
@@ -268,5 +309,7 @@ InOrder ==
         p < q => Pos(made, seq[p]) <= Pos(made, seq[q])
 
 DecidedOnce == decisions <= 1
+
+PressedByOwnerAtAsk == ~misPressed
 
 =============================================================================

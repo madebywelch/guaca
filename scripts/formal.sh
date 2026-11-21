@@ -13,8 +13,9 @@ readonly CALM="OperatorStops=FALSE StartCanFail=FALSE TurnsCanFail=FALSE"
 readonly STOPS="OperatorStops=TRUE StartCanFail=FALSE TurnsCanFail=FALSE"
 readonly FAILS="OperatorStops=FALSE StartCanFail=TRUE TurnsCanFail=FALSE"
 readonly ALL="NoBlindRepeat NothingLost OnlyStartedReported ReportedOnce StoppedStaysStopped"
-readonly RELAY="AckAfterCommit=TRUE FindFirst=TRUE CatchUpKeyed=TRUE PlaceRunOneCommit=TRUE"
-readonly RELAY_ALL="HeardOnce HeardOrToldWhy ShownOnce NothingDropped InOrder DecidedOnce"
+readonly RELAY="AckAfterCommit=TRUE FindFirst=TRUE CatchUpKeyed=TRUE PlaceRunOneCommit=TRUE AmbiguousHeld=TRUE OrderedByCommit=TRUE PressChecked=TRUE"
+readonly PROPERTIES="EventuallyTerminal"
+readonly RELAY_ALL="HeardOnce HeardOrToldWhy ShownOnce NothingDropped InOrder DecidedOnce PressedByOwnerAtAsk"
 
 CHECKS=(
   "recovery|holds|code, no stops, no failed commit|$CODE $CALM|$ALL"
@@ -26,11 +27,15 @@ CHECKS=(
   "recovery|broken|a message the turn acted on is handed on without its carrier|MarkBeforeRead=TRUE AcceptOneCommit=TRUE RecoverUntouched=TRUE RecoverClears=TRUE KeepLink=FALSE SkipStartNote=TRUE $STOPS|NoBlindRepeat"
   "recovery|broken|recover counts the notice that a start could not be recorded as a touch|MarkBeforeRead=TRUE AcceptOneCommit=TRUE RecoverUntouched=TRUE RecoverClears=TRUE KeepLink=TRUE SkipStartNote=FALSE OperatorStops=FALSE StartCanFail=TRUE TurnsCanFail=FALSE|OnlyStartedReported"
 
-  "relay|holds|code, a provider that redelivers, catch-up, two host ends, presses racing an answer and the lapse|$RELAY|$RELAY_ALL"
-  "relay|broken|acknowledge before the commit|AckAfterCommit=FALSE FindFirst=TRUE CatchUpKeyed=TRUE PlaceRunOneCommit=TRUE|HeardOrToldWhy"
-  "relay|broken|post again after a crash without asking find|AckAfterCommit=TRUE FindFirst=FALSE CatchUpKeyed=TRUE PlaceRunOneCommit=TRUE|ShownOnce"
-  "relay|broken|catch-up that skips the idempotency key|AckAfterCommit=TRUE FindFirst=TRUE CatchUpKeyed=FALSE PlaceRunOneCommit=TRUE|HeardOnce"
-  "relay|broken|place_runs written in a second commit|AckAfterCommit=TRUE FindFirst=TRUE CatchUpKeyed=TRUE PlaceRunOneCommit=FALSE|NothingDropped"
+  "relay|holds|code, a provider that redelivers, catch-up, two host ends, presses racing an answer and the lapse, a relink, ambiguous posts|$RELAY Relinks=TRUE|$RELAY_ALL"
+  "relay|holds|every committed item reaches sent, failed or doubt, without the relink, which no relay step reads|$RELAY Relinks=FALSE|EventuallyTerminal"
+  "relay|broken|acknowledge before the commit|AckAfterCommit=FALSE FindFirst=TRUE CatchUpKeyed=TRUE PlaceRunOneCommit=TRUE AmbiguousHeld=TRUE OrderedByCommit=TRUE PressChecked=TRUE Relinks=TRUE|HeardOrToldWhy"
+  "relay|broken|post again after a crash without asking find|AckAfterCommit=TRUE FindFirst=FALSE CatchUpKeyed=TRUE PlaceRunOneCommit=TRUE AmbiguousHeld=TRUE OrderedByCommit=TRUE PressChecked=TRUE Relinks=TRUE|ShownOnce"
+  "relay|broken|catch-up that skips the idempotency key|AckAfterCommit=TRUE FindFirst=TRUE CatchUpKeyed=FALSE PlaceRunOneCommit=TRUE AmbiguousHeld=TRUE OrderedByCommit=TRUE PressChecked=TRUE Relinks=TRUE|HeardOnce"
+  "relay|broken|place_runs written in a second commit|AckAfterCommit=TRUE FindFirst=TRUE CatchUpKeyed=TRUE PlaceRunOneCommit=FALSE AmbiguousHeld=TRUE OrderedByCommit=TRUE PressChecked=TRUE Relinks=TRUE|NothingDropped"
+  "relay|broken|an ambiguous post queued to send again|AckAfterCommit=TRUE FindFirst=TRUE CatchUpKeyed=TRUE PlaceRunOneCommit=TRUE AmbiguousHeld=FALSE OrderedByCommit=TRUE PressChecked=TRUE Relinks=TRUE|ShownOnce"
+  "relay|broken|rows picked without the commit order|AckAfterCommit=TRUE FindFirst=TRUE CatchUpKeyed=TRUE PlaceRunOneCommit=TRUE AmbiguousHeld=TRUE OrderedByCommit=FALSE PressChecked=TRUE Relinks=TRUE|InOrder"
+  "relay|broken|a press taken from anyone, anywhere|AckAfterCommit=TRUE FindFirst=TRUE CatchUpKeyed=TRUE PlaceRunOneCommit=TRUE AmbiguousHeld=TRUE OrderedByCommit=TRUE PressChecked=FALSE Relinks=TRUE|PressedByOwnerAtAsk"
 )
 
 fetch_tools() {
@@ -53,14 +58,11 @@ run_tlc() {
     for pair in $constants; do echo "    ${pair%%=*} = ${pair#*=}"; done
     echo "INVARIANTS"
     echo "    TypeOK"
-    for name in $invariants; do echo "    $name"; done
-    if [[ $model == relay && $invariants == "$RELAY_ALL" ]]; then
-      echo "PROPERTIES"
-      echo "    EventuallyTerminal"
-    fi
+    for name in $invariants; do [[ " $PROPERTIES " == *" $name "* ]] || echo "    $name"; done
+    for name in $invariants; do [[ " $PROPERTIES " != *" $name "* ]] || printf 'PROPERTIES\n    %s\n' "$name"; done
   } >"$work/$module.cfg"
   cp "formal/$model/$module.tla" "$work/"
-  (cd "$work" && java -XX:+UseParallelGC -cp "$JAR" tlc2.TLC -workers 1 -deadlock \
+  (cd "$work" && java -XX:+UseParallelGC -cp "$JAR" tlc2.TLC -workers 1 -deadlock -lncheck final \
     -metadir "$work/states" -config "$module.cfg" "$module.tla") >"$work/tlc.out" 2>&1 || true
 }
 
@@ -79,7 +81,7 @@ check() {
   states=$(sed -n 's/.* \([0-9]*\) distinct states found.*/\1/p' "$out" | tail -1)
   case "$expect:$violated" in
     holds:none)
-      printf 'ok    holds     %-22s %s (%s states)\n' "$invariants" "$what" "$states" | sed 's/NoBlindRepeat NothingLost OnlyStartedReported ReportedOnce StoppedStaysStopped/all five/; s/HeardOnce HeardOrToldWhy ShownOnce NothingDropped InOrder DecidedOnce/all six/'
+      printf 'ok    holds     %-22s %s (%s states)\n' "$invariants" "$what" "$states" | sed 's/NoBlindRepeat NothingLost OnlyStartedReported ReportedOnce StoppedStaysStopped/all five/; s/HeardOnce HeardOrToldWhy ShownOnce NothingDropped InOrder DecidedOnce PressedByOwnerAtAsk/all seven/'
       rm -rf "$work"; return 0 ;;
     finding:"$invariants"|broken:"$invariants")
       printf 'ok    %-9s %-22s %s\n' "$expect" "$invariants" "$what"
