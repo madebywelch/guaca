@@ -5,6 +5,7 @@ import type { Approval, Envelope } from "./types";
 const lead = { kind: "agent", id: "lead" } as const;
 const researcher = { kind: "agent", id: "researcher" } as const;
 const analyst = { kind: "agent", id: "analyst" } as const;
+const editor = { kind: "agent", id: "editor" } as const;
 const person = { kind: "human" } as const;
 
 function message(
@@ -49,6 +50,26 @@ function question(runId: string, lapsesAt: number | null): Approval {
 }
 
 describe("task map", () => {
+  it("puts questions before working colleagues and finished replies last", () => {
+    const [map] = taskMaps(
+      lead.id,
+      [
+        message("one", 1, person, lead, "Check the lease"),
+        message("one", 2, lead, editor, "Check the wording"),
+        message("one", 3, lead, analyst, "Check the numbers"),
+        message("one", 4, lead, researcher, "Check the sources"),
+        message("one", 5, editor, lead, "The wording is correct", "courtesy"),
+      ],
+      [question("one", 50)],
+      new Set(["one"]),
+    );
+    expect(map?.branches.map((branch) => branch.agentId)).toEqual([
+      researcher.id,
+      analyst.id,
+      editor.id,
+    ]);
+  });
+
   it("does not draw a map for a direct conversation or courtesy message", () => {
     expect(
       taskMaps(
