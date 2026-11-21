@@ -1152,14 +1152,17 @@ and Settings, and looks up saved content in Search results. Open a result
 from the menu without opening another search. The Groups sheet's shortcut
 opens this same menu.
 
-Writing to someone stays three presses: Command K, the sentence, Return. Three
-words or more select "Write to" and the recipient, because a sentence is a
-message and not a search. One or two words select the best match instead, so
-"dark" selects the dark reading surface, "approve" an Allow and a name that
-agent. Tab and Shift Tab change who the message goes to, in the same order as
-the numbers on the Agents rows, which are the order of the Groups sheet with
-pinned agents first and nobody lifted for being busy: an agent's number does
-not change because it started working.
+Return opens or does the best match and never sends a message, so a word typed
+to find an old message opens that message. "dark" selects the dark reading
+surface, "approve" an Allow and a name that agent; with no such match, a saved
+search result is chosen, and with nothing at all, Return does nothing. The
+"Write to" row sits below every match and sends only on Command Return or a
+click, and it shows Command Return when that key will send. While a matching
+request's Allow holds Command Return, choosing the "Write to" row gives the key
+back to writing. Tab and Shift Tab change who the message goes to, in the same
+order as the numbers on the Agents rows, which are the order of the Groups
+sheet with pinned agents first and nobody lifted for being busy: an agent's
+number does not change because it started working.
 
 Each request is drawn once, as its asker's face, name and question, with its
 answers as rows under it. Rows are set in the regular weight with their state
