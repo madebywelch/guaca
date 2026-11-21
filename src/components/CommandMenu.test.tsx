@@ -166,7 +166,7 @@ describe("the command menu", () => {
   it("never sends a short draft on Return, and sends it on Command Return", () => {
     const { input, type, chosen } = draw([], [dara]);
     type("on it");
-    expect(chosen()).not.toBe("Write to Dara");
+    expect(chosen()).toBeUndefined();
     fireEvent.keyDown(input, { key: "Enter" });
     expect(api.sendMessage).not.toHaveBeenCalled();
     fireEvent.keyDown(input, { key: "Enter", metaKey: true });

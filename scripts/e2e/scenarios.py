@@ -2607,10 +2607,15 @@ def scenario_menu(w: World) -> None:
     ui.key("k", mod=True)
     w.wait("the command menu opens a fourth time", lambda: ui.find("dialog", "Command menu"))
     ui.type("textbox", "Command menu", QUIET_PLEASE)
-    w.wait("the Write row offers Command Return", lambda: ui.find("button", f"Write to {AGENT}", exact=False))
+    write_key = ("Array.from(document.querySelectorAll('.palette__row')).find(row => row.querySelector("
+                 "'.palette__title')?.textContent === %s)?.querySelector('.palette__key')?.textContent || ''"
+                 ) % json.dumps(f"Write to {AGENT}")
+    w.wait("the Write row offers Command Return",
+           lambda: (lambda key: key.endswith("↩") and key != "↩")(ui.evaluate(write_key)))
     choice = menu_choice(w)
+    calls = len(w.model.calls)
     ui.key("Enter")
-    kept = ui.find("dialog", "Command menu") and not w.host.scalar(
+    kept = ui.find("dialog", "Command menu") and len(w.model.calls) == calls and not w.host.scalar(
         "SELECT count(*) FROM messages WHERE parts LIKE ?", f"%{QUIET_PLEASE}%")
     ui.key("Enter", mod=True)
     w.wait("the reply arrives", lambda: NOTED in said(w, AGENT))
@@ -2678,8 +2683,9 @@ def scenario_search(w: World) -> None:
     ui.key("Enter")
     w.check("Find opens the file's message without running an app action",
             w.wait("Find closes on the file's conversation",
-                   lambda: not ui.find("dialog", "Search") and ui.evaluate(
-                       "document.querySelector('[data-found=true]')?.innerText.includes('Keep these notes.')")),
+                   lambda: ui.evaluate(
+                       "!document.querySelector('[role=dialog][aria-label=\"Search\"]') && "
+                       "!!document.querySelector('[data-found=true]')?.innerText.includes('Keep these notes.')")),
             observed={"file": attachment, "conversation": AGENT}, shot=True)
 
     ui.click("button", f"Open {attachment}")

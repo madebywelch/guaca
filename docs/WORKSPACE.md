@@ -1159,10 +1159,10 @@ search result is chosen, and with nothing at all, Return does nothing. The
 "Write to" row sits below every match and sends only on Command Return or a
 click, and it shows Command Return when that key will send. While a matching
 request's Allow holds Command Return, choosing the "Write to" row gives the key
-back to writing. Tab and Shift Tab change who the message goes to, in the same order as
-the numbers on the Agents rows, which are the order of the Groups sheet with
-pinned agents first and nobody lifted for being busy: an agent's number does
-not change because it started working.
+back to writing. Tab and Shift Tab change who the message goes to, in the same
+order as the numbers on the Agents rows, which are the order of the Groups
+sheet with pinned agents first and nobody lifted for being busy: an agent's
+number does not change because it started working.
 
 Each request is drawn once, as its asker's face, name and question, with its
 answers as rows under it. Rows are set in the regular weight with their state
