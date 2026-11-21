@@ -1704,9 +1704,15 @@ NOTICE_INK = """(() => {
     .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
   const [high, low] = [light(ink), light(back)].sort((a, b) => b - a);
   const retry = [...chip.querySelectorAll('button')].find(b => b.innerText.startsWith('Try again'));
-  const line = parseFloat(getComputedStyle(retry).lineHeight);
+  const probe = document.createElement('div');
+  probe.style.height = 'var(--control-h)';
+  document.body.append(probe);
+  const control = probe.getBoundingClientRect().height;
+  probe.remove();
+  const box = retry.getBoundingClientRect();
   return {ratio: Math.round((high + 0.05) / (low + 0.05) * 100) / 100,
-          retryOnOneLine: retry.getBoundingClientRect().height < line * 2};
+          retryOnOneLine: retry.scrollWidth <= retry.clientWidth && box.height < control * 1.5,
+          retryAtControlHeight: control > 0 && Math.abs(box.height - control) < 1};
 })()"""
 
 
@@ -1753,6 +1759,9 @@ def scenario_failure(w: World) -> None:
     w.check("the failure's words measure at least 4.5 to 1 on their background in light and dark, with Try again on one line",
             all(m["ratio"] >= 4.5 and m["retryOnOneLine"] for m in ink.values()),
             observed={s: m["retryOnOneLine"] for s, m in ink.items()}, detail=ink, shot=True)
+    w.check("Try again is a standard control at the standard control height",
+            all(m["retryAtControlHeight"] for m in ink.values()),
+            observed={s: m["retryAtControlHeight"] for s, m in ink.items()})
 
     ui.click("button", "Now")
     now = w.wait("the Now tab says the last run failed", lambda: ui.evaluate(
@@ -3581,6 +3590,7 @@ SCENARIOS: dict[str, Scenario] = {
         "a failed model call says what happened and what to do, in plain words, with no status code",
         "Details shows the provider's own words for someone who wants them",
         "the failure's words measure at least 4.5 to 1 on their background in light and dark, with Try again on one line",
+        "Try again is a standard control at the standard control height",
         "the Now tab calls the last run failed, in the same words, and offers Try again",
         "an agent whose last task failed is listed as failed, not as needing attention",
         "For you files the failed task under Did not finish with Try again, never with finished work",

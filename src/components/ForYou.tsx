@@ -392,7 +392,7 @@ export function UnfinishedLine({
       <FinishedLine outcome={outcome} agent={agent} now={now} onOpen={onOpen} />
       <button
         type="button"
-        className="btn btn--compact unfinished-line__retry"
+        className="btn unfinished-line__retry"
         disabled={sending}
         onClick={async () => {
           setSending(true);

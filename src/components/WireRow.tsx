@@ -461,7 +461,7 @@ export function NoticeRow({
         {detail && (
           <button
             type="button"
-            className="chip__action chip__action--quiet"
+            className="btn btn--quiet"
             aria-expanded={open}
             aria-controls={shown}
             onClick={() => setOpen((was) => !was)}
@@ -472,7 +472,7 @@ export function NoticeRow({
         {onRetry && (
           <button
             type="button"
-            className="chip__action"
+            className="btn"
             disabled={tried}
             onClick={() => {
               setTried(true);

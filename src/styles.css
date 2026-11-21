@@ -3674,36 +3674,10 @@ button.handoff__name:hover {
   max-width: 100%;
 }
 
-.chip__action {
-  margin-left: var(--space-1);
-  padding: 0 var(--space-2);
-  border: 1px solid currentColor;
-  border-radius: var(--radius-control);
-  background: none;
-  color: inherit;
-  font: inherit;
-  font-size: var(--type-meta);
-}
-
-.chip__action:hover:not(:disabled) {
-  background: color-mix(in oklab, currentColor 14%, transparent);
-}
-
-.chip__action:disabled {
-  opacity: 0.55;
-  cursor: default;
-}
-
-.chip__action,
+.chip > .btn,
 .chip > .icon {
   flex: none;
   white-space: nowrap;
-}
-
-.chip__action--quiet {
-  border-color: transparent;
-  text-decoration: underline;
-  text-underline-offset: 2px;
 }
 
 .chip__said {

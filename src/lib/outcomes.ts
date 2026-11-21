@@ -115,6 +115,7 @@ export function forYouSummary(waiting: string[], unseen: number, stalled = 0): s
     ...(unseen > 0 ? [`${unseen} finished`] : []),
     ...(stalled > 0 ? [`${stalled} did not finish`] : []),
   ];
-  if (since.length > 0) return `Nothing needs your answer. ${since.join(" and ")} since you last looked.`;
+  if (since.length > 0)
+    return `Nothing needs your answer. ${since.join(" and ")} since you last looked.`;
   return "Nothing needs your answer right now.";
 }

@@ -608,7 +608,7 @@ function BranchFailure({ failed }: { failed: Envelope }) {
       {cause && (
         <button
           type="button"
-          className="btn btn--compact"
+          className="btn"
           disabled={sent}
           onClick={() => {
             setSent(true);

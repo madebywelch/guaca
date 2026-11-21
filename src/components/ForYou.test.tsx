@@ -332,7 +332,10 @@ describe("Finished", () => {
   it("says why when a failed task can no longer be sent again, and lets it be tried later", async () => {
     const showFailure = vi.fn();
     useStore.setState({ showFailure });
-    mocks.taskRecord.mockResolvedValue({ messages: [notice("notice-run-2", null)], resultId: null });
+    mocks.taskRecord.mockResolvedValue({
+      messages: [notice("notice-run-2", null)],
+      resultId: null,
+    });
     hostHas([failure("run-2")]);
     await act(async () => {
       render(<ForYou onClose={() => {}} />);

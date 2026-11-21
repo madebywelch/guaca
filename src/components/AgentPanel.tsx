@@ -124,7 +124,7 @@ function RetryTurn({ agent, cause }: { agent: AgentId; cause: MessageId }) {
   return (
     <button
       type="button"
-      className="btn btn--compact doing__retry"
+      className="btn doing__retry"
       disabled={sent}
       onClick={() => {
         setSent(true);
