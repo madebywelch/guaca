@@ -87,6 +87,7 @@ pub struct Ears {
     runtime: Runtime,
     adapter: Arc<dyn Adapter>,
     status: Arc<Mutex<AdapterStatus>>,
+    history: bool,
 }
 
 impl Ears {
@@ -95,7 +96,7 @@ impl Ears {
         adapter: Arc<dyn Adapter>,
         status: Arc<Mutex<AdapterStatus>>,
     ) -> Self {
-        Self { runtime, adapter, status }
+        Self { runtime, adapter, status, history: false }
     }
 
     pub async fn connected(&self) -> Result<(), AdapterError> {
@@ -109,13 +110,14 @@ impl Ears {
                     retry: true,
                 }
             })?;
+        let replay = Self { history: true, ..self.clone() };
         for (place, threads) in places {
-            self.adapter.catch_up(&place, &threads, since, self).await?;
+            self.adapter.catch_up(&place, &threads, since, &replay).await?;
         }
         Ok(())
     }
 
     pub async fn heard(&self, heard: Heard) -> Result<(), Unheard> {
-        self.runtime.hear(&self.adapter, heard).await
+        self.runtime.hear(&self.adapter, heard, self.history).await
     }
 }

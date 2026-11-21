@@ -2160,7 +2160,8 @@ ALTER TABLE onboarding_hires DROP COLUMN agent_id;
 CREATE TABLE adapters (
     id TEXT PRIMARY KEY,
     person TEXT,
-    linked_place TEXT
+    linked_place TEXT,
+    linked_at INTEGER NOT NULL
 );
 CREATE TABLE places (
     adapter TEXT NOT NULL,
@@ -2168,6 +2169,7 @@ CREATE TABLE places (
     group_id TEXT NOT NULL,
     agent_id TEXT NOT NULL,
     direct INTEGER NOT NULL,
+    bound_at INTEGER NOT NULL,
     high_water TEXT,
     PRIMARY KEY (adapter, place)
 );
@@ -2400,7 +2402,7 @@ mod tests {
         (78, "fc778794fb370b571ac5821e98c871c8172fa9f933bb1bd99ca48b4b6b617b67"),
         (79, "554ec9b4ff4a5bc9998ea33a07febc1abff3b79c452f248276987f15b1105348"),
         (80, "cfb92921daf974ffd88d8415551947ce65b6214fb8d895b9add4c29de403e54b"),
-        (81, "cfe1f8f773beca42890c49c813f614efdac8ee883a7b732c7c75ab2497583eec"),
+        (81, "1b5a31c8792b3dc47b62d6d6b477ae40031810b84929049644c8cbb580d60eda"),
     ];
 
     fn memory() -> Connection {

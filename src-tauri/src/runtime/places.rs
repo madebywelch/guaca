@@ -43,6 +43,10 @@ fn unheard(err: impl std::fmt::Display) -> Unheard {
 }
 
 impl Runtime {
+    pub(super) fn place_gate(&self, adapter: &AdapterId) -> Arc<tokio::sync::RwLock<()>> {
+        self.inner.place_gates.lock().entry(adapter.clone()).or_default().clone()
+    }
+
     pub fn attach_adapter(&self, adapter: Arc<dyn Adapter>) {
         let id = adapter.id();
         let mut adapters = self.inner.adapters.lock();
@@ -138,6 +142,9 @@ impl Runtime {
         let Some(code) = codes.get(adapter).filter(|code| code.code == said) else {
             return Ok(None);
         };
+        if heard.at_ms < code.expires_at - place::LINK_CODE_MS {
+            return Ok(Some(String::new()));
+        }
         if code.expires_at <= now_ms() {
             return Ok(Some(
                 "This link code expired. Ask for a new one in Guaca's Settings.".into(),
@@ -161,23 +168,63 @@ impl Runtime {
         &self,
         adapter: &Arc<dyn Adapter>,
         heard: Heard,
+        history: bool,
     ) -> Result<(), Unheard> {
         let id = adapter.id();
         let store = &self.inner.store;
-        if let Said::Text { text } = &heard.said {
+        let gate = self.place_gate(&id);
+        let pairing = match &heard.said {
+            Said::Text { text }
+                if text.len() == 6 && text.bytes().all(|byte| byte.is_ascii_digit()) =>
+            {
+                Some(text)
+            }
+            _ => None,
+        };
+        if let Some(text) = pairing {
+            if history {
+                return Ok(());
+            }
+            let guard = gate.write().await;
             if let Some(line) = self.use_code(&id, &heard, text).map_err(unheard)? {
+                drop(guard);
+                self.wake_relay();
                 if !line.is_empty() {
                     self.tell(adapter, &heard, &line).await;
                 }
                 return Ok(());
             }
         }
+        let _guard = gate.read().await;
         let linked = store.linked(&id).map_err(unheard)?;
+        if history
+            && !linked.as_ref().is_some_and(|linked| {
+                heard.at_ms >= linked.since && (!heard.direct || heard.spot.place == linked.place)
+            })
+        {
+            return Ok(());
+        }
         let Some(trust) = place::trust(linked.as_ref().map(|it| &it.person), &heard.speaker) else {
+            if history {
+                return Ok(());
+            }
             self.tell(adapter, &heard, place::STRANGER).await;
             return Ok(());
         };
+        if heard.direct && !linked.as_ref().is_some_and(|linked| linked.place == heard.spot.place) {
+            self.tell(adapter, &heard, place::UNBOUND).await;
+            return Ok(());
+        }
+        if history
+            && !store
+                .bound(&id, &heard.spot.place)
+                .map_err(unheard)?
+                .is_some_and(|bound| bound.direct == heard.direct && heard.at_ms >= bound.since)
+        {
+            return Ok(());
+        }
         match &heard.said {
+            Said::Choice { .. } if history => Ok(()),
             Said::Choice { ask, choice } => self.press(adapter, &heard, ask, choice).await,
             Said::Text { text } => self.take_text(adapter, &heard, text, trust).await,
         }
@@ -195,17 +242,35 @@ impl Runtime {
             Ok(id) => store.get_approval(id).map_err(unheard)?,
             Err(_) => None,
         };
-        let asked_here = match &approval {
-            Some(approval) => store
-                .place_run(approval.run_id)
-                .map_err(unheard)?
-                .is_some_and(|run| run.adapter == adapter.id()),
-            None => false,
-        };
-        let Some(approval) = approval.filter(|_| asked_here) else {
+        let id = adapter.id();
+        let posted = store.relay_row(&format!("ask:{ask}")).map_err(unheard)?;
+        let target = posted.filter(|row| row.adapter == id && row.spot == heard.spot);
+        let bound = store.bound(&id, &heard.spot.place).map_err(unheard)?;
+        let Some((approval, target)) = approval.zip(target).filter(|(approval, row)| {
+            row.run == Some(approval.run_id)
+                && bound.as_ref().is_some_and(|bound| bound.direct == heard.direct)
+                && matches!(&row.item, Outgoing::Post { card } if card.choices.iter().any(|c| c.id == choice))
+        }) else {
             self.tell(adapter, heard, place::NOT_FROM_HERE).await;
             return Ok(());
         };
+        if matches!(approval.request, Request::Permission { .. })
+            && (!heard.direct
+                || !store
+                    .linked(&id)
+                    .map_err(unheard)?
+                    .is_some_and(|linked| linked.place == heard.spot.place))
+        {
+            self.tell(adapter, heard, place::NOT_FROM_HERE).await;
+            return Ok(());
+        }
+        if target.state == RelayState::Sending {
+            return Err(Unheard { reason: "Guaca has not confirmed that post yet.".into() });
+        }
+        if target.state != RelayState::Sent || target.posted.is_none() {
+            self.tell(adapter, heard, place::NOT_FROM_HERE).await;
+            return Ok(());
+        }
         let answer = match &approval.request {
             Request::Permission { .. } => place::decision_for(choice).map(|_| choice.to_string()),
             Request::Question { options } => place::option_for(choice, options).map(str::to_string),
@@ -286,7 +351,11 @@ impl Runtime {
         if let Some((ask, answer)) = store.place_answer(&id, &heard.key).map_err(unheard)? {
             return self.give(ask, &answer).map_err(unheard);
         }
-        let Some(bound) = store.bound(&id, &heard.spot.place).map_err(unheard)? else {
+        let Some(bound) = store
+            .bound(&id, &heard.spot.place)
+            .map_err(unheard)?
+            .filter(|bound| bound.direct == heard.direct)
+        else {
             self.tell(adapter, heard, place::UNBOUND).await;
             return Ok(());
         };

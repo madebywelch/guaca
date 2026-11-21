@@ -86,6 +86,7 @@ impl Runtime {
 
     pub(super) async fn relay(self, adapter: Arc<dyn Adapter>, status: Arc<Mutex<AdapterStatus>>) {
         let id = adapter.id();
+        let gate = self.place_gate(&id);
         let mut woken = self.inner.relay_wake.subscribe();
         loop {
             woken.borrow_and_update();
@@ -93,6 +94,7 @@ impl Runtime {
                 if status.lock().stopped {
                     return;
                 }
+                let _guard = gate.read().await;
                 match self.relay_round(&adapter).await {
                     Ok(true) => continue,
                     Ok(false) => break,
@@ -147,6 +149,11 @@ impl Runtime {
         let mut progressed = false;
         for spot in spots {
             if let Some(head) = rows.iter().find(|row| row.state.open() && &row.spot == spot) {
+                if store.bound(&id, &spot.place)?.is_none() {
+                    store.relay_failed(&head.key, "This conversation is no longer linked.")?;
+                    progressed = true;
+                    continue;
+                }
                 if head.next_at > now {
                     continue;
                 }
@@ -161,7 +168,8 @@ impl Runtime {
                 continue;
             }
             let Some(want) = wants.iter().find(|want| &want.spot == spot) else { continue };
-            let skip = matches!(want.item, Outgoing::Skip);
+            let skip =
+                matches!(want.item, Outgoing::Skip) || store.bound(&id, &spot.place)?.is_none();
             let state = if skip { RelayState::Skipped } else { RelayState::Sending };
             store.insert_relay(&NewRelay {
                 key: &want.key,

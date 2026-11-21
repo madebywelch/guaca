@@ -23,6 +23,7 @@ pub struct Landing {
 pub struct Linked {
     pub person: OutsideUser,
     pub place: PlaceKey,
+    pub since: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +31,7 @@ pub struct Bound {
     pub group: GroupId,
     pub agent: AgentId,
     pub direct: bool,
+    pub since: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -191,16 +193,16 @@ fn raise(
 impl Store {
     pub fn linked(&self, adapter: &AdapterId) -> Result<Option<Linked>, StoreError> {
         let conn = self.conn()?;
-        let found: Option<(Option<String>, Option<String>)> = conn
+        let found: Option<(Option<String>, Option<String>, i64)> = conn
             .query_row(
-                "SELECT person,linked_place FROM adapters WHERE id=?1",
+                "SELECT person,linked_place,linked_at FROM adapters WHERE id=?1",
                 [&adapter.0],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
         Ok(match found {
-            Some((Some(person), Some(place))) => {
-                Some(Linked { person: OutsideUser(person), place: PlaceKey(place) })
+            Some((Some(person), Some(place), since)) => {
+                Some(Linked { person: OutsideUser(person), place: PlaceKey(place), since })
             }
             _ => None,
         })
@@ -215,13 +217,43 @@ impl Store {
     ) -> Result<(), StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.execute(
-            "INSERT INTO adapters (id,person,linked_place) VALUES (?1,?2,?3)
-             ON CONFLICT(id) DO UPDATE SET person=excluded.person, linked_place=excluded.linked_place",
-            params![adapter.0, heard.speaker.0, heard.spot.place.0],
-        )?;
         let place = &heard.spot.place;
-        bind(&tx, adapter, place, group, agent, true)?;
+        let old_place: Option<String> = tx
+            .query_row(
+                "SELECT linked_place FROM adapters WHERE id=?1 AND linked_place<>?2",
+                params![adapter.0, place.0],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(old) = old_place {
+            let reason =
+                "Guaca linked a different direct conversation before this could be confirmed.";
+            tx.execute(
+                "UPDATE relay SET state=CASE state WHEN 'sending' THEN 'doubt' ELSE 'failed' END,
+                                  last_error=?3
+                  WHERE adapter=?1 AND place=?2 AND state IN ('queued','sending')",
+                params![adapter.0, old, reason],
+            )?;
+            tx.execute(
+                "UPDATE place_runs SET relayed=1 WHERE adapter=?1 AND place=?2",
+                params![adapter.0, old],
+            )?;
+            tx.execute(
+                "DELETE FROM place_threads WHERE adapter=?1 AND place=?2",
+                params![adapter.0, old],
+            )?;
+            tx.execute(
+                "DELETE FROM places WHERE adapter=?1 AND place=?2",
+                params![adapter.0, old],
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO adapters (id,person,linked_place,linked_at) VALUES (?1,?2,?3,?4)
+             ON CONFLICT(id) DO UPDATE SET person=excluded.person, linked_place=excluded.linked_place,
+                                           linked_at=excluded.linked_at",
+            params![adapter.0, heard.speaker.0, place.0, heard.at_ms],
+        )?;
+        bind(&tx, adapter, place, group, agent, true, heard.at_ms)?;
         tx.execute(
             "INSERT INTO place_links (adapter,heard_key) VALUES (?1,?2)",
             params![adapter.0, heard.key.0],
@@ -252,7 +284,7 @@ impl Store {
         direct: bool,
     ) -> Result<(), StoreError> {
         let conn = self.conn()?;
-        bind(&conn, adapter, place, group, agent, direct)
+        bind(&conn, adapter, place, group, agent, direct, now_ms())
     }
 
     pub fn bound(
@@ -261,15 +293,15 @@ impl Store {
         place: &PlaceKey,
     ) -> Result<Option<Bound>, StoreError> {
         let conn = self.conn()?;
-        let found: Option<(String, String, bool)> = conn
+        let found: Option<(String, String, bool, i64)> = conn
             .query_row(
-                "SELECT group_id,agent_id,direct FROM places WHERE adapter=?1 AND place=?2",
+                "SELECT group_id,agent_id,direct,bound_at FROM places WHERE adapter=?1 AND place=?2",
                 params![adapter.0, place.0],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()?;
         found
-            .map(|(group, agent, direct)| {
+            .map(|(group, agent, direct, since)| {
                 Ok(Bound {
                     group: group
                         .parse()
@@ -278,6 +310,7 @@ impl Store {
                         .parse()
                         .map_err(|e: uuid::Error| corrupt("agent id")(e.to_string()))?,
                     direct,
+                    since,
                 })
             })
             .transpose()
@@ -637,12 +670,13 @@ fn bind(
     group: GroupId,
     agent: AgentId,
     direct: bool,
+    since: i64,
 ) -> Result<(), StoreError> {
     conn.execute(
-        "INSERT INTO places (adapter,place,group_id,agent_id,direct) VALUES (?1,?2,?3,?4,?5)
+        "INSERT INTO places (adapter,place,group_id,agent_id,direct,bound_at) VALUES (?1,?2,?3,?4,?5,?6)
          ON CONFLICT(adapter,place) DO UPDATE SET group_id=excluded.group_id,
-             agent_id=excluded.agent_id, direct=excluded.direct",
-        params![adapter.0, place.0, group.to_string(), agent.to_string(), direct],
+             agent_id=excluded.agent_id, direct=excluded.direct, bound_at=excluded.bound_at",
+        params![adapter.0, place.0, group.to_string(), agent.to_string(), direct, since],
     )?;
     Ok(())
 }

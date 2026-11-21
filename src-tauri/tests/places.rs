@@ -21,6 +21,7 @@ use guac_lib::runtime::guard::GuardLimits;
 use harness::*;
 
 const DM: &str = "T1/D1";
+const OTHER_DM: &str = "T1/D2";
 const CHANNEL: &str = "T1/C1";
 const PERSON: &str = "U1";
 const STRANGER: &str = "U2";
@@ -238,7 +239,7 @@ fn said(key: &str, place: &str, thread: Option<&str>, speaker: &str, text: &str)
     Heard {
         key: HeardKey(key.into()),
         spot: Spot { place: PlaceKey(place.into()), thread: thread.map(|t| ThreadKey(t.into())) },
-        direct: place == DM,
+        direct: matches!(place, DM | OTHER_DM),
         speaker: OutsideUser(speaker.into()),
         at_ms: now_ms(),
         said: Said::Text { text: text.into() },
@@ -358,6 +359,13 @@ async fn asked(h: &Harness) -> ApprovalId {
     h.awaited_request().await
 }
 
+async fn posted_ask(h: &Harness, ask: ApprovalId) {
+    h.wait_until("the request to be sent", |h| {
+        relay_state(h, &format!("ask:{ask}")) == Some(RelayState::Sent)
+    })
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_stranger_gets_one_line_and_nothing_is_stored_or_spent() {
     let stub = saying("Hello.").await;
@@ -460,10 +468,78 @@ async fn relinking_replaces_the_person() {
     let stub = saying("Hello.").await;
     let Setup { h, world } = linked(&stub, abilities()).await;
     let code = h.runtime.link_code(&adapter(), h.id("Ada")).unwrap();
-    hear(&world, said("relink", DM, None, STRANGER, &code)).await;
+    hear(&world, said("relink", OTHER_DM, None, STRANGER, &code)).await;
     assert_eq!(world.told(STRANGER), vec![place::linked("Ada")]);
     hear(&world, said("old", DM, None, PERSON, "still me?")).await;
     assert_eq!(world.told(PERSON).last().unwrap(), place::STRANGER);
+    hear(&world, said("old-dm", DM, None, STRANGER, "Do not route this")).await;
+    assert_eq!(world.told(STRANGER).last().unwrap(), place::UNBOUND);
+    assert!(h.runtime.store().bound(&adapter(), &PlaceKey(DM.into())).unwrap().is_none());
+    assert_eq!(runs(&h), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn relinking_retires_a_queued_reply_to_the_old_owner() {
+    let stub = saying("For your eyes only.").await;
+    let Setup { h, world } = linked(&stub, abilities()).await;
+    world.failures.lock().push_back(SendError::Retry { after: Some(Duration::from_secs(60)) });
+    hear(&world, said("work", DM, None, PERSON, "Run privately")).await;
+    let run = settled(&h, "work").await;
+    let message = h.runtime.store().replies_in_run(run).unwrap().remove(0);
+    let key = format!("message:{}", message.id);
+    h.wait_until("the reply to be held for retry", |h| {
+        relay_state(h, &key) == Some(RelayState::Queued)
+    })
+    .await;
+    let code = h.runtime.link_code(&adapter(), h.id("Ada")).unwrap();
+    hear(&world, said("relink", OTHER_DM, None, STRANGER, &code)).await;
+    assert_eq!(relay_state(&h, &key), Some(RelayState::Failed));
+    hear(&world, said("new", OTHER_DM, None, STRANGER, "Try the new direct conversation")).await;
+    let next = settled(&h, "new").await;
+    relayed(&h, next, Mark::Done).await;
+    assert_eq!(world.posts().len(), 1);
+    assert_eq!(world.posts()[0].spot.place, PlaceKey(OTHER_DM.into()));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn historical_lines_never_pair_or_expose_pairing_codes() {
+    let stub = saying("Here.").await;
+    let Setup { h, world } = linked(&stub, abilities()).await;
+    let fresh = h.runtime.link_code(&adapter(), h.id("Ada")).unwrap();
+    world.history.lock().extend([
+        said("fresh-code", DM, None, PERSON, &fresh),
+        said("old-unrelated", DM, None, PERSON, "Old private traffic"),
+        said("wrong-dm", OTHER_DM, None, STRANGER, &fresh),
+    ]);
+    world.history.lock()[1].at_ms -= 60_000;
+    attach(&h, &world).await;
+    assert_eq!(runs(&h), 0);
+    assert_eq!(h.runtime.store().linked(&adapter()).unwrap().unwrap().person.0, PERSON);
+    hear(&world, said("real-pair", OTHER_DM, None, STRANGER, &fresh)).await;
+    assert_eq!(h.runtime.store().linked(&adapter()).unwrap().unwrap().person.0, STRANGER);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn catch_up_ignores_channel_traffic_before_binding_and_unlinked_speakers() {
+    let stub = saying("Here.").await;
+    let Setup { h, world } = linked(&stub, abilities()).await;
+    let before = said("before", CHANNEL, None, PERSON, "Before binding");
+    let pip = h.runtime.store().get_agent(h.id("Pip")).unwrap().unwrap();
+    h.runtime
+        .store()
+        .bind_place(&adapter(), &PlaceKey(CHANNEL.into()), pip.group_id, pip.id, false)
+        .unwrap();
+    world.history.lock().extend([
+        before,
+        said("stranger", CHANNEL, None, STRANGER, "Unrelated traffic"),
+        said("after", CHANNEL, None, PERSON, "After binding"),
+    ]);
+    attach(&h, &world).await;
+    settled(&h, "after").await;
+    assert!(run_for(&h, "before").is_none());
+    assert!(run_for(&h, "stranger").is_none());
+    assert!(world.told(STRANGER).is_empty());
+    assert_eq!(runs(&h), 1);
 }
 
 async fn crash_after_post(posts: PostSafety) -> (Setup, String) {
@@ -623,6 +699,7 @@ async fn a_press_from_a_stranger_decides_nothing() {
     let Setup { h, world } = linked(&stub, abilities()).await;
     hear(&world, said("m1", DM, None, PERSON, "Release?")).await;
     let ask = asked(&h).await;
+    posted_ask(&h, ask).await;
     hear(&world, press("press1", DM, STRANGER, ask, "0")).await;
     assert_eq!(world.told(STRANGER), vec![place::STRANGER]);
     assert_eq!(h.runtime.store().get_approval(ask).unwrap().unwrap().state, ApprovalState::Pending);
@@ -631,6 +708,29 @@ async fn a_press_from_a_stranger_decides_nothing() {
         h.runtime.store().get_approval(ask).unwrap().unwrap().answer.as_deref(),
         Some("Ship it")
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_press_from_another_spot_or_a_retired_direct_place_decides_nothing() {
+    let stub = asking().await;
+    let Setup { h, world } = linked(&stub, abilities()).await;
+    hear(&world, said("m1", DM, None, PERSON, "Release?")).await;
+    let ask = asked(&h).await;
+    posted_ask(&h, ask).await;
+    let wrong_thread = Heard {
+        spot: Spot { place: PlaceKey(DM.into()), thread: Some(ThreadKey("different".into())) },
+        ..press("wrong", DM, PERSON, ask, "0")
+    };
+    hear(&world, wrong_thread).await;
+    assert_eq!(world.told(PERSON).last().unwrap(), place::NOT_FROM_HERE);
+    let new_code = h.runtime.link_code(&adapter(), h.id("Ada")).unwrap();
+    hear(&world, said("relink", OTHER_DM, None, STRANGER, &new_code)).await;
+    hear(&world, press("old-speaker", DM, PERSON, ask, "0")).await;
+    hear(&world, press("old-spot", DM, STRANGER, ask, "0")).await;
+    hear(&world, press("new-spot", OTHER_DM, STRANGER, ask, "0")).await;
+    assert_eq!(world.told(PERSON).last().unwrap(), place::STRANGER);
+    assert_eq!(world.told(STRANGER).last().unwrap(), place::NOT_FROM_HERE);
+    assert_eq!(h.runtime.store().get_approval(ask).unwrap().unwrap().state, ApprovalState::Pending);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -775,6 +875,7 @@ async fn a_permission_asked_from_a_channel_goes_to_the_direct_place_and_the_chan
     hear(&world, said("m1", CHANNEL, Some("m1"), PERSON, "Send the draft to the board")).await;
     let ask = asked(&h).await;
     h.wait_until("the request and the waiting line", |_| world.posts().len() == 2).await;
+    posted_ask(&h, ask).await;
     let posts = world.posts();
     let request =
         posts.iter().find(|p| p.card.kind == CardKind::Permission).expect("the request was posted");
@@ -783,6 +884,8 @@ async fn a_permission_asked_from_a_channel_goes_to_the_direct_place_and_the_chan
         posts.iter().find(|p| p.card.kind == CardKind::Notice).expect("the channel was told");
     assert_eq!(waiting.spot.place, PlaceKey(CHANNEL.into()));
     assert_eq!(waiting.card.text, place::waiting_for_owner("Pip"));
+    hear(&world, press("wrong-place", CHANNEL, PERSON, ask, place::ALLOW)).await;
+    assert_eq!(h.runtime.store().get_approval(ask).unwrap().unwrap().state, ApprovalState::Pending);
     hear(&world, press("press1", DM, PERSON, ask, place::ALLOW)).await;
     let run = settled(&h, "m1").await;
     relayed(&h, run, Mark::Done).await;

@@ -652,6 +652,7 @@ struct Inner {
     adapters: Mutex<HashMap<crate::domain::place::AdapterId, places::Attached>>,
     link_codes: Mutex<HashMap<crate::domain::place::AdapterId, places::LinkCode>>,
     relay_started: std::sync::atomic::AtomicBool,
+    place_gates: Mutex<HashMap<crate::domain::place::AdapterId, Arc<tokio::sync::RwLock<()>>>>,
     relay_wake: tokio::sync::watch::Sender<u64>,
     events: Arc<dyn EventSink>,
 }
@@ -768,6 +769,7 @@ impl Runtime {
                 adapters: Mutex::new(HashMap::new()),
                 link_codes: Mutex::new(HashMap::new()),
                 relay_started: std::sync::atomic::AtomicBool::new(false),
+                place_gates: Mutex::new(HashMap::new()),
                 relay_wake: relay_wake.clone(),
                 events: Arc::new(relay::Waking { sink: events, wake: relay_wake }),
             }),
