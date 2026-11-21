@@ -81,7 +81,7 @@ export const BINDINGS: Binding[] = [
   },
   {
     id: "menu-do",
-    what: "Do the selected row; with three words or more, send them",
+    what: "Open or do the selected row, which never sends a message",
     combo: { key: "Enter" },
     where: "The command menu",
     fixed: true,
@@ -96,7 +96,7 @@ export const BINDINGS: Binding[] = [
   },
   {
     id: "menu-allow",
-    what: "Allow the question the selected row belongs to",
+    what: "Send what you typed, or allow the question the selected row belongs to",
     combo: { key: "Enter", mod: true },
     where: "The command menu",
     fixed: true,

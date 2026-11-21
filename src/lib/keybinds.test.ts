@@ -293,7 +293,7 @@ describe("the keys that name an agent and take an answer back", () => {
   it("calls what the queue walks through a question", () => {
     expect(BINDINGS.map((binding) => binding.what)).toEqual(
       expect.arrayContaining([
-        "Allow the question the selected row belongs to",
+        "Send what you typed, or allow the question the selected row belongs to",
         "From an empty composer, select the first question",
         "Select the next or the previous question",
         "Allow, or the selected question's first button",

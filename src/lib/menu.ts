@@ -6,8 +6,6 @@ import type { SearchAction, SearchResult } from "./search";
 import { SECTION_LABELS, SECTIONS, type Section } from "./sections";
 import type { Activity, AgentCard, AgentId, Approval, Decision, Escalation } from "./types";
 
-export const WRITE_WORDS = 3;
-
 export type MenuSection = "Waiting on you" | "Agents" | "Actions" | "Settings" | "Search results";
 
 export const MENU_SECTIONS: readonly MenuSection[] = [
@@ -346,6 +344,7 @@ export function menuRows(input: MenuInput, matches: SearchResult[] = []): MenuRo
               seed: input.recipient.id,
             },
             words: "",
+            key: formatCombo({ key: "Enter", mod: true }),
             action: { do: "write", agentId: input.recipient.id, text },
           },
         ]
@@ -370,26 +369,24 @@ export function menuRows(input: MenuInput, matches: SearchResult[] = []): MenuRo
     }));
   const actions = found.filter((row) => row.section === "Actions");
   return [
-    ...write,
     ...found.filter((row) => row.section === "Waiting on you" || row.section === "Agents"),
     ...actions,
     ...found.filter((row) => row.section === "Settings"),
     ...results.filter((row) => row.section === "Settings"),
     ...results.filter((row) => row.section === "Search results"),
+    ...write,
   ];
 }
 
 export function firstChoice(rows: MenuRow[], query: string): string | null {
   const words = wordsIn(query);
-  const write = rows.find((row) => row.id === "write");
-  if (words.length >= WRITE_WORDS && write) return write.id;
-  const others = rows.filter((row) => row.id !== "write" && row.section !== "Search results");
-  if (words.length === 0) return others[0]?.id ?? rows[0]?.id ?? null;
-  const named = others.find((row) => wordsIn(row.title).join(" ") === words.join(" "));
-  const titled = others.find((row) =>
+  const found = rows.filter((row) => row.section !== null && row.section !== "Search results");
+  const named = found.find((row) => wordsIn(row.title).join(" ") === words.join(" "));
+  const titled = found.find((row) =>
     words.every((word) => row.title.toLowerCase().includes(word)),
   );
-  return (named ?? titled ?? others[0] ?? write ?? rows[0])?.id ?? null;
+  const hit = rows.find((row) => row.section === "Search results");
+  return (named ?? titled ?? found[0] ?? hit)?.id ?? null;
 }
 
 export function requestAt(rows: MenuRow[], selected: string | null): string | undefined {

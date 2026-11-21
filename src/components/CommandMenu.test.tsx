@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { HOLD_MS, useHeld } from "../lib/held";
 import { api, openExternal } from "../lib/ipc";
+import { formatCombo } from "../lib/keybinds";
 import { DEFAULT_PREFS } from "../lib/prefs";
 import { useStore } from "../lib/store";
 import { aGroup, anAgent, anApproval } from "../test-fixtures";
@@ -47,6 +48,7 @@ const dara = anAgent("agent-1", {
 });
 const noor = anAgent("agent-2", { name: "Noor", groupId: group.id, railOrder: 1 });
 const request = anApproval({ agentId: "agent-1", summary: "Change your name to Robin?" });
+const SEND = formatCombo({ key: "Enter", mod: true });
 const decide = vi.fn(async () => {});
 const select = vi.fn(async () => {});
 
@@ -108,12 +110,45 @@ describe("the command menu", () => {
     expect(api.sendMessage).not.toHaveBeenCalled();
   });
 
-  it("keeps a draft selected when results arrive and opens a selected link externally", async () => {
-    const { type, chosen } = draw([]);
-    type("the quarterly ledger");
-    expect(chosen()).toBe("Write to Noor");
+  it("does nothing on Return while nothing matches, then opens the first saved hit", async () => {
+    const openMessage = vi.fn(async () => {});
+    act(() => useStore.setState({ openMessage }));
+    const { input, type, chosen, onClose } = draw([]);
+    type("lisbon");
+    expect(chosen()).toBeUndefined();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onClose).not.toHaveBeenCalled();
     await act(async () => vi.advanceTimersByTime(120));
-    expect(chosen()).toBe("Write to Noor");
+    expect(chosen()).toBe("You → Dara");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(openMessage).toHaveBeenCalledExactlyOnceWith("agent-1", "message-1");
+    expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("does nothing on Return when the search finds nothing either", async () => {
+    vi.mocked(api.search).mockResolvedValueOnce({
+      messages: [],
+      files: [],
+      links: [],
+      routines: [],
+      artifacts: [],
+    });
+    const { input, type, chosen, onClose } = draw([]);
+    type("lisbon");
+    await act(async () => vi.advanceTimersByTime(120));
+    expect(chosen()).toBeUndefined();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("draws the Write row below the saved hits and opens a selected link externally", async () => {
+    const { type } = draw([]);
+    type("the quarterly ledger");
+    await act(async () => vi.advanceTimersByTime(120));
+    const titles = [...document.querySelectorAll(".palette__title")].map((t) => t.textContent);
+    expect(titles.at(-1)).toBe("Write to Noor");
+    expect(titles.indexOf("You → Dara")).toBeLessThan(titles.length - 1);
     fireEvent.click(screen.getByText("example.com/ledger"));
     expect(openExternal).toHaveBeenCalledExactlyOnceWith("https://example.com/ledger");
     expect(api.sendMessage).not.toHaveBeenCalled();
@@ -128,22 +163,31 @@ describe("the command menu", () => {
     expect(select).not.toHaveBeenCalled();
   });
 
-  it("keeps a short draft selected over incidental matches in an agent prompt", () => {
+  it("never sends a short draft on Return, and sends it on Command Return", () => {
     const { input, type, chosen } = draw([], [dara]);
     type("on it");
-    expect(chosen()).toBe("Write to Dara");
+    expect(chosen()).not.toBe("Write to Dara");
     fireEvent.keyDown(input, { key: "Enter" });
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: "Enter", metaKey: true });
     expect(api.sendMessage).toHaveBeenCalledExactlyOnceWith("agent-1", "on it");
-    expect(select).not.toHaveBeenCalled();
   });
 
-  it("can find an agent by its prompt without choosing it in place of a draft", () => {
-    const { type, chosen } = draw([]);
+  it("chooses an agent found by its prompt before the draft, and opens it on Return", () => {
+    const { input, type, chosen } = draw([]);
     type("this kitchen");
-    expect(chosen()).toBe("Write to Noor");
-    fireEvent.click(screen.getByRole("button", { name: /Dara.*this kitchen/ }));
+    expect(screen.getByRole("button", { name: /Dara.*this kitchen/ })).toBeTruthy();
+    expect(chosen()).toBe("Dara");
+    fireEvent.keyDown(input, { key: "Enter" });
     expect(select).toHaveBeenCalledExactlyOnceWith("agent-1");
     expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("sends the draft from its row on a click", () => {
+    const { type } = draw([]);
+    type("lisbon");
+    fireEvent.click(screen.getByRole("button", { name: /^Write to Noor/ }));
+    expect(api.sendMessage).toHaveBeenCalledExactlyOnceWith("agent-2", "lisbon");
   });
 
   it.each([
@@ -163,11 +207,14 @@ describe("the command menu", () => {
     expect(headings).toEqual(["Waiting on you", "Agents", "Actions", "Settings"]);
   });
 
-  it("sends three words or more to the recipient on Return, which is whoever was written to last", async () => {
+  it("sends a draft to whoever was written to last on Command Return, never on Return", async () => {
     const { input, type, chosen, onClose } = draw();
     type("draft the renewal note");
-    expect(chosen()).toBe("Write to Noor");
+    expect(chosen()).toBeUndefined();
     fireEvent.keyDown(input, { key: "Enter" });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: "Enter", metaKey: true });
     expect(onClose).toHaveBeenCalled();
     expect(api.sendMessage).toHaveBeenCalledExactlyOnceWith("agent-2", "draft the renewal note");
   });
@@ -181,7 +228,7 @@ describe("the command menu", () => {
     expect(screen.getByText("To Noor")).toBeTruthy();
     fireEvent.keyDown(input, { key: "Tab" });
     type("please book the room");
-    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.keyDown(input, { key: "Enter", metaKey: true });
     expect(api.sendMessage).toHaveBeenCalledExactlyOnceWith("agent-1", "please book the room");
   });
 
@@ -274,7 +321,22 @@ describe("the command menu", () => {
     expect(chosen()).toBe("Reading surface: Dark");
     expect(returns()).toEqual(["Reading surface: Dark"]);
     type("draft the renewal note");
-    expect(returns()).toEqual(["Write to Noor"]);
+    expect(returns()).toEqual([]);
+    const write = screen.getByRole("button", { name: /^Write to Noor/ });
+    expect(within(write).getByText(SEND)).toBeTruthy();
+  });
+
+  it("keeps Command Return on a matching Allow until the Write row is chosen", () => {
+    const { input, type } = draw();
+    type("approve");
+    const write = screen.getByRole("button", { name: /^Write to Noor/ });
+    expect(within(write).queryByText(SEND)).toBeNull();
+    fireEvent.mouseMove(write);
+    expect(within(write).getByText(SEND)).toBeTruthy();
+    fireEvent.keyDown(input, { key: "Enter", metaKey: true });
+    expect(api.sendMessage).toHaveBeenCalledExactlyOnceWith("agent-2", "approve");
+    act(() => vi.advanceTimersByTime(HOLD_MS));
+    expect(decide).not.toHaveBeenCalled();
   });
 
   it("numbers the agents with the keys that open them", () => {

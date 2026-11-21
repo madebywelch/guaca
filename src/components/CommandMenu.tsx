@@ -110,6 +110,11 @@ export function CommandMenu({
   );
   const selected = rows.some((row) => row.id === chosen) ? chosen : firstChoice(rows, query);
   const current = requestAt(rows, selected);
+  const allow = rows.find(
+    (row) => row.request === current && row.action.do === "decide" && row.action.decision === "allow",
+  );
+  const write = rows.find((row) => row.action.do === "write");
+  const sends = write !== undefined && (selected === write.id || allow === undefined);
 
   useEffect(() => {
     list.current
@@ -218,7 +223,8 @@ export function CommandMenu({
     }
     if (mod && event.key === "Enter") {
       event.preventDefault();
-      verdict("allow");
+      if (sends) run(write.action);
+      else verdict("allow");
       return;
     }
     if (mod && event.key === "Backspace") {
@@ -229,11 +235,11 @@ export function CommandMenu({
     if (event.key === "Enter") {
       event.preventDefault();
       const row = rows[at];
-      if (row) run(row.action);
+      if (row && row.action.do !== "write") run(row.action);
     }
   };
 
-  const sections: MenuRow["section"][] = [null, ...MENU_SECTIONS];
+  const sections: MenuRow["section"][] = [...MENU_SECTIONS, null];
   return (
     <Scrim>
       <button
@@ -307,11 +313,15 @@ export function CommandMenu({
                           row.request === current &&
                           row.action.do === "decide"
                             ? row.action.decision === "allow"
-                              ? ALLOW
+                              ? sends
+                                ? undefined
+                                : ALLOW
                               : row.action.decision === "deny"
                                 ? DENY
                                 : undefined
-                            : row.key
+                            : row.action.do === "write" && !sends
+                              ? undefined
+                              : row.key
                         }
                         onHover={() => setChosen(row.id)}
                         onPick={() => run(row.action)}
@@ -403,7 +413,7 @@ function MenuItem({
       </span>
       <span className="palette__meta">
         {row.meta}
-        {selected && <kbd className="palette__key">{RETURN}</kbd>}
+        {selected && row.action.do !== "write" && <kbd className="palette__key">{RETURN}</kbd>}
         {keys && <kbd className="palette__key">{keys}</kbd>}
       </span>
     </button>

@@ -2540,15 +2540,19 @@ def menu_choice(w: World) -> str:
 
 
 def scenario_menu(w: World) -> None:
+    brief = "Plan the trip."
+    itinerary = "The Lisbon itinerary is ready."
 
     def script(c: Call) -> Reply | None:
         if c.speaker == AGENT and c.last_user.endswith(QUIET_PLEASE):
             return say(NOTED)
+        if c.speaker == AGENT and c.last_user.endswith(brief):
+            return say(itinerary)
         return hello(c)
 
     w.model.script = script
     w.start()
-    first_run(w)
+    first_run(w, brief, itinerary)
     settled(w, 1)
     ui = w.ui
 
@@ -2583,14 +2587,37 @@ def scenario_menu(w: World) -> None:
             observed={"focused": ui.focused(), "said": len(said(w, AGENT)) - before})
 
     ui.key("k", mod=True)
-    w.wait("the command menu opens a third time", lambda: ui.find("dialog", "Command menu"))
-    ui.type("textbox", "Command menu", QUIET_PLEASE)
-    w.wait("three words or more select writing them", lambda: menu_choice(w) == f"Write to {AGENT}")
+    w.wait("the command menu opens to find a word", lambda: ui.find("dialog", "Command menu"))
+    calls = len(w.model.calls)
+    sent = w.host.scalar("SELECT count(*) FROM messages WHERE from_kind = 'human'")
+    ui.type("textbox", "Command menu", "lisbon")
+    w.wait("the message that holds the word is chosen", lambda: menu_choice(w) == f"{AGENT} → You")
+    order = ui.evaluate("Array.from(document.querySelectorAll('.palette__title')).map(e => e.textContent)")
+    w.capture("the command menu with a word from a message")
     ui.key("Enter")
+    found = ("document.querySelector('[data-found=true]')?.innerText.includes(%s) && "
+             "!document.querySelector('[role=dialog][aria-label=\"Command menu\"]')") % json.dumps(itinerary)
+    w.check("one word and Return open the message that holds it and send nothing",
+            w.wait("the message is highlighted and the menu closes", lambda: ui.evaluate(found))
+            and len(w.model.calls) == calls
+            and w.host.scalar("SELECT count(*) FROM messages WHERE from_kind = 'human'") == sent
+            and order[-1] == f"Write to {AGENT}",
+            observed={"order": order, "modelCalls": len(w.model.calls) - calls}, shot=True)
+
+    ui.key("k", mod=True)
+    w.wait("the command menu opens a fourth time", lambda: ui.find("dialog", "Command menu"))
+    ui.type("textbox", "Command menu", QUIET_PLEASE)
+    w.wait("the Write row offers Command Return", lambda: ui.find("button", f"Write to {AGENT}", exact=False))
+    choice = menu_choice(w)
+    ui.key("Enter")
+    kept = ui.find("dialog", "Command menu") and not w.host.scalar(
+        "SELECT count(*) FROM messages WHERE parts LIKE ?", f"%{QUIET_PLEASE}%")
+    ui.key("Enter", mod=True)
     w.wait("the reply arrives", lambda: NOTED in said(w, AGENT))
-    w.check("three words or more and Return write to the agent, and its reply arrives",
-            said(w, AGENT)[-1] == NOTED and not ui.find("dialog", "Command menu"),
-            observed={"said": said(w, AGENT)[-2:]})
+    w.check("Return never writes a sentence, and Command Return writes it to the agent, whose reply arrives",
+            kept and choice != f"Write to {AGENT}" and said(w, AGENT)[-1] == NOTED
+            and not ui.find("dialog", "Command menu"),
+            observed={"chosen": choice, "keptOnReturn": bool(kept), "said": said(w, AGENT)[-2:]})
 
     new_agent(w, "Editor", "Wait to be asked.")
     open_agent(w, "Editor")
@@ -3629,14 +3656,15 @@ SCENARIOS: dict[str, Scenario] = {
         "Calendar and Artifacts explain their empty lists without repeating the description",
     )),
     "menu": Scenario(scenario_menu, "A person in a conversation finds the focus in the composer, opens the command menu on "
-                     "Command K, switches to dark with one word and Return, writes to an agent with a sentence and "
-                     "Return, and opens the first agent on Command 1 with the focus in its composer; a sentence "
-                     "left in the menu by Escape is not sent.",
+                     "Command K, switches to dark with one word and Return, opens a message by a word in it with "
+                     "Return, writes to an agent with a sentence only on Command Return, and opens the first agent on "
+                     "Command 1 with the focus in its composer; a sentence left in the menu by Escape is not sent.",
     (
         "the conversation puts the focus in the composer",
         "one word, dark, and Return switch the reading surface to dark",
         "Escape closes the menu with a sentence in it, sends nothing and returns to the composer",
-        "three words or more and Return write to the agent, and its reply arrives",
+        "one word and Return open the message that holds it and send nothing",
+        "Return never writes a sentence, and Command Return writes it to the agent, whose reply arrives",
         "Command 1 opens the first agent with the focus in its composer",
         "every model call was one the scenario scripted",
     )),

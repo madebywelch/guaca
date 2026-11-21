@@ -17,4 +17,25 @@ describe("the command menu's first choice", () => {
     expect(firstChoice(rows, "Market")).toBe("market");
     expect(firstChoice(rows, "search")).toBe("market");
   });
+
+  it("chooses a saved hit before the Write row, and never the Write row", () => {
+    const write: MenuRow = {
+      id: "write",
+      section: null,
+      title: "Write to Noor",
+      words: "",
+      action: { do: "write", agentId: "noor", text: "lisbon" },
+    };
+    const hit: MenuRow = {
+      id: "message-1",
+      section: "Search results",
+      title: "lisbon trip notes",
+      words: "",
+      action: { do: "result", action: { do: "openMessage", channelId: "noor", messageId: "m1" } },
+    };
+    expect(firstChoice([hit, write], "lisbon")).toBe("message-1");
+    expect(firstChoice([write, hit], "lisbon")).toBe("message-1");
+    expect(firstChoice([write], "lisbon")).toBeNull();
+    expect(firstChoice([write], "draft the renewal note for friday")).toBeNull();
+  });
 });
