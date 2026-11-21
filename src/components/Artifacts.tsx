@@ -23,6 +23,7 @@ import {
 } from "../lib/types";
 import { HtmlArtifact } from "./HtmlArtifact";
 import { Icon } from "./Icon";
+import { Scrim } from "./Scrim";
 
 interface Props {
   onClose: () => void;
@@ -85,7 +86,7 @@ export function Artifacts({ onClose }: Props) {
   const crewName = (groupId: string) => groups.find((group) => group.id === groupId)?.name ?? null;
 
   return (
-    <div className="scrim">
+    <Scrim>
       <button type="button" className="scrim__close" aria-label="Close dialog" onClick={onClose} />
       <div
         className="dialog dialog--artifacts"
@@ -147,10 +148,7 @@ export function Artifacts({ onClose }: Props) {
             )}
 
             <div className="artifacts__foot">
-              <p className="artifacts__note">
-                Pages your agents keep. Ask one to make or change a page; every change is kept as a
-                version.
-              </p>
+              <span className="artifacts__spacer" />
               <button type="button" className="btn" onClick={onClose}>
                 Close
               </button>
@@ -158,7 +156,7 @@ export function Artifacts({ onClose }: Props) {
           </>
         )}
       </div>
-    </div>
+    </Scrim>
   );
 }
 

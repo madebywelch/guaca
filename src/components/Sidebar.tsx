@@ -4,7 +4,8 @@ import { FLIGHT_MS, roleOf, usePulseChoreography } from "../lib/choreography";
 import { useDismiss } from "../lib/dismiss";
 import { doing } from "../lib/doing";
 import { useForYouCount, useShown } from "../lib/held";
-import { FIND_KEY, IS_MAC } from "../lib/keybinds";
+import { IS_MAC, MENU_KEY } from "../lib/keybinds";
+import { APP_SETTINGS, PLACE_LABELS } from "../lib/menu";
 import { prefersReducedMotion } from "../lib/motion";
 import { newestByAgent } from "../lib/outcomes";
 import { questions } from "../lib/questions";
@@ -29,7 +30,7 @@ interface Props {
   onOpenCalendar: () => void;
   onOpenArtifacts: () => void;
   onOpenSettings: () => void;
-  onOpenSearch: () => void;
+  onOpenCommandMenu: () => void;
   onNewAgent: () => void;
   onNewGroup: () => void;
   onOpenMenu: (agent: AgentCard, at: { x: number; y: number }) => void;
@@ -55,7 +56,7 @@ export function Sidebar({
   onOpenCalendar,
   onOpenArtifacts,
   onOpenSettings,
-  onOpenSearch,
+  onOpenCommandMenu,
   onNewAgent,
   onNewGroup,
   onOpenMenu,
@@ -373,12 +374,17 @@ export function Sidebar({
           </select>
         </label>
 
-        <button type="button" className="rail__search" onClick={onOpenSearch}>
+        <button
+          type="button"
+          className="rail__search"
+          onClick={onOpenCommandMenu}
+          aria-label="Command menu"
+        >
           <span aria-hidden="true" className="rail__glass">
             <Icon name="search" size={16} />
           </span>
-          <span className="rail__search-label">Search</span>
-          <kbd className="rail__key">{FIND_KEY}</kbd>
+          <span className="rail__search-label">Command menu</span>
+          <kbd className="rail__key">{MENU_KEY}</kbd>
         </button>
 
         <div className="rail__body" data-live={inFlight.length > 0 ? "true" : undefined}>
@@ -477,27 +483,29 @@ export function Sidebar({
           <button
             type="button"
             className="rail__place"
-            aria-label={waiting > 0 ? `For you, ${questions(waiting)}` : "For you"}
+            aria-label={
+              waiting > 0 ? `${PLACE_LABELS.forYou}, ${questions(waiting)}` : PLACE_LABELS.forYou
+            }
             onClick={() => showForYou(true)}
           >
-            <span>For you</span>
+            <span>{PLACE_LABELS.forYou}</span>
             <b data-waiting={waiting > 0 ? "true" : undefined}>{waiting}</b>
           </button>
           <button type="button" className="rail__place" onClick={onOpenCalendar}>
-            <span>Calendar</span>
+            <span>{PLACE_LABELS.calendar}</span>
             <b>{new Date(now).toLocaleDateString([], { weekday: "short" })}</b>
           </button>
           <button type="button" className="rail__place" onClick={onOpenArtifacts}>
-            <span>Artifacts</span>
+            <span>{PLACE_LABELS.artifacts}</span>
           </button>
           <button
             type="button"
             className="rail__place"
             onClick={onOpenSettings}
-            aria-label="App settings"
-            title="App settings"
+            aria-label={APP_SETTINGS}
+            title={APP_SETTINGS}
           >
-            <span>Settings</span>
+            <span>{APP_SETTINGS}</span>
           </button>
         </div>
 

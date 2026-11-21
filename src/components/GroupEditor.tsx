@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-
 import { useDismiss } from "../lib/dismiss";
 import { api } from "../lib/ipc";
 import { LIMITS } from "../lib/limits";
@@ -23,6 +22,7 @@ import { GroupTransfer } from "./GroupTransfer";
 import { Permissions } from "./Permissions";
 import { PluginList } from "./PluginList";
 import { ProviderPresets, SubscriptionModel } from "./ProviderFields";
+import { Scrim } from "./Scrim";
 import { SkillList } from "./SkillList";
 import { ToolList } from "./ToolList";
 
@@ -264,7 +264,7 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
   const setLimitCount = LIMITS.filter((field) => (limits[field.key] ?? "").trim()).length;
 
   return (
-    <div className="scrim">
+    <Scrim>
       <button type="button" className="scrim__close" aria-label="Close dialog" onClick={onClose} />
       <div
         className="dialog dialog--settings"
@@ -771,6 +771,6 @@ export function GroupEditor({ group, onClose, onSection }: Props) {
           )}
         </div>
       </div>
-    </div>
+    </Scrim>
   );
 }

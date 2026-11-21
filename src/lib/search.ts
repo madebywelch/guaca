@@ -34,11 +34,7 @@ export type SearchAction =
   | { do: "openLink"; url: string }
   | { do: "openArtifact"; artifactId: ArtifactId }
   | { do: "editAgent"; agentId: AgentId }
-  | { do: "editGroup"; groupId: GroupId }
-  | { do: "openSettings" }
-  | { do: "newAgent" }
-  | { do: "newGroup" }
-  | { do: "openCafeteria" };
+  | { do: "editGroup"; groupId: GroupId };
 
 export interface SearchResult {
   key: string;
@@ -134,12 +130,13 @@ export function searchResults(input: SearchInput): SearchResult[] {
   }
 
   for (const group of groups) {
-    const value = score(group.name, query);
+    const title = `${group.name} settings`;
+    const value = Math.max(score(group.name, query), score(title, query));
     if (value <= 0) continue;
     results.push({
       key: `group:${group.id}`,
       kind: "groups",
-      title: group.name,
+      title,
       detail: `${group.agentCount} ${group.agentCount === 1 ? "agent" : "agents"}`,
       meta: "Group",
       score: value,
@@ -148,7 +145,7 @@ export function searchResults(input: SearchInput): SearchResult[] {
     });
   }
 
-  for (const door of actionsFor(agents, groups)) {
+  for (const door of agentSettings(agents)) {
     const value = score(door.title, query);
     if (value <= 0) continue;
     results.push({ ...door, score: value, at: 0 });
@@ -240,7 +237,7 @@ function faceFor(
   return card ? { avatar: card.avatar, color: card.color, seed: card.id } : undefined;
 }
 
-function actionsFor(agents: AgentCard[], groups: Group[]): Omit<SearchResult, "score">[] {
+function agentSettings(agents: AgentCard[]): Omit<SearchResult, "score">[] {
   const out: Omit<SearchResult, "score">[] = [];
 
   for (const agent of agents) {
@@ -255,52 +252,6 @@ function actionsFor(agents: AgentCard[], groups: Group[]): Omit<SearchResult, "s
       face: { avatar: agent.avatar, color: agent.color, seed: agent.id },
     });
   }
-
-  for (const group of groups) {
-    out.push({
-      key: `action:group-settings:${group.id}`,
-      kind: "actions",
-      title: `${group.name} settings`,
-      detail: "Endpoint, model, limits, and who gets which connector",
-      meta: "Action",
-      action: { do: "editGroup", groupId: group.id },
-    });
-  }
-
-  out.push(
-    {
-      key: "action:app-settings",
-      kind: "actions",
-      title: "App settings",
-      detail: "API key, model, limits, computers, appearance, notifications, shortcuts",
-      meta: "Action",
-      action: { do: "openSettings" },
-    },
-    {
-      key: "action:new-agent",
-      kind: "actions",
-      title: "New agent",
-      detail: "Add an agent",
-      meta: "Action",
-      action: { do: "newAgent" },
-    },
-    {
-      key: "action:new-group",
-      kind: "actions",
-      title: "New group",
-      detail: "A group that cannot see the others",
-      meta: "Action",
-      action: { do: "newGroup" },
-    },
-    {
-      key: "action:cafeteria",
-      kind: "actions",
-      title: "Cafeteria",
-      detail: "Hire agents that are already set up",
-      meta: "Action",
-      action: { do: "openCafeteria" },
-    },
-  );
 
   return out;
 }

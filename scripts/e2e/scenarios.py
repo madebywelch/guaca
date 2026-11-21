@@ -524,6 +524,140 @@ def look_surface(w: World, surface: str) -> None:
     ui.viewport(*look.FRAME)
 
 
+def scenario_controls(w: World) -> None:
+    look_world(w)
+    look_surface(w, "light")
+    ui = w.ui
+    field = ("combobox", f"Write to {AGENT}")
+    ui.fill(*field, "   ")
+    w.check("Send is unavailable for a blank draft",
+            ui.property("button", "Send", "disabled"), stop=False)
+    ui.fill(*field, "")
+    composer = ui.evaluate("""(() => {
+      const box = document.activeElement.closest('.composer');
+      const ring = getComputedStyle(box);
+      return {ring: [ring.outlineColor, ring.outlineWidth, ring.outlineOffset],
+              shadow: ring.boxShadow,
+              send: box.querySelector('button[aria-label="Send"]').textContent.trim(),
+              recipient: box.querySelector('label:has(select) > [aria-hidden="true"]')?.innerText.trim(),
+              face: !!box.querySelector('label:has(select) .avatar')};
+    })()""")
+    w.check("the composer has an icon Send and a recipient pill with a face",
+            composer["send"] == "" and composer["recipient"] == AGENT and composer["face"],
+            observed={k: v for k, v in composer.items() if k not in ("ring", "shadow")}, stop=False)
+
+    edges = """['.composer', '.result', '.msg__bubble', '.ask'].map(
+      selector => document.querySelector(selector)?.getBoundingClientRect().left)"""
+    columns = {}
+    for width, height in (look.FRAME, (390, 700)):
+        ui.viewport(width, height)
+        columns[width] = ui.evaluate(edges)
+    w.check("the composer, result, brief and question start on the same edge",
+            all(None not in values and max(values) - min(values) < 1 for values in columns.values()),
+            observed=columns, stop=False)
+    ui.viewport(*look.FRAME)
+
+    show(w, "Settings")
+    ui.click("tab", "General")
+    ui.click("textbox", "Your name")
+    field_ring = ui.evaluate("""(() => {
+      const s = getComputedStyle(document.activeElement);
+      return [s.outlineColor, s.outlineWidth, s.outlineOffset];
+    })()""")
+    neutral = ui.evaluate("""(() => {
+      const probe = document.createElement('span');
+      probe.style.color = 'var(--faint)';
+      document.body.append(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    })()""")
+    w.check("the focused composer and name field share one neutral ring without a halo",
+            composer["ring"] == field_ring and field_ring[0] == neutral
+            and field_ring[1] != "0px" and composer["shadow"] == "none",
+            observed={"composer": composer["ring"], "field": field_ring}, stop=False)
+
+    ui.click("tab", "Appearance")
+    short = ui.within("radiogroup", "Reading surface", "radio")
+    long = ui.within("radiogroup", "Reading size", "radio")
+    w.check("short choices are segments and longer choices are visible radios",
+            len(short) == 3 and len(long) == 5 and ui.evaluate("""(() => {
+              const short = document.querySelector('[aria-label="Reading surface: Light"]');
+              const long = document.querySelector('[aria-label="Reading size: 16px"]');
+              return getComputedStyle(short).opacity === '0'
+                && getComputedStyle(long).opacity === '1' && long.checked;
+            })()"""), observed={"surface": len(short), "sizes": len(long)})
+    ui.click("radio", "Reading surface: Light")
+    ui.key("ArrowDown")
+    w.check("one arrow changes the selected segment and applies the new surface",
+            ui.focused() == ("radio", "Reading surface: Dark")
+            and ui.property("radio", "Reading surface: Dark", "checked")
+            and not ui.property("radio", "Reading surface: Light", "checked")
+            and ui.evaluate("document.documentElement.dataset.surface") == "dark")
+    ui.key("Tab")
+    w.check("Tab leaves the radio group instead of stopping on each segment",
+            ui.focused() == ("radio", "Theme: Violet"))
+    ui.click("radio", "Contrast: More")
+    w.check("a custom look does not falsely mark any preset selected",
+            not any(ui.property("radio", label(node), "checked")
+                    for node in ui.within("radiogroup", "Theme presets", "radio")))
+    ui.click("tab", "Notifications")
+    w.check("long notification choices use visible radios even with only two options",
+            len(ui.within("radiogroup", "What a push says", "radio")) == 2
+            and ui.evaluate("""(() => {
+              const options = [...document.querySelectorAll(
+                '[aria-label="Include what finished"], [aria-label="Only say that something finished"]'
+              )];
+              return options.length === 2 && options.every(input => getComputedStyle(input).opacity === '1');
+            })()"""))
+    ui.evaluate("""(() => {
+      const send = window.fetch;
+      window.formatSaves = 0;
+      window.fetch = (url, init) => {
+        if (!String(url).endsWith('/v1/call') || !init?.body ||
+            JSON.parse(init.body).args?.patch?.delivery?.format !== 'json') return send(url, init);
+        window.formatSaves++;
+        return new Promise(resolve => {
+          window.rejectFormatSave = () => {
+            window.fetch = send;
+            resolve(new Response(JSON.stringify({
+              err: {kind: 'storage', message: 'Could not save the notification format.'}
+            }), {status: 500}));
+          };
+        });
+      };
+    })()""")
+    ui.click("radio", "Format: ntfy")
+    ui.key("ArrowDown")
+    w.wait("the first format save is pending", lambda: ui.evaluate("window.formatSaves === 1"))
+    held_focus = ui.focused()
+    ui.key(" ")
+    ui.evaluate("window.rejectFormatSave()")
+    w.wait("the refusal is visible", lambda: "Could not save the notification format." in ui.text())
+    w.check("a refused notification format keeps focus and the saved value without a second write",
+            held_focus == ("radio", "Format: JSON webhook")
+            and ui.focused() == held_focus and ui.evaluate("window.formatSaves") == 1
+            and ui.property("radio", "Format: ntfy", "checked")
+            and w.host.call("get_settings")["delivery"]["format"] == "ntfy",
+            observed={"pendingFocus": held_focus, "afterRefusal": ui.focused(),
+                      "writes": ui.evaluate("window.formatSaves")})
+    ui.key(" ")
+    w.check("a notification format stays selected after the Host saves it",
+            w.wait("the saved format", lambda: w.host.call("get_settings")["delivery"]["format"] == "json"
+                   and ui.property("radio", "Format: JSON webhook", "checked")
+                   and not ui.property("radio", "Format: ntfy", "checked")))
+    dismiss(w)
+    draft = "Keep this as a draft."
+    ui.fill(*field, draft)
+    ui.choose("combobox", "Recipient", "Market Researcher")
+    w.check("the recipient pill moves the unsent draft to the selected conversation",
+            w.wait("the new conversation holds the draft", lambda:
+                   ui.find("combobox", "Write to Market Researcher")
+                   and ui.value("combobox", "Write to Market Researcher") == draft)
+            and w.host.scalar("SELECT count(*) FROM messages WHERE parts LIKE ?", f"%{draft}%") == 0)
+    no_unscripted(w)
+
+
 def scenario_look(w: World) -> None:
     look_world(w)
     ui = w.ui
@@ -669,10 +803,11 @@ def section_shown(w: World) -> str:
 
 def menu_section(w: World, section: str) -> None:
     ui = w.ui
+    title = "App settings" if section == "General" else f"Settings: {section}"
     ui.key("k", mod=True)
     w.wait("the command menu opens", lambda: ui.find("dialog", "Command menu"))
-    ui.type("textbox", "Command menu", f"Settings: {section}")
-    w.wait(f"Settings: {section} is chosen", lambda: menu_choice(w) == f"Settings: {section}")
+    ui.type("textbox", "Command menu", title)
+    w.wait(f"{title} is chosen", lambda: menu_choice(w) == title)
     ui.key("Enter")
     w.wait("the menu closes", lambda: not ui.find("dialog", "Command menu"))
 
@@ -1526,6 +1661,10 @@ def scenario_failed(w: World) -> None:
             sorted(o["status"] for o in ended[1:]) == ["failed", "interrupted"]
             and len(w.ui.find("button", "Try again")) == 2,
             observed={"outcomes": ended, "tryAgain": len(w.ui.find("button", "Try again"))}, shot=True)
+    edges = w.ui.evaluate("""['.composer', ...document.querySelectorAll('.wire--notice > .chip')].map(
+      item => (typeof item === 'string' ? document.querySelector(item) : item).getBoundingClientRect().left)""")
+    w.check("both failure notices start at the composer edge",
+            len(edges) == 3 and max(edges) - min(edges) < 1, observed=edges)
     no_unscripted(w)
 
 
@@ -2134,19 +2273,46 @@ def scenario_roster(w: World) -> None:
     open_agent(w, names[9])
     w.wait("the clicked row focuses its question", lambda: ui.focused() == ("button", "Early"))
     compact = {}
+    compact_geometry = {}
     for height in (355, 320):
         ui.viewport(320, height)
         w.wait(f"the app fits the {height}-pixel viewport and the compact picker is visible",
                lambda: ui.evaluate(f"document.querySelector('.app').getBoundingClientRect().height === {height}")
                and ui.find("combobox", "Switch agent") and ui.evaluate(look.SETTLED))
-        compact[str(height)] = ui.on_screen("combobox", f"Write to {asking}") and ui.on_screen("button", "Send")
-    w.check("the composer and Send stay visible with a question at keyboard height",
-            all(compact.values()), observed=compact,
-            detail=ui.evaluate("""Object.fromEntries(['.app', '.roster', '.pane__header', '.agent-tabs',
+        compact[str(height)] = (ui.on_screen("combobox", f"Write to {asking}") and ui.on_screen("button", "Send")
+                                and ui.evaluate("document.querySelector('.composer').getBoundingClientRect().bottom "
+                                                "<= document.querySelector('.app').getBoundingClientRect().bottom"))
+        compact_geometry[str(height)] = ui.evaluate("""Object.fromEntries(['.app', '.roster', '.pane__header', '.agent-tabs',
               '.pane__body', '.working', '.composer', '.composer__input', '.composer__send', '.statusbar'].map(s => {
                 const el = document.querySelector(s), r = el.getBoundingClientRect();
                 return [s, [r.top, r.bottom, getComputedStyle(el).paddingBlock]];
-              }))"""), shot=True)
+              }))""")
+    w.check("the composer and Send stay visible with a question at keyboard height",
+            all(compact.values()), observed=compact, detail=compact_geometry, shot=True)
+    field = ("combobox", f"Write to {asking}")
+    ui.fill(*field, "@")
+    w.wait("the mention picker opens at keyboard height", lambda: ui.find("listbox", "Agents"))
+    for _ in range(5):
+        ui.key("ArrowDown")
+    mention = w.wait("a keyboard-chosen mention stays within the picker and on screen", lambda: ui.evaluate("""
+      (() => {
+        const composer = document.querySelector('.composer');
+        const list = composer.querySelector('.mentions').getBoundingClientRect();
+        const active = composer.querySelector('.mentions__item[aria-selected="true"]');
+        const row = active.getBoundingClientRect();
+        const limit = document.querySelector('.app').getBoundingClientRect();
+        if (composer.getBoundingClientRect().bottom > limit.bottom || list.top < limit.top
+            || row.top < list.top || row.bottom > list.bottom || row.bottom > limit.bottom) return null;
+        return active.querySelector('.mentions__name').textContent;
+      })()
+    """), timeout=4)
+    w.capture("the selected mention stays on screen at keyboard height")
+    ui.key("Enter")
+    w.check("keyboard selection inserts a visible mention without sending at keyboard height",
+            ui.value(*field) == f"@{mention} " and ui.focused() == field
+            and w.host.scalar("SELECT count(*) FROM messages WHERE parts LIKE ?", f"%@{mention}%") == 0,
+            observed=mention)
+    ui.fill(*field, "")
     ui.viewport(900, 700)
     ui.key("Tab", mod=True)
     w.wait("Control Tab opens the next row", lambda: ui.find("log", f"Conversation with {names[10]}"))
@@ -2437,6 +2603,140 @@ def scenario_menu(w: World) -> None:
     w.check("Command 1 opens the first agent with the focus in its composer",
             w.wait("the composer takes the focus", lambda: ui.focused() == ("combobox", f"Write to {AGENT}")),
             observed=ui.focused(), shot=True)
+    no_unscripted(w)
+
+
+def scenario_search(w: World) -> None:
+    brief = "Review the quarterly ledger."
+    reply = "The ledger is ready."
+    attachment = "ledger-notes.txt"
+
+    def script(c: Call) -> Reply | None:
+        if c.last_user.endswith(brief):
+            return say(reply)
+        if c.last_user.startswith(f"The attached file {attachment} contains:"):
+            return say("Noted.")
+        return hello(c)
+
+    w.model.script = script
+    w.start()
+    first_run(w, brief, reply)
+    settled(w, 1)
+    ui = w.ui
+    agent_count = w.host.scalar("SELECT count(*) FROM agents")
+
+    ui.key("f", mod=True)
+    w.wait("Find opens", lambda: ui.find("dialog", "Search"))
+    ui.fill("textbox", "Search Guaca", "new agent")
+    w.wait("Find settles without an action", lambda: "Nothing matching" in ui.text()
+           or ui.find("button", "New agent", exact=False))
+    ui.key("Enter")
+    tabs = [label(one) for one in reversed(ui.within("dialog", "Search", "tab"))]
+    w.check("Find only offers messages and files and cannot run New agent",
+            tabs == ["All", "Messages", "Files"] and not ui.find("dialog", "New agent")
+            and w.host.scalar("SELECT count(*) FROM agents") == agent_count, observed=tabs, shot=True)
+    dismiss(w)
+
+    ui.evaluate("""(() => {
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(new File(["Follow up on the ledger."], "ledger-notes.txt", {type: "text/plain"}));
+      window.dispatchEvent(new DragEvent("drop", {dataTransfer, bubbles: true, cancelable: true}));
+    })()""")
+    w.wait("the file is staged", lambda: ui.find("button", f"Remove {attachment}"))
+    ui.fill("combobox", f"Write to {AGENT}", "Keep these notes.")
+    ui.click("button", "Send")
+    settled(w, 2)
+    ui.key("f", mod=True)
+    w.wait("Find opens again", lambda: ui.find("dialog", "Search"))
+    ui.click("tab", "Files")
+    ui.fill("textbox", "Search Guaca", attachment)
+    w.wait("Find locates the attached file", lambda: any(
+        label(one).startswith(attachment) for one in ui.within("dialog", "Search", "button")))
+    ui.key("Enter")
+    w.check("Find opens the file's message without running an app action",
+            w.wait("Find closes on the file's conversation",
+                   lambda: not ui.find("dialog", "Search") and ui.evaluate(
+                       "document.querySelector('[data-found=true]')?.innerText.includes('Keep these notes.')")),
+            observed={"file": attachment, "conversation": AGENT}, shot=True)
+
+    ui.click("button", f"Open {attachment}")
+    w.wait("the file reader opens", lambda: ui.find("dialog", attachment))
+    w.wait("the reader has finished moving", lambda: ui.evaluate(look.SETTLED))
+    reader = ui.evaluate("""(() => {
+      const dialog = document.querySelector('[aria-label="ledger-notes.txt"][role=dialog]');
+      const close = dialog.querySelector('button[aria-label=Close]');
+      const box = close.getBoundingClientRect();
+      return {
+        backdrop: document.elementFromPoint(4, 4)?.closest('.scrim') === dialog.parentElement,
+        close: document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)?.closest('button') === close,
+      };
+    })()""")
+    ui.key("f", mod=True)
+    w.wait("Find opens above the reader", lambda: ui.find("dialog", "Search"))
+    w.wait("Find has finished moving", lambda: ui.evaluate(look.SETTLED))
+    above = ui.evaluate("""(() => {
+      const input = document.querySelector('input[aria-label="Search Guaca"]');
+      const box = input.getBoundingClientRect();
+      return document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) === input;
+    })()""")
+    ui.key("Escape")
+    w.wait("Escape closes only Find", lambda: not ui.find("dialog", "Search") and ui.find("dialog", attachment))
+    w.check("the file reader covers the window without clipping and Find stacks above it",
+            reader == {"backdrop": True, "close": True} and above,
+            observed={**reader, "findOnTop": above}, shot=True)
+    dismiss(w)
+
+    show(w, "the Groups sheet")
+    ui.click("button", "Command menu", exact=False)
+    w.wait("the Groups sheet opens the command menu", lambda: ui.focused() == ("textbox", "Command menu"))
+    ui.fill("textbox", "Command menu", "ledger is ready")
+    w.wait("the command menu finds the message itself", lambda: ui.find("button", reply, exact=False))
+    w.capture("the command menu with a matching message")
+    ui.click("button", reply, exact=False)
+    landing = """(() => {
+      const dialogs = [...document.querySelectorAll('[role=dialog]')].map(el => el.getAttribute('aria-label'));
+      const highlight = [...document.querySelectorAll('[data-found=true]')].some(
+        el => el.innerText.includes('The ledger is ready.'));
+      return {menuOpen: dialogs.includes('Command menu'), findOpen: dialogs.includes('Search'),
+        groupsOpen: dialogs.includes('Groups and agents'), highlight};
+    })()"""
+    expected = {"menuOpen": False, "findOpen": False, "groupsOpen": False, "highlight": True}
+    w.check("the Groups sheet uses the command menu and a message hit opens without another palette",
+            w.wait("the message is highlighted and the search surfaces close",
+                   lambda: ui.evaluate(landing) == expected), observed=expected)
+    dismiss(w)
+
+    geometry = {}
+    descriptions = {}
+    for name in ("Search", "the command menu", "New agent", "the Groups sheet", "Artifacts", "Calendar", "For you"):
+        if name in ("Artifacts", "Calendar", "For you"):
+            ui.click("button", name, exact=False)
+            w.wait(f"{name} opens", lambda: ui.find("dialog", name))
+        else:
+            show(w, name)
+        w.wait(f"{name} has finished moving", lambda: ui.evaluate(look.SETTLED))
+        geometry[name] = ui.evaluate("""(() => {
+          const dialog = [...document.querySelectorAll('.scrim > [role=dialog]')].at(-1);
+          const box = dialog.getBoundingClientRect();
+          const color = getComputedStyle(dialog.parentElement).backgroundColor;
+          return {top: Math.round(box.top), width: Math.round(box.width), color};
+        })()""")
+        if name == "Calendar":
+            w.wait("the empty calendar is shown", lambda: "Nothing on this calendar" in ui.text())
+            descriptions[name] = ui.text().count("Guaca's own calendar")
+        if name == "Artifacts":
+            w.wait("the empty artifacts list is shown", lambda: "keeps any artifacts yet" in ui.text())
+            descriptions[name] = ui.text().count("Ask an agent for a page")
+            descriptions["Artifacts footer"] = ui.text().count("Pages your agents keep.")
+        dismiss(w)
+    w.check("dialogs and sheets share one top offset, two widths, and a lighter light scrim",
+            len({box["top"] for box in geometry.values()}) == 1
+            and len({box["width"] for box in geometry.values()}) == 2
+            and all(box["color"] == "rgba(11, 11, 10, 0.25)" for box in geometry.values()),
+            observed=geometry)
+    w.check("Calendar and Artifacts explain their empty lists without repeating the description",
+            descriptions == {"Calendar": 1, "Artifacts": 1, "Artifacts footer": 0},
+            observed=descriptions)
     no_unscripted(w)
 
 
@@ -2895,6 +3195,17 @@ def scenario_taskmap(w: World) -> None:
             all(opens_remainder(d, lease) for d in fanout.values())
             and all(opens_remainder(d, (buy,)) for d in asking.values()),
             observed={key: {"shown": d["names"], "rest": d["rest"]} for key, d in layouts.items()})
+    insets = {}
+    for width, height in (*TASK_MAP_FRAMES, (390, 700)):
+        ui.viewport(width, height)
+        insets[width] = ui.evaluate("""(() => {
+          if (!document.querySelector('.task-map-stack:not([hidden]) .task-map__graph')) return null;
+          return ['.composer', '.msg__bubble', '.result'].map(selector =>
+            document.querySelector(selector)?.getBoundingClientRect().left);
+        })()""")
+    w.check("the composer and transcript share one inset beneath the live task map",
+            all(edges and None not in edges and max(edges) - min(edges) < 1 for edges in insets.values()),
+            observed=insets)
     ui.viewport(900, 700)
     ui.click("button", f"Task map {MAP_LEASE}", exact=False)
     w.wait("the urgent question is back in the map", lambda: MAP_LEASE_ASK in card_text(w))
@@ -2996,12 +3307,30 @@ SCENARIOS: dict[str, Scenario] = {
         "the pinned maps cover at most two fifths of the pane in both themes and window sizes",
         "the fan-out and question-only maps lay out by their pane's width in both themes at every frame",
         "the colleagues disclosure opens exactly the branches the fan-out map hides",
+        "the composer and transcript share one inset beneath the live task map",
         "manually folding a live task keeps it folded while another question is open",
         "Tab and a number answer the question on the open branch",
         "Escape from the composer still opens the Questions tray with a branch waiting",
         "opening the typed answer puts the keyboard in the field",
         "the typed answer and shortcut stay with their recorded questions",
         "a nested hand-off opens the named colleague's conversation",
+        "every model call was one the scenario scripted",
+    )),
+    "controls": Scenario(scenario_controls, "A person changes an exclusive setting by keyboard and uses the "
+                         "conversation composer; an empty draft cannot send and a custom look selects no preset.",
+    (
+        "Send is unavailable for a blank draft",
+        "the composer has an icon Send and a recipient pill with a face",
+        "the composer, result, brief and question start on the same edge",
+        "the focused composer and name field share one neutral ring without a halo",
+        "short choices are segments and longer choices are visible radios",
+        "one arrow changes the selected segment and applies the new surface",
+        "Tab leaves the radio group instead of stopping on each segment",
+        "a custom look does not falsely mark any preset selected",
+        "long notification choices use visible radios even with only two options",
+        "a refused notification format keeps focus and the saved value without a second write",
+        "a notification format stays selected after the Host saves it",
+        "the recipient pill moves the unsent draft to the selected conversation",
         "every model call was one the scenario scripted",
     )),
     "resume": Scenario(scenario_resume, "A person queues two messages while an agent is paused and resumes it; "
@@ -3116,6 +3445,7 @@ SCENARIOS: dict[str, Scenario] = {
                        "silently with the turn.",
     (
         "a failed model call tells the other conversation the turn acted on at once, with Try again on each",
+        "both failure notices start at the composer edge",
         "every model call was one the scenario scripted",
     )),
     "routine": Scenario(scenario_routine, "A person adds a routine on an event, copies its curl line, reveals its secret and hides it again, and one delivery "
@@ -3227,6 +3557,7 @@ SCENARIOS: dict[str, Scenario] = {
         "a new question changes the tenth status without reordering or switching conversations",
         "desktop names wrap before they are shortened and stay above the status and shortcut",
         "the composer and Send stay visible with a question at keyboard height",
+        "keyboard selection inserts a visible mention without sending at keyboard height",
         "mouse, Control Tab in both directions, and the numbered shortcut keep the draft with its agent",
         "stacked Search and its keys leave the command menu and underlying draft unchanged",
         "reload lands on the pending question but keeps the other conversation's draft",
@@ -3291,6 +3622,15 @@ SCENARIOS: dict[str, Scenario] = {
         "with no key, the refusal is about this endpoint and names no other provider or place",
         "an endpoint that needs no key passes the test with none, and is kept",
         "every model call was one the scenario scripted",
+    )),
+    "search": Scenario(scenario_search, "Find opens files and the command menu opens messages and actions; "
+                       "Find cannot run an action and dialogs share their geometry.", (
+        "Find only offers messages and files and cannot run New agent",
+        "Find opens the file's message without running an app action",
+        "the file reader covers the window without clipping and Find stacks above it",
+        "the Groups sheet uses the command menu and a message hit opens without another palette",
+        "dialogs and sheets share one top offset, two widths, and a lighter light scrim",
+        "Calendar and Artifacts explain their empty lists without repeating the description",
     )),
     "menu": Scenario(scenario_menu, "A person in a conversation finds the focus in the composer, opens the command menu on "
                      "Command K, switches to dark with one word and Return, writes to an agent with a sentence and "

@@ -77,6 +77,62 @@ interface Props {
   notices?: ReactNode;
 }
 
+function SettingChoice<T>({
+  name,
+  title,
+  hint,
+  value,
+  options,
+  list,
+  busy,
+  onChange,
+}: {
+  name: string;
+  title?: string;
+  hint?: string;
+  value: T | undefined;
+  options: readonly { value: T; label: string; name?: string; preview?: ReactNode }[];
+  list?: boolean;
+  busy?: boolean;
+  onChange: (value: T) => void;
+}) {
+  const id = useId();
+  return (
+    <div className="setting-choice" data-layout={list || options.length > 4 ? "list" : "segments"}>
+      <div>
+        <span className="field__label" id={id} title={title}>
+          {name}
+        </span>
+        {hint && <p className="field__hint">{hint}</p>}
+      </div>
+      <div className="setting-choice__options" role="radiogroup" aria-labelledby={id}>
+        {options.map((option) => (
+          <label className="setting-choice__option" key={option.label}>
+            <input
+              type="radio"
+              name={id}
+              aria-label={option.name ?? `${name}: ${option.label}`}
+              checked={value === option.value}
+              aria-disabled={busy || undefined}
+              onChange={() => {
+                if (!busy) onChange(option.value);
+              }}
+            />
+            <span className="setting-choice__label">
+              {option.preview && (
+                <span className="setting-choice__preview" aria-hidden="true">
+                  {option.preview}
+                </span>
+              )}
+              {option.label}
+            </span>
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const SURFACE_LABELS: Record<SurfaceMode, string> = {
   light: "Light",
   dark: "Dark",
@@ -1379,294 +1435,127 @@ export function SettingsPage({ request, onSection, notices }: Props) {
                   known to an agent.
                 </p>
 
-                <div
-                  className="switch-row"
-                  title="The model's published thinking and each tool call, in chat while it works."
-                >
-                  <span className="switch-row__text">
-                    <span className="switch-row__label">Show reasoning and tool calls</span>
-                  </span>
-                  <button
-                    type="button"
-                    className="toggle"
-                    role="switch"
-                    aria-label="Show reasoning and tool calls"
-                    aria-checked={prefs.showReasoning}
-                    onClick={() => setPrefs({ showReasoning: !prefs.showReasoning })}
+                <div className="settings-rows">
+                  <div
+                    className="switch-row"
+                    title="The model's published thinking and each tool call, in chat while it works."
                   >
-                    <span aria-hidden="true" className="toggle__track" />
-                  </button>
-                </div>
-
-                <div className="field">
-                  <span className="field__label" title="The whole window follows this setting.">
-                    Reading surface
-                  </span>
-                  <div className="choices">
-                    {(Object.keys(SURFACE_LABELS) as SurfaceMode[]).map((mode) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        className="choice"
-                        aria-label={`Reading surface: ${SURFACE_LABELS[mode]}`}
-                        aria-pressed={prefs.surface === mode}
-                        onClick={() => setLook({ surface: mode })}
-                      >
-                        {SURFACE_LABELS[mode]}
-                      </button>
-                    ))}
+                    <span className="switch-row__text">
+                      <span className="switch-row__label">Show reasoning and tool calls</span>
+                    </span>
+                    <button
+                      type="button"
+                      className="toggle"
+                      role="switch"
+                      aria-label="Show reasoning and tool calls"
+                      aria-checked={prefs.showReasoning}
+                      onClick={() => setPrefs({ showReasoning: !prefs.showReasoning })}
+                    >
+                      <span aria-hidden="true" className="toggle__track" />
+                    </button>
                   </div>
-                  <span className="field__hint">
-                    {resolveSurface(prefs.surface, systemDark) === "dark" ? "Dark" : "Light"} mode
-                    {prefs.surface === "system" ? ", matching your system" : ""}.
-                  </span>
-                </div>
-
-                <div className="field">
-                  <span className="field__label">Theme presets</span>
-                  <div className="choices">
-                    {Object.entries(THEME_PRESETS).map(([name, theme]) => (
-                      <button
-                        key={name}
-                        type="button"
-                        className="choice choice--swatch"
-                        aria-label={`Theme: ${name}`}
-                        aria-pressed={matchesPreset(prefs, theme)}
-                        onClick={() => setLook(theme)}
-                      >
-                        <span
-                          className="choice__swatch"
-                          aria-hidden="true"
-                          style={
-                            {
-                              "--swatch": themeTokens(theme, resolveSurface(prefs.surface))[
-                                "--rail-ground"
-                              ],
-                            } as React.CSSProperties
-                          }
-                        />
-                        {name}
-                      </button>
-                    ))}
-                  </div>
-                  <span className="field__hint">Choose a preset or adjust its colors below.</span>
-                </div>
-
-                <div className="field">
-                  <span
-                    className="field__label"
+                  <SettingChoice
+                    name="Reading surface"
+                    title="The whole window follows this setting."
+                    value={prefs.surface}
+                    options={(Object.keys(SURFACE_LABELS) as SurfaceMode[]).map((value) => ({
+                      value,
+                      label: SURFACE_LABELS[value],
+                    }))}
+                    onChange={(surface) => setLook({ surface })}
+                    hint={`${resolveSurface(prefs.surface, systemDark) === "dark" ? "Dark" : "Light"} mode${prefs.surface === "system" ? ", matching your system" : ""}.`}
+                  />
+                  <SettingChoice
+                    name="Theme presets"
+                    value={Object.values(THEME_PRESETS).find((preset) =>
+                      matchesPreset(prefs, preset),
+                    )}
+                    options={Object.entries(THEME_PRESETS).map(([label, value]) => ({
+                      value,
+                      label,
+                      name: `Theme: ${label}`,
+                    }))}
+                    onChange={setLook}
+                    hint={"Choose a preset or adjust its colors below."}
+                  />
+                  <SettingChoice
+                    name="Grays"
                     title="The tint in the workspace surfaces and dividers."
-                  >
-                    Grays
-                  </span>
-                  <div className="choices">
-                    {(Object.keys(GRAYS) as GrayKey[]).map((grays) => (
-                      <button
-                        key={grays}
-                        type="button"
-                        className="choice choice--swatch"
-                        aria-label={`Grays: ${GRAYS[grays].label}`}
-                        aria-pressed={prefs.grays === grays}
-                        onClick={() => setLook({ grays })}
-                      >
-                        <span
-                          className="choice__swatch"
-                          aria-hidden="true"
-                          style={
-                            {
-                              "--swatch": themeTokens(
-                                { ...prefs, grays },
-                                resolveSurface(prefs.surface),
-                              )["--rail-ground"],
-                            } as React.CSSProperties
-                          }
-                        />
-                        {GRAYS[grays].label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="field">
-                  <span
-                    className="field__label"
+                    value={prefs.grays}
+                    options={(Object.keys(GRAYS) as GrayKey[]).map((value) => ({
+                      value,
+                      label: GRAYS[value].label,
+                    }))}
+                    onChange={(grays) => setLook({ grays })}
+                  />
+                  <SettingChoice
+                    name="Surface temperature"
                     title="Adjust the warmth of the workspace surfaces."
-                  >
-                    Surface temperature
-                  </span>
-                  <div className="choices">
-                    {TEMPERATURE_KEYS.map((temperature) => (
-                      <button
-                        key={temperature}
-                        type="button"
-                        className="choice choice--swatch"
-                        aria-label={`Surface temperature: ${TEMPERATURES[temperature].label}`}
-                        aria-pressed={prefs.temperature === temperature}
-                        onClick={() => setLook({ temperature })}
-                      >
+                    value={prefs.temperature}
+                    options={TEMPERATURE_KEYS.map((value) => ({
+                      value,
+                      label: TEMPERATURES[value].label,
+                    }))}
+                    onChange={(temperature) => setLook({ temperature })}
+                  />
+                  <SettingChoice
+                    name="Attention"
+                    title="The one color that means an agent is waiting on you."
+                    value={prefs.attention}
+                    options={(Object.keys(ATTENTIONS) as AttentionKey[]).map((value) => ({
+                      value,
+                      label: ATTENTIONS[value].label,
+                      preview: (
                         <span
-                          className="choice__swatch"
-                          aria-hidden="true"
-                          style={
-                            {
-                              "--swatch": themeTokens(
-                                { ...prefs, temperature },
-                                resolveSurface(prefs.surface),
-                              )["--ground"],
-                            } as React.CSSProperties
-                          }
+                          className="setting-choice__dot"
+                          style={{
+                            backgroundColor: themeTokens(
+                              { ...prefs, attention: value },
+                              resolveSurface(prefs.surface, systemDark),
+                            )["--attention-fill"],
+                          }}
                         />
-                        {TEMPERATURES[temperature].label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="field">
-                  <span
-                    className="field__label"
-                    title="The one color that means an agent is waiting on you. Nothing else is drawn in it, so it never has to compete to be seen."
-                  >
-                    Attention
-                  </span>
-                  <div className="choices">
-                    {(Object.keys(ATTENTIONS) as AttentionKey[]).map((attention) => (
-                      <button
-                        key={attention}
-                        type="button"
-                        className="choice choice--swatch"
-                        aria-label={`Attention: ${ATTENTIONS[attention].label}`}
-                        aria-pressed={prefs.attention === attention}
-                        onClick={() => setLook({ attention })}
-                      >
-                        <span
-                          className="choice__swatch"
-                          aria-hidden="true"
-                          style={
-                            {
-                              "--swatch": themeTokens(
-                                { ...prefs, attention },
-                                resolveSurface(prefs.surface),
-                              )["--attention-fill"],
-                            } as React.CSSProperties
-                          }
-                        />
-                        {ATTENTIONS[attention].label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="field">
-                  <span
-                    className="field__label"
+                      ),
+                    }))}
+                    onChange={(attention) => setLook({ attention })}
+                  />
+                  <SettingChoice
+                    name="Contrast"
                     title="More darkens text, hints and borders to the strictest accessibility level, over whichever grays and color you chose."
-                  >
-                    Contrast
-                  </span>
-                  <div className="choices">
-                    {CONTRASTS.map((contrast) => (
-                      <button
-                        key={contrast}
-                        type="button"
-                        className="choice"
-                        aria-label={`Contrast: ${CONTRAST_LABELS[contrast]}`}
-                        aria-pressed={prefs.contrast === contrast}
-                        onClick={() => setLook({ contrast })}
-                      >
-                        {CONTRAST_LABELS[contrast]}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="field">
-                  <span
-                    className="field__label"
+                    value={prefs.contrast}
+                    options={CONTRASTS.map((value) => ({ value, label: CONTRAST_LABELS[value] }))}
+                    onChange={(contrast) => setLook({ contrast })}
+                  />
+                  <SettingChoice
+                    name="Typeface"
                     title="System is whatever your computer draws its own windows in. Atkinson Hyperlegible is drawn so that no two letters are easy to mistake for each other."
-                  >
-                    Typeface
-                  </span>
-                  <div className="choices">
-                    {TYPEFACES.map((typeface) => (
-                      <button
-                        key={typeface}
-                        type="button"
-                        className="choice"
-                        aria-label={`Typeface: ${TYPEFACE_LABELS[typeface]}`}
-                        aria-pressed={prefs.typeface === typeface}
-                        onClick={() => setLook({ typeface })}
-                      >
-                        {TYPEFACE_LABELS[typeface]}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="field">
-                  <span
-                    className="field__label"
+                    value={prefs.typeface}
+                    options={TYPEFACES.map((value) => ({ value, label: TYPEFACE_LABELS[value] }))}
+                    onChange={(typeface) => setLook({ typeface })}
+                  />
+                  <SettingChoice
+                    name="Reading face"
                     title="What agents wrote, and what you type to them. Literata is a serif made for reading at length on a screen."
-                  >
-                    Reading face
-                  </span>
-                  <div className="choices">
-                    {READINGS.map((reading) => (
-                      <button
-                        key={reading}
-                        type="button"
-                        className="choice"
-                        aria-label={`Reading face: ${READING_LABELS[reading]}`}
-                        aria-pressed={prefs.reading === reading}
-                        onClick={() => setLook({ reading })}
-                      >
-                        {READING_LABELS[reading]}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="field">
-                  <span
-                    className="field__label"
-                    title="The same text, larger or smaller. The rest of the window keeps its size; interface scale is the one that moves everything."
-                  >
-                    Reading size
-                  </span>
-                  <div className="choices">
-                    {READING_SIZES.map((readingSize) => (
-                      <button
-                        key={readingSize}
-                        type="button"
-                        className="choice"
-                        aria-label={`Reading size: ${readingSize}px`}
-                        aria-pressed={prefs.readingSize === readingSize}
-                        onClick={() => setLook({ readingSize })}
-                      >
-                        {readingSize}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="field">
-                  <span
-                    className="field__label"
-                    title="How every agent is drawn. Cut uses flat shapes with pupils and lids. Drawn uses a brush line with brows and, where there is room, a mouth. Each agent keeps the same character."
-                  >
-                    Characters
-                  </span>
-                  <div className="choices">
-                    {CASTS.map((cast) => (
-                      <button
-                        key={cast}
-                        type="button"
-                        className="choice choice--cast"
-                        aria-label={`Characters: ${CAST_LABELS[cast]}`}
-                        aria-pressed={prefs.cast === cast}
-                        onClick={() => setPrefs({ cast })}
-                      >
-                        <span className="choice__crew" aria-hidden="true">
+                    value={prefs.reading}
+                    options={READINGS.map((value) => ({ value, label: READING_LABELS[value] }))}
+                    onChange={(reading) => setLook({ reading })}
+                  />
+                  <SettingChoice
+                    name="Reading size"
+                    title="Change the reading text size without resizing the rest of the window."
+                    value={prefs.readingSize}
+                    options={READING_SIZES.map((value) => ({ value, label: `${value}px` }))}
+                    onChange={(readingSize) => setLook({ readingSize })}
+                  />
+                  <SettingChoice
+                    name="Characters"
+                    title="Cut uses flat shapes with pupils and lids. Drawn uses a brush line. Each agent keeps the same character."
+                    value={prefs.cast}
+                    options={CASTS.map((value) => ({
+                      value,
+                      label: CAST_LABELS[value],
+                      preview: (
+                        <span className="setting-choice__faces">
                           {CAST_SAMPLE.map((one) => (
                             <AgentAvatar
                               key={one.avatar}
@@ -1674,38 +1563,22 @@ export function SettingsPage({ request, onSection, notices }: Props) {
                               color={one.color}
                               size="xs"
                               mood="idle"
-                              cast={cast}
+                              cast={value}
                               seed={`settings-${one.avatar}`}
                             />
                           ))}
                         </span>
-                        {CAST_LABELS[cast]}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="field">
-                  <span
-                    className="field__label"
-                    title="Everything, not just the type: the timeline, the rows and the spacing scale with it. The Groups sheet stops growing before it would cover a small window."
-                  >
-                    Interface scale
-                  </span>
-                  <div className="choices">
-                    {UI_SCALES.map((scale) => (
-                      <button
-                        key={scale}
-                        type="button"
-                        className="choice"
-                        aria-label={`Interface scale: ${scale}%`}
-                        aria-pressed={prefs.uiScale === scale}
-                        onClick={() => setLook({ uiScale: scale })}
-                      >
-                        {scale}%
-                      </button>
-                    ))}
-                  </div>
+                      ),
+                    }))}
+                    onChange={(cast) => setPrefs({ cast })}
+                  />
+                  <SettingChoice
+                    name="Interface scale"
+                    title="Resize the controls, type and spacing across the window."
+                    value={prefs.uiScale}
+                    options={UI_SCALES.map((value) => ({ value, label: `${value}%` }))}
+                    onChange={(uiScale) => setLook({ uiScale })}
+                  />
                 </div>
               </>
             )}
@@ -1956,45 +1829,23 @@ export function SettingsPage({ request, onSection, notices }: Props) {
                         );
                       })()}
 
-                    <div className="field" style={{ marginTop: "1.2rem" }}>
-                      <span className="field__label">Format</span>
-                      <div className="choices">
-                        {PUSH_FORMATS.map((format) => (
-                          <button
-                            key={format.value}
-                            type="button"
-                            className="choice"
-                            aria-label={`Format: ${format.label}`}
-                            aria-pressed={settings.delivery?.format === format.value}
-                            disabled={pushBusy}
-                            onClick={() => void writePush({ format: format.value })}
-                          >
-                            {format.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="field">
-                      <span className="field__label">What a push says</span>
-                      <div className="choices">
-                        {PUSH_CONTENTS.map((content) => (
-                          <button
-                            key={content.value}
-                            type="button"
-                            className="choice"
-                            aria-pressed={settings.delivery?.content === content.value}
-                            disabled={pushBusy}
-                            onClick={() => void writePush({ content: content.value })}
-                          >
-                            {content.label}
-                          </button>
-                        ))}
-                      </div>
-                      <p className="field__hint">
-                        What finished is the agent's own line about it. Choose the second if this
-                        address should not carry what your agents are working on.
-                      </p>
+                    <div className="settings-rows">
+                      <SettingChoice
+                        name="Format"
+                        value={settings.delivery.format}
+                        options={PUSH_FORMATS}
+                        busy={pushBusy}
+                        onChange={(format) => void writePush({ format })}
+                      />
+                      <SettingChoice
+                        name="What a push says"
+                        value={settings.delivery.content}
+                        options={PUSH_CONTENTS.map((option) => ({ ...option, name: option.label }))}
+                        list
+                        busy={pushBusy}
+                        onChange={(content) => void writePush({ content })}
+                        hint="What finished is the agent's own line about it. Choose the second if this address should not carry what your agents are working on."
+                      />
                     </div>
 
                     <p className="field__hint" style={{ marginTop: "1rem" }}>

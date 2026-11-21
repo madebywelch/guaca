@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { HIREABLE, type Hireable, pick, STARTER_CREW, STATIONS, toDraft } from "../lib/cafeteria";
 import { useDismiss } from "../lib/dismiss";
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import { errorMessage, type GroupId } from "../lib/types";
+import { Scrim } from "./Scrim";
 
 interface Props {
   onClose: () => void;
@@ -110,7 +110,7 @@ export function Cafeteria({ onClose }: Props) {
   };
 
   return (
-    <div className="scrim">
+    <Scrim>
       <button type="button" className="scrim__close" aria-label="Close dialog" onClick={onClose} />
       <div
         className="dialog dialog--cafeteria"
@@ -202,6 +202,6 @@ export function Cafeteria({ onClose }: Props) {
           </button>
         </div>
       </div>
-    </div>
+    </Scrim>
   );
 }

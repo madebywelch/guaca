@@ -108,17 +108,7 @@ function Workspace() {
   return (
     <>
       <ChannelView channel={MANAGER} onOpenMenu={() => {}} />
-      {overlay === "search" && (
-        <Search
-          onClose={() => setOverlay(null)}
-          onEditAgent={() => {}}
-          onEditGroup={() => {}}
-          onNewAgent={() => {}}
-          onNewGroup={() => {}}
-          onOpenCafeteria={() => {}}
-          onOpenSettings={() => {}}
-        />
-      )}
+      {overlay === "search" && <Search onClose={() => setOverlay(null)} />}
     </>
   );
 }
