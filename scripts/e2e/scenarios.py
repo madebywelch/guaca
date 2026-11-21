@@ -2032,14 +2032,15 @@ ROSTER_GEOMETRY = """(() => {
     const text = range.getBoundingClientRect();
     const nameBox = name.getBoundingClientRect();
     const statusBox = status.getBoundingClientRect();
-    const clipped = name.scrollWidth > name.clientWidth;
+    const clipped = name.scrollWidth > name.clientWidth || name.scrollHeight > name.clientHeight;
     const visible = clipped ? nameBox : text;
     const style = getComputedStyle(name);
     const tooltip = name.title === name.textContent;
-    const fragments = [...range.getClientRects()];
+    const lines = new Set([...range.getClientRects()]
+      .filter(fragment => within(fragment, nameBox)).map(fragment => Math.round(fragment.top)));
     return {
       name: name.textContent.trim(), clipped, tooltip,
-      oneLine: fragments.length > 0 && fragments.every(fragment => Math.abs(fragment.top - text.top) <= 1),
+      lines: lines.size,
       ownLine: nameBox.bottom <= statusBox.top + 1 && (!shortcut ||
         (nameBox.bottom <= shortcut.top + 1 && statusBox.right <= shortcut.left + 1
           && statusBox.top < shortcut.bottom && shortcut.top < statusBox.bottom
@@ -2050,7 +2051,7 @@ ROSTER_GEOMETRY = """(() => {
         && within(visible, {left: 0, right: innerWidth, top: 0, bottom: innerHeight})
         && !overlap(visible, statusBox)
         && rows.every(other => other === row || !overlap(visible, other.getBoundingClientRect()))
-        && (!clipped || (style.textOverflow === 'ellipsis' && style.overflowX === 'hidden')),
+        && (!clipped || (style.webkitLineClamp === '2' && style.overflow === 'hidden')),
     };
   });
   scroller.scrollTop = before;
@@ -2119,12 +2120,15 @@ def scenario_roster(w: World) -> None:
         w.wait("roster layout settles", lambda: ui.evaluate(look.SETTLED) and ui.evaluate("document.fonts.status") == "loaded")
         readable[f"{width}x{height}"] = ui.evaluate(ROSTER_GEOMETRY)
         w.capture(f"the roster at {width}x{height}")
-    w.check("each desktop name has its own line above the status and shortcut at both widths",
+    w.check("desktop names wrap before they are shortened and stay above the status and shortcut",
             all([row["name"] for row in rows] == list(names)
-                and all(row["visible"] and row["oneLine"] and row["ownLine"]
+                and all(row["visible"] and 1 <= row["lines"] <= 2 and row["ownLine"]
                         and (not row["clipped"] or row["tooltip"]) for row in rows)
-                and not rows[0]["clipped"] and rows[-1]["clipped"]
-                for rows in readable.values()) and not readable["1280x820"][1]["clipped"],
+                and rows[0]["lines"] == 1 and not rows[0]["clipped"]
+                and rows[-1]["lines"] == 2 and rows[-1]["clipped"]
+                for rows in readable.values())
+            and readable["1280x820"][1]["lines"] == 1 and not readable["1280x820"][1]["clipped"]
+            and readable["900x700"][1]["lines"] == 2 and not readable["900x700"][1]["clipped"],
             observed=readable)
 
     open_agent(w, names[9])
@@ -3221,7 +3225,7 @@ SCENARIOS: dict[str, Scenario] = {
         "each agent has one ordered row, with shortcuts only for the first nine",
         "the conversation has no Today destination or spare writing field",
         "a new question changes the tenth status without reordering or switching conversations",
-        "each desktop name has its own line above the status and shortcut at both widths",
+        "desktop names wrap before they are shortened and stay above the status and shortcut",
         "the composer and Send stay visible with a question at keyboard height",
         "mouse, Control Tab in both directions, and the numbered shortcut keep the draft with its agent",
         "stacked Search and its keys leave the command menu and underlying draft unchanged",

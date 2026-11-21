@@ -288,7 +288,7 @@ try {
         const name = row.querySelector('.roster__name');
         range.selectNodeContents(name);
         const box = row.getBoundingClientRect(), bounds = name.getBoundingClientRect();
-        const clipped = name.scrollWidth > name.clientWidth;
+        const clipped = name.scrollWidth > name.clientWidth || name.scrollHeight > name.clientHeight;
         const visible = clipped ? bounds : range.getBoundingClientRect();
         const style = getComputedStyle(name);
         return { name: name.textContent.trim(), clipped, shown: visible.width > 0 && visible.height > 0 &&
@@ -296,7 +296,7 @@ try {
           visible.left >= box.left - 1 && visible.left >= bounds.left - 1 &&
           visible.right <= box.right + 1 && visible.right <= bounds.right + 1 &&
           visible.top >= box.top - 1 && visible.bottom <= box.bottom + 1 &&
-          (!clipped || (style.textOverflow === 'ellipsis' && style.overflowX === 'hidden')),
+          (!clipped || (style.webkitLineClamp === '2' && style.overflow === 'hidden')),
           fullName: name.title === name.textContent && row.getAttribute('aria-label')?.startsWith(name.textContent + ', ') };
       });
     })()`);
