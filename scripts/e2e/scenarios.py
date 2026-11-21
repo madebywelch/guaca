@@ -2223,6 +2223,30 @@ def scenario_roster(w: World) -> None:
               }))""")
     w.check("the composer and Send stay visible with a question at keyboard height",
             all(compact.values()), observed=compact, detail=compact_geometry, shot=True)
+    field = ("combobox", f"Write to {asking}")
+    ui.fill(*field, "@")
+    w.wait("the mention picker opens at keyboard height", lambda: ui.find("listbox", "Agents"))
+    for _ in range(5):
+        ui.key("ArrowDown")
+    mention = w.wait("a keyboard-chosen mention stays within the picker and on screen", lambda: ui.evaluate("""
+      (() => {
+        const composer = document.querySelector('.composer');
+        const list = composer.querySelector('.mentions').getBoundingClientRect();
+        const active = composer.querySelector('.mentions__item[aria-selected="true"]');
+        const row = active.getBoundingClientRect();
+        const limit = document.querySelector('.app').getBoundingClientRect();
+        if (composer.getBoundingClientRect().bottom > limit.bottom || list.top < limit.top
+            || row.top < list.top || row.bottom > list.bottom || row.bottom > limit.bottom) return null;
+        return active.querySelector('.mentions__name').textContent;
+      })()
+    """), timeout=4)
+    w.capture("the selected mention stays on screen at keyboard height")
+    ui.key("Enter")
+    w.check("keyboard selection inserts a visible mention without sending at keyboard height",
+            ui.value(*field) == f"@{mention} " and ui.focused() == field
+            and w.host.scalar("SELECT count(*) FROM messages WHERE parts LIKE ?", f"%@{mention}%") == 0,
+            observed=mention)
+    ui.fill(*field, "")
     ui.viewport(900, 700)
     ui.key("Tab", mod=True)
     w.wait("Control Tab opens the next row", lambda: ui.find("log", f"Conversation with {names[10]}"))
@@ -3296,6 +3320,7 @@ SCENARIOS: dict[str, Scenario] = {
         "a new question changes the tenth status without reordering or switching conversations",
         "every roster row scrolls fully into view with its name readable at both sizes",
         "the composer and Send stay visible with a question at keyboard height",
+        "keyboard selection inserts a visible mention without sending at keyboard height",
         "mouse, Control Tab in both directions, and the numbered shortcut keep the draft with its agent",
         "stacked Search and its keys leave the command menu and underlying draft unchanged",
         "reload lands on the pending question but keeps the other conversation's draft",

@@ -163,6 +163,7 @@ export function Composer({
 
   const ref = useRef<HTMLTextAreaElement>(null);
   const mirror = useRef<HTMLDivElement>(null);
+  const mentionList = useRef<HTMLDivElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const localFiles = useStore((s) => s.capabilities.localFiles);
 
@@ -210,6 +211,17 @@ export function Composer({
     node.style.height = `${node.scrollHeight}px`;
     if (mirror.current) mirror.current.scrollTop = node.scrollTop;
   }, [text]);
+
+  useEffect(() => {
+    const list = mentionList.current;
+    const choice = list?.children.item(selected);
+    if (!showing || !list || !choice) return;
+    const top = list.getBoundingClientRect().top + list.clientTop;
+    const bottom = top + list.clientHeight;
+    const row = choice.getBoundingClientRect();
+    if (row.top < top) list.scrollTop += row.top - top;
+    else if (row.bottom > bottom) list.scrollTop += row.bottom - bottom;
+  }, [selected, showing]);
 
   const choose = (name: string) => {
     if (!query) return;
@@ -508,7 +520,13 @@ export function Composer({
         </ul>
       )}
       {showing && (
-        <div className="mentions" role="listbox" id="mention-list" aria-label="Agents">
+        <div
+          className="mentions"
+          role="listbox"
+          id="mention-list"
+          aria-label="Agents"
+          ref={mentionList}
+        >
           {matches.map((name, index) => {
             const agent = crew.find((a) => a.name === name);
             const active = index === selected;

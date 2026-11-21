@@ -8776,6 +8776,7 @@ button.artifacts__version[aria-pressed="true"] {
 
     .app[data-roster] .composer {
       display: grid;
+      position: relative;
       grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
       align-items: center;
       column-gap: var(--space-3);
@@ -8785,6 +8786,18 @@ button.artifacts__version[aria-pressed="true"] {
 
     .app[data-roster] .composer > :not(.composer__recipient, .composer__row) {
       grid-column: 1 / -1;
+    }
+
+    .app[data-roster] .composer > .mentions {
+      position: absolute;
+      inset-inline: 0;
+      bottom: calc(100% + var(--space-2));
+      z-index: 1;
+      max-height: calc(var(--control-touch) * 3);
+      border: 1px solid var(--rule);
+      border-radius: var(--radius-card);
+      background: var(--popover);
+      box-shadow: var(--lift-2);
     }
 
     .app[data-roster] .composer__recipient {
