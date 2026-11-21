@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { HIREABLE, toDraft } from "../lib/cafeteria";
 import { api } from "../lib/ipc";
+import { PLACE_LABELS } from "../lib/menu";
 import { FIRST_TASKS, type FirstTask, readFirstTask, saveFirstTask } from "../lib/onboarding";
 import { useStore } from "../lib/store";
 import { BEFORE_RELOAD, desktop, isUnreachable } from "../lib/transport";
@@ -289,7 +290,7 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
             <div className="onboarding-alternatives">
               <span>Prefer to set things up yourself?</span>
               <button type="button" className="btn btn--quiet" onClick={onBrowse}>
-                Open the cafeteria
+                {PLACE_LABELS.cafeteria}
               </button>
               <button type="button" className="btn btn--quiet" onClick={onCreate}>
                 Create one agent

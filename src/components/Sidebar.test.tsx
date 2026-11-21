@@ -89,7 +89,7 @@ function draw(
         onOpenCalendar={vi.fn()}
         onOpenArtifacts={vi.fn()}
         onOpenSettings={vi.fn()}
-        onOpenSearch={vi.fn()}
+        onOpenCommandMenu={vi.fn()}
         onNewAgent={onNewAgent}
         onNewGroup={onNewGroup}
         onOpenMenu={vi.fn()}

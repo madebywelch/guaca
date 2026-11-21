@@ -2,13 +2,13 @@ import { act, createEvent, fireEvent, render, screen, waitFor } from "@testing-l
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentCard, SearchHits } from "../lib/types";
+import { searchRequest } from "../lib/useSearchHits";
 import { aGroup } from "../test-fixtures";
 
 const GROUP = "00000000-0000-4000-8000-000000000001";
 const NOTHING: SearchHits = { messages: [], files: [], links: [], routines: [], artifacts: [] };
 
 const search = vi.fn<(query: string, limit?: number) => Promise<SearchHits>>(async () => NOTHING);
-const openExternal = vi.fn<(url: string) => Promise<void>>(async () => {});
 
 vi.mock("../lib/ipc", () => ({
   api: {
@@ -18,10 +18,9 @@ vi.mock("../lib/ipc", () => ({
     channelMessages: async () => [],
     conversationFlow: async () => [],
   },
-  openExternal: (url: string) => openExternal(url),
 }));
 
-const { Search, searchRequest } = await import("./Search");
+const { Search } = await import("./Search");
 const { useStore } = await import("../lib/store");
 const originalShowFailure = useStore.getState().showFailure;
 
@@ -53,26 +52,37 @@ function agent(name: string, extra: Partial<AgentCard> = {}): AgentCard {
   };
 }
 
-const handlers = {
-  onClose: vi.fn(),
-  onEditAgent: vi.fn(),
-  onEditGroup: vi.fn(),
-  onNewAgent: vi.fn(),
-  onNewGroup: vi.fn(),
-  onOpenCafeteria: vi.fn(),
-  onOpenSettings: vi.fn(),
-};
+const onClose = vi.fn();
 
-function open(agents: AgentCard[] = [agent("Manager"), agent("Chef")]) {
+function open() {
   useStore.setState({
-    agents,
-    groups: [aGroup({ id: GROUP, name: "Kitchen", agentCount: agents.length })],
+    agents: [agent("Manager"), agent("Chef")],
+    groups: [aGroup({ id: GROUP, name: "Kitchen", agentCount: 2 })],
     lastActive: {},
     selected: null,
     messages: {},
     focused: null,
   });
-  return render(<Search {...handlers} />);
+  return render(<Search onClose={onClose} />);
+}
+
+function fileHits(...names: string[]): SearchHits {
+  return {
+    ...NOTHING,
+    files: names.map((name, index) => ({
+      file: { digest: name, name, mime: "text/plain", bytes: 2048 },
+      messageId: `m${index + 1}`,
+      channelId: "id-Chef",
+      from: { kind: "human" },
+      createdAt: index + 1,
+    })),
+  };
+}
+
+async function openWithFiles(...names: string[]) {
+  search.mockResolvedValue(fileHits(...names));
+  open();
+  await screen.findByText(names[0] ?? "");
 }
 
 function type(value: string) {
@@ -104,6 +114,19 @@ beforeEach(() => {
 });
 
 describe("Search", () => {
+  it("limits Find to messages and files and never offers an app action", () => {
+    open();
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "All",
+      "Messages",
+      "Files",
+    ]);
+    type("new agent");
+    press("Enter");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByText("New agent")).toBeNull();
+  });
+
   it("transitions request ownership only for the current generation", () => {
     const inactive = { phase: "inactive" } as const;
     const debounce = searchRequest(inactive, { type: "begin", generation: 1 });
@@ -139,6 +162,7 @@ describe("Search", () => {
       await act(async () => vi.advanceTimersByTime(1));
       expect(search).toHaveBeenCalledTimes(1);
       expect(failure).toHaveBeenCalledExactlyOnceWith(error);
+      expect(screen.getByText("Could not search messages and files.")).toBeTruthy();
     } finally {
       vi.useRealTimers();
     }
@@ -190,14 +214,13 @@ describe("Search", () => {
       vi.useRealTimers();
     }
   });
-  it("narrows as the operator types, without waiting for the store", async () => {
-    open();
-    expect(screen.getByText("Manager")).toBeTruthy();
-    expect(screen.getByText("Chef")).toBeTruthy();
-
-    type("chef");
-    expect(screen.queryByText("Manager")).toBeNull();
-    expect(screen.getByText("Chef")).toBeTruthy();
+  it("does not open a previous hit while a different query is pending", async () => {
+    await openWithFiles("previous.txt");
+    type("new query");
+    expect(screen.queryByText("previous.txt")).toBeNull();
+    press("Enter");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(useStore.getState().focused).toBeNull();
   });
 
   it("asks the store about the query, once the typing has settled", async () => {
@@ -209,18 +232,8 @@ describe("Search", () => {
   });
 
   it("ignores an answer to a query the operator has moved past", async () => {
-    const stale: SearchHits = {
-      ...NOTHING,
-      links: [
-        { url: "https://stale.example", messageId: "m0", channelId: "id-Chef", createdAt: 1 },
-      ],
-    };
-    const fresh: SearchHits = {
-      ...NOTHING,
-      links: [
-        { url: "https://fresh.example", messageId: "m1", channelId: "id-Chef", createdAt: 2 },
-      ],
-    };
+    const stale = fileHits("stale.txt");
+    const fresh = fileHits("fresh.txt");
 
     let releaseStale: (hits: SearchHits) => void = () => {};
     search.mockImplementationOnce(
@@ -235,49 +248,33 @@ describe("Search", () => {
     type("b");
     await waitFor(() => expect(search).toHaveBeenCalledTimes(1));
     type("budget");
-    await waitFor(() => expect(screen.getByText("fresh.example")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("fresh.txt")).toBeTruthy());
 
     releaseStale(stale);
-    await waitFor(() => expect(screen.queryByText("stale.example")).toBeNull());
-    expect(screen.getByText("fresh.example")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText("stale.txt")).toBeNull());
+    expect(screen.getByText("fresh.txt")).toBeTruthy();
   });
 
-  it("shows only one kind once a tab is chosen", async () => {
-    search.mockResolvedValue({
-      ...NOTHING,
-      files: [
-        {
-          file: { digest: "aaa", name: "budget.pdf", mime: "application/pdf", bytes: 2048 },
-          messageId: "m1",
-          channelId: "id-Chef",
-          from: { kind: "human" },
-          createdAt: 2,
-        },
-      ],
-    });
-    open();
-    await waitFor(() => expect(screen.getByText("budget.pdf")).toBeTruthy());
-
+  it("shows files in All and Files but not Messages", async () => {
+    await openWithFiles("budget.pdf");
     fireEvent.click(screen.getByRole("tab", { name: "Files" }));
     expect(screen.getByText("budget.pdf")).toBeTruthy();
-    expect(screen.queryByText("Manager")).toBeNull();
-
-    fireEvent.click(screen.getByRole("tab", { name: "Agents" }));
-    expect(screen.getByText("Manager")).toBeTruthy();
+    fireEvent.click(screen.getByRole("tab", { name: "Messages" }));
     expect(screen.queryByText("budget.pdf")).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: "All" }));
+    expect(screen.getByText("budget.pdf")).toBeTruthy();
   });
 
-  it("opens the selected result on Enter and closes", async () => {
-    open();
-    type("chef");
-    fireEvent.keyDown(window, { key: "Enter" });
-
+  it("opens the selected file's message on Enter and closes", async () => {
+    await openWithFiles("budget.pdf");
+    press("Enter");
     await waitFor(() => expect(useStore.getState().selected).toBe("id-Chef"));
-    expect(handlers.onClose).toHaveBeenCalled();
+    expect(useStore.getState().focused).toBe("m1");
+    expect(onClose).toHaveBeenCalled();
   });
 
   it("moves the selection with the arrow keys", async () => {
-    open();
+    await openWithFiles("budget.pdf", "invoice.txt");
     const selected = () =>
       document.querySelector("[data-selected='true'] .palette__title")?.textContent;
     const rows = [...document.querySelectorAll(".palette__title")].map((n) => n.textContent);
@@ -290,42 +287,15 @@ describe("Search", () => {
   });
 
   it("does not run off the end of the list", async () => {
-    open([agent("Manager")]);
-    fireEvent.click(screen.getByRole("tab", { name: "Agents" }));
-    for (let i = 0; i < 5; i++) fireEvent.keyDown(window, { key: "ArrowDown" });
-
-    expect(document.querySelector("[data-selected='true'] .palette__title")?.textContent).toBe(
-      "Manager",
-    );
+    await openWithFiles("budget.pdf");
+    for (let i = 0; i < 5; i++) press("ArrowDown");
+    expect(selectedTitle()).toBe("budget.pdf");
   });
 
   it("closes on Escape without opening anything", async () => {
     open();
     fireEvent.keyDown(window, { key: "Escape" });
-    expect(handlers.onClose).toHaveBeenCalled();
-    expect(useStore.getState().selected).toBeNull();
-  });
-
-  it("opens a link in the operating system browser, never in the webview", async () => {
-    search.mockResolvedValue({
-      ...NOTHING,
-      links: [
-        { url: "https://example.com/report", messageId: "m1", channelId: "id-Chef", createdAt: 2 },
-      ],
-    });
-    open();
-    await waitFor(() => expect(screen.getByText("example.com/report")).toBeTruthy());
-
-    fireEvent.click(screen.getByText("example.com/report"));
-    expect(openExternal).toHaveBeenCalledWith("https://example.com/report");
-  });
-
-  it("hands an agent's settings to the editor rather than opening the channel", async () => {
-    open();
-    type("Manager settings");
-    fireEvent.keyDown(window, { key: "Enter" });
-
-    expect(handlers.onEditAgent).toHaveBeenCalledWith(expect.objectContaining({ name: "Manager" }));
+    expect(onClose).toHaveBeenCalled();
     expect(useStore.getState().selected).toBeNull();
   });
 
@@ -354,19 +324,19 @@ describe("Search", () => {
   it("says so when nothing matches, rather than looking broken", async () => {
     open();
     type("nothing here by that name");
-    expect(screen.getByText(/nothing matching/i)).toBeTruthy();
+    expect(screen.getByText("Searching…")).toBeTruthy();
+    expect(await screen.findByText(/nothing matching/i)).toBeTruthy();
   });
 
   describe("while an input method is composing", () => {
     it("does not open a result or close the palette on Enter", async () => {
-      open();
-      type("chef");
+      await openWithFiles("budget.pdf");
 
       const event = press("Enter", { isComposing: true });
 
       expect(event.defaultPrevented).toBe(false);
       expect(useStore.getState().selected).toBeNull();
-      expect(handlers.onClose).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
     });
 
     it("does not move the selection down with ArrowDown", async () => {
@@ -380,7 +350,7 @@ describe("Search", () => {
     });
 
     it("does not move the selection up with ArrowUp", async () => {
-      open();
+      await openWithFiles("budget.pdf", "invoice.txt");
       press("ArrowDown");
       const second = selectedTitle();
       expect(second).not.toBe(selectedTitleAtStart());
@@ -422,26 +392,25 @@ describe("Search", () => {
       const event = press("Escape", { isComposing: true });
 
       expect(event.defaultPrevented).toBe(false);
-      expect(handlers.onClose).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
       expect(useStore.getState().selected).toBeNull();
     });
 
     it("recovers on the ordinary key that follows composition", async () => {
-      open();
-      type("chef");
+      await openWithFiles("budget.pdf");
       press("Enter", { isComposing: true });
-      expect(handlers.onClose).not.toHaveBeenCalled();
+      expect(onClose).not.toHaveBeenCalled();
 
       press("Enter");
 
       await waitFor(() => expect(useStore.getState().selected).toBe("id-Chef"));
-      expect(handlers.onClose).toHaveBeenCalled();
+      expect(onClose).toHaveBeenCalled();
     });
   });
 
   describe("ordinary keyboard input", () => {
     it("still moves down and up one row and stops at the bounds", async () => {
-      open();
+      await openWithFiles("budget.pdf", "invoice.txt");
       const rows = [...document.querySelectorAll(".palette__title")].map((n) => n.textContent);
 
       const down = press("ArrowDown");
@@ -456,52 +425,31 @@ describe("Search", () => {
       expect(selectedTitle()).toBe(rows[0]);
     });
 
-    it("cycles the scope forward, wrapping Actions back to All", () => {
+    it("cycles the scope forward, wrapping Files back to All", () => {
       open();
       expect(activeScope()).toBe("All");
-      for (const label of [
-        "Messages",
-        "Agents",
-        "Groups",
-        "Files",
-        "Links",
-        "Routines",
-        "Artifacts",
-        "Actions",
-        "All",
-      ]) {
+      for (const label of ["Messages", "Files", "All"]) {
         const event = press("Tab");
         expect(event.defaultPrevented).toBe(true);
         expect(activeScope()).toBe(label);
       }
     });
 
-    it("cycles the scope backward, wrapping Messages back to All", () => {
+    it("cycles the scope backward, wrapping All to Files", () => {
       open();
-      const event = press("Tab", { shiftKey: true });
-      expect(event.defaultPrevented).toBe(true);
-      expect(activeScope()).toBe("Actions");
-      for (const label of [
-        "Artifacts",
-        "Routines",
-        "Links",
-        "Files",
-        "Groups",
-        "Agents",
-        "Messages",
-        "All",
-      ]) {
-        press("Tab", { shiftKey: true });
+      for (const label of ["Files", "Messages", "All"]) {
+        const event = press("Tab", { shiftKey: true });
+        expect(event.defaultPrevented).toBe(true);
         expect(activeScope()).toBe(label);
       }
     });
 
-    it("still filters on typed text after composing navigation", () => {
+    it("still searches typed text after composing navigation", async () => {
       open();
       press("ArrowDown", { isComposing: true });
+      search.mockResolvedValue(fileHits("chef.txt"));
       type("chef");
-      expect(screen.queryByText("Manager")).toBeNull();
-      expect(screen.getByText("Chef")).toBeTruthy();
+      expect(await screen.findByText("chef.txt")).toBeTruthy();
     });
   });
 });

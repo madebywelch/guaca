@@ -1,4 +1,5 @@
 import { IS_MAC } from "../lib/keybinds";
+import { APP_SETTINGS, groupsLabel } from "../lib/menu";
 import { useStore } from "../lib/store";
 import { useNow } from "../lib/time";
 import { desktop } from "../lib/transport";
@@ -63,8 +64,8 @@ export function TopBar({
         <button
           type="button"
           className="topbar__button"
-          aria-label={groups.length > 1 ? "Groups and agents" : "Agents"}
-          title={groups.length > 1 ? "Groups and agents" : "Agents"}
+          aria-label={groupsLabel(groups.length)}
+          title={groupsLabel(groups.length)}
           onClick={onGroups}
         >
           <Icon name="group" />
@@ -77,8 +78,8 @@ export function TopBar({
         <button
           type="button"
           className="topbar__button"
-          aria-label="App settings"
-          title="App settings"
+          aria-label={APP_SETTINGS}
+          title={APP_SETTINGS}
           onClick={onSettings}
         >
           <Icon name="gear" />

@@ -803,10 +803,11 @@ def section_shown(w: World) -> str:
 
 def menu_section(w: World, section: str) -> None:
     ui = w.ui
+    title = "App settings" if section == "General" else f"Settings: {section}"
     ui.key("k", mod=True)
     w.wait("the command menu opens", lambda: ui.find("dialog", "Command menu"))
-    ui.type("textbox", "Command menu", f"Settings: {section}")
-    w.wait(f"Settings: {section} is chosen", lambda: menu_choice(w) == f"Settings: {section}")
+    ui.type("textbox", "Command menu", title)
+    w.wait(f"{title} is chosen", lambda: menu_choice(w) == title)
     ui.key("Enter")
     w.wait("the menu closes", lambda: not ui.find("dialog", "Command menu"))
 
@@ -2601,6 +2602,140 @@ def scenario_menu(w: World) -> None:
     no_unscripted(w)
 
 
+def scenario_search(w: World) -> None:
+    brief = "Review the quarterly ledger."
+    reply = "The ledger is ready."
+    attachment = "ledger-notes.txt"
+
+    def script(c: Call) -> Reply | None:
+        if c.last_user.endswith(brief):
+            return say(reply)
+        if c.last_user.startswith(f"The attached file {attachment} contains:"):
+            return say("Noted.")
+        return hello(c)
+
+    w.model.script = script
+    w.start()
+    first_run(w, brief, reply)
+    settled(w, 1)
+    ui = w.ui
+    agent_count = w.host.scalar("SELECT count(*) FROM agents")
+
+    ui.key("f", mod=True)
+    w.wait("Find opens", lambda: ui.find("dialog", "Search"))
+    ui.fill("textbox", "Search Guaca", "new agent")
+    w.wait("Find settles without an action", lambda: "Nothing matching" in ui.text()
+           or ui.find("button", "New agent", exact=False))
+    ui.key("Enter")
+    tabs = [label(one) for one in reversed(ui.within("dialog", "Search", "tab"))]
+    w.check("Find only offers messages and files and cannot run New agent",
+            tabs == ["All", "Messages", "Files"] and not ui.find("dialog", "New agent")
+            and w.host.scalar("SELECT count(*) FROM agents") == agent_count, observed=tabs, shot=True)
+    dismiss(w)
+
+    ui.evaluate("""(() => {
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(new File(["Follow up on the ledger."], "ledger-notes.txt", {type: "text/plain"}));
+      window.dispatchEvent(new DragEvent("drop", {dataTransfer, bubbles: true, cancelable: true}));
+    })()""")
+    w.wait("the file is staged", lambda: ui.find("button", f"Remove {attachment}"))
+    ui.fill("combobox", f"Write to {AGENT}", "Keep these notes.")
+    ui.click("button", "Send")
+    settled(w, 2)
+    ui.key("f", mod=True)
+    w.wait("Find opens again", lambda: ui.find("dialog", "Search"))
+    ui.click("tab", "Files")
+    ui.fill("textbox", "Search Guaca", attachment)
+    w.wait("Find locates the attached file", lambda: any(
+        label(one).startswith(attachment) for one in ui.within("dialog", "Search", "button")))
+    ui.key("Enter")
+    w.check("Find opens the file's message without running an app action",
+            w.wait("Find closes on the file's conversation",
+                   lambda: not ui.find("dialog", "Search") and ui.evaluate(
+                       "document.querySelector('[data-found=true]')?.innerText.includes('Keep these notes.')")),
+            observed={"file": attachment, "conversation": AGENT}, shot=True)
+
+    ui.click("button", f"Open {attachment}")
+    w.wait("the file reader opens", lambda: ui.find("dialog", attachment))
+    w.wait("the reader has finished moving", lambda: ui.evaluate(look.SETTLED))
+    reader = ui.evaluate("""(() => {
+      const dialog = document.querySelector('[aria-label="ledger-notes.txt"][role=dialog]');
+      const close = dialog.querySelector('button[aria-label=Close]');
+      const box = close.getBoundingClientRect();
+      return {
+        backdrop: document.elementFromPoint(4, 4)?.closest('.scrim') === dialog.parentElement,
+        close: document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)?.closest('button') === close,
+      };
+    })()""")
+    ui.key("f", mod=True)
+    w.wait("Find opens above the reader", lambda: ui.find("dialog", "Search"))
+    w.wait("Find has finished moving", lambda: ui.evaluate(look.SETTLED))
+    above = ui.evaluate("""(() => {
+      const input = document.querySelector('input[aria-label="Search Guaca"]');
+      const box = input.getBoundingClientRect();
+      return document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) === input;
+    })()""")
+    ui.key("Escape")
+    w.wait("Escape closes only Find", lambda: not ui.find("dialog", "Search") and ui.find("dialog", attachment))
+    w.check("the file reader covers the window without clipping and Find stacks above it",
+            reader == {"backdrop": True, "close": True} and above,
+            observed={**reader, "findOnTop": above}, shot=True)
+    dismiss(w)
+
+    show(w, "the Groups sheet")
+    ui.click("button", "Command menu", exact=False)
+    w.wait("the Groups sheet opens the command menu", lambda: ui.focused() == ("textbox", "Command menu"))
+    ui.fill("textbox", "Command menu", "ledger is ready")
+    w.wait("the command menu finds the message itself", lambda: ui.find("button", reply, exact=False))
+    w.capture("the command menu with a matching message")
+    ui.click("button", reply, exact=False)
+    landing = """(() => {
+      const dialogs = [...document.querySelectorAll('[role=dialog]')].map(el => el.getAttribute('aria-label'));
+      const highlight = [...document.querySelectorAll('[data-found=true]')].some(
+        el => el.innerText.includes('The ledger is ready.'));
+      return {menuOpen: dialogs.includes('Command menu'), findOpen: dialogs.includes('Search'),
+        groupsOpen: dialogs.includes('Groups and agents'), highlight};
+    })()"""
+    expected = {"menuOpen": False, "findOpen": False, "groupsOpen": False, "highlight": True}
+    w.check("the Groups sheet uses the command menu and a message hit opens without another palette",
+            w.wait("the message is highlighted and the search surfaces close",
+                   lambda: ui.evaluate(landing) == expected), observed=expected)
+    dismiss(w)
+
+    geometry = {}
+    descriptions = {}
+    for name in ("Search", "the command menu", "New agent", "the Groups sheet", "Artifacts", "Calendar", "For you"):
+        if name in ("Artifacts", "Calendar", "For you"):
+            ui.click("button", name, exact=False)
+            w.wait(f"{name} opens", lambda: ui.find("dialog", name))
+        else:
+            show(w, name)
+        w.wait(f"{name} has finished moving", lambda: ui.evaluate(look.SETTLED))
+        geometry[name] = ui.evaluate("""(() => {
+          const dialog = [...document.querySelectorAll('.scrim > [role=dialog]')].at(-1);
+          const box = dialog.getBoundingClientRect();
+          const color = getComputedStyle(dialog.parentElement).backgroundColor;
+          return {top: Math.round(box.top), width: Math.round(box.width), color};
+        })()""")
+        if name == "Calendar":
+            w.wait("the empty calendar is shown", lambda: "Nothing on this calendar" in ui.text())
+            descriptions[name] = ui.text().count("Guaca's own calendar")
+        if name == "Artifacts":
+            w.wait("the empty artifacts list is shown", lambda: "keeps any artifacts yet" in ui.text())
+            descriptions[name] = ui.text().count("Ask an agent for a page")
+            descriptions["Artifacts footer"] = ui.text().count("Pages your agents keep.")
+        dismiss(w)
+    w.check("dialogs and sheets share one top offset, two widths, and a lighter light scrim",
+            len({box["top"] for box in geometry.values()}) == 1
+            and len({box["width"] for box in geometry.values()}) == 2
+            and all(box["color"] == "rgba(11, 11, 10, 0.25)" for box in geometry.values()),
+            observed=geometry)
+    w.check("Calendar and Artifacts explain their empty lists without repeating the description",
+            descriptions == {"Calendar": 1, "Artifacts": 1, "Artifacts footer": 0},
+            observed=descriptions)
+    no_unscripted(w)
+
+
 def selected_card(w: World) -> str:
     return w.ui.evaluate(
         "(document.querySelector('.desk__card[data-selected]') || {}).innerText || ''") or ""
@@ -3483,6 +3618,15 @@ SCENARIOS: dict[str, Scenario] = {
         "with no key, the refusal is about this endpoint and names no other provider or place",
         "an endpoint that needs no key passes the test with none, and is kept",
         "every model call was one the scenario scripted",
+    )),
+    "search": Scenario(scenario_search, "Find opens files and the command menu opens messages and actions; "
+                       "Find cannot run an action and dialogs share their geometry.", (
+        "Find only offers messages and files and cannot run New agent",
+        "Find opens the file's message without running an app action",
+        "the file reader covers the window without clipping and Find stacks above it",
+        "the Groups sheet uses the command menu and a message hit opens without another palette",
+        "dialogs and sheets share one top offset, two widths, and a lighter light scrim",
+        "Calendar and Artifacts explain their empty lists without repeating the description",
     )),
     "menu": Scenario(scenario_menu, "A person in a conversation finds the focus in the composer, opens the command menu on "
                      "Command K, switches to dark with one word and Return, writes to an agent with a sentence and "

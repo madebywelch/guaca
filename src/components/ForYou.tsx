@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { ABSENT_ACCENT } from "../avatars/catalog";
 import { decisionTime, needsAnswer, orderedDecisions } from "../lib/decisions";
@@ -23,6 +22,7 @@ import { useStore } from "../lib/store";
 import { relativeTime, useNow } from "../lib/time";
 import { type AgentCard, errorMessage, type Outcome, type WorkDecision } from "../lib/types";
 import { Desk } from "./Desk";
+import { Scrim } from "./Scrim";
 
 export function ForYou({ onClose }: { onClose: () => void }) {
   const decisions = useStore((state) => state.decisions);
@@ -94,7 +94,7 @@ export function ForYou({ onClose }: { onClose: () => void }) {
     (id) => agents.find((agent) => agent.id === id)?.name ?? DELETED,
   );
   return (
-    <div className="scrim">
+    <Scrim>
       <button type="button" className="scrim__close" aria-label="Close For you" onClick={onClose} />
       <div
         className="dialog for-you"
@@ -282,7 +282,7 @@ export function ForYou({ onClose }: { onClose: () => void }) {
           workspace’s timezone. Notification preferences apply.
         </footer>
       </div>
-    </div>
+    </Scrim>
   );
 }
 

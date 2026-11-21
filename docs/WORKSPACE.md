@@ -1147,10 +1147,10 @@ show scheduled work without an hour ruler in the window.
 ## Command K is one box that writes, answers, jumps and sets
 
 `CommandMenu.tsx` draws it and `lib/menu.ts` decides its rows. It is one input
-with the recipient beside it, then four sections: Waiting on you, with each
-request's own answers as rows, Agents, Actions and Settings, which holds the
-reading surface, the typeface and every pane. Typing filters every section at
-once.
+with the recipient beside it. Typing filters Waiting on you, Agents, Actions
+and Settings, and looks up saved content in Search results. Open a result
+from the menu without opening another search. The Groups sheet's shortcut
+opens this same menu.
 
 Writing to someone stays three presses: Command K, the sentence, Return. Three
 words or more select "Write to" and the recipient, because a sentence is a
@@ -2251,19 +2251,18 @@ the accounts or the transcript. Two agents holding one sandbox id is two agents
 on one machine, and a copy that inherited a routine would double a standing
 commitment nobody asked to double.
 
-## Search happens in two places and is ranked in one
+## Command K searches the workspace, and Command F finds messages and files
 
 The workspace is held in two places, so it is matched in two: messages, files,
 links and routines are in SQLite and are matched there, while agents and groups
 are already in the webview's store to draw the sidebar and actions are not stored
 anywhere at all. Reading the transcript into the renderer to search it would
-copy the database across IPC on every keystroke; going to IPC for two agent
-names would make the commonest search the slow one. What must not be split is
-the ordering: both halves arrive in `lib/search.ts` as raw matches and are
-scored by one function, because a list where an agent and a message are ordered
-by different rules is a list you have to read twice. A file and a link are the
-same rows as the messages read from a different angle, which is why one scan
-produces all three.
+copy the database across IPC on every keystroke. Command K searches local
+actions immediately and adds saved results once the host answers. Those
+results do not take the selection away from a command or a draft. Command F
+uses the same lookup, shows only messages and files, and never runs a command.
+A file and a link are the same rows as the messages read from a different
+angle, which is why one scan produces all three.
 
 ## A search hit that opens the wrong part of a channel is a search that failed
 
@@ -2933,7 +2932,7 @@ The fixed ones are listed as fixed, and the ones listed under *Anywhere* are
 matched from the same table the pane draws, so a key listed there is a key that
 works: Command K opens the command menu, Command 1 to 9 open the agents the menu
 numbers, Control Tab and Control Shift Tab step in that same order,
-Command F opens search, Command comma opens settings, Command slash
+Command F searches messages and files, Command comma opens settings, Command slash
 opens the list itself, and Command Z takes back an answer while it still offers
 Undo. The keys of the command menu and of Needs you are listed under those two
 surfaces, from the same table, and `keybinds.test.ts` holds that each is there.

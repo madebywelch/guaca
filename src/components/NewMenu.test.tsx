@@ -27,7 +27,7 @@ describe("the plus", () => {
   it.each([
     ["New agent", "onNewAgent"],
     ["New group", "onNewGroup"],
-    ["Hire from the cafeteria", "onOpenCafeteria"],
+    ["Open the cafeteria", "onOpenCafeteria"],
   ] as const)("runs %s and closes", (label, prop) => {
     const handles = draw();
     fireEvent.click(handles.plus);

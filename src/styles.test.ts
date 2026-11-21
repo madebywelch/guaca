@@ -402,6 +402,16 @@ describe("the rail's corner", () => {
 });
 
 describe("dialog modifiers", () => {
+  it("uses a single offset and keeps the light scrim translucent", () => {
+    const rule = (selector: string, property: string) =>
+      declarations().find((d) => d.selector === selector && d.property === property)?.value;
+    expect(rule(".scrim", "padding-block-start")).toBe("var(--space-dialog-top)");
+    expect(rule(".dialog", "width")).toContain("var(--dialog-compact)");
+    expect(rule(".dialog.dialog--artifacts", "width")).toContain("var(--dialog-wide)");
+    const scrim = getComputedStyle(document.documentElement).getPropertyValue("--scrim");
+    expect(scrim).toMatch(/^rgb\(11 11 10\s*\/\s*0\.25\)$/);
+  });
+
   it("out-specify the base rule, or are declared after it", () => {
     const base = css.search(/^\.dialog \{$/m);
     expect(base).toBeGreaterThan(-1);

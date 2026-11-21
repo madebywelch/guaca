@@ -146,7 +146,7 @@ describe("searchResults", () => {
     );
     const kinds = new Set(results.map((r) => r.kind));
     expect(kinds).toEqual(
-      new Set(["messages", "files", "links", "routines", "artifacts", "groups", "actions"]),
+      new Set(["messages", "files", "links", "routines", "artifacts", "groups"]),
     );
     const page = results.find((r) => r.kind === "artifacts");
     expect(page?.action).toEqual({ do: "openArtifact", artifactId: "k1" });
@@ -205,17 +205,11 @@ describe("searchResults", () => {
     expect(results.find((r) => r.kind === "messages")?.title).toBe("Ghost → You");
   });
 
-  it("offers settings for every agent and group, plus the app's own", () => {
-    const actions = inScope(
-      searchResults(input({ agents: [agent("Chef")], groups: [group("Kitchen")] })),
-      "actions",
+  it("returns each agent or group editor once and leaves app actions to the command menu", () => {
+    const titles = searchResults(
+      input({ agents: [agent("Chef")], groups: [group("Kitchen")] }),
     ).map((r) => r.title);
-
-    expect(actions).toContain("Chef settings");
-    expect(actions).toContain("Kitchen settings");
-    expect(actions).toContain("App settings");
-    expect(actions).toContain("New agent");
-    expect(actions).toContain("New group");
+    expect(titles.sort()).toEqual(["Chef", "Chef settings", "Kitchen settings"]);
   });
 
   it("opens an agent's channel, and its settings only from the action", () => {

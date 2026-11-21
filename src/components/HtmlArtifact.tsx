@@ -4,6 +4,7 @@ import { artifactUrl } from "../lib/files";
 import { api } from "../lib/ipc";
 import { type AgentId, errorMessage } from "../lib/types";
 import { Icon } from "./Icon";
+import { Scrim } from "./Scrim";
 
 export const Answering = createContext<{ id: AgentId; name: string } | null>(null);
 
@@ -154,7 +155,7 @@ export function HtmlArtifact({
 
   if (full) {
     return (
-      <div className="scrim">
+      <Scrim>
         <button
           type="button"
           className="scrim__close"
@@ -181,7 +182,7 @@ export function HtmlArtifact({
             {answer}
           </div>
         </div>
-      </div>
+      </Scrim>
     );
   }
 

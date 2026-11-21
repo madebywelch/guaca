@@ -43,6 +43,11 @@
 
   --ui-scale: 1;
   --measure-attention: 46rem;
+  --dialog-compact: 38rem;
+  --dialog-wide: 58rem;
+  --space-dialog-top: max(clamp(var(--space-8), 8dvh, 4rem), var(--space-safe-top));
+  --palette-height: 34rem;
+  --group-editor-height: 38rem;
   --control-touch: 2.75rem;
   --picker-w: 14rem;
   --picker-h: 24rem;
@@ -132,7 +137,7 @@
   --pop-rise: 0.5rem;
   --pop-origin: center;
 
-  --scrim: rgb(11 11 10 / 0.5);
+  --scrim: rgb(11 11 10 / 0.25);
 
   --lift-1: 0 0.125rem 0.5rem -0.25rem rgb(11 11 10 / 0.1);
   --lift-2: 0 0.5rem 1.25rem -0.625rem rgb(11 11 10 / 0.13), 0 0 0 1px var(--rule);
@@ -4149,10 +4154,9 @@ button.handoff__name:hover {
 }
 
 .dialog.dialog--file {
-  width: min(64rem, 100%);
+  width: min(var(--dialog-wide), 100%);
   display: flex;
   flex-direction: column;
-  max-height: calc(100vh - 3rem);
 }
 
 .file-view__head {
@@ -4908,7 +4912,8 @@ input[type="file"]:disabled {
   align-items: flex-start;
   justify-content: center;
   padding: var(--space-7);
-  overflow-y: auto;
+  padding-block-start: var(--space-dialog-top);
+  overflow: clip;
   z-index: 50;
   animation: fade var(--tempo-enter) var(--ease) both;
 }
@@ -4929,12 +4934,18 @@ input[type="file"]:disabled {
 
 .dialog {
   position: relative;
-  width: min(38rem, 100%);
-  margin: auto;
+  width: min(var(--dialog-compact), 100%);
+  max-height: 100%;
   background: var(--popover);
   border-radius: var(--radius-card);
   box-shadow: var(--lift-3);
   padding: var(--space-7);
+}
+
+.dialog--message,
+.question-tray {
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .dialog,
@@ -6439,15 +6450,10 @@ input[type="file"]:disabled {
   opacity: 0.75;
 }
 
-.scrim--palette {
-  align-items: flex-start;
-  padding-top: 12vh;
-}
-
 .palette {
   position: relative;
-  width: min(42rem, 100%);
-  max-height: min(34rem, 76vh);
+  width: min(var(--dialog-compact), 100%);
+  max-height: min(var(--palette-height), 100%);
   display: flex;
   flex-direction: column;
   background: var(--popover);
@@ -6622,10 +6628,9 @@ input[type="file"]:disabled {
 }
 
 .dialog--cafeteria {
-  width: min(58rem, 100%);
+  width: min(var(--dialog-wide), 100%);
   display: flex;
   flex-direction: column;
-  max-height: calc(100vh - 3rem);
   padding: 0;
 }
 
@@ -6821,10 +6826,9 @@ input[type="file"]:disabled {
 }
 
 .dialog.dialog--calendar {
-  width: min(46rem, 100%);
+  width: min(var(--dialog-wide), 100%);
   display: flex;
   flex-direction: column;
-  max-height: calc(100vh - 3rem);
   padding: 0;
 }
 
@@ -7026,10 +7030,9 @@ input[type="file"]:disabled {
 }
 
 .dialog.dialog--artifacts {
-  width: min(64rem, 100%);
+  width: min(var(--dialog-wide), 100%);
   display: flex;
   flex-direction: column;
-  max-height: calc(100vh - 3rem);
   padding: 0;
 }
 
@@ -7224,14 +7227,6 @@ button.artifacts__version[aria-pressed="true"] {
   flex: none;
 }
 
-.artifacts__note {
-  flex: 1;
-  margin: 0;
-  font-size: var(--type-support);
-  color: var(--faint);
-  line-height: var(--lead-ui);
-}
-
 .artifacts__spacer {
   flex: 1;
 }
@@ -7302,10 +7297,10 @@ button.artifacts__version[aria-pressed="true"] {
 }
 
 .dialog--settings {
-  width: min(52rem, 100%);
+  width: min(var(--dialog-wide), 100%);
   display: flex;
   flex-direction: column;
-  height: min(38rem, calc(100vh - 3rem));
+  height: var(--group-editor-height);
   padding: 0;
 }
 
@@ -8043,9 +8038,8 @@ button.artifacts__version[aria-pressed="true"] {
 }
 
 .dialog.for-you {
-  height: min(var(--measure-attention), calc(100dvh - var(--space-7) - var(--space-7)));
-  max-height: calc(100dvh - var(--space-7) - var(--space-7));
-  width: min(var(--measure-attention), calc(100vw - var(--space-8)));
+  height: var(--measure-attention);
+  width: min(var(--dialog-wide), 100%);
   padding: 0;
   display: flex;
   flex-direction: column;
@@ -8365,10 +8359,12 @@ button.artifacts__version[aria-pressed="true"] {
   }
 
   .scrim {
+    --space-dialog-top: var(--space-safe-top);
     top: var(--viewport-top, 0px);
     bottom: auto;
     height: var(--viewport-height, 100dvh);
-    padding: var(--space-safe-top) var(--space-safe-right) var(--space-safe-bottom) var(--space-safe-left);
+    padding-inline: var(--space-safe-left) var(--space-safe-right);
+    padding-block-end: var(--space-safe-bottom);
   }
 
   .scrim > .dialog,
@@ -8376,7 +8372,6 @@ button.artifacts__version[aria-pressed="true"] {
     width: 100%;
     max-width: 100%;
     max-height: 100%;
-    margin: auto;
     border-radius: 0;
     overflow-y: auto;
   }
@@ -8389,6 +8384,11 @@ button.artifacts__version[aria-pressed="true"] {
     height: 100%;
     padding: 0;
     overflow: hidden;
+  }
+
+  .scrim > .sheet {
+    width: 100%;
+    border-radius: 0;
   }
 
   .settings__body {
@@ -9119,16 +9119,14 @@ button.artifacts__version[aria-pressed="true"] {
   color: var(--danger);
 }
 
-.sheet-scrim {
-  justify-content: flex-start;
-  padding: 0;
-}
-
 .sheet {
   position: relative;
+  width: min(var(--dialog-compact), 100%);
   height: 100%;
   display: flex;
+  border-radius: var(--radius-card);
   box-shadow: var(--lift-3);
+  overflow: hidden;
   outline: none;
 }
 
@@ -9146,17 +9144,10 @@ button.artifacts__version[aria-pressed="true"] {
   font-variant-numeric: tabular-nums;
 }
 
-@media (max-width: 48rem), (hover: none) and (pointer: coarse) {
-
-  .sheet {
-    width: 100%;
-  }
-
-  .sheet .rail {
-    flex: 1;
-    width: 100%;
-    min-width: 0;
-  }
+.sheet .rail {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
 }
 
 @media (max-height: 32rem) {
@@ -9550,7 +9541,6 @@ button.artifacts__version[aria-pressed="true"] {
 .file-view__body,
 .mentions,
 .connector-failure__detail > pre,
-.scrim,
 .dialog__body,
 .onboarding,
 .memory__text,
@@ -9580,11 +9570,6 @@ button.artifacts__version[aria-pressed="true"] {
 
 .dialog__body {
   padding-inline-end: calc(var(--space-7) + var(--scrollbar-size) * -1);
-}
-
-.scrim:has(> .dialog--settings, > .dialog--form) {
-  overflow: clip;
-  scrollbar-gutter: auto;
 }
 
 .settings__nav,

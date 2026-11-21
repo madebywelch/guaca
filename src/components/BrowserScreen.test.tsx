@@ -45,18 +45,7 @@ function ScreenWorkspace() {
   return (
     <>
       <BrowserScreen agent={card("a", "Cook")} />
-      {upper === "search" && (
-        <Search
-          onClose={close}
-          onOpenChannel={vi.fn()}
-          onEditAgent={vi.fn()}
-          onEditGroup={vi.fn()}
-          onNewAgent={vi.fn()}
-          onNewGroup={vi.fn()}
-          onOpenCafeteria={vi.fn()}
-          onOpenSettings={vi.fn()}
-        />
-      )}
+      {upper === "search" && <Search onClose={close} />}
     </>
   );
 }

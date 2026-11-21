@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useDismiss } from "../lib/dismiss";
+import { PLACE_LABELS } from "../lib/menu";
 import { Icon } from "./Icon";
 
 interface Props {
@@ -91,9 +92,9 @@ export function NewMenu({ onNewAgent, onNewGroup, onOpenCafeteria }: Props) {
             aria-label="Make something new"
             style={{ left: at.x, top: at.y, "--pop-origin": at.origin } as CSSProperties}
           >
-            {item("New agent", "Somebody new in this group", onNewAgent)}
-            {item("New group", "A group that cannot see the others", onNewGroup)}
-            {item("Hire from the cafeteria", "Agents who are already set up", onOpenCafeteria)}
+            {item(PLACE_LABELS.newAgent, "Somebody new in this group", onNewAgent)}
+            {item(PLACE_LABELS.newGroup, "A group that cannot see the others", onNewGroup)}
+            {item(PLACE_LABELS.cafeteria, "Agents who are already set up", onOpenCafeteria)}
           </div>
         </>
       )}
