@@ -23,6 +23,7 @@ import {
 } from "../lib/types";
 import { HtmlArtifact } from "./HtmlArtifact";
 import { Icon } from "./Icon";
+import { Scrim } from "./Scrim";
 
 interface Props {
   onClose: () => void;
@@ -85,7 +86,7 @@ export function Artifacts({ onClose }: Props) {
   const crewName = (groupId: string) => groups.find((group) => group.id === groupId)?.name ?? null;
 
   return (
-    <div className="scrim">
+    <Scrim>
       <button type="button" className="scrim__close" aria-label="Close dialog" onClick={onClose} />
       <div
         className="dialog dialog--artifacts"
@@ -155,7 +156,7 @@ export function Artifacts({ onClose }: Props) {
           </>
         )}
       </div>
-    </div>
+    </Scrim>
   );
 }
 

@@ -214,6 +214,19 @@ describe("a page in a message", () => {
     expect(screen.getByRole("button", { name: "Open" })).toBeTruthy();
   });
 
+  it("mounts the HTML reader outside the transcript that opened it", async () => {
+    const { container } = render(
+      <div className="pane__scroll">
+        <Markdown>{fence("html", PAGE)}</Markdown>
+      </div>,
+    );
+    await waitFor(() => expect(container.querySelector("iframe")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Open" }));
+    const reader = screen.getByRole("dialog");
+    expect(container.contains(reader)).toBe(false);
+    expect(within(reader).getByRole("button", { name: "Close" })).toBeTruthy();
+  });
+
   it("never becomes part of this document", async () => {
     const { container } = render(<Markdown>{fence("html", PAGE)}</Markdown>);
     await waitFor(() => expect(container.querySelector("iframe")).toBeTruthy());

@@ -200,6 +200,18 @@ describe("FileCard", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("mounts the reader outside the transcript that opened it", () => {
+    const { container } = render(
+      <div className="pane__scroll">
+        <FileCard file={file("shot.png", "image/png")} />
+      </div>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Open shot.png" }));
+    const reader = screen.getByRole("dialog", { name: "shot.png" });
+    expect(container.contains(reader)).toBe(false);
+    expect(within(reader).getByRole("button", { name: "Close" })).toBeTruthy();
+  });
+
   it("dismisses search above a file preview and restores focus through both", () => {
     render(<Workspace />);
     const opener = screen.getByRole("button", { name: "archive.zip" });

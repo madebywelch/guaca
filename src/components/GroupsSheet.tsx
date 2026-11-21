@@ -1,10 +1,10 @@
 import { type ComponentProps, useEffect, useRef } from "react";
-
 import { useDismiss } from "../lib/dismiss";
 import { IS_MAC } from "../lib/keybinds";
 import { groupsLabel } from "../lib/menu";
 import { useStore } from "../lib/store";
 import { desktop } from "../lib/transport";
+import { Scrim } from "./Scrim";
 import { Sidebar } from "./Sidebar";
 
 type Props = ComponentProps<typeof Sidebar> & { onClose: () => void };
@@ -19,7 +19,7 @@ export function GroupsSheet({ onClose, onOpenChannel, ...rest }: Props) {
     panel.current?.focus();
   }, []);
   return (
-    <div className="scrim">
+    <Scrim>
       <button type="button" className="scrim__close" aria-label="Close groups" onClick={onClose} />
       <div
         className="sheet"
@@ -45,6 +45,6 @@ export function GroupsSheet({ onClose, onOpenChannel, ...rest }: Props) {
           />
         </div>
       </div>
-    </div>
+    </Scrim>
   );
 }

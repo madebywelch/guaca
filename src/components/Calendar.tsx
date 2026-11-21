@@ -23,6 +23,7 @@ import {
   type OccasionId,
 } from "../lib/types";
 import { Icon } from "./Icon";
+import { Scrim } from "./Scrim";
 
 interface Props {
   onClose: () => void;
@@ -190,7 +191,7 @@ export function Calendar({ onClose }: Props) {
   };
 
   return (
-    <div className="scrim">
+    <Scrim>
       <button type="button" className="scrim__close" aria-label="Close dialog" onClick={onClose} />
       <div
         className="dialog dialog--calendar"
@@ -417,6 +418,6 @@ export function Calendar({ onClose }: Props) {
           </button>
         </div>
       </div>
-    </div>
+    </Scrim>
   );
 }

@@ -3,6 +3,7 @@ import { useDismiss } from "../lib/dismiss";
 import { useShown } from "../lib/held";
 import type { AgentId } from "../lib/types";
 import { Desk } from "./Desk";
+import { Scrim } from "./Scrim";
 import { Toast } from "./Toast";
 
 export function QuestionTray({
@@ -26,7 +27,7 @@ export function QuestionTray({
   }, [pending, stuck, selected, onSelect, onClose]);
 
   return (
-    <div className="scrim">
+    <Scrim>
       <button
         type="button"
         className="scrim__close"
@@ -68,6 +69,6 @@ export function QuestionTray({
         />
         <Toast />
       </div>
-    </div>
+    </Scrim>
   );
 }

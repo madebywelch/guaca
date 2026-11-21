@@ -2231,6 +2231,33 @@ def scenario_search(w: World) -> None:
                        "document.querySelector('[data-found=true]')?.innerText.includes('Keep these notes.')")),
             observed={"file": attachment, "conversation": AGENT}, shot=True)
 
+    ui.click("button", f"Open {attachment}")
+    w.wait("the file reader opens", lambda: ui.find("dialog", attachment))
+    w.wait("the reader has finished moving", lambda: ui.evaluate(look.SETTLED))
+    reader = ui.evaluate("""(() => {
+      const dialog = document.querySelector('[aria-label="ledger-notes.txt"][role=dialog]');
+      const close = dialog.querySelector('button[aria-label=Close]');
+      const box = close.getBoundingClientRect();
+      return {
+        backdrop: document.elementFromPoint(4, 4)?.closest('.scrim') === dialog.parentElement,
+        close: document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)?.closest('button') === close,
+      };
+    })()""")
+    ui.key("f", mod=True)
+    w.wait("Find opens above the reader", lambda: ui.find("dialog", "Search"))
+    w.wait("Find has finished moving", lambda: ui.evaluate(look.SETTLED))
+    above = ui.evaluate("""(() => {
+      const input = document.querySelector('input[aria-label="Search Guaca"]');
+      const box = input.getBoundingClientRect();
+      return document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) === input;
+    })()""")
+    ui.key("Escape")
+    w.wait("Escape closes only Find", lambda: not ui.find("dialog", "Search") and ui.find("dialog", attachment))
+    w.check("the file reader covers the window without clipping and Find stacks above it",
+            reader == {"backdrop": True, "close": True} and above,
+            observed={**reader, "findOnTop": above}, shot=True)
+    dismiss(w)
+
     show(w, "the Groups sheet")
     ui.click("button", "Command menu", exact=False)
     w.wait("the Groups sheet opens the command menu", lambda: ui.focused() == ("textbox", "Command menu"))
@@ -2961,6 +2988,7 @@ SCENARIOS: dict[str, Scenario] = {
                        "Find cannot run an action and dialogs share their geometry.", (
         "Find only offers messages and files and cannot run New agent",
         "Find opens the file's message without running an app action",
+        "the file reader covers the window without clipping and Find stacks above it",
         "the Groups sheet uses the command menu and a message hit opens without another palette",
         "dialogs and sheets share one top offset, two widths, and a lighter light scrim",
         "Calendar and Artifacts explain their empty lists without repeating the description",

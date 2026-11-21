@@ -1,5 +1,4 @@
 import { Fragment, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
-
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { useDismiss } from "../lib/dismiss";
 import { defaultTarget } from "../lib/field";
@@ -25,6 +24,7 @@ import { useNow } from "../lib/time";
 import { type AgentCard, type AgentId, errorMessage, type Group } from "../lib/types";
 import { useSearchHits } from "../lib/useSearchHits";
 import { Icon } from "./Icon";
+import { Scrim } from "./Scrim";
 
 interface Props {
   onClose: () => void;
@@ -235,7 +235,7 @@ export function CommandMenu({
 
   const sections: MenuRow["section"][] = [null, ...MENU_SECTIONS];
   return (
-    <div className="scrim">
+    <Scrim>
       <button
         type="button"
         className="scrim__close"
@@ -327,7 +327,7 @@ export function CommandMenu({
           )}
         </div>
       </div>
-    </div>
+    </Scrim>
   );
 }
 

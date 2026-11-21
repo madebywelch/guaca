@@ -6,6 +6,7 @@ import { useStore } from "../lib/store";
 import { useNow } from "../lib/time";
 import { useSearchHits } from "../lib/useSearchHits";
 import { Icon, type IconName } from "./Icon";
+import { Scrim } from "./Scrim";
 
 const FIND_SCOPES = ["all", "messages", "files"] as const;
 type FindScope = (typeof FIND_SCOPES)[number];
@@ -87,7 +88,7 @@ export function Search({ onClose }: { onClose: () => void }) {
   }, [at]);
 
   return (
-    <div className="scrim">
+    <Scrim>
       <button type="button" className="scrim__close" aria-label="Close search" onClick={onClose} />
 
       <div className="palette" role="dialog" aria-modal="true" aria-label="Search">
@@ -156,7 +157,7 @@ export function Search({ onClose }: { onClose: () => void }) {
           )}
         </div>
       </div>
-    </div>
+    </Scrim>
   );
 }
 
