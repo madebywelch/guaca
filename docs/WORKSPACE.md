@@ -74,10 +74,12 @@ fifths of the window at 1280 by 820 and 900 by 700. Each visible branch fits in 
 remaining branches from the one colleagues control. The map uses the width beside the roster,
 leaving the transcript in its reading column. At 740 pixels of pane width
 the brief sits above the lead on the left, with connectors branching to
-colleagues on the right. Below that they stack, and finished replies and
-working colleagues in the live map take one line each. The map counts rows of
-height, not branches: it shows every branch that fits and folds only the rest.
-The brief keeps to one line in the live map, with Read brief whenever that line
+colleagues on the right. Below that they stack, and finished replies in the
+live map take one line. The map counts rows of height, not branches: when the
+branches do not fit in full, working colleagues collapse to one line (face,
+name, state) the way finished ones already are, and a branch goes behind the
+colleagues control only when one-line branches still do not fit. Questions keep
+their full form and come first. The brief keeps to one line in the live map, with Read brief whenever that line
 is cut, so the brief and lead fit beside the branches from the first hand-off to
 the result. The branches take priority if space is tight: a stacked map drops
 the brief and lead only when that shows more branches. From an empty composer,

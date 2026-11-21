@@ -298,6 +298,7 @@ export function TaskMapCard({
       const candidates = Array.from(branches.querySelectorAll<HTMLElement>(":scope > li"));
       for (const branch of candidates) branch.hidden = false;
       node.removeAttribute("data-compact");
+      node.removeAttribute("data-collapsed");
       const brief = node.querySelector(".task-map__brief");
       if (brief) setBriefCut(brief.scrollWidth > Math.ceil(brief.getBoundingClientRect().width));
       const box = node.getBoundingClientRect();
@@ -309,20 +310,26 @@ export function TaskMapCard({
       const root = node.querySelector(".task-map__root")?.getBoundingClientRect();
       const beside = root !== undefined && root.right <= branches.getBoundingClientRect().left;
       const firstTop = candidates[0]?.getBoundingClientRect().top ?? top;
+      const full = heights();
+      node.setAttribute("data-collapsed", "true");
       let fit = fitRows({
         room,
         root: beside ? (root?.height ?? 0) : firstTop - top,
         beside,
         gap,
-        branches: heights(),
+        branches: full,
+        lines: heights(),
       });
+      if (!fit.collapsed) node.removeAttribute("data-collapsed");
       if (!fit.root) {
         node.setAttribute("data-compact", "true");
-        if (beside)
+        if (beside) {
+          const widened = heights();
           fit = {
-            ...fitRows({ room, root: 0, beside: false, gap, branches: heights() }),
+            ...fitRows({ room, root: 0, beside: false, gap, branches: widened, lines: widened }),
             root: false,
           };
+        }
       }
       candidates.forEach((branch, index) => {
         branch.hidden = index >= fit.shown;

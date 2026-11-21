@@ -1357,6 +1357,8 @@ TASK_MAP_FIT = """(() => {
     centeredLead: split && near(roots[0].top + roots[1].bottom, branchBounds.top + branchBounds.bottom),
     stacked: split && roots[1].bottom < branches[0]?.getBoundingClientRect().top,
     leadStatus: rootNodes[1]?.querySelector('p')?.innerText.trim() ?? '',
+    oneLine: branches.filter(el => !el.matches('[data-question], [data-finished]')
+      && !el.querySelector('.task-map__excerpt')?.getClientRects().length).length,
     replyOnOneLine: branches.some(branch => {
       const box = branch.getBoundingClientRect();
       const name = branch.querySelector('.task-map__person')?.getBoundingClientRect();
@@ -1548,8 +1550,10 @@ def scenario_handoff(w: World) -> None:
             all(lays_out_by_pane(d, question=False)
                 and ("Researcher" not in d["names"] or "Analyst" in d["names"][:1])
                 and (not d["horizontal"] or d["leadStatus"] == "Waiting for Analyst")
-                and (d["viewport"] not in ([900, 700], [900, 820], [900, 560]) or
+                and (d["viewport"] not in ([900, 700], [900, 820]) or
                      (d["names"] == ["Analyst", "Researcher"] and d["replyOnOneLine"]))
+                and (d["viewport"] != [900, 560] or
+                     (d["names"] == ["Analyst"] and d["rest"] == ["Researcher"] and d["oneLine"] == 1))
                 for d in layouts.values()), observed=layouts)
     w.check("the colleagues disclosure opens exactly the branches the two-colleague map hides",
             all(opens_remainder(d, peers) for d in layouts.values()),
@@ -1609,24 +1613,37 @@ def scenario_handoff(w: World) -> None:
             observed={"outcome": ended[-1]["status"]}, shot=True)
     ui.viewport(*WINDOW)
     write(w, AGENT, ASK_PLAN)
-    working = w.wait("the map settles at 1280x820 while both colleagues work", lambda: (
-        fit := painted_task_map(ui)) and fit["viewport"] == list(WINDOW) and PLAN_Q in card_text(w)
-        and card_text(w).count("Working") == 2 and fit)
+    w.wait("both colleagues are working on the third hand-off", lambda: PLAN_Q in ui.text()
+           and "Working" in card_text(w) and len(card_text(w).split("Working")) == 3)
+    working = {}
+    for width, height in (WINDOW, (900, 700)):
+        ui.viewport(width, height)
+        working[f"{width}x{height}"] = w.wait(f"the map settles at {width}x{height} while both colleagues work",
+                                              lambda: (fit := painted_task_map(ui))
+                                              and fit["viewport"] == [width, height] and fit)
+    wide = working["1280x820"]
     w.check("while both colleagues work, the map at 1280x820 draws the brief and the lead with lines to both branches",
-            sorted(working["names"]) == ["Analyst", "Researcher"] and working["horizontal"] and working["connected"]
-            and working["leadStatus"].startswith("Waiting for") and working["partial"] == 0 and not working["more"],
-            observed={"names": sorted(working["names"]), "horizontal": working["horizontal"],
-                      "connected": working["connected"], "waiting": working["leadStatus"].startswith("Waiting for"),
-                      "more": working["more"]}, shot=True)
+            sorted(wide["names"]) == ["Analyst", "Researcher"] and wide["horizontal"] and wide["connected"]
+            and wide["leadStatus"].startswith("Waiting for") and wide["partial"] == 0 and not wide["more"],
+            observed={"names": sorted(wide["names"]), "horizontal": wide["horizontal"],
+                      "connected": wide["connected"], "waiting": wide["leadStatus"].startswith("Waiting for"),
+                      "more": wide["more"]}, shot=True)
+    narrow = working["900x700"]
+    w.check("while both colleagues work, the map at 900x700 shows both, each collapsed to one line before either is hidden",
+            sorted(narrow["names"]) == ["Analyst", "Researcher"] and not narrow["more"] and narrow["partial"] == 0
+            and narrow["oneLine"] == 2,
+            observed={"names": sorted(narrow["names"]), "more": narrow["more"], "partial": narrow["partial"],
+                      "oneLine": narrow["oneLine"]}, shot=True)
+    ui.viewport(*WINDOW)
     plan_ask.set()
-    ui.viewport(900, 700)
-    asking = w.wait("the map settles at 900x700 with a question on one branch", lambda: (
-        fit := painted_task_map(ui)) and fit["viewport"] == [900, 700] and PLAN_ASK in card_text(w) and fit["answerVisible"] and fit)
-    w.check("with a question on one branch, the map at 900x700 shows both branches whole and folds neither",
-            sorted(asking["names"]) == ["Analyst", "Researcher"] and not asking["more"]
-            and asking["partial"] == 0 and asking["answerVisible"],
-            observed={"names": sorted(asking["names"]), "more": asking["more"], "partial": asking["partial"],
-                      "answerVisible": asking["answerVisible"]}, shot=True)
+    asking = w.wait("the map settles at 1280x820 with a question on one branch", lambda: (
+        fit := painted_task_map(ui)) and fit["viewport"] == list(WINDOW) and PLAN_ASK in card_text(w)
+        and fit["answerVisible"] and fit)
+    w.check("with a question on one branch, the map at 1280x820 keeps the question whole and first and the working colleague on one line",
+            asking["names"] == ["Researcher", "Analyst"] and not asking["more"] and asking["partial"] == 0
+            and asking["oneLine"] == 1 and asking["horizontal"] and asking["connected"],
+            observed={"names": asking["names"], "more": asking["more"], "oneLine": asking["oneLine"],
+                      "horizontal": asking["horizontal"], "connected": asking["connected"]}, shot=True)
     ui.click("button", PLAN_OPTION)
     w.wait("the researcher answers after the question", lambda: R_PLAN in [m["text"] for m in between(w)])
     plan_answer.set()
@@ -3618,7 +3635,7 @@ SCENARIOS: dict[str, Scenario] = {
                         "status word with time and the answer at reading size, the status line says who it waits "
                         "for with Stop, and the transcript keeps two text edges; after the replies the card folds "
                         "to one line; the live map draws the brief, the lead and both branches while both "
-                        "colleagues work, and keeps both branches whole at 900x700 with a question waiting; a "
+                        "colleagues work, collapsing working colleagues to one line before folding any; a "
                         "hand-off cut short by Stop folds and says who answered.",
     (
         "the pinned map shows each colleague, the work still underway, and the result already sent",
@@ -3638,7 +3655,8 @@ SCENARIOS: dict[str, Scenario] = {
         "opening a colleague's message shows their recorded words",
         "a hand-off cut short by Stop folds and says who answered, instead of ticking on",
         "while both colleagues work, the map at 1280x820 draws the brief and the lead with lines to both branches",
-        "with a question on one branch, the map at 900x700 shows both branches whole and folds neither",
+        "while both colleagues work, the map at 900x700 shows both, each collapsed to one line before either is hidden",
+        "with a question on one branch, the map at 1280x820 keeps the question whole and first and the working colleague on one line",
         "a colleague's failure does not promote the lead's progress note to a result",
         "a failed map read cannot turn a progress note into a result",
         "every model call was one the scenario scripted",

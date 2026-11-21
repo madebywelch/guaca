@@ -144,40 +144,80 @@ describe("task map", () => {
 });
 
 describe("fitting a task map by rows", () => {
-  it("folds the branch that does not fit the map's height", () => {
-    expect(fitRows({ room: 167, root: 138, beside: true, gap: 6, branches: [68, 68, 68] })).toEqual(
-      {
-        shown: 2,
-        root: true,
-      },
-    );
+  it("folds a branch only when one-line branches still do not fit", () => {
+    expect(
+      fitRows({
+        room: 114.5,
+        root: 57,
+        beside: false,
+        gap: 6,
+        branches: [88, 58],
+        lines: [88, 32],
+      }),
+    ).toEqual({ shown: 1, root: false, collapsed: true });
   });
 
-  it("drops the brief and lead from a stacked map when that keeps a second branch whole", () => {
-    expect(fitRows({ room: 131.7, root: 60, beside: false, gap: 6, branches: [88, 32] })).toEqual({
-      shown: 2,
-      root: false,
-    });
+  it("folds the third branch beside the brief when one-line branches still overflow", () => {
+    expect(
+      fitRows({
+        room: 100,
+        root: 90,
+        beside: true,
+        gap: 6,
+        branches: [68, 68, 68],
+        lines: [36, 36, 36],
+      }),
+    ).toEqual({ shown: 2, root: true, collapsed: true });
   });
 
   it("drops the brief and lead beside the branches only when they alone overflow", () => {
-    expect(fitRows({ room: 63, root: 138, beside: true, gap: 6, branches: [32] })).toEqual({
-      shown: 1,
-      root: false,
-    });
+    expect(
+      fitRows({ room: 63, root: 138, beside: true, gap: 6, branches: [32], lines: [32] }),
+    ).toEqual({ shown: 1, root: false, collapsed: false });
   });
 
-  it("keeps the brief and lead beside two working branches when its column fits", () => {
-    expect(fitRows({ room: 167, root: 138, beside: true, gap: 6, branches: [68, 68] })).toEqual({
-      shown: 2,
-      root: true,
-    });
+  it("collapses two working colleagues to one line each before hiding either", () => {
+    expect(
+      fitRows({
+        room: 114.5,
+        root: 57,
+        beside: false,
+        gap: 6,
+        branches: [58, 58],
+        lines: [32, 32],
+      }),
+    ).toEqual({ shown: 2, root: false, collapsed: true });
+  });
+
+  it("keeps a question whole and collapses the working colleague beside it", () => {
+    expect(
+      fitRows({
+        room: 150.5,
+        root: 114,
+        beside: true,
+        gap: 6,
+        branches: [92, 68],
+        lines: [92, 36],
+      }),
+    ).toEqual({ shown: 2, root: true, collapsed: true });
+  });
+
+  it("keeps working colleagues in full beside the brief and lead when they fit", () => {
+    expect(
+      fitRows({ room: 150, root: 142, beside: true, gap: 6, branches: [68, 68], lines: [36, 36] }),
+    ).toEqual({ shown: 2, root: true, collapsed: false });
   });
 
   it("keeps the brief and lead above the branches when dropping them shows no more", () => {
-    expect(fitRows({ room: 179.7, root: 57, beside: false, gap: 6, branches: [32, 32] })).toEqual({
-      shown: 2,
-      root: true,
-    });
+    expect(
+      fitRows({
+        room: 179.7,
+        root: 57,
+        beside: false,
+        gap: 6,
+        branches: [32, 32],
+        lines: [32, 32],
+      }),
+    ).toEqual({ shown: 2, root: true, collapsed: false });
   });
 });

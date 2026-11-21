@@ -21,23 +21,30 @@ export interface MapRows {
   beside: boolean;
   gap: number;
   branches: readonly number[];
+  lines: readonly number[];
 }
 
-export function fitRows({ room, root, beside, gap, branches }: MapRows) {
-  const count = (space: number) => {
-    let used = -gap;
-    let shown = 0;
-    for (const height of branches) {
-      used += gap + height;
-      if (used > space + 0.5) break;
-      shown += 1;
-    }
-    return shown;
+export function fitRows({ room, root, beside, gap, branches, lines }: MapRows) {
+  const place = (heights: readonly number[]) => {
+    const count = (space: number) => {
+      let used = -gap;
+      let shown = 0;
+      for (const height of heights) {
+        used += gap + height;
+        if (used > space + 0.5) break;
+        shown += 1;
+      }
+      return shown;
+    };
+    if (beside) return { shown: count(room), root: root <= room + 0.5 };
+    const withRoot = count(room - root);
+    const without = count(room);
+    return without > withRoot ? { shown: without, root: false } : { shown: withRoot, root: true };
   };
-  if (beside) return { shown: count(room), root: root <= room + 0.5 };
-  const withRoot = count(room - root);
-  const without = count(room);
-  return without > withRoot ? { shown: without, root: false } : { shown: withRoot, root: true };
+  const full = place(branches);
+  return full.shown === branches.length
+    ? { ...full, collapsed: false }
+    : { ...place(lines), collapsed: true };
 }
 
 const due = (question: Approval) => question.lapsesAt ?? Infinity;
