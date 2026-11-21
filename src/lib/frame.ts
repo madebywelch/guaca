@@ -69,3 +69,12 @@ export function openingConversation(
     )[0];
   return recent?.agentId ?? (lastOpen && live.has(lastOpen) ? lastOpen : order[0]?.id);
 }
+
+export function drawnIn(question: LiveQuestion, agentId: AgentId, running: readonly Running[]) {
+  if (!("request" in question)) return false;
+  if (question.agentId === agentId) return true;
+  return (
+    question.request.kind === "question" &&
+    running.some((run) => run.runId === question.runId && run.agentId === agentId)
+  );
+}

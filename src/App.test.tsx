@@ -3,7 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { rememberConversation } from "./lib/frame";
 import { expectRestart, forgetRestart } from "./lib/link";
 import { saveFirstTask } from "./lib/onboarding";
-import type { AgentCard, Approval, Routine, Running, Settings } from "./lib/types";
+import type {
+  AgentCard,
+  Approval,
+  Envelope,
+  Routine,
+  Running,
+  Settings,
+  TaskRecord,
+} from "./lib/types";
 import { aGroup, anApproval, anOutcome } from "./test-fixtures";
 
 const pendingApprovals = vi.fn<() => Promise<Approval[]>>(async () => []);
@@ -16,6 +24,10 @@ const agentActivity = vi.fn<() => Promise<Record<string, unknown>>>(async () => 
 const agentRoutines = vi.fn<() => Promise<Routine[]>>(async () => []);
 const setAgentPinned = vi.fn<(id: string, pinned: boolean) => Promise<AgentCard>>();
 const duplicateAgent = vi.fn<(id: string) => Promise<AgentCard>>();
+const taskRecord = vi.fn<(channel: string, run: string) => Promise<TaskRecord>>(async () => ({
+  messages: [],
+  resultId: null,
+}));
 const getSettings = vi.fn<() => Promise<Settings>>(async () => ({
   baseUrl: "https://openrouter.ai/api/v1",
   defaultModel: "test/model",
@@ -102,6 +114,7 @@ vi.mock("./lib/ipc", () => ({
     agentGrants: async () => [],
     setAgentPinned: (id: string, pinned: boolean) => setAgentPinned(id, pinned),
     duplicateAgent: (id: string) => duplicateAgent(id),
+    taskRecord: (channel: string, run: string) => taskRecord(channel, run),
     createAgent: async () => {
       throw new Error("not used");
     },
@@ -298,15 +311,45 @@ describe("App", () => {
     expect(markOutcomesSeen).toHaveBeenCalledExactlyOnceWith({ runIds: ["written"] });
   });
 
-  it("shows neither the roster nor the status bar while the first run is on screen", async () => {
+  it("shows neither the roster, the places nor the window's buttons while the first run is on screen", async () => {
     render(<App />);
     await screen.findByRole("heading", { name: "What would you like help with?" });
     expect(screen.queryByRole("navigation", { name: "Agent conversations" })).toBeNull();
     expect(screen.queryByRole("navigation", { name: "Places" })).toBeNull();
-    expect(screen.getByRole("button", { name: "App settings" })).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: "Window" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "App settings" })).toBeNull();
+  });
+
+  it("gives the window no row of its own beside the sidebar, and keeps the date at the sidebar's foot", async () => {
+    listAgents.mockResolvedValue([agent("Manager")]);
+    const { container } = render(<App />);
+    await screen.findByRole("combobox", { name: "Write to Manager" });
+    const roster = screen.getByRole("navigation", { name: "Agent conversations" });
+    const foot = container.querySelector(".roster__foot") as HTMLElement;
+    const day = new Date().toLocaleDateString([], {
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+    });
+    expect(within(foot).getByText(day)).toBeTruthy();
+    expect(within(foot).getByRole("navigation", { name: "Places" })).toBeTruthy();
+    expect(screen.queryByText("A kept page can be pinned here, from Artifacts.")).toBeNull();
+    expect(roster.compareDocumentPosition(foot) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const bar = container.querySelector(".topbar") as HTMLElement;
+    expect(bar.textContent).not.toContain(day);
+    expect(
+      within(bar)
+        .getAllByRole("button")
+        .map((one) => one.getAttribute("aria-label")),
+    ).toEqual(["Search", "Agents", "Make something new", "App settings"]);
+    const header = container.querySelector(".pane__header") as HTMLElement;
+    expect(within(header).getByRole("heading", { name: "Manager" })).toBeTruthy();
+    expect(within(header).getByRole("navigation", { name: "Manager's page" })).toBeTruthy();
+    expect(header.hasAttribute("data-tauri-drag-region")).toBe(true);
   });
 
   it("names the top row's settings button App settings, apart from each group's own", async () => {
+    listAgents.mockResolvedValue([agent("Manager")]);
     render(<App />);
     const row = await screen.findByRole("navigation", { name: "Window" });
     fireEvent.click(within(row).getByRole("button", { name: "App settings" }));
@@ -379,8 +422,9 @@ describe("App", () => {
   });
 
   it("goes back on Command-comma, Escape and the back control, restoring the focus", async () => {
+    listAgents.mockResolvedValue([agent("Manager")]);
     render(<App />);
-    await screen.findByRole("heading", { name: "What would you like help with?" });
+    await screen.findByRole("log", { name: "Conversation with Manager" });
     const gear = within(screen.getByRole("navigation", { name: "Window" })).getByRole("button", {
       name: "App settings",
     });
@@ -391,9 +435,9 @@ describe("App", () => {
       await waitFor(() => expect(document.activeElement).toBe(page));
       if (leave === "comma") fireEvent.keyDown(window, { key: ",", ctrlKey: true });
       if (leave === "escape") fireEvent.keyDown(window, { key: "Escape" });
-      if (leave === "back") fireEvent.click(screen.getByRole("button", { name: "Workspace" }));
+      if (leave === "back") fireEvent.click(screen.getByRole("button", { name: "Manager" }));
       expect(screen.queryByRole("region", { name: "Settings" })).toBeNull();
-      expect(screen.getByRole("heading", { name: "What would you like help with?" })).toBeTruthy();
+      expect(screen.getByRole("log", { name: "Conversation with Manager" })).toBeTruthy();
       await waitFor(() => expect(document.activeElement).toBe(gear));
     }
   });
@@ -636,8 +680,9 @@ describe("App", () => {
   it.each(["New agent", "New group"])(
     "restores the menu opener after %s replaces the menu",
     async (name) => {
+      listAgents.mockResolvedValue([agent("Manager")]);
       render(<App />);
-      await screen.findByRole("heading", { name: "What would you like help with?" });
+      await screen.findByRole("log", { name: "Conversation with Manager" });
       const opener = await screen.findByRole("button", { name: "Make something new" });
       opener.focus();
       fireEvent.click(opener);
@@ -655,8 +700,9 @@ describe("App", () => {
     ["New agent", "Search", "f"],
     ["New group", "Search", "f"],
   ])("keeps %s open under %s", async (name, upperName, key) => {
+    listAgents.mockResolvedValue([agent("Manager")]);
     render(<App />);
-    await screen.findByRole("heading", { name: "What would you like help with?" });
+    await screen.findByRole("log", { name: "Conversation with Manager" });
     fireEvent.click(screen.getByRole("button", { name: "Make something new" }));
     fireEvent.click(screen.getByRole("menuitem", { name: new RegExp(`^${name}`) }));
     const lower = await screen.findByRole("dialog", { name });
@@ -724,6 +770,99 @@ describe("App", () => {
     fireEvent.keyDown(document.activeElement as Element, { key: "Escape" });
     const input = await screen.findByRole("combobox", { name: "Write to Manager" });
     await waitFor(() => expect(document.activeElement).toBe(input));
+  });
+
+  const askOnTheMap = () => {
+    listAgents.mockResolvedValue([agent("Manager", 0), agent("Chef", 1)]);
+    pendingApprovals.mockResolvedValue([
+      anApproval({
+        id: "budget",
+        agentId: "id-Chef",
+        runId: "delegated",
+        request: { kind: "question", options: ["Under 12,000", "Up to 15,000"] },
+        summary: "Keep the venue under 12,000 euros?",
+        lapsesAt: Date.now() + 30_000,
+      }),
+    ]);
+    runningRuns.mockResolvedValue([
+      {
+        runId: "delegated",
+        agentId: "id-Manager",
+        groupId: agent("Manager").groupId,
+        startedAt: 1,
+        note: null,
+      },
+    ]);
+    const envelope = (over: Partial<Envelope>): Envelope => ({
+      id: "brief",
+      runId: "delegated",
+      channelId: "id-Manager",
+      from: { kind: "human" },
+      to: { kind: "agent", id: "id-Manager" },
+      parts: [{ type: "text", text: "Plan the team offsite in Lisbon." }],
+      trust: "operator",
+      hop: 0,
+      intent: "work",
+      expectsReply: true,
+      cause: null,
+      createdAt: 1,
+      ...over,
+    });
+    return {
+      messages: [
+        envelope({}),
+        envelope({
+          id: "asked",
+          from: { kind: "agent", id: "id-Manager" },
+          to: { kind: "agent", id: "id-Chef" },
+          createdAt: 2,
+        }),
+      ],
+      resultId: null,
+    };
+  };
+
+  it("opens the task owner on a colleague's question drawn on its map, focuses it there and opens no tray", async () => {
+    taskRecord.mockResolvedValue(askOnTheMap());
+    const { container } = render(<App />);
+    const asked = await waitFor(() => {
+      const drawn = container.querySelector<HTMLElement>(
+        '.task-map__question[data-question="budget"]',
+      );
+      expect(drawn).toBeTruthy();
+      return drawn as HTMLElement;
+    });
+    await waitFor(() => expect(document.activeElement).toBe(asked));
+    expect(useStore.getState().selected).toBe("id-Manager");
+    expect(screen.queryByRole("dialog", { name: "Questions" })).toBeNull();
+    const input = screen.getByRole("combobox", { name: "Write to Manager" });
+    input.focus();
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(document.activeElement).toBe(asked);
+    expect(screen.queryByRole("dialog", { name: "Questions" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "1 question waiting" }));
+    expect(await screen.findByRole("dialog", { name: "Questions" })).toBeTruthy();
+  });
+
+  it("leaves focus where the person put it when the map draws the question after they acted", async () => {
+    const record = askOnTheMap();
+    let draw: (value: typeof record) => void = () => {};
+    taskRecord.mockReturnValue(
+      new Promise((resolve) => {
+        draw = resolve;
+      }),
+    );
+    const { container } = render(<App />);
+    const input = await screen.findByRole("combobox", { name: "Write to Manager" });
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    fireEvent.pointerDown(screen.getByRole("log", { name: "Conversation with Manager" }));
+    input.blur();
+    await act(async () => draw(record));
+    await waitFor(() =>
+      expect(container.querySelector('.task-map__question[data-question="budget"]')).toBeTruthy(),
+    );
+    expect(document.activeElement).toBe(document.body);
+    expect(screen.queryByRole("dialog", { name: "Questions" })).toBeNull();
   });
 
   it.each(["automatic", "manual"])(

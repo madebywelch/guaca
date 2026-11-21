@@ -580,10 +580,10 @@ function ArtifactView({
         {!history && widgets !== null && (
           <>
             <label className="artifacts__owner artifacts__pin">
-              <span>Status bar</span>
+              <span>Sidebar</span>
               <select
                 className="input input--slim"
-                aria-label="Status bar"
+                aria-label="Sidebar"
                 aria-describedby={artifact.condensed ? undefined : why}
                 disabled={busy}
                 value={pinned?.width ?? ""}
@@ -601,7 +601,7 @@ function ArtifactView({
             {!artifact.condensed && (
               <span className="artifacts__pin-why" id={why}>
                 {pinned
-                  ? "This version has no condensed view; it can be taken off the bar."
+                  ? "This version has no condensed view; it can be taken off the sidebar."
                   : artifact.owner && !artifact.owner.gone
                     ? `No condensed view yet; ask ${artifact.owner.name} to add one.`
                     : "No condensed view yet; any agent in its group can add one."}

@@ -58,8 +58,9 @@ waits run on a shorter minute. It refuses to compile with optimizations on,
 so no shipped Host has it. Only `lapse` uses it.
 
 A run is ready when the Host answers `/health` and the page has exchanged the
-invitation's token for a session and drawn the App settings button. That is
-usable, not just alive: the schema is migrated and the page is admitted.
+invitation's token for a session and drawn its first screen: the App settings
+button, or the first run, which has no window buttons. That is usable, not
+just alive: the schema is migrated and the page is admitted.
 
 Before the first scenario starts its clock, `verify.py` starts Chromium once on
 a throwaway profile and waits, for at most three minutes, until it has opened a

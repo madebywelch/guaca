@@ -256,10 +256,10 @@ describe("StatusBar", () => {
     );
   });
 
-  it("names the two things that can live on it while there is nothing on it", () => {
+  it("offers a quick action while there is nothing on it, and no sentence about pinning", () => {
     seed([]);
     render(<StatusBar onOpen={onOpen} onMessage={onMessage} />);
-    expect(screen.getByText("A kept page can be pinned here, from Artifacts.")).toBeTruthy();
+    expect(screen.queryByText(/A kept page can be pinned here/)).toBeNull();
     expect(screen.getByRole("button", { name: "Add a quick action" })).toBeTruthy();
   });
 
@@ -279,7 +279,7 @@ describe("StatusBar", () => {
     fireEvent.change(screen.getByLabelText("Label"), { target: { value: "Brief" } });
     fireEvent.change(screen.getByLabelText("To"), { target: { value: "a2" } });
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Brief me." } });
-    fireEvent.click(screen.getByRole("button", { name: "Add to the status bar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add to the sidebar" }));
     await waitFor(() =>
       expect(addQuickAction).toHaveBeenCalledWith("Brief", {
         kind: "message",

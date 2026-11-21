@@ -598,7 +598,7 @@ describe("the agent's tabs", () => {
           .map((d) => [d.property, d.value]),
       );
     const tabs = at(".agent-tabs__list");
-    const caption = at(".agent-tabs .pane__meta");
+    const caption = at(".pane__header .pane__meta");
     expect(tabs.flex, "the tabs keep their width").toBe("none");
     expect(caption.flex?.split(" ")[1], "the caption shrinks").not.toBe("0");
     expect(caption["min-width"], "the caption can shrink below its text").toBe("0");

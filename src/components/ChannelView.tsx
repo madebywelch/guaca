@@ -2,7 +2,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "re
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { dismissing, rememberDismissOpener } from "../lib/dismiss";
 import { waitingQuestion } from "../lib/field";
-import { focusWriting } from "../lib/focus";
+import { focusQuestion, focusWriting } from "../lib/focus";
 import { useFollowBottom } from "../lib/follow";
 import { waitingLine } from "../lib/handoff";
 import { useShown } from "../lib/held";
@@ -77,6 +77,7 @@ export function ChannelView({
   onEditProfile,
 }: Props) {
   const lookups = useAgentLookup();
+  const pane = useRef<HTMLElement>(null);
   const messages = useStore((s) => s.messages[channel]);
   const { activity } = useShown();
   const showFailure = useStore((s) => s.showFailure);
@@ -103,29 +104,6 @@ export function ChannelView({
     () => (answeringId && answeringName ? { id: answeringId, name: answeringName } : null),
     [answeringId, answeringName],
   );
-
-  const requestedFocus = useRef<Props["focusRequest"]>(null);
-  useLayoutEffect(() => {
-    if (
-      !focusRequest ||
-      requestedFocus.current === focusRequest ||
-      view !== "conversation" ||
-      !transcript ||
-      !messages ||
-      dismissing()
-    )
-      return;
-    const card = [...(transcript()?.querySelectorAll<HTMLElement>("[data-question]") ?? [])].find(
-      (one) => one.dataset.question === focusRequest.id,
-    );
-    const answer = card?.querySelector<HTMLElement>(":is(button, input):not(:disabled)");
-    if (answer) {
-      requestedFocus.current = focusRequest;
-      answer.focus();
-    } else {
-      focusWriting();
-    }
-  }, [focusRequest, transcript, messages, view]);
 
   useLayoutEffect(follow, [follow, messages]);
 
@@ -162,6 +140,40 @@ export function ChannelView({
       : null;
   }, [rows]);
 
+  const requestedFocus = useRef<{
+    request: Props["focusRequest"];
+    state: "trying" | "fellBack" | "done";
+  }>({ request: null, state: "done" });
+  useLayoutEffect(() => {
+    if (requestedFocus.current.request !== focusRequest)
+      requestedFocus.current = { request: focusRequest, state: "trying" };
+    const current = requestedFocus.current;
+    if (
+      !focusRequest ||
+      current.state === "done" ||
+      view !== "conversation" ||
+      !messages ||
+      dismissing()
+    )
+      return;
+    if (current.state === "fellBack" && !composerUntouched()) return;
+    if (pane.current && focusQuestion(focusRequest.id, pane.current)) {
+      current.state = "done";
+      return;
+    }
+    if (current.state === "trying") {
+      focusWriting();
+      const acted = new AbortController();
+      const settle = () => {
+        current.state = "done";
+        acted.abort();
+      };
+      for (const type of ["pointerdown", "keydown"])
+        document.addEventListener(type, settle, { capture: true, signal: acted.signal });
+    }
+    current.state = "fellBack";
+  }, [focusRequest, messages, view, taskMaps]);
+
   useEffect(() => {
     if (!focused || messages === undefined) return;
     const row = transcript()?.querySelector<HTMLElement>(`[data-message~="${focused}"]`);
@@ -185,8 +197,8 @@ export function ChannelView({
   }
 
   return (
-    <section className="pane">
-      <header className="pane__header">
+    <section className="pane" ref={pane}>
+      <header className="pane__header" data-tauri-drag-region>
         {agent ? (
           <>
             <span className="pane__face">
@@ -209,6 +221,8 @@ export function ChannelView({
                 })}
               </p>
             </div>
+            {onView && <AgentTabs agent={agent} view={view} onView={onView} />}
+            <p className="pane__meta">{answeredBy(agent, group, settings)}</p>
             {paused && <span className="pane__flag">Paused</span>}
             <button
               type="button"
@@ -227,13 +241,6 @@ export function ChannelView({
           <h1 className="pane__title">Channel unavailable</h1>
         )}
       </header>
-
-      {agent && (
-        <div className="agent-tabs">
-          {onView && <AgentTabs agent={agent} view={view} onView={onView} />}
-          <p className="pane__meta">{answeredBy(agent, group, settings)}</p>
-        </div>
-      )}
 
       {agent && view !== "conversation" && view !== "now" && (
         <div className="pane__scroll">
@@ -448,6 +455,14 @@ export function ChannelView({
         />
       </div>
     </section>
+  );
+}
+
+function composerUntouched() {
+  const active = document.activeElement;
+  return (
+    active === document.body ||
+    (active instanceof HTMLTextAreaElement && active.matches("[data-field]") && active.value === "")
   );
 }
 

@@ -44,6 +44,10 @@ def free_port() -> int:
         return probe.getsockname()[1]
 
 
+def admitted(browser: Browser) -> bool:
+    return bool(browser.find("button", "App settings") or browser.find("region", "Get started with Guaca"))
+
+
 def until(what: str, check: Callable[[], Any], timeout: float = 60, every: float = 0.1) -> Any:
     deadline = time.monotonic() + timeout
     last = ""
@@ -536,7 +540,7 @@ class World:
         self.browser.open(self.host.invitation)
         until("the page loads and the token is exchanged",
               lambda: self.browser and "#token=" not in (self.browser.evaluate("location.href") or "#token=")
-              and self.browser.find("button", "App settings"), 60)
+              and admitted(self.browser), 60)
         return self.browser
 
     @property

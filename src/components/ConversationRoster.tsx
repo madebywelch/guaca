@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from "react";
+import { type ReactNode, useLayoutEffect, useRef } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { dueQuestions } from "../lib/frame";
 import { useShown } from "../lib/held";
@@ -12,10 +12,13 @@ import type { AgentId } from "../lib/types";
 export function ConversationRoster({
   onOpen,
   onQuestions,
+  foot,
 }: {
   onOpen: (agentId: AgentId) => void;
   onQuestions: () => void;
+  foot: ReactNode;
 }) {
+  const now = useNow(30_000);
   const agents = useStore((s) => s.agents);
   const groups = useStore((s) => s.groups);
   const selected = useStore((s) => s.selected);
@@ -24,7 +27,7 @@ export function ConversationRoster({
   const scroll = useRef<HTMLDivElement>(null);
   const decisions = useStore((s) => s.decisions);
   const { pending, stuck, activity } = useShown();
-  const filed = dueQuestions(decisions, useNow(30_000));
+  const filed = dueQuestions(decisions, now);
   const count = pending.length + stuck.length + filed.length;
   const asking = new Set([...pending, ...stuck, ...filed].map((one) => one.agentId));
   const working = new Set(running.map((one) => one.agentId));
@@ -64,71 +67,88 @@ export function ConversationRoster({
   }, [selected]);
 
   return (
-    <nav className="roster" aria-label="Agent conversations">
-      <button
-        type="button"
-        className="roster__questions"
-        disabled={count === 0}
-        onClick={onQuestions}
-      >
-        {count === 1 ? "1 question waiting" : `${count} questions waiting`}
-      </button>
-      <select
-        className="roster__compact"
-        aria-label="Switch agent"
-        value={selected ?? ""}
-        onChange={(event) => onOpen(event.currentTarget.value)}
-      >
-        {all.map(({ id, name, rows }) => (
-          <optgroup key={id} label={name}>
-            {rows.map(({ agent, status, key }) => (
-              <option key={agent.id} value={agent.id}>
-                {agent.name}, {status}
-                {key && ` (${key})`}
-              </option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
-      <div className="roster__scroll" ref={scroll}>
-        {all.map(({ id, name, rows }) => (
-          <section key={id} aria-label={name}>
-            <h2 className="roster__group">{name}</h2>
-            <ul className="roster__list">
-              {rows.map(({ agent, index, status, key }) => (
-                <li key={agent.id}>
-                  <button
-                    type="button"
-                    className="roster__agent"
-                    aria-label={`${agent.name}, ${status}`}
-                    aria-current={agent.id === selected ? "page" : undefined}
-                    aria-keyshortcuts={
-                      index < 9 ? `Meta+${index + 1} Control+${index + 1}` : undefined
-                    }
-                    onClick={() => onOpen(agent.id)}
-                    data-status={status}
-                  >
-                    <AgentAvatar
-                      avatar={agent.avatar}
-                      color={agent.color}
-                      seed={agent.id}
-                      size="sm"
-                      title=""
-                    />
-                    <span className="roster__label">
-                      <span className="roster__name" title={agent.name}>
-                        {agent.name}
-                      </span>
-                      <span className="roster__status">{status}</span>
-                    </span>
-                    {key && <kbd>{key}</kbd>}
-                  </button>
-                </li>
+    <div className="roster">
+      <nav className="roster__nav" aria-label="Agent conversations">
+        <button
+          type="button"
+          className="roster__questions"
+          disabled={count === 0}
+          onClick={onQuestions}
+        >
+          {count === 1 ? "1 question waiting" : `${count} questions waiting`}
+        </button>
+        <select
+          className="roster__compact"
+          aria-label="Switch agent"
+          value={selected ?? ""}
+          onChange={(event) => onOpen(event.currentTarget.value)}
+        >
+          {all.map(({ id, name, rows }) => (
+            <optgroup key={id} label={name}>
+              {rows.map(({ agent, status, key }) => (
+                <option key={agent.id} value={agent.id}>
+                  {agent.name}, {status}
+                  {key && ` (${key})`}
+                </option>
               ))}
-            </ul>
-          </section>
-        ))}
-      </div>
-    </nav>
+            </optgroup>
+          ))}
+        </select>
+        <div className="roster__scroll" ref={scroll}>
+          {all.map(({ id, name, rows }) => (
+            <section key={id} aria-label={name}>
+              <h2 className="roster__group">{name}</h2>
+              <ul className="roster__list">
+                {rows.map(({ agent, index, status, key }) => (
+                  <li key={agent.id}>
+                    <button
+                      type="button"
+                      className="roster__agent"
+                      aria-label={`${agent.name}, ${status}`}
+                      aria-current={agent.id === selected ? "page" : undefined}
+                      aria-keyshortcuts={
+                        index < 9 ? `Meta+${index + 1} Control+${index + 1}` : undefined
+                      }
+                      onClick={() => onOpen(agent.id)}
+                      data-status={status}
+                    >
+                      <AgentAvatar
+                        avatar={agent.avatar}
+                        color={agent.color}
+                        seed={agent.id}
+                        size="sm"
+                        title=""
+                      />
+                      <span className="roster__label">
+                        <span className="roster__name" title={agent.name}>
+                          {agent.name}
+                        </span>
+                        <span className="roster__status">{status}</span>
+                      </span>
+                      {key && <kbd>{key}</kbd>}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
+        </div>
+      </nav>
+      <footer className="roster__foot">
+        {foot}
+        <p className="roster__day">
+          <span className="roster__day-long">
+            {new Date(now).toLocaleDateString([], {
+              weekday: "long",
+              month: "long",
+              day: "numeric",
+            })}
+          </span>
+          <span className="roster__day-short">
+            {new Date(now).toLocaleDateString([], { month: "short", day: "numeric" })}
+          </span>
+        </p>
+      </footer>
+    </div>
   );
 }
