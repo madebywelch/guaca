@@ -2976,6 +2976,17 @@ def scenario_taskmap(w: World) -> None:
             all(opens_remainder(d, lease) for d in fanout.values())
             and all(opens_remainder(d, (buy,)) for d in asking.values()),
             observed={key: {"shown": d["names"], "rest": d["rest"]} for key, d in layouts.items()})
+    insets = {}
+    for width, height in (*TASK_MAP_FRAMES, (390, 700)):
+        ui.viewport(width, height)
+        insets[width] = ui.evaluate("""(() => {
+          if (!document.querySelector('.task-map-stack:not([hidden]) .task-map__graph')) return null;
+          return ['.composer', '.msg__bubble', '.result'].map(selector =>
+            document.querySelector(selector)?.getBoundingClientRect().left);
+        })()""")
+    w.check("the composer and transcript share one inset beneath the live task map",
+            all(edges and None not in edges and max(edges) - min(edges) < 1 for edges in insets.values()),
+            observed=insets)
     ui.viewport(900, 700)
     ui.click("button", f"Task map {MAP_LEASE}", exact=False)
     w.wait("the urgent question is back in the map", lambda: MAP_LEASE_ASK in card_text(w))
@@ -3071,6 +3082,7 @@ SCENARIOS: dict[str, Scenario] = {
         "the pinned maps cover at most two fifths of the pane in both themes and window sizes",
         "the fan-out and question-only maps lay out by their pane's width in both themes at every frame",
         "the colleagues disclosure opens exactly the branches the fan-out map hides",
+        "the composer and transcript share one inset beneath the live task map",
         "manually folding a live task keeps it folded while another question is open",
         "Tab and a number answer the question on the open branch",
         "Escape from the composer still opens the Questions tray with a branch waiting",
