@@ -108,6 +108,8 @@ pub enum Part {
     Notice {
         kind: NoticeKind,
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
     },
     ToolCall {
         name: String,
@@ -490,7 +492,7 @@ mod tests {
             to: agent(AgentId::new()),
             parts: vec![
                 Part::text("visible"),
-                Part::Notice { kind: NoticeKind::GuardStop, text: "hidden".into() },
+                Part::Notice { kind: NoticeKind::GuardStop, text: "hidden".into(), detail: None },
                 Part::text("also visible"),
             ],
             trust: Trust::Operator,

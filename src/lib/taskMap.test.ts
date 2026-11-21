@@ -50,6 +50,31 @@ function question(runId: string, lapsesAt: number | null): Approval {
 }
 
 describe("task map", () => {
+  it("marks a colleague whose model call failed as failed, with the notice that says so", () => {
+    const brief = message("run-1", 1, person, lead, "Find the figures.");
+    const asked = message("run-1", 2, lead, analyst, "Find the unavailable figures.");
+    const failure: Envelope = {
+      ...message("run-1", 3, { kind: "system" }, analyst, ""),
+      parts: [{ type: "notice", kind: "upstreamError", text: "Analyst could not reply." }],
+      cause: asked.id,
+    };
+    const [map] = taskMaps("lead", [brief, asked, failure], [], new Set());
+    expect(map?.branches.map((branch) => [branch.agentId, branch.failed?.id ?? null])).toEqual([
+      ["analyst", failure.id],
+    ]);
+  });
+
+  it("does not take a guard notice to a colleague for a failure", () => {
+    const brief = message("run-1", 1, person, lead, "Find the figures.");
+    const asked = message("run-1", 2, lead, analyst, "Find the unavailable figures.");
+    const stop: Envelope = {
+      ...message("run-1", 3, { kind: "system" }, analyst, ""),
+      parts: [{ type: "notice", kind: "guardStop", text: "hop limit" }],
+    };
+    const [map] = taskMaps("lead", [brief, asked, stop], [], new Set());
+    expect(map?.branches[0]?.failed).toBeNull();
+  });
+
   it("puts questions before working colleagues and finished replies last", () => {
     const [map] = taskMaps(
       lead.id,

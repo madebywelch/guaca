@@ -282,6 +282,7 @@ export function TaskMapCard({
   const count = map.branches.length;
   const waiting = map.branches.filter((branch) => branch.questions.length).length;
   const answered = map.branches.filter((branch) => branch.reply).length;
+  const failed = map.branches.filter((branch) => branch.failed && !branch.reply).length;
   const [awaited, ...alsoAwaited] = map.branches.filter((branch) => !branch.reply);
   const hidden = Math.max(0, count - fitted);
   const branchKeys = map.branches
@@ -394,6 +395,7 @@ export function TaskMapCard({
       className="task-map__node"
       data-question={branch.questions.length > 0 || undefined}
       data-finished={(branch.reply !== null && branch.questions.length === 0) || undefined}
+      data-failed={(branch.failed !== null && branch.reply === null) || undefined}
     >
       <div className="task-map__branch-head">
         {participant(branch.agentId)}
@@ -402,13 +404,18 @@ export function TaskMapCard({
             ? "Question for you"
             : branch.reply
               ? "Sent a message"
-              : map.inFlight
-                ? "Working"
-                : "Did not answer"}
+              : branch.failed
+                ? "Failed"
+                : map.inFlight
+                  ? "Working"
+                  : "Did not answer"}
         </span>
       </div>
-      {!branch.questions.length && !branch.reply && (
+      {!branch.questions.length && !branch.reply && !branch.failed && (
         <p className="task-map__excerpt">{preview(plainText(branch.asked), PREVIEW_LENGTH)}</p>
+      )}
+      {!branch.questions.length && !branch.reply && branch.failed && (
+        <BranchFailure failed={branch.failed} />
       )}
       {branch.questions.map((request, questionIndex) => (
         <BranchQuestion
@@ -463,7 +470,9 @@ export function TaskMapCard({
             ? "Task map"
             : delivered
               ? "Hand-off complete"
-              : "Hand-off ended"}
+              : failed
+                ? "Hand-off failed"
+                : "Hand-off ended"}
         </strong>
         <span className="task-map__subject">{preview(text, SUMMARY_LENGTH)}</span>
         <span>
@@ -475,7 +484,9 @@ export function TaskMapCard({
                 ? waiting
                   ? `${waiting} waiting for you`
                   : `Started ${clockLabel(map.brief.createdAt)}`
-                : `${answered} of ${count} answered`}
+                : failed
+                  ? `${answered} of ${count} answered, ${failed} failed`
+                  : `${answered} of ${count} answered`}
         </span>
         <span>{open ? "Hide map" : "Show map"}</span>
       </button>
@@ -583,6 +594,34 @@ export function TaskMapCard({
           document.body,
         )}
     </section>
+  );
+}
+
+function BranchFailure({ failed }: { failed: Envelope }) {
+  const showFailure = useStore((state) => state.showFailure);
+  const [sent, setSent] = useState(false);
+  const said = failed.parts.flatMap((part) => (part.type === "notice" ? [part.text] : []))[0];
+  const cause = failed.cause;
+  return (
+    <div className="task-map__failure">
+      {said && <p className="task-map__excerpt">{said.split("\n")[0]}</p>}
+      {cause && (
+        <button
+          type="button"
+          className="btn btn--compact"
+          disabled={sent}
+          onClick={() => {
+            setSent(true);
+            api.retryTurn(failed.channelId, cause).catch((error: unknown) => {
+              showFailure(error);
+              setSent(false);
+            });
+          }}
+        >
+          {sent ? "Sent again" : "Try again"}
+        </button>
+      )}
+    </div>
   );
 }
 

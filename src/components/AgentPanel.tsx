@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { useShown } from "../lib/held";
+import { api } from "../lib/ipc";
 import { runsOn } from "../lib/profile";
 import { useStore } from "../lib/store";
 import { useNow, whenLabel } from "../lib/time";
@@ -9,7 +10,9 @@ import { callInFlight } from "../lib/trail";
 import {
   type Activity,
   type AgentCard,
+  type AgentId,
   type Envelope,
+  type MessageId,
   type Participant,
   plainText,
   type RoutineId,
@@ -115,6 +118,27 @@ function ended(one: Envelope) {
   return null;
 }
 
+function RetryTurn({ agent, cause }: { agent: AgentId; cause: MessageId }) {
+  const showFailure = useStore((state) => state.showFailure);
+  const [sent, setSent] = useState(false);
+  return (
+    <button
+      type="button"
+      className="btn btn--compact doing__retry"
+      disabled={sent}
+      onClick={() => {
+        setSent(true);
+        api.retryTurn(agent, cause).catch((error: unknown) => {
+          showFailure(error);
+          setSent(false);
+        });
+      }}
+    >
+      {sent ? "Sent again" : "Try again"}
+    </button>
+  );
+}
+
 const doingWords: Record<"thinking" | "queued", string> = {
   thinking: "Working on a request from",
   queued: "Waiting its turn, with a request from",
@@ -146,6 +170,7 @@ function Doing({ agent }: { agent: AgentCard }) {
                 {whenLabel(said.createdAt, now)}
               </span>{" "}
               <span className="doing__text">{end.text}</span>
+              {said.cause && <RetryTurn agent={said.channelId} cause={said.cause} />}
             </>
           ) : said ? (
             <>

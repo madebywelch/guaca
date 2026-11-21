@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useStore } from "../lib/store";
-import type { Outcome, RunId, WorkDecision } from "../lib/types";
+import type { Envelope, Outcome, RunId, TaskRecord, WorkDecision } from "../lib/types";
 import { aDecision, aGroup, anAgent } from "../test-fixtures";
 import { ForYou } from "./ForYou";
 
@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   resume: vi.fn(),
   outcomes: vi.fn<(query: { unseenOnly?: boolean }) => Promise<Outcome[]>>(),
   seen: vi.fn<(target: { runIds?: RunId[]; before?: number }) => Promise<RunId[]>>(),
+  taskRecord: vi.fn<(channel: string, run: string) => Promise<TaskRecord | null>>(),
+  retry: vi.fn<(agent: string, message: string) => Promise<RunId>>(),
 }));
 vi.mock("../lib/ipc", () => ({
   api: {
@@ -21,6 +23,8 @@ vi.mock("../lib/ipc", () => ({
     resumeDecision: mocks.resume,
     listOutcomes: mocks.outcomes,
     markOutcomesSeen: mocks.seen,
+    taskRecord: mocks.taskRecord,
+    retryTurn: mocks.retry,
   },
 }));
 
@@ -301,6 +305,84 @@ describe("Finished", () => {
     expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("For you 1 question");
     expect(screen.getByText("Scribe is waiting on you.")).toBeTruthy();
     expect(within(requests).queryByRole("heading")).toBeNull();
+  });
+
+  const failure = (runId: string) =>
+    outcome(runId, {
+      status: "failed",
+      headline: "Analyst could not reply: the provider had a problem on its side.",
+      noteId: `notice-${runId}`,
+    });
+
+  const notice = (id: string, cause: string | null): Envelope => ({
+    id,
+    runId: "run-2",
+    channelId: "agent-3",
+    from: { kind: "system" },
+    to: { kind: "agent", id: "agent-3" },
+    parts: [{ type: "notice", kind: "upstreamError", text: "Analyst could not reply." }],
+    trust: "system",
+    hop: 0,
+    expectsReply: false,
+    intent: "courtesy",
+    cause,
+    createdAt: NOW - HOUR,
+  });
+
+  it("says why when a failed task can no longer be sent again, and lets it be tried later", async () => {
+    const showFailure = vi.fn();
+    useStore.setState({ showFailure });
+    mocks.taskRecord.mockResolvedValue({ messages: [notice("notice-run-2", null)], resultId: null });
+    hostHas([failure("run-2")]);
+    await act(async () => {
+      render(<ForYou onClose={() => {}} />);
+    });
+    const stalled = screen.getByRole("region", { name: "Did not finish" });
+    await act(async () => {
+      fireEvent.click(within(stalled).getByRole("button", { name: "Try again" }));
+    });
+    expect(mocks.retry).not.toHaveBeenCalled();
+    expect(String(showFailure.mock.calls[0]?.[0])).toContain("can no longer be sent again");
+    expect(mocks.seen).not.toHaveBeenCalled();
+    expect(
+      (within(stalled).getByRole("button", { name: "Try again" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it("files a failed task under Did not finish, never with the finished ones", async () => {
+    hostHas([outcome("run-1"), failure("run-2")]);
+    await act(async () => {
+      render(<ForYou onClose={() => {}} />);
+    });
+    const stalled = screen.getByRole("region", { name: "Did not finish" });
+    const finished = screen.getByRole("region", { name: "Finished" });
+    expect(within(finished).queryByText(/could not reply/)).toBeNull();
+    expect(within(stalled).getByText(/could not reply/)).toBeTruthy();
+    expect(within(stalled).getByRole("button", { name: "Try again" })).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Nothing needs your answer. 1 finished and 1 did not finish since you last looked.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("sends a failed task again from where it is listed, then marks it seen", async () => {
+    mocks.taskRecord.mockResolvedValue({
+      messages: [notice("notice-run-2", "ask-1")],
+      resultId: null,
+    });
+    mocks.retry.mockResolvedValue("run-3");
+    hostHas([failure("run-2")]);
+    await act(async () => {
+      render(<ForYou onClose={() => {}} />);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    });
+    expect(mocks.taskRecord).toHaveBeenCalledWith("agent-1", "run-2");
+    expect(mocks.retry).toHaveBeenCalledWith("agent-3", "ask-1");
+    expect(mocks.seen).toHaveBeenCalledWith({ runIds: ["run-2"] });
+    expect(screen.queryByRole("region", { name: "Did not finish" })).toBeNull();
   });
 
   it("opens the closing note in its channel and marks the run seen", async () => {

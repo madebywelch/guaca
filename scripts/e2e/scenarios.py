@@ -19,7 +19,7 @@ API_KEY = "API key Use OpenRouter or OpenAI, with usage billed to that account."
 WRONG_KEY = "verify-wrong-key"
 HELLO = "Hello. I am ready when you are."
 ROSTER = "Agent conversations"
-STATUSES = ("Idle", "Paused", "Working", "Has a question", "Has a result", "Needs attention")
+STATUSES = ("Idle", "Paused", "Working", "Has a question", "Has a result", "Task failed", "Needs attention")
 
 
 def roster_entry(accessible_name: str, name: str) -> re.Match | None:
@@ -1613,7 +1613,18 @@ def scenario_handoff(w: World) -> None:
     ui.click("button", "Retry task map")
     w.wait("the map records that the hand-off ended without a result", lambda: ui.evaluate(
         "[...document.querySelectorAll('.task-map__summary')].some(el => "
-        "el.innerText.includes('Hand-off ended') && el.innerText.includes('unavailable figures'))"))
+        "el.innerText.includes('Hand-off failed') && el.innerText.includes('unavailable figures'))"))
+    if not ui.evaluate("[...document.querySelectorAll('.task-map')].some(map => map.querySelector('.task-map__summary')"
+                       "?.getAttribute('aria-expanded') === 'true')"):
+        ui.click("button", "Hand-off failed", exact=False)
+    branch = w.wait("the failed colleague's branch is drawn", lambda: ui.evaluate(
+        "(() => { const node = document.querySelector('.task-map__node[data-failed]');"
+        " return node && {status: node.querySelector('.task-map__branch-head > span')?.innerText,"
+        " said: node.querySelector('.task-map__failure .task-map__excerpt')?.innerText,"
+        " retry: [...node.querySelectorAll('button')].map(b => b.innerText).includes('Try again')}; })()"))
+    w.check("a colleague whose model call failed is marked failed on the map, in plain words, with Try again",
+            branch == {"status": "Failed", "said": FAILED_PLAINLY.format(name="Analyst"), "retry": True},
+            observed=branch)
     w.check("a colleague's failure does not promote the lead's progress note to a result",
             failed[-1]["status"] == "failed" and not ui.evaluate(
                 "[...document.querySelectorAll('.msg--result')].some(el => "
@@ -1665,6 +1676,124 @@ def scenario_failed(w: World) -> None:
       item => (typeof item === 'string' ? document.querySelector(item) : item).getBoundingClientRect().left)""")
     w.check("both failure notices start at the composer edge",
             len(edges) == 3 and max(edges) - min(edges) < 1, observed=edges)
+    no_unscripted(w)
+
+
+FAILED_PLAINLY = "{name} could not reply: the provider had a problem on its side. Wait a minute, then try again."
+CHECK_INVOICE = "Check the failed invoice."
+FIGURES = "Find the unavailable figures."
+FIGURES_FOUND = "The figures are in the appendix."
+NOTICE_INK = """(() => {
+  const chip = [...document.querySelectorAll('.chip--error')].at(-1);
+  if (!chip) return null;
+  const said = chip.querySelector('.chip__said');
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 1;
+  const pen = canvas.getContext('2d', {willReadFrequently: true});
+  const layers = [];
+  for (let el = chip; el; el = el.parentElement) layers.push(getComputedStyle(el).backgroundColor);
+  pen.fillStyle = document.documentElement.dataset.surface === 'dark' ? '#000' : '#fff';
+  pen.fillRect(0, 0, 1, 1);
+  for (const layer of layers.reverse()) { pen.fillStyle = layer; pen.fillRect(0, 0, 1, 1); }
+  const back = [...pen.getImageData(0, 0, 1, 1).data];
+  pen.fillStyle = getComputedStyle(said).color;
+  pen.fillRect(0, 0, 1, 1);
+  const ink = [...pen.getImageData(0, 0, 1, 1).data];
+  const light = ([r, g, b]) => [r, g, b].map(v => v / 255)
+    .map(v => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
+    .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
+  const [high, low] = [light(ink), light(back)].sort((a, b) => b - a);
+  const retry = [...chip.querySelectorAll('button')].find(b => b.innerText.startsWith('Try again'));
+  const line = parseFloat(getComputedStyle(retry).lineHeight);
+  return {ratio: Math.round((high + 0.05) / (low + 0.05) * 100) / 100,
+          retryOnOneLine: retry.getBoundingClientRect().height < line * 2};
+})()"""
+
+
+def scenario_failure(w: World) -> None:
+    analyst = threading.Event()
+    retrying = threading.Event()
+
+    def script(c: Call) -> Reply | None:
+        if c.last_user == "ping":
+            return say("pong")
+        if c.speaker == AGENT and c.last_user.endswith("Say hello."):
+            return say(HELLO)
+        if c.speaker == AGENT and c.last_user.endswith(CHECK_INVOICE):
+            return refuse(500, "The model is overloaded.")
+        if c.speaker == "Analyst" and c.last_user.endswith(FIGURES):
+            return say(FIGURES_FOUND) if retrying.is_set() else held(analyst, refuse(500, "The model is overloaded."))
+        return None
+
+    w.model.script = script
+    w.start()
+    first_run(w)
+    settled(w, 1)
+    ui = w.ui
+    new_agent(w, "Analyst", "Answer questions about figures.")
+
+    write(w, AGENT, CHECK_INVOICE)
+    w.wait("the failure is shown where it happened", lambda: ui.find("button", "Try again"))
+    words = ui.evaluate("[...document.querySelectorAll('.chip--error .chip__said')].at(-1)?.innerText")
+    shown = conversation(w)
+    w.check("a failed model call says what happened and what to do, in plain words, with no status code",
+            words == FAILED_PLAINLY.format(name=AGENT)
+            and not any(word in shown for word in ("HTTP", "500", "overloaded", "inference endpoint")),
+            observed={"said": words, "speaksHttp": "HTTP" in shown})
+    ui.click("button", "Details")
+    detail = w.wait("Details opens", lambda: ui.evaluate(
+        "(() => { const d = [...document.querySelectorAll('.chip__detail')].at(-1); return d && !d.hidden && d.innerText; })()"))
+    w.check("Details shows the provider's own words for someone who wants them",
+            "HTTP 500" in detail and "The model is overloaded." in detail, observed=detail)
+    ink = {}
+    for surface in LOOK_SURFACES:
+        look_surface(w, surface)
+        open_agent(w, AGENT)
+        ink[surface] = w.wait(f"the notice is drawn in {surface}", lambda: ui.evaluate(NOTICE_INK))
+    w.check("the failure's words measure at least 4.5 to 1 on their background in light and dark, with Try again on one line",
+            all(m["ratio"] >= 4.5 and m["retryOnOneLine"] for m in ink.values()),
+            observed={s: m["retryOnOneLine"] for s, m in ink.items()}, detail=ink, shot=True)
+
+    ui.click("button", "Now")
+    now = w.wait("the Now tab says the last run failed", lambda: ui.evaluate(
+        "(() => { const line = document.querySelector('.doing__line'); return line && line.innerText; })()"))
+    w.check("the Now tab calls the last run failed, in the same words, and offers Try again",
+            now.startswith("Last run failed") and FAILED_PLAINLY.format(name=AGENT) in now
+            and bool(ui.find("button", "Try again")), observed=bool(ui.find("button", "Try again")), detail=now)
+    ui.click("button", "Conversation")
+
+    write(w, "Analyst", FIGURES)
+    w.wait("Analyst's model call is in the air", lambda: w.host.scalar(
+        "SELECT count(*) FROM messages WHERE parts LIKE ?", f"%{FIGURES}%"))
+    open_agent(w, AGENT)
+    analyst.set()
+    ended = settled(w, 3, "Analyst's failure is recorded")
+    w.wait("the roster says Analyst's task failed", lambda: roster_status(w, "Analyst") == "Task failed")
+    w.check("an agent whose last task failed is listed as failed, not as needing attention",
+            ended[-1]["status"] == "failed" and roster_status(w, "Analyst") == "Task failed",
+            observed=roster_status(w, "Analyst"))
+    ui.click("button", "For you")
+    w.wait("For you opens", lambda: ui.find("dialog", "For you", exact=False))
+    regions = w.wait("the failure is filed on its own", lambda: ui.evaluate("""(() => {
+      const named = (id) => document.getElementById(id)?.closest('section')?.innerText ?? null;
+      const stalled = named('for-you-unfinished');
+      return stalled && {stalled, finished: named('for-you-finished')};
+    })()"""))
+    w.check("For you files the failed task under Did not finish with Try again, never with finished work",
+            FAILED_PLAINLY.format(name="Analyst").split(".")[0] in regions["stalled"]
+            and "Try again" in regions["stalled"]
+            and "could not reply" not in (regions["finished"] or ""),
+            observed={"stalled": "Analyst could not reply" in regions["stalled"],
+                      "finishedHasFailure": "could not reply" in (regions["finished"] or "")}, shot=True)
+    retrying.set()
+    ui.press(next(node for node in ui.within("region", "Did not finish", "button") if label(node) == "Try again"))
+    again = settled(w, 4, "the task sent again settles")
+    w.wait("Did not finish empties once the task is sent again", lambda: not ui.evaluate(
+        "Boolean(document.getElementById('for-you-unfinished'))"))
+    w.check("Try again from For you sends the same task again and it finishes",
+            again[-1] == {"status": "done", "trigger": "retry", "agent": "Analyst"}
+            and FIGURES_FOUND in said(w, "Analyst"),
+            observed=again[-1])
     no_unscripted(w)
 
 
@@ -3432,6 +3561,7 @@ SCENARIOS: dict[str, Scenario] = {
         "the folded line opens onto both answers",
         "opening a colleague's message shows their recorded words",
         "a hand-off cut short by Stop folds and says who answered, instead of ticking on",
+        "a colleague whose model call failed is marked failed on the map, in plain words, with Try again",
         "a colleague's failure does not promote the lead's progress note to a result",
         "a failed map read cannot turn a progress note into a result",
         "every model call was one the scenario scripted",
@@ -3442,6 +3572,19 @@ SCENARIOS: dict[str, Scenario] = {
     (
         "a failed model call tells the other conversation the turn acted on at once, with Try again on each",
         "both failure notices start at the composer edge",
+        "every model call was one the scenario scripted",
+    )),
+    "failure": Scenario(scenario_failure, "A model call fails: the conversation says what happened and what to do in "
+                        "plain words, with the provider's words behind Details, legible in light and dark; the Now "
+                        "tab, the roster and For you call it failed, and Try again from For you sends it again.",
+    (
+        "a failed model call says what happened and what to do, in plain words, with no status code",
+        "Details shows the provider's own words for someone who wants them",
+        "the failure's words measure at least 4.5 to 1 on their background in light and dark, with Try again on one line",
+        "the Now tab calls the last run failed, in the same words, and offers Try again",
+        "an agent whose last task failed is listed as failed, not as needing attention",
+        "For you files the failed task under Did not finish with Try again, never with finished work",
+        "Try again from For you sends the same task again and it finishes",
         "every model call was one the scenario scripted",
     )),
     "routine": Scenario(scenario_routine, "A person adds a routine on an event, copies its curl line, reveals its secret and hides it again, and one delivery "

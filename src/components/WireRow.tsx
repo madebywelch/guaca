@@ -439,19 +439,36 @@ export function AsideRow({ text }: { text: string }) {
 export function NoticeRow({
   kind,
   text,
+  detail,
   onRetry,
 }: {
   kind: string;
   text: string;
+  detail?: string;
   onRetry?: () => void;
 }) {
   const [tried, setTried] = useState(false);
+  const [open, setOpen] = useState(false);
+  const shown = useId();
 
   return (
     <div className="wire wire--notice">
-      <span className={kind === "upstreamError" ? "chip chip--error" : "chip chip--guard"}>
+      <div className={kind === "upstreamError" ? "chip chip--error" : "chip chip--guard"}>
         <Icon name={kind === "upstreamError" ? "alert" : "shield"} size={16} />
-        <span style={{ whiteSpace: "pre-line" }}>{text}</span>
+        <span className="chip__said" style={{ whiteSpace: "pre-line" }}>
+          {text}
+        </span>
+        {detail && (
+          <button
+            type="button"
+            className="chip__action chip__action--quiet"
+            aria-expanded={open}
+            aria-controls={shown}
+            onClick={() => setOpen((was) => !was)}
+          >
+            Details
+          </button>
+        )}
         {onRetry && (
           <button
             type="button"
@@ -465,7 +482,12 @@ export function NoticeRow({
             {tried ? "Sent again" : "Try again"}
           </button>
         )}
-      </span>
+        {detail && (
+          <p id={shown} className="chip__detail" hidden={!open}>
+            {detail}
+          </p>
+        )}
+      </div>
     </div>
   );
 }

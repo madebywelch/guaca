@@ -1,6 +1,7 @@
+import { api } from "./ipc";
 import { whoIsWaiting } from "./questions";
 import { relativeTime } from "./time";
-import type { AgentId, Group, GroupId, Outcome, OutcomeStatus } from "./types";
+import type { AgentId, Group, GroupId, Outcome, OutcomeStatus, RunId } from "./types";
 
 export const EARLIER_MS = 7 * 24 * 3_600_000;
 
@@ -26,6 +27,20 @@ export function earlier(outcomes: Outcome[], now: number): Outcome[] {
   return outcomes
     .filter((one) => one.seenAt !== null && told(one) && one.finishedAt >= now - EARLIER_MS)
     .sort(newestFirst);
+}
+
+export function didNotFinish(outcome: Outcome): boolean {
+  return outcome.status === "failed" || outcome.status === "interrupted";
+}
+
+export const NOT_SENT_AGAIN =
+  "This task can no longer be sent again from here. Open the conversation and write it again.";
+
+export async function retryOutcome(outcome: Outcome): Promise<RunId> {
+  const record = outcome.noteId ? await api.taskRecord(outcome.agentId, outcome.runId) : null;
+  const notice = record?.messages?.find((message) => message.id === outcome.noteId);
+  if (!notice?.cause) throw new Error(NOT_SENT_AGAIN);
+  return api.retryTurn(notice.channelId, notice.cause);
 }
 
 export function statusWord(status: OutcomeStatus): string | null {
@@ -94,8 +109,12 @@ export function moreLine(total: number, shown: number): string | null {
   return rest > 0 ? `And ${rest} more in For you` : null;
 }
 
-export function forYouSummary(waiting: string[], unseen: number): string {
+export function forYouSummary(waiting: string[], unseen: number, stalled = 0): string {
   if (waiting.length > 0) return `${whoIsWaiting(waiting)}.`;
-  if (unseen > 0) return `Nothing needs your answer. ${unseen} finished since you last looked.`;
+  const since = [
+    ...(unseen > 0 ? [`${unseen} finished`] : []),
+    ...(stalled > 0 ? [`${stalled} did not finish`] : []),
+  ];
+  if (since.length > 0) return `Nothing needs your answer. ${since.join(" and ")} since you last looked.`;
   return "Nothing needs your answer right now.";
 }

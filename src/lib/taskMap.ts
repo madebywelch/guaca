@@ -4,6 +4,7 @@ export interface TaskBranch {
   agentId: AgentId;
   asked: Envelope;
   reply: Envelope | null;
+  failed: Envelope | null;
   questions: Approval[];
   delegatedTo: AgentId[];
 }
@@ -38,6 +39,15 @@ export function taskMaps(
       const branches = new Map<AgentId, TaskBranch>();
       for (const message of run) {
         const { from, to } = message;
+        if (from.kind === "system" && to.kind === "agent") {
+          const branch = branches.get(to.id);
+          if (
+            branch &&
+            message.parts.some((part) => part.type === "notice" && part.kind === "upstreamError")
+          )
+            branch.failed = message;
+          continue;
+        }
         if (from.kind !== "agent" || to.kind !== "agent") continue;
         if (from.id === lead && to.id !== lead && message.intent === "work") {
           if (!branches.has(to.id)) {
@@ -45,6 +55,7 @@ export function taskMaps(
               agentId: to.id,
               asked: message,
               reply: null,
+              failed: null,
               questions: [],
               delegatedTo: [],
             });

@@ -426,6 +426,65 @@ impl LlmError {
         }
     }
 
+    pub fn plainly(&self) -> String {
+        match self {
+            LlmError::NotConfigured => {
+                "no AI provider is set up yet. Connect one in Settings, then try again.".into()
+            }
+            LlmError::Auth { .. } => {
+                "the provider did not accept the API key. Check the key in Settings, then try again."
+                    .into()
+            }
+            LlmError::KeyMissing { .. } => {
+                "the provider needs an API key, and none is set. Add one in Settings, then try again."
+                    .into()
+            }
+            LlmError::SubscriptionRejected { .. } => {
+                "the ChatGPT sign-in stopped working. Sign in again in Settings, then try again."
+                    .into()
+            }
+            LlmError::ProgramMissing { program } => format!(
+                "{program} is not installed, or this app cannot find it. Install it with `{}`, or \
+                 choose another provider in Settings.",
+                crate::llm::claude::INSTALL
+            ),
+            LlmError::ProgramFailed { program, .. } => {
+                format!("{program} stopped before it answered. Try again.")
+            }
+            LlmError::ModelRefused { .. } => "the model's own safety check stopped the answer. \
+                 That check reads the answer, not your sign-in or your plan, so it can fire on an \
+                 ordinary request. Reword the message, or give this group another provider in its \
+                 settings."
+                .into(),
+            LlmError::RateLimited { .. } => {
+                "the provider is limiting how often it answers right now. Wait a minute, then try \
+                 again."
+                    .into()
+            }
+            LlmError::ModelRejected { model, .. } => format!(
+                "the provider does not offer the model {model}. Choose another model in the group's \
+                 settings."
+            ),
+            LlmError::Upstream { status, .. } if *status >= 500 || *status == 200 => {
+                "the provider had a problem on its side. Wait a minute, then try again.".into()
+            }
+            LlmError::Upstream { .. } => {
+                "the provider turned the request down. Open Details to see why, then try again."
+                    .into()
+            }
+            LlmError::Transport { .. } => {
+                "the provider could not be reached. Check the connection, then try again.".into()
+            }
+            LlmError::Timeout { secs } => format!(
+                "the model did not answer within {secs} seconds. Try again, or allow more time in \
+                 the group's settings."
+            ),
+            LlmError::Decode(_) | LlmError::Truncated => {
+                "the answer broke off partway. Try again.".into()
+            }
+        }
+    }
+
     pub fn headline(&self) -> String {
         match self {
             LlmError::NotConfigured => "no endpoint configured".into(),
@@ -781,6 +840,59 @@ fn truncate(value: &str, max: usize) -> String {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn a_failure_is_told_without_its_status_code_or_the_provider_text() {
+        let said = "Upstream overloaded_error 0xdead";
+        let failures = [
+            LlmError::NotConfigured,
+            LlmError::Auth { status: 401, message: said.into() },
+            LlmError::KeyMissing {
+                endpoint: "https://api.example.test/v1".into(),
+                message: said.into(),
+            },
+            LlmError::SubscriptionRejected { message: said.into() },
+            LlmError::ProgramMissing { program: "claude" },
+            LlmError::ProgramFailed { program: "claude", message: said.into() },
+            LlmError::ModelRefused { program: "claude", message: said.into() },
+            LlmError::RateLimited { message: said.into(), retry_after_secs: Some(30) },
+            LlmError::ModelRejected { model: "vendor/model-x".into(), message: said.into() },
+            LlmError::Upstream { status: 503, message: said.into() },
+            LlmError::Upstream { status: 422, message: said.into() },
+            LlmError::Timeout { secs: 120 },
+            LlmError::Decode(said.into()),
+            LlmError::Truncated,
+        ];
+        for failure in failures {
+            let words = failure.plainly();
+            assert!(!words.contains(said), "{failure:?} leads with the provider text: {words}");
+            assert!(!words.contains("HTTP"), "{failure:?} speaks HTTP: {words}");
+            assert!(
+                !words
+                    .split(|c: char| !c.is_ascii_digit())
+                    .any(|n| n.len() == 3 && n.starts_with(['4', '5'])),
+                "{failure:?} shows a status code: {words}"
+            );
+            assert!(words.ends_with('.'), "{failure:?} is not a whole sentence: {words}");
+            assert!(
+                ["try again", "settings", "reword", "install"]
+                    .iter()
+                    .any(|step| words.to_lowercase().contains(step)),
+                "{failure:?} does not say what to do next: {words}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_server_fault_and_a_refused_request_ask_for_different_next_steps() {
+        let busy = LlmError::Upstream { status: 500, message: "The model is overloaded.".into() };
+        let refused = LlmError::Upstream { status: 400, message: "context too long".into() };
+        assert_eq!(
+            busy.plainly(),
+            "the provider had a problem on its side. Wait a minute, then try again."
+        );
+        assert!(refused.plainly().contains("Open Details"), "{}", refused.plainly());
+    }
 
     use axum::response::IntoResponse;
     use axum::routing::post;

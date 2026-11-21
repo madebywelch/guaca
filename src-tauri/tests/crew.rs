@@ -482,7 +482,7 @@ fn render(messages: &[Envelope], names: &HashMap<AgentId, String>, report: &RunR
         for part in &envelope.parts {
             out.push_str(&match part {
                 Part::Text { text } => format!("\n{text}\n"),
-                Part::Notice { kind, text } => format!("\n> [{kind:?}] {text}\n"),
+                Part::Notice { kind, text, .. } => format!("\n> [{kind:?}] {text}\n"),
                 Part::ToolCall { name, arguments, outcome, .. } => {
                     format!("\n`{name}` → {outcome:?}\n\n```json\n{}\n```\n", clip(arguments))
                 }

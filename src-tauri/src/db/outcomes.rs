@@ -255,9 +255,11 @@ fn notice_text(message: &Envelope) -> String {
         .parts
         .iter()
         .find_map(|part| match part {
-            Part::Notice { kind: NoticeKind::UpstreamError | NoticeKind::Interrupted, text } => {
-                Some(text.clone())
-            }
+            Part::Notice {
+                kind: NoticeKind::UpstreamError | NoticeKind::Interrupted,
+                text,
+                ..
+            } => Some(text.clone()),
             _ => None,
         })
         .unwrap_or_default()

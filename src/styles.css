@@ -720,6 +720,9 @@ input[type="file"]::file-selector-button {
 .menubar .finished-line__meta {
   color: var(--rail-muted);
 }
+.menubar .unfinished-line {
+  padding-inline-end: var(--space-5);
+}
 .menubar__finished .menubar__more {
   margin: var(--space-2) var(--space-5);
 }
@@ -3691,6 +3694,31 @@ button.handoff__name:hover {
   cursor: default;
 }
 
+.chip__action,
+.chip > .icon {
+  flex: none;
+  white-space: nowrap;
+}
+
+.chip__action--quiet {
+  border-color: transparent;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.chip__said {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.chip__detail {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .chip--guard {
   background: var(--wash);
   border-color: var(--rule-hard);
@@ -3698,8 +3726,14 @@ button.handoff__name:hover {
 }
 
 .chip--error {
-  background: color-mix(in oklab, var(--danger) 12%, transparent);
+  flex-wrap: wrap;
+  background: color-mix(in oklab, var(--danger) 8%, transparent);
   border-color: color-mix(in oklab, var(--danger) 35%, transparent);
+  border-inline-start: 2px solid var(--danger);
+  color: var(--text);
+}
+
+.chip--error > .icon {
   color: var(--danger);
 }
 
@@ -4687,7 +4721,7 @@ input[type="file"]:disabled {
   border: 1px solid color-mix(in oklab, var(--danger) 40%, transparent);
   border-radius: var(--radius-card);
   background: color-mix(in oklab, var(--danger) 10%, transparent);
-  color: var(--danger);
+  color: var(--text);
   font-size: var(--type-meta);
   line-height: var(--lead-ui);
   overflow-wrap: anywhere;
@@ -5504,8 +5538,9 @@ input[type="file"]:disabled {
 
 .banner--error {
   border-color: color-mix(in oklab, var(--danger) 40%, transparent);
+  border-inline-start: 2px solid var(--danger);
   background: color-mix(in oklab, var(--danger) 10%, transparent);
-  color: var(--danger);
+  color: var(--text);
 }
 
 .banner--ok {
@@ -6340,11 +6375,6 @@ input[type="file"]:disabled {
 
 .menu__item[data-tone="danger"] {
   color: var(--danger);
-}
-
-.menu__item[data-tone="danger"]:hover,
-.menu__item[data-tone="danger"]:focus-visible {
-  background: color-mix(in oklab, var(--danger) 10%, transparent);
 }
 
 .menu__item {
@@ -8178,6 +8208,19 @@ button.artifacts__version[aria-pressed="true"] {
   text-align: left;
   color: inherit;
 }
+.unfinished-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.unfinished-line > .finished-line {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.unfinished-line__retry {
+  flex: none;
+  white-space: nowrap;
+}
 .finished-line:hover .finished-line__text {
   text-decoration: underline;
 }
@@ -9098,6 +9141,11 @@ button.artifacts__version[aria-pressed="true"] {
 
 .doing__text {
   color: var(--text);
+}
+
+.doing__retry {
+  margin-inline-start: var(--space-3);
+  white-space: nowrap;
 }
 
 .doing__steps {

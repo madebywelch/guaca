@@ -63,7 +63,7 @@ export interface Staged {
 export type Part =
   | { type: "text"; text: string }
   | { type: "json"; name: string; value: unknown }
-  | { type: "notice"; kind: NoticeKind; text: string }
+  | { type: "notice"; kind: NoticeKind; text: string; detail?: string }
   | {
       type: "toolCall";
       name: string;
