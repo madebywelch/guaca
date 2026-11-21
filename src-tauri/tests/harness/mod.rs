@@ -675,7 +675,7 @@ fn parts_of(envelope: &Envelope) -> String {
         .iter()
         .map(|part| match part {
             Part::Text { text } => text.clone(),
-            Part::Notice { kind, text } => format!("[{kind:?}] {text}"),
+            Part::Notice { kind, text, .. } => format!("[{kind:?}] {text}"),
             Part::ToolCall { name, outcome, .. } => format!("[{name} -> {outcome:?}]"),
             Part::File(file) => format!("[file {}]", file.name),
             Part::Approval { summary, .. } => format!("[asks: {summary}]"),

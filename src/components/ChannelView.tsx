@@ -224,7 +224,7 @@ export function ChannelView({
             </button>
           </>
         ) : (
-          <h1 className="pane__title">Channel unavailable</h1>
+          <h1 className="pane__title">Conversation unavailable</h1>
         )}
       </header>
 
@@ -517,7 +517,7 @@ function ThoughtPanel({ id, agent }: { id: string; agent: AgentId }) {
       {held ? (
         <pre className="thought__text">{held}</pre>
       ) : (
-        <p className="thought__empty">Nothing published yet on this turn.</p>
+        <p className="thought__empty">Nothing shared yet.</p>
       )}
     </div>
   );
@@ -633,7 +633,7 @@ function WorkingNote({
             data-failed={tally.failed > 0 || undefined}
             aria-expanded={showing === "steps"}
             aria-controls={showing === "steps" ? panel : undefined}
-            title={`What ${agent.name} has done on this turn`}
+            title={`What ${agent.name} has done so far`}
             onClick={() => onToggle("steps")}
           >
             <span className="working__caret" aria-hidden="true">

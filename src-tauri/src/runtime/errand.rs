@@ -5,7 +5,7 @@ use super::{forget_old_screens, Reading, Runtime, ToolResult, SCREEN_NOW};
 use crate::config::InferenceConfig;
 use crate::domain::agent::AgentCard;
 use crate::domain::attachment::Attachment;
-use crate::domain::envelope::{NoticeKind, Part, ToolOutcome};
+use crate::domain::envelope::{Part, ToolOutcome};
 use crate::domain::errand::{self, Ending, Errand};
 use crate::domain::ids::{MessageId, RunId};
 use crate::domain::plugin::PluginKind;
@@ -196,12 +196,16 @@ impl Runtime {
                     break;
                 }
                 Err(err) => {
-                    self.notice(
+                    self.failed(
                         card.id,
                         from.run_id,
                         from.cause,
-                        NoticeKind::UpstreamError,
-                        format!("An errand {} sent could not reach the model: {err}", card.name),
+                        format!(
+                            "An errand {} sent could not reach the model: {}",
+                            card.name,
+                            err.plainly()
+                        ),
+                        &err,
                     );
                     ending = Ending::Failed { error: err.to_string() };
                     break;

@@ -320,6 +320,7 @@ impl Runtime {
                  and carries on from this point once it is back.",
                 card.name
             ),
+            detail: None,
         });
         let record = Envelope {
             id: MessageId::new(),

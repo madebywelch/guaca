@@ -7,6 +7,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { AVATAR_PX } from "./avatars/frame";
 import { ROOT_PX } from "./lib/appearance";
 import { contrast } from "./lib/color";
+import { THEME_PRESETS, themeTokens } from "./lib/theme";
 
 const css = readFileSync(join(process.cwd(), "src/styles.css"), "utf8");
 const signalCss = readFileSync(join(process.cwd(), "src/signal-layout.css"), "utf8");
@@ -1123,6 +1124,50 @@ describe("the waiting count", () => {
       expect(own.filter((d) => d.value.includes("danger"))).toEqual([]);
     },
   );
+
+  it("writes every line on a red wash at 4.5 to 1 or better, in every preset and both surfaces", () => {
+    const all = declarations();
+    const washes = all.flatMap((d) => {
+      const wash = /^background(-color)?$/.test(d.property)
+        ? d.value.match(/^color-mix\(in oklab, var\(--danger\) (\d+)%, transparent\)$/)
+        : null;
+      return wash ? [{ selector: d.selector, share: Number(wash[1]) / 100 }] : [];
+    });
+    expect(washes.map((wash) => wash.selector)).toEqual(
+      expect.arrayContaining([".chip--error", ".banner--error", ".connector-failure"]),
+    );
+    const channel = (color: string, at: number) => Number.parseInt(color.slice(at, at + 2), 16);
+    const over = (ink: string, ground: string, share: number) =>
+      `#${[1, 3, 5]
+        .map((at) =>
+          Math.round(channel(ink, at) * share + channel(ground, at) * (1 - share))
+            .toString(16)
+            .padStart(2, "0"),
+        )
+        .join("")}`;
+    const short: string[] = [];
+    for (const { selector, share } of washes) {
+      const base = selector.split(", ")[0]!.replace(/:(hover|focus-visible)/g, "");
+      const ink = [selector, base]
+        .map((one) => all.find((d) => d.selector === one && d.property === "color")?.value)
+        .find(Boolean);
+      const token = ink?.match(/^var\((--[a-z-]+)\)$/)?.[1];
+      if (!token) {
+        short.push(`${selector} draws on a red wash without naming its text color as a token`);
+        continue;
+      }
+      for (const [name, theme] of Object.entries(THEME_PRESETS)) {
+        for (const surface of ["light", "dark"] as const) {
+          const tokens = themeTokens(theme, surface) as Record<string, string>;
+          const wash = over(tokens["--danger"]!, tokens["--ground"]!, share);
+          const ratio = contrast(tokens[token]!, wash);
+          if (ratio < 4.5)
+            short.push(`${selector} ${token} in ${name} ${surface}: ${ratio.toFixed(2)}`);
+        }
+      }
+    }
+    expect(short).toEqual([]);
+  });
 
   it("keeps the counts beside it that wait on nobody out of amber", () => {
     const counts = declarations().filter(

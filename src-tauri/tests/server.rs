@@ -164,6 +164,7 @@ async fn a_task_read_follows_selected_root_runs_across_conversations() {
         parts: vec![Part::Notice {
             kind: NoticeKind::UpstreamError,
             text: "Could not reply".into(),
+            detail: None,
         }],
         cause: Some(another_brief.id),
         ..recorded_message(second, System, lead, 17, Courtesy, "")

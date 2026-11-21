@@ -357,7 +357,11 @@ fn interrupted(original: &Envelope) -> Envelope {
         channel_id: original.channel_id,
         from: Participant::System,
         to: original.to,
-        parts: vec![Part::Notice { kind: NoticeKind::Interrupted, text: INTERRUPTED.into() }],
+        parts: vec![Part::Notice {
+            kind: NoticeKind::Interrupted,
+            text: INTERRUPTED.into(),
+            detail: None,
+        }],
         trust: Trust::System,
         hop: 0,
         expects_reply: false,
