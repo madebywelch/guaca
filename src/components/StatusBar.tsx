@@ -122,9 +122,6 @@ export function StatusBar({ onOpen, onMessage }: Props) {
           ))}
         </div>
       )}
-      {empty && (
-        <span className="statusbar__empty">A kept page can be pinned here, from Artifacts.</span>
-      )}
       <div className="statusbar__actions" role="toolbar" aria-label="Quick actions">
         {actions.map((action) => (
           <span className="statusbar__action" key={action.id}>
@@ -502,7 +499,7 @@ function QuickActionForm({ onAdded }: { onAdded: () => void }) {
           disabled={busy || !ready}
           onClick={() => void add()}
         >
-          Add to the status bar
+          Add to the sidebar
         </button>
       </div>
       {error && (

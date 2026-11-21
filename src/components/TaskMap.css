@@ -2,23 +2,10 @@
   container: task-pane / size;
 }
 
-.app[data-roster][data-page="agent"] .pane:has(.task-map-stack:not([hidden])) {
-  width: 100%;
-}
-
-.pane:has(.task-map-stack:not([hidden])) > :is(.pane__header, .agent-tabs),
-.pane:has(.task-map-stack:not([hidden])) .pane__body > :not(.task-map-stack, .offscreen) {
-  width: min(var(--column-w), 100%);
-  margin-inline: auto;
-}
-
-.pane:has(.task-map-stack:not([hidden])) .pane__body > .composer {
-  width: calc(min(var(--column-w), 100%) - 2 * var(--column-inset));
-}
-
 .task-map-stack {
-  --task-map-height: 40cqb;
-  max-height: var(--task-map-height);
+  --task-map-height: 30cqb;
+  --task-map-stack-height: 40cqb;
+  max-height: var(--task-map-stack-height);
   overflow: auto;
   scrollbar-gutter: stable;
   display: flex;
@@ -51,6 +38,7 @@
 .task-map-stack .task-map:has(.task-map__graph) {
   flex-shrink: 1;
   min-height: var(--control-h);
+  max-height: calc(var(--task-map-height) - 2 * var(--space-2));
 }
 
 .task-map-stack .task-map__summary,

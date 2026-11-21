@@ -3,7 +3,7 @@
 Guaca runs unattended. A choice found during an email check must still be
 answerable when the operator returns, without keeping the agent's turn alive.
 `decision` records that choice in SQLite. **For you** is its permanent destination,
-at the end of the status bar and at the foot of the Groups sheet, shared by
+in the sidebar's foot and at the foot of the Groups sheet, shared by
 every group.
 
 ## Three tiers over one queue
@@ -439,7 +439,7 @@ the countdown on the card and the lapse it predicts come from the same number.
 Four kinds lapse this way: `request_permission`, `ask_operator`, `create_agent`
 and `settings`. Browser consent does not: that press belonged to a page the
 turn has since left, so it expires as it always did, and so does a page pinned
-to the status bar. A stop or a restart that closes a request first is a
+to the sidebar. A stop or a restart that closes a request first is a
 different fact from a lapse. Nothing is filed, and the turn, or the turn the
 next host picks up, is told the restart ended it and to ask again.
 

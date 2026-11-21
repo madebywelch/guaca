@@ -354,8 +354,7 @@ export function TaskMapCard({
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
-      if (first.current?.contains(document.activeElement)) focusWriting();
-      else first.current?.focus();
+      if (!first.current?.contains(document.activeElement)) first.current?.focus();
     } else if (first.current?.contains(document.activeElement) && /^[1-9]$/.test(event.key)) {
       const option = question.request.options[Number(event.key) - 1];
       if (option !== undefined) {

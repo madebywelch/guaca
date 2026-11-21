@@ -315,8 +315,9 @@ try {
     assert.equal(await evaluate("document.querySelector('.app > .rail')"), null, "no rail beside the column");
     const head = await box(".pane__header");
     assert.ok(head.height <= 60, `the page's head is one line: ${JSON.stringify(head)}`);
-    const bar = await box(".statusbar");
-    assert.ok(bar.height <= 60, `the status bar is one row: ${JSON.stringify(bar)}`);
+    const foot = await box(".roster__foot");
+    const pane = await box(".pane");
+    assert.ok(foot.height <= 60 || foot.right <= pane.left + 1, `the sidebar's foot is one row, or sits beside the conversation: ${JSON.stringify({ foot, pane })}`);
     const reading = await evaluate("(() => { const log=document.querySelector('.pane__scroll[role=log]').getBoundingClientRect(); const c=document.querySelector('.composer').getBoundingClientRect(); return (c.bottom - log.top) / visualViewport.height; })()");
     assert.ok(reading >= 0.6, `conversation and composer take at least 60% of the height: ${reading}`);
     await tap(".composer__input");
@@ -434,14 +435,14 @@ try {
   const routine = await call("create_routine", { agentId: agent.id, draft: { name: "Morning check", what: "Say good morning.", trigger: "every:86400", inSecs: null, skipIfWorking: false } });
   await call("update_agent", { id: agent.id, draft: { ...draft, model: "offline-test-with-a-long-dated-model-identifier-2026-11-16" } });
   await until(() => evaluate("!!document.querySelector('.agent-tabs__count')"), "the routine count shows on its tab");
-  await until(() => evaluate("document.querySelector('.agent-tabs .pane__meta')?.textContent.includes('Long Dated')"), "the long model is in the caption");
+  await until(() => evaluate("document.querySelector('.pane__header .pane__meta')?.textContent.includes('Long Dated')"), "the long model is in the caption");
   for (const width of [1280, 900]) {
     await size(width, 900, false);
     await rosterClear(`the ${width}px conversation`);
     const row = await evaluate(`(() => {
       const list = document.querySelector('.agent-tabs__list'), edge = list.getBoundingClientRect().right;
       const tabs = [...list.querySelectorAll('.agent-tabs__tab')].map((n) => ({ text: n.textContent, right: n.getBoundingClientRect().right, cut: n.scrollWidth - n.clientWidth }));
-      return { edge, overflow: list.scrollWidth - list.clientWidth, tabs, caption: getComputedStyle(document.querySelector('.agent-tabs .pane__meta')).display };
+      return { edge, overflow: list.scrollWidth - list.clientWidth, tabs, caption: getComputedStyle(document.querySelector('.pane__header .pane__meta')).display };
     })()`);
     assert.notEqual(row.caption, "none", `the caption is drawn at ${width}: ${JSON.stringify(row)}`);
     assert.ok(row.overflow <= 1, `the tabs fit their row at ${width}: ${JSON.stringify(row)}`);

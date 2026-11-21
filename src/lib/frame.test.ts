@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { anAgent, anApproval, DEFAULT_GROUP } from "../test-fixtures";
-import { nextQuestion, openingConversation } from "./frame";
+import { drawnIn, nextQuestion, openingConversation } from "./frame";
 import type { Running } from "./types";
 
 const order = ["owner", "colleague", "writer"].map((id) => anAgent(id));
@@ -43,5 +43,35 @@ describe("which conversation opens", () => {
     expect(openingConversation(order, [], [], [], {}, "writer")).toBe("writer");
     expect(openingConversation(order, [], [], [], {}, "gone")).toBe("owner");
     expect(openingConversation([], [], [], [], {}, "gone")).toBeUndefined();
+  });
+});
+
+describe("where a waiting question is drawn in the conversation that opens", () => {
+  const running = [active("owner", "delegated", 10)];
+  const asked = (over: Parameters<typeof anApproval>[0]) =>
+    anApproval({ request: { kind: "question", options: ["Yes", "No"] }, ...over });
+
+  it("is nowhere for a stuck agent, whose escalation has no card", () => {
+    const stuck = { id: "stuck", agentId: "owner", runId: "delegated", raisedAt: 1 };
+    expect(drawnIn(stuck as never, "owner", running)).toBe(false);
+  });
+
+  it("is nowhere for a colleague's permission, which the map does not draw", () => {
+    const permission = anApproval({ agentId: "colleague", runId: "delegated" });
+    expect(drawnIn(permission, "owner", running)).toBe(false);
+  });
+
+  it("is nowhere for a colleague's question in a task this agent does not lead", () => {
+    expect(drawnIn(asked({ agentId: "colleague", runId: "other" }), "owner", running)).toBe(false);
+  });
+
+  it("is on the map for a colleague's question in the task this agent leads", () => {
+    expect(drawnIn(asked({ agentId: "colleague", runId: "delegated" }), "owner", running)).toBe(
+      true,
+    );
+  });
+
+  it("is its own card for the agent's own request", () => {
+    expect(drawnIn(anApproval({ agentId: "owner" }), "owner", [])).toBe(true);
   });
 });

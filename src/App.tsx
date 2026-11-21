@@ -19,12 +19,13 @@ import { Search } from "./components/Search";
 import { SettingsPage } from "./components/SettingsPage";
 import { StatusBar } from "./components/StatusBar";
 import { Toast } from "./components/Toast";
-import { TopBar } from "./components/TopBar";
+import { TopBar, type WindowActionsProps } from "./components/TopBar";
 import { applyAppearance, watchSystemSurface } from "./lib/appearance";
 import { diagnostic } from "./lib/diagnostic";
 import { dismissing } from "./lib/dismiss";
-import { editingText, focusWriting } from "./lib/focus";
+import { editingText, focusQuestion, focusWriting } from "./lib/focus";
 import {
+  drawnIn,
   dueQuestions,
   lastConversation,
   nextQuestion,
@@ -103,9 +104,7 @@ export default function App() {
 
   const [agentView, setAgentView] = useState<AgentView>("conversation");
   const [chosenQuestion, setChosenQuestion] = useState<string | null>(null);
-  const [inlineQuestion, setInlineQuestion] = useState<{ agentId: AgentId; id: string } | null>(
-    null,
-  );
+  const [questionFocus, setQuestionFocus] = useState<{ agentId: AgentId; id: string } | null>(null);
 
   const reveal = useCallback((target: Reveal) => {
     if (target.kind === "agent") diagnostic("reveal.agent", target.id);
@@ -160,10 +159,10 @@ export default function App() {
     const { pending, stuck } = shown(state.pending, state.stuck, state.activity, hiddenNow());
     const question = nextQuestion(pending.filter(belongs), stuck.filter(belongs));
     if (!order.some((agent) => agent.id === id)) return;
-    const inline = question?.agentId === id && "request" in question ? question.id : null;
+    const drawn = question && drawnIn(question, id, state.running) ? question.id : null;
     setAgentView("conversation");
-    setInlineQuestion(inline ? { agentId: id, id: inline } : null);
-    setChosenQuestion(inline ? null : (question?.id ?? null));
+    setQuestionFocus(drawn ? { agentId: id, id: drawn } : null);
+    setChosenQuestion(drawn ? null : (question?.id ?? null));
     void state.select(id).catch(state.showFailure);
     if (state.selected === id) seeConversationResults(id);
     if (!question) focusWriting();
@@ -172,7 +171,7 @@ export default function App() {
   useEffect(() => {
     if (!selected) return;
     setAgentView("conversation");
-    setInlineQuestion((current) => (current?.agentId === selected ? current : null));
+    setQuestionFocus((current) => (current?.agentId === selected ? current : null));
     rememberConversation(selected);
     seeConversationResults(selected);
   }, [selected]);
@@ -442,6 +441,23 @@ export default function App() {
     return true;
   };
 
+  const windowActions: WindowActionsProps = {
+    onSearch: () => setSearching(true),
+    onGroups: () => setShowGroups(true),
+    onSettings: () => openSettings(),
+    onNewAgent: () => setEditing("new"),
+    onNewGroup: () => setEditingGroup("new"),
+    onOpenCafeteria: () => setShowCafeteria(true),
+  };
+
+  const toQuestion = () => {
+    const state = useStore.getState();
+    const { pending, stuck } = shown(state.pending, state.stuck, state.activity, hiddenNow());
+    const question = nextQuestion(pending, stuck);
+    if (question && focusQuestion(question.id)) return true;
+    return openQuestions();
+  };
+
   const notices = (
     <>
       {needsKey && !firstRun && (
@@ -483,15 +499,16 @@ export default function App() {
     >
       <TopBar
         back={settingsPage ? { to: openAgent?.name ?? "Workspace", go: closeSettings } : null}
-        onSearch={() => setSearching(true)}
-        onGroups={() => setShowGroups(true)}
-        onSettings={() => openSettings()}
-        onNewAgent={() => setEditing("new")}
-        onNewGroup={() => setEditingGroup("new")}
-        onOpenCafeteria={() => setShowCafeteria(true)}
+        actions={firstRun && !settingsPage ? null : windowActions}
       />
 
-      {showRoster && <ConversationRoster onOpen={openConversation} onQuestions={openQuestions} />}
+      {showRoster && (
+        <ConversationRoster
+          onOpen={openConversation}
+          onQuestions={openQuestions}
+          foot={<StatusBar onOpen={openPlace} onMessage={sendFromBar} />}
+        />
+      )}
 
       <main>
         {settingsPage ? (
@@ -548,8 +565,8 @@ export default function App() {
               onOpenMenu={(agent, at) => setMenu({ agent, ...at })}
               view={agentView}
               onView={setAgentView}
-              onQuestions={openQuestions}
-              focusRequest={inlineQuestion?.agentId === selected ? inlineQuestion : null}
+              onQuestions={toQuestion}
+              focusRequest={questionFocus?.agentId === selected ? questionFocus : null}
               onEditProfile={(agent) => setEditing(agent)}
             />
           ) : retryOpening ? (
@@ -567,8 +584,6 @@ export default function App() {
             </div>
           ) : null}
         </div>
-
-        {ready && !welcoming && <StatusBar onOpen={openPlace} onMessage={sendFromBar} />}
       </main>
 
       {chosenQuestion && !settingsPage && (
