@@ -2202,7 +2202,6 @@ CREATE TABLE place_answers (
     adapter TEXT NOT NULL,
     heard_key TEXT NOT NULL,
     approval_id TEXT NOT NULL,
-    answer TEXT NOT NULL,
     PRIMARY KEY (adapter, heard_key)
 );
 CREATE TABLE relay (
@@ -2214,6 +2213,9 @@ CREATE TABLE relay (
     run_id TEXT,
     state TEXT NOT NULL
         CHECK (state IN ('queued','sending','sent','failed','doubt','skipped')),
+    source_seq INTEGER NOT NULL,
+    rank INTEGER NOT NULL,
+    chunk INTEGER NOT NULL,
     item TEXT NOT NULL,
     posted TEXT,
     attempts INTEGER NOT NULL DEFAULT 0,
@@ -2223,6 +2225,40 @@ CREATE TABLE relay (
 );
 CREATE INDEX relay_open ON relay (adapter, seq) WHERE state IN ('queued','sending');
 CREATE INDEX relay_run ON relay (run_id);
+CREATE TABLE place_relay_order (
+    seq INTEGER PRIMARY KEY,
+    run_id TEXT,
+    key TEXT NOT NULL UNIQUE
+);
+CREATE INDEX place_relay_order_run ON place_relay_order (run_id);
+CREATE TRIGGER place_relay_reply AFTER INSERT ON messages
+    WHEN NEW.from_kind='agent' AND NEW.to_kind='human'
+      AND EXISTS (SELECT 1 FROM place_runs WHERE run_id=NEW.run_id AND relayed=0)
+BEGIN
+    INSERT INTO place_relay_order (run_id,key) VALUES (NEW.run_id,'message:'||NEW.id);
+END;
+CREATE TRIGGER place_relay_started AFTER UPDATE OF started_at ON pending_runs
+    WHEN OLD.started_at IS NULL AND NEW.started_at IS NOT NULL
+      AND EXISTS (SELECT 1 FROM place_runs WHERE run_id=NEW.run_id AND relayed=0)
+BEGIN
+    INSERT OR IGNORE INTO place_relay_order (run_id,key) VALUES (NEW.run_id,'start:'||NEW.run_id);
+END;
+CREATE TRIGGER place_relay_ask AFTER INSERT ON approvals
+    WHEN EXISTS (SELECT 1 FROM place_runs WHERE run_id=NEW.run_id AND relayed=0)
+BEGIN
+    INSERT INTO place_relay_order (run_id,key) VALUES (NEW.run_id,'ask:'||NEW.id);
+END;
+CREATE TRIGGER place_relay_settle AFTER UPDATE OF state ON approvals
+    WHEN OLD.state='pending' AND NEW.state<>'pending'
+      AND EXISTS (SELECT 1 FROM place_runs WHERE run_id=NEW.run_id AND relayed=0)
+BEGIN
+    INSERT OR IGNORE INTO place_relay_order (run_id,key) VALUES (NEW.run_id,'settle:'||NEW.id);
+END;
+CREATE TRIGGER place_relay_outcome AFTER INSERT ON outcomes
+    WHEN EXISTS (SELECT 1 FROM place_runs WHERE run_id=NEW.run_id AND relayed=0)
+BEGIN
+    INSERT OR IGNORE INTO place_relay_order (run_id,key) VALUES (NEW.run_id,'outcome:'||NEW.run_id);
+END;
 "#,
     ),
 ];
@@ -2402,7 +2438,7 @@ mod tests {
         (78, "fc778794fb370b571ac5821e98c871c8172fa9f933bb1bd99ca48b4b6b617b67"),
         (79, "554ec9b4ff4a5bc9998ea33a07febc1abff3b79c452f248276987f15b1105348"),
         (80, "cfb92921daf974ffd88d8415551947ce65b6214fb8d895b9add4c29de403e54b"),
-        (81, "1b5a31c8792b3dc47b62d6d6b477ae40031810b84929049644c8cbb580d60eda"),
+        (81, "2f929b6106ce8032e62bc18c8cf1c287b8a07b8344e5ed51c110edf30bfad808"),
     ];
 
     fn memory() -> Connection {

@@ -120,6 +120,7 @@ impl Runtime {
         let abilities = adapter.abilities();
         let store = &self.inner.store;
         let now = now_ms();
+        let watermark = store.relay_watermark()?;
         let rows = store.relay_rows(&id)?;
         let known: HashMap<&str, &RelayRow> =
             rows.iter().map(|row| (row.key.as_str(), row)).collect();
@@ -133,12 +134,14 @@ impl Runtime {
                 store.finish_place_run(run.run)?;
             }
         }
+        wants.retain(|want| want.at <= watermark);
         wants.sort_by(|a, b| (a.at, a.rank, a.sub, &a.key).cmp(&(b.at, b.rank, b.sub, &b.key)));
 
+        let open_rows = store.relay_rows(&id)?;
         let mut spots: Vec<&Spot> = Vec::new();
-        for spot in rows
+        for spot in open_rows
             .iter()
-            .filter(|row| row.state.open())
+            .filter(|row| row.state.open() && row.order.0 <= watermark)
             .map(|row| &row.spot)
             .chain(wants.iter().map(|w| &w.spot))
         {
@@ -148,7 +151,13 @@ impl Runtime {
         }
         let mut progressed = false;
         for spot in spots {
-            if let Some(head) = rows.iter().find(|row| row.state.open() && &row.spot == spot) {
+            let want = wants.iter().find(|want| &want.spot == spot);
+            let head = open_rows
+                .iter()
+                .find(|row| row.state.open() && &row.spot == spot && row.order.0 <= watermark);
+            if let Some(head) = head
+                .filter(|head| want.is_none_or(|want| head.order <= (want.at, want.rank, want.sub)))
+            {
                 if store.bound(&id, &spot.place)?.is_none() {
                     store.relay_failed(&head.key, "This conversation is no longer linked.")?;
                     progressed = true;
@@ -167,7 +176,7 @@ impl Runtime {
                 progressed = true;
                 continue;
             }
-            let Some(want) = wants.iter().find(|want| &want.spot == spot) else { continue };
+            let Some(want) = want else { continue };
             let skip =
                 matches!(want.item, Outgoing::Skip) || store.bound(&id, &spot.place)?.is_none();
             let state = if skip { RelayState::Skipped } else { RelayState::Sending };
@@ -178,6 +187,7 @@ impl Runtime {
                 run: want.run,
                 state,
                 item: &want.item,
+                order: (want.at, want.rank, want.sub),
             })?;
             if !skip {
                 let row = store.relay_row(&want.key)?.ok_or_else(|| {
@@ -274,6 +284,19 @@ impl Runtime {
             !known.contains_key(key) && wants.iter().all(|w| w.key != key)
         };
         let outcome = store.outcome(id)?;
+        let replies = store.replies_in_run(id)?;
+        let approvals = store
+            .approvals_in_run(id)?
+            .into_iter()
+            .map(|approval| store.get_approval(approval))
+            .collect::<Result<Vec<_>, _>>()?;
+        let positions = store.relay_order(id)?;
+        let position = |key: &str| {
+            positions
+                .get(key)
+                .copied()
+                .ok_or_else(|| StoreError::Corrupt(format!("missing commit order for {key}")))
+        };
         let mark = |mark: place::Mark| {
             if abilities.reactions {
                 Outgoing::Mark { heard: run.heard.clone(), mark }
@@ -283,26 +306,20 @@ impl Runtime {
         };
         let mut posts: Vec<Want> = Vec::new();
 
-        if run.started_at.is_some() || outcome.is_some() {
+        if let Some(at) = positions.get(&format!("start:{id}")).copied() {
             let key = format!("mark:{id}:{}", place::Mark::Working.as_str());
             if fresh(&key, wants) {
-                let at = run.started_at.unwrap_or(run.created_at);
                 wants.push(Want::new(key, &run.spot, id, (at, 1, 0), mark(place::Mark::Working)));
             }
         }
 
-        for reply in store.replies_in_run(id)? {
+        for reply in replies {
             let text = texts(&reply.parts);
             let base = format!("message:{}", reply.id);
+            let replied = position(&base)?;
             if text.is_empty() {
                 if fresh(&base, wants) {
-                    wants.push(Want::new(
-                        base,
-                        &run.spot,
-                        id,
-                        (reply.created_at, 2, 0),
-                        Outgoing::Skip,
-                    ));
+                    wants.push(Want::new(base, &run.spot, id, (replied, 2, 0), Outgoing::Skip));
                 }
                 continue;
             }
@@ -321,7 +338,7 @@ impl Runtime {
                         key,
                         &run.spot,
                         id,
-                        (reply.created_at, 2, at),
+                        (replied, 2, at),
                         Outgoing::Post { card },
                     ));
                 }
@@ -330,12 +347,13 @@ impl Runtime {
 
         let direct =
             store.linked(&run.adapter)?.map(|linked| Spot { place: linked.place, thread: None });
-        for approval_id in store.approvals_in_run(id)? {
-            let Some(approval) = store.get_approval(approval_id)? else { continue };
+        for approval in approvals.into_iter().flatten() {
+            let approval_id = approval.id;
             let name =
                 store.get_agent(approval.agent_id)?.map(|card| card.name).unwrap_or_default();
             let ask_key = format!("ask:{approval_id}");
             let settle_key = format!("settle:{approval_id}");
+            let asked_at = position(&ask_key)?;
             let ask = approval_id.to_string();
             let (card, spot) = match &approval.request {
                 Request::Question { options } => {
@@ -358,7 +376,7 @@ impl Runtime {
                 if fresh(&key, &posts) && fresh(&key, wants) {
                     let item =
                         Outgoing::Post { card: place::notice(place::waiting_for_owner(&name)) };
-                    posts.push(Want::new(key, &run.spot, id, (approval.created_at, 3, 0), item));
+                    posts.push(Want::new(key, &run.spot, id, (asked_at, 3, 0), item));
                 }
             }
             match known.get(ask_key.as_str()) {
@@ -380,7 +398,7 @@ impl Runtime {
                                 key,
                                 &spot,
                                 id,
-                                (approval.created_at, 3, at + 1),
+                                (asked_at, 3, at + 1),
                                 Outgoing::Post { card },
                             ));
                         }
@@ -390,7 +408,7 @@ impl Runtime {
                             settle_key,
                             &spot,
                             id,
-                            (approval.created_at, 3, last + 2),
+                            (asked_at, 3, last + 2),
                             Outgoing::Skip,
                         ));
                     }
@@ -422,32 +440,33 @@ impl Runtime {
                             settled: Some(said.clone()),
                         },
                     });
-                    let at = approval.decided_at.unwrap_or(now);
+                    let at = position(&settle_key)?;
                     wants.push(Want::new(settle_key, &asked.spot, id, (at, 4, 0), item));
                 }
             }
         }
 
         if let Some(outcome) = &outcome {
+            let ended_at = position(&format!("outcome:{id}"))?;
             let stopped = outcome.status == crate::domain::outcome::Status::Stopped;
             let ended = place::mark_for(outcome.status);
             let key = format!("mark:{id}:{}", ended.as_str());
             if !stopped && fresh(&key, wants) {
-                wants.push(Want::new(key, &run.spot, id, (outcome.finished_at, 5, 0), mark(ended)));
+                wants.push(Want::new(key, &run.spot, id, (ended_at, 5, 0), mark(ended)));
             }
             if stopped {
                 let key = format!("notice:{id}:stopped");
                 if fresh(&key, &posts) && fresh(&key, wants) {
                     let item =
                         Outgoing::Post { card: place::notice("Guaca stopped this run.".into()) };
-                    posts.push(Want::new(key, &run.spot, id, (outcome.finished_at, 6, 0), item));
+                    posts.push(Want::new(key, &run.spot, id, (ended_at, 6, 0), item));
                 }
             }
             if ended == place::Mark::Failed {
                 let key = format!("notice:{id}:failed");
                 if fresh(&key, &posts) && fresh(&key, wants) {
                     let item = Outgoing::Post { card: place::failed_notice(&outcome.headline) };
-                    posts.push(Want::new(key, &run.spot, id, (outcome.finished_at, 6, 0), item));
+                    posts.push(Want::new(key, &run.spot, id, (ended_at, 6, 0), item));
                 }
             }
         }
@@ -462,15 +481,14 @@ impl Runtime {
             })
             .map(|row| row.created_at)
             .min();
-        let in_spot = posts.iter().any(|want| want.spot == run.spot);
-        if fresh(&offline, wants)
-            && in_spot
-            && posted_at.is_none()
-            && place::late(run.heard_at, now)
-        {
+        let first_in_spot =
+            posts.iter().filter(|want| want.spot == run.spot).map(|want| want.at).min();
+        if let Some(first) = first_in_spot.filter(|_| {
+            fresh(&offline, wants) && posted_at.is_none() && place::late(run.heard_at, now)
+        }) {
             let text = store.get_message(run.message)?.map(|m| texts(&m.parts)).unwrap_or_default();
             let item = Outgoing::Post { card: place::offline_notice(&text) };
-            wants.push(Want::new(offline, &run.spot, id, (run.created_at, 0, 0), item));
+            wants.push(Want::new(offline, &run.spot, id, (first, 0, 0), item));
         }
         wants.extend(posts);
         Ok(outcome.is_some())

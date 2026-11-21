@@ -13,7 +13,7 @@ use crate::domain::envelope::{Part, Trust};
 use crate::domain::ids::{AgentId, ApprovalId};
 use crate::domain::now_ms;
 use crate::domain::place::{self, AdapterId, Heard, Outgoing, Said};
-use crate::places::{Adapter, AdapterStatus, Ears, Unheard};
+use crate::places::{Adapter, AdapterStatus, Ears, SendError, Unheard};
 
 pub(super) struct Attached {
     adapter: Arc<dyn Adapter>,
@@ -123,9 +123,21 @@ impl Runtime {
         }
     }
 
-    async fn tell(&self, adapter: &Arc<dyn Adapter>, heard: &Heard, text: &str) {
-        if let Err(err) = adapter.tell(&heard.spot, &heard.speaker, text).await {
-            tracing::warn!(?err, "could not tell a person outside why their message was not taken");
+    async fn tell(
+        &self,
+        adapter: &Arc<dyn Adapter>,
+        heard: &Heard,
+        text: &str,
+    ) -> Result<(), Unheard> {
+        match adapter.tell(&heard.spot, &heard.speaker, text).await {
+            Ok(()) => Ok(()),
+            Err(SendError::Retry { .. } | SendError::Ambiguous { .. }) => {
+                Err(Unheard { reason: "Guaca could not send the private line yet.".into() })
+            }
+            Err(SendError::Refused { reason } | SendError::Gone { reason }) => {
+                tracing::warn!(%reason, "could not tell a person outside why their message was not taken");
+                Ok(())
+            }
         }
     }
 
@@ -190,7 +202,7 @@ impl Runtime {
                 drop(guard);
                 self.wake_relay();
                 if !line.is_empty() {
-                    self.tell(adapter, &heard, &line).await;
+                    self.tell(adapter, &heard, &line).await?;
                 }
                 return Ok(());
             }
@@ -208,11 +220,11 @@ impl Runtime {
             if history {
                 return Ok(());
             }
-            self.tell(adapter, &heard, place::STRANGER).await;
+            self.tell(adapter, &heard, place::STRANGER).await?;
             return Ok(());
         };
         if heard.direct && !linked.as_ref().is_some_and(|linked| linked.place == heard.spot.place) {
-            self.tell(adapter, &heard, place::UNBOUND).await;
+            self.tell(adapter, &heard, place::UNBOUND).await?;
             return Ok(());
         }
         if history
@@ -251,7 +263,7 @@ impl Runtime {
                 && bound.as_ref().is_some_and(|bound| bound.direct == heard.direct)
                 && matches!(&row.item, Outgoing::Post { card } if card.choices.iter().any(|c| c.id == choice))
         }) else {
-            self.tell(adapter, heard, place::NOT_FROM_HERE).await;
+            self.tell(adapter, heard, place::NOT_FROM_HERE).await?;
             return Ok(());
         };
         if matches!(approval.request, Request::Permission { .. })
@@ -261,14 +273,14 @@ impl Runtime {
                     .map_err(unheard)?
                     .is_some_and(|linked| linked.place == heard.spot.place))
         {
-            self.tell(adapter, heard, place::NOT_FROM_HERE).await;
+            self.tell(adapter, heard, place::NOT_FROM_HERE).await?;
             return Ok(());
         }
         if target.state == RelayState::Sending {
             return Err(Unheard { reason: "Guaca has not confirmed that post yet.".into() });
         }
         if target.state != RelayState::Sent || target.posted.is_none() {
-            self.tell(adapter, heard, place::NOT_FROM_HERE).await;
+            self.tell(adapter, heard, place::NOT_FROM_HERE).await?;
             return Ok(());
         }
         let answer = match &approval.request {
@@ -302,6 +314,30 @@ impl Runtime {
                 Ok(())
             }
         }
+    }
+
+    fn give_text(
+        &self,
+        id: ApprovalId,
+        text: &str,
+        adapter: &AdapterId,
+        heard: &Heard,
+    ) -> Result<(), StoreError> {
+        let store = &self.inner.store;
+        let Some(approval) = store.get_approval(id)? else { return Ok(()) };
+        let (state, answer) = match approval.request {
+            Request::Permission { .. } => {
+                let Some(decision) = place::decision_for(text) else { return Ok(()) };
+                (decision.into(), None)
+            }
+            Request::Question { .. } => (ApprovalState::Answered, Some(text)),
+        };
+        match store.settle_place_answer(id, state, answer, adapter, heard) {
+            Ok(approval) => self.approval_settled(&approval),
+            Err(StoreError::PlaceAnswerRecorded | StoreError::ApprovalSettled { .. }) => {}
+            Err(err) => return Err(err),
+        }
+        Ok(())
     }
 
     fn reading(
@@ -348,15 +384,15 @@ impl Runtime {
         {
             return Ok(());
         }
-        if let Some((ask, answer)) = store.place_answer(&id, &heard.key).map_err(unheard)? {
-            return self.give(ask, &answer).map_err(unheard);
+        if store.place_answered(&id, &heard.key).map_err(unheard)? {
+            return Ok(());
         }
         let Some(bound) = store
             .bound(&id, &heard.spot.place)
             .map_err(unheard)?
             .filter(|bound| bound.direct == heard.direct)
         else {
-            self.tell(adapter, heard, place::UNBOUND).await;
+            self.tell(adapter, heard, place::UNBOUND).await?;
             return Ok(());
         };
         if place::stale(heard.at_ms, now_ms()) {
@@ -368,6 +404,7 @@ impl Runtime {
                 run: None,
                 state: RelayState::Queued,
                 item: &item,
+                order: (0, 0, 0),
             };
             store.queue_place_notice(&notice, &heard.key).map_err(unheard)?;
             self.wake_relay();
@@ -377,10 +414,7 @@ impl Runtime {
             if let Some(answer) =
                 self.reading(ask, text, no_buttons, heard.at_ms).map_err(unheard)?
             {
-                store
-                    .record_place_answer(&id, &heard.spot.place, &heard.key, ask, &answer)
-                    .map_err(unheard)?;
-                return self.give(ask, &answer).map_err(unheard);
+                return self.give_text(ask, &answer, &id, heard).map_err(unheard);
             }
         }
         let (agent, body) = match store.thread_agent(&id, &heard.spot).map_err(unheard)? {
@@ -400,7 +434,7 @@ impl Runtime {
             .map_err(unheard)?
             .is_some_and(|card| card.group_id == bound.group && card.lifecycle.is_discoverable())
         {
-            self.tell(adapter, heard, place::AGENT_UNAVAILABLE).await;
+            self.tell(adapter, heard, place::AGENT_UNAVAILABLE).await?;
             return store.raise_high_water(&id, &heard.spot.place, &heard.key).map_err(unheard);
         }
         if body.is_empty() {
@@ -425,7 +459,7 @@ impl Runtime {
                 Err(unheard(err))
             }
             Err(RuntimeError::UnknownAgent(_) | RuntimeError::AgentTerminated(_)) => {
-                self.tell(adapter, heard, place::AGENT_UNAVAILABLE).await;
+                self.tell(adapter, heard, place::AGENT_UNAVAILABLE).await?;
                 store.raise_high_water(&id, &heard.spot.place, &heard.key).map_err(unheard)
             }
             Err(err) => Err(unheard(err)),
