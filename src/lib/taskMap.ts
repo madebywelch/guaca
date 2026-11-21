@@ -93,7 +93,8 @@ export function taskMaps(
             const x = a.questions[0];
             const y = b.questions[0];
             if (x && y) return due(x) - due(y) || x.createdAt - y.createdAt;
-            return Number(!!y) - Number(!!x);
+            if (x || y) return x ? -1 : 1;
+            return Number(a.reply !== null) - Number(b.reply !== null);
           }),
         },
       ];

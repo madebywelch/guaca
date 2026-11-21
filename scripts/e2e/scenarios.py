@@ -1161,7 +1161,19 @@ TASK_MAP_FIT = """(() => {
   const moreRect = more?.getBoundingClientRect();
   const option = graph.querySelector('li:not([hidden]) .task-map__actions button');
   const optionRect = option?.getBoundingClientRect();
-  const roots = [...graph.querySelectorAll('.task-map__root > div')].map(el => el.getBoundingClientRect());
+  const rootNodes = [...graph.querySelectorAll('.task-map__root > div')];
+  const roots = rootNodes.map(el => el.getBoundingClientRect());
+  const branchList = graph.querySelector('.task-map__branches');
+  const branchBounds = branchList.getBoundingClientRect();
+  const near = (a, b) => Math.abs(a - b) <= 1;
+  const connector = (el, pseudo, border, length) => {
+    const style = el && getComputedStyle(el, pseudo);
+    return Boolean(style && style.content !== 'none' && parseFloat(style[border]) === 1
+      && parseFloat(style[length]) > 0
+      && style.position === 'absolute');
+  };
+  const split = roots.length === 2 && roots[0].height > 0 && roots[1].height > 0
+    && roots[0].bottom <= roots[1].top;
   const body = stack.parentElement;
   const pane = body.getBoundingClientRect();
   const style = getComputedStyle(body);
@@ -1186,10 +1198,29 @@ TASK_MAP_FIT = """(() => {
     answerVisible: Boolean(optionRect && optionRect.top >= clip.top && optionRect.bottom <= clip.bottom + 1),
     more: moreRect && moreRect.top >= bounds.top && moreRect.bottom <= bounds.bottom + 1
       && getComputedStyle(more).visibility === 'visible' ? more.innerText.trim() : null,
-    horizontal: roots.length === 2 && roots[0].width > 0 && roots[1].width > 0
-      && roots[0].right < roots[1].left && roots[1].right < branches[0]?.getBoundingClientRect().left,
-    stacked: roots.length === 2 && roots[0].height > 0 && roots[1].height > 0
-      && roots[0].bottom <= roots[1].top && roots[1].bottom < branches[0]?.getBoundingClientRect().top,
+    horizontal: split && roots[0].left === roots[1].left
+      && roots.every(root => root.right < branches[0]?.getBoundingClientRect().left),
+    connected: connector(rootNodes[0], '::after', 'borderLeftWidth', 'height')
+      && near(roots[0].bottom + parseFloat(getComputedStyle(rootNodes[0], '::after').height), roots[1].top)
+      && connector(rootNodes[1], '::after', 'borderTopWidth', 'width')
+      && near(roots[1].right + parseFloat(getComputedStyle(rootNodes[1], '::after').width), branchBounds.left)
+      && connector(branchList, '::before', 'borderLeftWidth', 'height')
+      && branches.length > 0 && branches.every(branch =>
+        connector(branch, '::before', 'borderTopWidth', 'width')
+        && near(branch.getBoundingClientRect().left - parseFloat(getComputedStyle(branch, '::before').width),
+          branchBounds.left)),
+    centeredLead: split && near(roots[0].top + roots[1].bottom, branchBounds.top + branchBounds.bottom),
+    stacked: split && roots[1].bottom < branches[0]?.getBoundingClientRect().top,
+    leadStatus: rootNodes[1]?.querySelector('p')?.innerText.trim() ?? '',
+    replyOnOneLine: branches.some(branch => {
+      const box = branch.getBoundingClientRect();
+      const name = branch.querySelector('.task-map__person')?.getBoundingClientRect();
+      const state = branch.querySelector('.task-map__branch-head > span')?.getBoundingClientRect();
+      const reply = branch.querySelector('.task-map__reply button')?.getBoundingClientRect();
+      return reply?.height > 0 && [name, state].every(rect => rect?.height > 0
+        && rect.top < reply.bottom && reply.top < rect.bottom && rect.left >= box.left
+        && rect.right <= reply.left) && reply.right <= box.right;
+    }),
   };
 })()"""
 
@@ -1221,7 +1252,7 @@ def painted_task_map(ui: Browser) -> dict | None:
 def map_matrix(w: World, case: str, surface: str, names: tuple[str, ...], layouts: dict,
                question: bool) -> None:
     ui = w.ui
-    frames = (*TASK_MAP_FRAMES, (900, 820)) if case == "two colleagues" else TASK_MAP_FRAMES
+    frames = (*TASK_MAP_FRAMES, (900, 820), (900, 560)) if case == "two colleagues" else TASK_MAP_FRAMES
     for width, height in frames:
         ui.viewport(width, height)
         fit = w.wait(f"the {case} map settles at {width}x{height}",
@@ -1244,6 +1275,7 @@ def map_matrix(w: World, case: str, surface: str, names: tuple[str, ...], layout
 
 def lays_out_by_pane(d: dict, question: bool) -> bool:
     return (d["partial"] == 0 and d["horizontal"] == (d["width"] >= HORIZONTAL_FROM)
+            and d["connected"] == d["horizontal"] and (not d["horizontal"] or d["centeredLead"])
             and d["transcript"] is not None and abs(d["transcript"] - min(TRANSCRIPT_WIDTH, d["width"])) <= 1
             and d["mapWidth"] <= d["width"] and d["map"] <= .4 * d["pane"] + 1 and not d["chip"]
             and (d["viewport"][0] != 1280 or d["mapWidth"] > d["transcript"])
@@ -1357,7 +1389,14 @@ def scenario_handoff(w: World) -> None:
                and ui.evaluate(TASK_MAP_FIT)["viewport"] == list(look.FRAME))
         measure(w, f"a hand-off in {surface}", surface, seen)
     w.check("the two-colleague map lays out by its pane's width in both themes at every frame",
-            all(lays_out_by_pane(d, question=False) for d in layouts.values()), observed=layouts)
+            all(lays_out_by_pane(d, question=False)
+                and ("Researcher" not in d["names"] or "Analyst" in d["names"][:1])
+                and (not d["horizontal"] or d["leadStatus"] == "Waiting for Analyst")
+                and (d["viewport"] not in ([900, 700], [900, 820]) or
+                     (d["names"] == ["Analyst", "Researcher"] and d["replyOnOneLine"]))
+                and (d["viewport"] != [900, 560] or
+                     (d["names"] == ["Analyst"] and d["rest"] == ["Researcher"]))
+                for d in layouts.values()), observed=layouts)
     w.check("the colleagues disclosure opens exactly the branches the two-colleague map hides",
             all(opens_remainder(d, peers) for d in layouts.values()),
             observed={key: {"shown": d["names"], "rest": d["rest"]} for key, d in layouts.items()})
@@ -2805,7 +2844,8 @@ def scenario_taskmap(w: World) -> None:
             and all(d["more"] for d in fanout.values()), observed=layouts)
     w.check("the fan-out and question-only maps lay out by their pane's width in both themes at every frame",
             all(lays_out_by_pane(d, question=True) for d in layouts.values()),
-            observed={key: {k: d[k] for k in ("viewport", "width", "transcript", "mapWidth", "horizontal")}
+            observed={key: {k: d[k] for k in ("viewport", "width", "transcript", "mapWidth", "horizontal",
+                                             "connected", "centeredLead")}
                       for key, d in layouts.items()})
     w.check("the colleagues disclosure opens exactly the branches the fan-out map hides",
             all(opens_remainder(d, lease) for d in fanout.values())
@@ -2846,10 +2886,13 @@ def scenario_taskmap(w: World) -> None:
     w.check("the typed answer and shortcut stay with their recorded questions",
             w.host.scalar("SELECT answer FROM approvals WHERE summary=?", MAP_BUY_ASK) == "Three years",
             observed={"lease": "Use four years", "purchase": "Three years"})
-    w.wait("the lease map still has colleagues working",
-           lambda: specialist in working_line(w) and ui.find("region", "Tasks in progress"))
+    fit = w.wait("the lease map settles after the answer while its colleagues keep working",
+                 lambda: specialist in working_line(w) and MAP_LEASE_ASK not in card_text(w)
+                 and painted_task_map(ui))
     if not ui.find("button", specialist):
-        ui.click("button", ui.evaluate(TASK_MAP_FIT)["more"])
+        ui.click("button", fit["more"])
+    w.wait("the nested colleague's link can be clicked",
+           lambda: ui.find("button", specialist) and ui.on_screen("button", specialist))
     ui.click("button", specialist)
     w.wait("the nested specialist's conversation opens", lambda: ui.find("heading", specialist))
     w.check("a nested hand-off opens the named colleague's conversation",

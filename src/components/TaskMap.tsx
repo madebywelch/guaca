@@ -282,6 +282,7 @@ export function TaskMapCard({
   const count = map.branches.length;
   const waiting = map.branches.filter((branch) => branch.questions.length).length;
   const answered = map.branches.filter((branch) => branch.reply).length;
+  const [awaited, ...alsoAwaited] = map.branches.filter((branch) => !branch.reply);
   const hidden = Math.max(0, count - fitted);
   const branchKeys = map.branches
     .slice(0, DIRECT_BRANCHES)
@@ -294,13 +295,17 @@ export function TaskMapCard({
     const measure = () => {
       if (!node.getClientRects().length) return;
       const candidates = Array.from(branches.querySelectorAll<HTMLElement>(":scope > li"));
+      const roots = Array.from(node.querySelectorAll(".task-map__root > .task-map__node"));
       const fitFromStart = () => {
-        const bottom =
-          node.getBoundingClientRect().bottom - parseFloat(getComputedStyle(node).paddingBottom);
+        const box = node.getBoundingClientRect();
+        const style = getComputedStyle(node);
+        const top = box.top + parseFloat(style.paddingTop);
+        const bottom = box.bottom - parseFloat(style.paddingBottom);
         if (
-          Array.from(node.querySelectorAll(".task-map__root > .task-map__node")).some(
-            (root) => root.getBoundingClientRect().bottom > bottom + 0.5,
-          )
+          roots.some((root) => {
+            const rect = root.getBoundingClientRect();
+            return rect.height > 0 && (rect.top < top - 0.5 || rect.bottom > bottom + 0.5);
+          })
         )
           return 0;
         const firstHidden = candidates.findIndex(
@@ -311,9 +316,13 @@ export function TaskMapCard({
       for (const branch of candidates) branch.hidden = false;
       node.removeAttribute("data-compact");
       let fit = fitFromStart();
-      if (fit === 0) {
+      const stacked =
+        branches.getBoundingClientRect().left === roots[0]?.getBoundingClientRect().left;
+      if (fit === 0 || (stacked && candidates.length === 2 && fit === 1)) {
         node.setAttribute("data-compact", "true");
-        fit = fitFromStart();
+        const compactFit = fitFromStart();
+        if (compactFit > fit || fit === 0) fit = compactFit;
+        else node.removeAttribute("data-compact");
       }
       candidates.forEach((branch, index) => {
         branch.hidden = index >= fit;
@@ -375,7 +384,7 @@ export function TaskMapCard({
         }}
       >
         {agent && <AgentAvatar avatar={agent.avatar} color={agent.color} size="xs" seed={id} />}
-        {name(id)}
+        <span>{name(id)}</span>
       </button>
     );
   };
@@ -384,6 +393,7 @@ export function TaskMapCard({
       key={branch.agentId}
       className="task-map__node"
       data-question={branch.questions.length > 0 || undefined}
+      data-finished={(branch.reply !== null && branch.questions.length === 0) || undefined}
     >
       <div className="task-map__branch-head">
         {participant(branch.agentId)}
@@ -490,6 +500,13 @@ export function TaskMapCard({
               <div className="task-map__node">
                 <span>Leads the task</span>
                 {lead && participant(lead.id)}
+                {map.inFlight && (
+                  <p className="task-map__lead-status">
+                    {awaited
+                      ? `Waiting for ${name(awaited.agentId)}${alsoAwaited.length ? ` and ${alsoAwaited.length} more` : ""}`
+                      : "Working"}
+                  </p>
+                )}
               </div>
             </div>
             <ul className="task-map__branches" ref={list}>

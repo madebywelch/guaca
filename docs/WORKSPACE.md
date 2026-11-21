@@ -69,12 +69,13 @@ message. The host reads its original envelopes across the participating
 agents. The map stays pinned above that conversation while the task runs.
 The task with the soonest-due question opens automatically; a
 person can fold it and open another. Three direct colleagues appear first,
-with questions before other work. The map uses at most two fifths of the
-pane. Each visible branch fits in full; anything that does not fit opens
-from the one colleagues control. The map uses the width beside the roster,
+with questions before ongoing work and finished replies last. The map uses
+at most two fifths of the pane. Each visible branch fits in full; open any
+remaining branches from the one colleagues control. The map uses the width beside the roster,
 leaving the transcript in its reading column. At 740 pixels of pane width
-the brief, lead, and branches sit side by side. Below that they stack, with
-the branches taking priority if space is tight. From an empty composer,
+the brief sits above the lead on the left, with connectors branching to
+colleagues on the right. Below that they stack, and finished replies in the
+live map take one line. The branches take priority if space is tight. From an empty composer,
 Tab goes to the visible branch question when the agent has not asked one
 directly; a number picks an answer. Escape from the composer still opens
 the Questions tray. A colleague's own hand-off is
