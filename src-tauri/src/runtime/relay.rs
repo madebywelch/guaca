@@ -87,6 +87,7 @@ impl Runtime {
     pub(super) async fn relay(self, adapter: Arc<dyn Adapter>, status: Arc<Mutex<AdapterStatus>>) {
         let id = adapter.id();
         let gate = self.place_gate(&id);
+        let rounds = self.inner.relay_rounds.lock().entry(id.clone()).or_default().clone();
         let mut woken = self.inner.relay_wake.subscribe();
         loop {
             woken.borrow_and_update();
@@ -94,6 +95,7 @@ impl Runtime {
                 if status.lock().stopped {
                     return;
                 }
+                let _round = rounds.lock().await;
                 let _guard = gate.read().await;
                 match self.relay_round(&adapter).await {
                     Ok(true) => continue,

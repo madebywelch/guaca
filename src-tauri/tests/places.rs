@@ -51,6 +51,7 @@ struct World {
     finds: AtomicUsize,
     hide_posts: AtomicBool,
     lose_post_response: AtomicBool,
+    post_gate: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
     runs: AtomicUsize,
     ending: Mutex<Option<AdapterError>>,
 }
@@ -144,6 +145,10 @@ impl Adapter for Fake {
     ) -> Pending<'a, Result<Posted, SendError>> {
         async move {
             self.0.post_calls.lock().push(tag.clone());
+            let gate = self.0.post_gate.lock().take();
+            if let Some(gate) = gate {
+                let _ = gate.recv();
+            }
             if let Some(failure) = self.0.failures.lock().pop_front() {
                 return Err(failure);
             }
@@ -707,6 +712,23 @@ async fn a_lost_post_response_is_recovered_without_reposting() {
     let run = settled(&h, "m1").await;
     relayed(&h, run, Mark::Done).await;
     assert_eq!(world.finds.load(Ordering::SeqCst), 1);
+    assert_eq!(world.post_calls.lock().len(), 1);
+    assert_eq!(texts(&world.posts()), vec!["Your report."]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_replaced_adapter_waits_for_the_post_its_predecessor_is_still_making() {
+    let stub = saying("Your report.").await;
+    let Setup { h, world } = linked(&stub, abilities()).await;
+    let (open, gate) = std::sync::mpsc::channel();
+    *world.post_gate.lock() = Some(gate);
+    hear(&world, said("m1", DM, None, PERSON, "Get the report")).await;
+    h.wait_until("the first post to start", |_| !world.post_calls.lock().is_empty()).await;
+    attach(&h, &world).await;
+    drop(open);
+    let run = settled(&h, "m1").await;
+    relayed(&h, run, Mark::Done).await;
+    assert_eq!(world.finds.load(Ordering::SeqCst), 0);
     assert_eq!(world.post_calls.lock().len(), 1);
     assert_eq!(texts(&world.posts()), vec!["Your report."]);
 }
