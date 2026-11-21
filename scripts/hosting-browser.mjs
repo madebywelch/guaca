@@ -287,16 +287,22 @@ try {
       return [...roster.querySelectorAll('.roster__agent')].map(row => {
         const name = row.querySelector('.roster__name');
         range.selectNodeContents(name);
-        const text = range.getBoundingClientRect(), box = row.getBoundingClientRect(), bounds = name.getBoundingClientRect();
-        return { name: name.textContent.trim(), readable: text.width > 0 && text.height > 0 &&
+        const box = row.getBoundingClientRect(), bounds = name.getBoundingClientRect();
+        const clipped = name.scrollWidth > name.clientWidth;
+        const visible = clipped ? bounds : range.getBoundingClientRect();
+        const style = getComputedStyle(name);
+        return { name: name.textContent.trim(), clipped, shown: visible.width > 0 && visible.height > 0 &&
           name.checkVisibility({opacityProperty: true, visibilityProperty: true}) &&
-          text.left >= box.left - 1 && text.left >= bounds.left - 1 &&
-          text.right <= box.right + 1 && text.right <= bounds.right + 1 &&
-          text.top >= box.top - 1 && text.bottom <= box.bottom + 1 };
+          visible.left >= box.left - 1 && visible.left >= bounds.left - 1 &&
+          visible.right <= box.right + 1 && visible.right <= bounds.right + 1 &&
+          visible.top >= box.top - 1 && visible.bottom <= box.bottom + 1 &&
+          (!clipped || (style.textOverflow === 'ellipsis' && style.overflowX === 'hidden')),
+          fullName: name.title === name.textContent && row.getAttribute('aria-label')?.startsWith(name.textContent + ', ') };
       });
     })()`);
-    assert.deepEqual(facts, [{ name: "Browser check", readable: true }, { name: "Browser check reviewer", readable: true }],
-      `${where}: both conversation names are readable in their rows`);
+    assert.deepEqual(facts.map(row => row.name), ["Browser check", "Browser check reviewer"], `${where}: both names are present`);
+    assert.ok(!facts[0].clipped && facts.every(row => row.shown && row.fullName),
+      `${where}: the shorter name fits and both give their full names on hover and to assistive technology: ${JSON.stringify(facts)}`);
   };
   for (const width of [320,390,430,768]) {
     await size(width,844);

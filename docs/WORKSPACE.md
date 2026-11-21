@@ -1123,8 +1123,10 @@ Its order is the same as Command 1 to 9 and the command menu: pinned agents
 first within each group, then the order the operator set. Activity never moves
 a row. Agents past nine remain in the scrollable list and can be opened by
 name or with the next and previous keys; only the numbers stop at nine. The
-sidebar is 248 px wide and uses 212 px at a 900 px window. Names wrap rather
-than losing their distinguishing words.
+sidebar is 248 px wide and uses 212 px at a 900 px window. At desktop widths,
+the name has the first line to itself. The status and shortcut share the line
+below it. If the name still does not fit, an ellipsis marks the cut and the
+full name appears on hover.
 
 After the workspace is read, the opening conversation is the owner of the
 soonest-due question. A colleague's approval carries the same run ID as the

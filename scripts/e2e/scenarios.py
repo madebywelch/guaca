@@ -1987,16 +1987,32 @@ ROSTER_GEOMETRY = """(() => {
     row.scrollIntoView({block: 'nearest', inline: 'nearest'});
     const name = row.querySelector('.roster__name');
     const status = row.querySelector('.roster__status');
+    const shortcut = row.querySelector('kbd')?.getBoundingClientRect();
     const box = row.getBoundingClientRect();
     range.selectNodeContents(name);
     const text = range.getBoundingClientRect();
+    const nameBox = name.getBoundingClientRect();
     const statusBox = status.getBoundingClientRect();
-    return [name.textContent.trim(), name.checkVisibility({opacityProperty: true, visibilityProperty: true})
-      && text.width > 0 && text.height > 0 && within(text, name.getBoundingClientRect())
-      && within(text, box) && within(text, scroller.getBoundingClientRect())
-      && within(text, {left: 0, right: innerWidth, top: 0, bottom: innerHeight})
-      && !overlap(text, statusBox)
-      && rows.every(other => other === row || !overlap(text, other.getBoundingClientRect()))];
+    const clipped = name.scrollWidth > name.clientWidth;
+    const visible = clipped ? nameBox : text;
+    const style = getComputedStyle(name);
+    const tooltip = name.title === name.textContent;
+    const fragments = [...range.getClientRects()];
+    return {
+      name: name.textContent.trim(), clipped, tooltip,
+      oneLine: fragments.length > 0 && fragments.every(fragment => Math.abs(fragment.top - text.top) <= 1),
+      ownLine: nameBox.bottom <= statusBox.top + 1 && (!shortcut ||
+        (nameBox.bottom <= shortcut.top + 1 && statusBox.right <= shortcut.left + 1
+          && statusBox.top < shortcut.bottom && shortcut.top < statusBox.bottom
+          && Math.abs(nameBox.right - shortcut.right) <= 1)),
+      visible: name.checkVisibility({opacityProperty: true, visibilityProperty: true})
+        && visible.width > 0 && visible.height > 0 && within(visible, nameBox)
+        && within(visible, box) && within(visible, scroller.getBoundingClientRect())
+        && within(visible, {left: 0, right: innerWidth, top: 0, bottom: innerHeight})
+        && !overlap(visible, statusBox)
+        && rows.every(other => other === row || !overlap(visible, other.getBoundingClientRect()))
+        && (!clipped || (style.textOverflow === 'ellipsis' && style.overflowX === 'hidden')),
+    };
   });
   scroller.scrollTop = before;
   return measured;
@@ -2004,8 +2020,9 @@ ROSTER_GEOMETRY = """(() => {
 
 
 def scenario_roster(w: World) -> None:
+    long_name = "Researcher for International Market Operations"
     names = (AGENT, MARKET, "Product Manager", "Researcher", "Researcher West", "Critic",
-             "Archivist", "Writer", "Analyst", "Editor", "Observer")
+             "Archivist", "Writer", "Analyst", "Editor", long_name)
     asking = names[9]
     parked = threading.Event()
     draft = "Keep this draft while switching conversations."
@@ -2063,8 +2080,13 @@ def scenario_roster(w: World) -> None:
         w.wait("roster layout settles", lambda: ui.evaluate(look.SETTLED) and ui.evaluate("document.fonts.status") == "loaded")
         readable[f"{width}x{height}"] = ui.evaluate(ROSTER_GEOMETRY)
         w.capture(f"the roster at {width}x{height}")
-    w.check("every roster row scrolls fully into view with its name readable at both sizes",
-            all(rows == [[name, True] for name in names] for rows in readable.values()), observed=readable)
+    w.check("each desktop name has its own line above the status and shortcut at both widths",
+            all([row["name"] for row in rows] == list(names)
+                and all(row["visible"] and row["oneLine"] and row["ownLine"]
+                        and (not row["clipped"] or row["tooltip"]) for row in rows)
+                and not rows[0]["clipped"] and rows[-1]["clipped"]
+                for rows in readable.values()) and not readable["1280x820"][1]["clipped"],
+            observed=readable)
 
     open_agent(w, names[9])
     w.wait("the clicked row focuses its question", lambda: ui.focused() == ("button", "Early"))
@@ -2119,6 +2141,24 @@ def scenario_roster(w: World) -> None:
     w.check("reload lands on the pending question but keeps the other conversation's draft",
             ui.value("combobox", f"Write to {names[1]}") == draft,
             observed=ui.focused(), shot=True)
+    ui.send("Emulation.setUserAgentOverride", {"userAgent": ui.evaluate("navigator.userAgent"), "platform": "MacIntel"})
+    ui.evaluate("location.reload()")
+    w.wait("the Mac platform reload opens the waiting conversation",
+           lambda: ui.find("log", f"Conversation with {asking}") and ui.find("button", "Early"))
+    open_agent(w, AGENT)
+    ui.key("k", mod=True)
+    w.wait("the command menu opens with the platform shortcut labels",
+           lambda: ui.find("dialog", "Command menu"))
+    labels = ui.evaluate("""(() => {
+      const first = document.querySelector('.roster__agent kbd').textContent.trim();
+      const title = document.querySelector('.roster__name').textContent;
+      const menu = [...document.querySelectorAll('.palette__row')].find(
+        row => row.querySelector('.palette__title')?.textContent === title
+      );
+      return [first, [...(menu?.querySelectorAll('kbd') ?? [])].map(key => key.textContent.trim()).at(-1)];
+    })()""")
+    w.check("the roster and command menu both show Command 1 on macOS",
+            labels == ["⌘1", "⌘1"], observed=labels)
     no_unscripted(w)
 
 
@@ -3135,11 +3175,12 @@ SCENARIOS: dict[str, Scenario] = {
         "each agent has one ordered row, with shortcuts only for the first nine",
         "the conversation has no Today destination or spare writing field",
         "a new question changes the tenth status without reordering or switching conversations",
-        "every roster row scrolls fully into view with its name readable at both sizes",
+        "each desktop name has its own line above the status and shortcut at both widths",
         "the composer and Send stay visible with a question at keyboard height",
         "mouse, Control Tab in both directions, and the numbered shortcut keep the draft with its agent",
         "stacked Search and its keys leave the command menu and underlying draft unchanged",
         "reload lands on the pending question but keeps the other conversation's draft",
+        "the roster and command menu both show Command 1 on macOS",
         "every model call was one the scenario scripted",
     )),
     "grouptabs": Scenario(scenario_grouptabs, "A person opens a group's settings from the Groups sheet, reaches "
