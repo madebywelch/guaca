@@ -67,6 +67,12 @@
   padding-block: var(--space-1);
 }
 
+.task-map-stack .task-map__brief {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .task-map-stack .task-map__graph {
   overflow: clip;
   min-height: 0;
@@ -372,6 +378,36 @@
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
+  }
+
+  .task-map-stack .task-map__branches > .task-map__node:not([data-question], [data-finished], [hidden]) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: var(--space-3);
+  }
+
+  .task-map-stack .task-map__branches > .task-map__node:not([data-question], [data-finished]) > .task-map__branch-head {
+    display: contents;
+  }
+
+  .task-map-stack .task-map__branches > .task-map__node:not([data-question], [data-finished]) > .task-map__excerpt {
+    flex: 1;
+    order: 1;
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .task-map-stack .task-map__branches > .task-map__node:not([data-question], [data-finished]) > .task-map__branch-head > span {
+    order: 2;
+  }
+
+  .task-map-stack .task-map__branches > .task-map__node:not([data-question], [data-finished]) > .task-map__nested {
+    flex-basis: 100%;
+    order: 3;
   }
 
   .task-map-stack .task-map__node[data-finished]:not([hidden]) {

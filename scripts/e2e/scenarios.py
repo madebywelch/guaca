@@ -1257,6 +1257,15 @@ def scenario_running(w: World) -> None:
 ASK_BOTH = "Ask Researcher and Analyst what changed in the quarterly filings."
 ASK_AGAIN = "Ask them both about the lease note."
 ASK_FAILING = "Ask Analyst for the unavailable figures."
+ASK_PLAN = ("Ask Researcher and Analyst at the same time: Researcher for what current sources say about buying or "
+            "leasing the next car, Analyst for the cost over three years and what would change the answer. Then "
+            "come back with one recommendation.")
+PLAN_Q = "Buy or lease the next car: what do your sources and the numbers say?"
+PLAN_ASK = "Keep the budget under 40,000 dollars?"
+PLAN_OPTION = "Under 40,000"
+R_PLAN = "Leasing costs less over three years."
+A_PLAN = "Buying wins after year four."
+PLAN_SAID = "Lease if you replace the car within four years."
 FILINGS_Q = "What changed in the quarterly filings since last quarter?"
 LEASE_Q = "What does the lease note change?"
 R_SAYS = "Revenue rose four percent."
@@ -1426,6 +1435,8 @@ def scenario_handoff(w: World) -> None:
     analyst = threading.Event()
     never = threading.Event()
     analyst_failure = threading.Event()
+    plan_ask = threading.Event()
+    plan_answer = threading.Event()
 
     def script(c: Call) -> Reply | None:
         if c.last_user == "ping":
@@ -1434,12 +1445,16 @@ def scenario_handoff(w: World) -> None:
         if c.speaker == AGENT:
             if c.last_user.endswith("Say hello."):
                 return say(HELLO)
-            for ask, question in ((ASK_BOTH, FILINGS_Q), (ASK_AGAIN, LEASE_Q)):
+            for ask, question in ((ASK_BOTH, FILINGS_Q), (ASK_AGAIN, LEASE_Q), (ASK_PLAN, PLAN_Q)):
                 if c.last_user.endswith(ask):
                     return say("I asked them both.") if results else call(
                         "send_message", to=["Researcher", "Analyst"], text=question, intent="work")
             if A_SAYS in c.last_user:
                 return say(BOTH_SAID)
+            if A_PLAN in c.last_user:
+                return say(PLAN_SAID)
+            if R_PLAN in c.last_user:
+                return say("Researcher answered.")
             if R_SAYS in c.last_user:
                 return say("Researcher answered.")
             if c.last_user.endswith(ASK_FAILING):
@@ -1447,6 +1462,11 @@ def scenario_handoff(w: World) -> None:
                     "send_message", to=["Analyst"], text="Find the unavailable figures.", intent="work")
         if c.speaker == "Researcher" and (FILINGS_Q in c.last_user or LEASE_Q in c.last_user):
             return say(R_SAYS)
+        if c.speaker == "Researcher" and PLAN_Q in c.last_user:
+            return say(R_PLAN) if results else held(plan_ask, call(
+                "ask_operator", question=PLAN_ASK, options=[PLAN_OPTION, "Up to 50,000"]))
+        if c.speaker == "Analyst" and PLAN_Q in c.last_user:
+            return held(plan_answer, say(A_PLAN))
         if c.speaker == "Analyst" and FILINGS_Q in c.last_user:
             return held(analyst, say(A_SAYS))
         if c.speaker == "Analyst" and LEASE_Q in c.last_user:
@@ -1527,10 +1547,8 @@ def scenario_handoff(w: World) -> None:
             all(lays_out_by_pane(d, question=False)
                 and ("Researcher" not in d["names"] or "Analyst" in d["names"][:1])
                 and (not d["horizontal"] or d["leadStatus"] == "Waiting for Analyst")
-                and (d["viewport"] not in ([900, 700], [900, 820]) or
+                and (d["viewport"] not in ([900, 700], [900, 820], [900, 560]) or
                      (d["names"] == ["Analyst", "Researcher"] and d["replyOnOneLine"]))
-                and (d["viewport"] != [900, 560] or
-                     (d["names"] == ["Analyst"] and d["rest"] == ["Researcher"]))
                 for d in layouts.values()), observed=layouts)
     w.check("the colleagues disclosure opens exactly the branches the two-colleague map hides",
             all(opens_remainder(d, peers) for d in layouts.values()),
@@ -1588,6 +1606,31 @@ def scenario_handoff(w: World) -> None:
             ended[-1]["status"] == "stopped" and not card_text(w)
             and not ui.find("button", "Stop"),
             observed={"outcome": ended[-1]["status"]}, shot=True)
+    ui.viewport(*WINDOW)
+    write(w, AGENT, ASK_PLAN)
+    working = w.wait("the map settles at 1280x820 while both colleagues work", lambda: (
+        fit := painted_task_map(ui)) and fit["viewport"] == list(WINDOW) and PLAN_Q in card_text(w)
+        and card_text(w).count("Working") == 2 and fit)
+    w.check("while both colleagues work, the map at 1280x820 draws the brief and the lead with lines to both branches",
+            sorted(working["names"]) == ["Analyst", "Researcher"] and working["horizontal"] and working["connected"]
+            and working["leadStatus"].startswith("Waiting for") and working["partial"] == 0 and not working["more"],
+            observed={"names": sorted(working["names"]), "horizontal": working["horizontal"],
+                      "connected": working["connected"], "waiting": working["leadStatus"].startswith("Waiting for"),
+                      "more": working["more"]}, shot=True)
+    plan_ask.set()
+    ui.viewport(900, 700)
+    asking = w.wait("the map settles at 900x700 with a question on one branch", lambda: (
+        fit := painted_task_map(ui)) and fit["viewport"] == [900, 700] and PLAN_ASK in card_text(w) and fit["answerVisible"] and fit)
+    w.check("with a question on one branch, the map at 900x700 shows both branches whole and folds neither",
+            sorted(asking["names"]) == ["Analyst", "Researcher"] and not asking["more"]
+            and asking["partial"] == 0 and asking["answerVisible"],
+            observed={"names": sorted(asking["names"]), "more": asking["more"], "partial": asking["partial"],
+                      "answerVisible": asking["answerVisible"]}, shot=True)
+    ui.click("button", PLAN_OPTION)
+    w.wait("the researcher answers after the question", lambda: R_PLAN in [m["text"] for m in between(w)])
+    plan_answer.set()
+    settled(w, 4, "the third hand-off settles")
+    ui.viewport(*WINDOW)
     write(w, AGENT, ASK_FAILING)
     w.wait("the lead's dispatch note is visible during the delegated work",
            lambda: "I asked Analyst to check." in conversation(w))
@@ -1604,7 +1647,7 @@ def scenario_handoff(w: World) -> None:
       window.restoreTaskReads = () => { window.fetch = fetchFromHost; };
     })()""")
     analyst_failure.set()
-    failed = settled(w, 4, "the delegated failure is recorded")
+    failed = settled(w, 5, "the delegated failure is recorded")
     w.wait("the task offers to retry the failed read", lambda: ui.find("button", "Retry task map"))
     w.check("a failed map read cannot turn a progress note into a result",
             not ui.evaluate("[...document.querySelectorAll('.msg--result')].some(el => "
@@ -3447,7 +3490,9 @@ SCENARIOS: dict[str, Scenario] = {
     "handoff": Scenario(scenario_handoff, "An agent asks two colleagues; a live card shows each face, the question, a "
                         "status word with time and the answer at reading size, the status line says who it waits "
                         "for with Stop, and the transcript keeps two text edges; after the replies the card folds "
-                        "to one line; a hand-off cut short by Stop folds and says who answered.",
+                        "to one line; the live map draws the brief, the lead and both branches while both "
+                        "colleagues work, and keeps both branches whole at 900x700 with a question waiting; a "
+                        "hand-off cut short by Stop folds and says who answered.",
     (
         "the pinned map shows each colleague, the work still underway, and the result already sent",
         "a pinned branch is fully visible or behind the colleagues control",
@@ -3465,6 +3510,8 @@ SCENARIOS: dict[str, Scenario] = {
         "the folded line opens onto both answers",
         "opening a colleague's message shows their recorded words",
         "a hand-off cut short by Stop folds and says who answered, instead of ticking on",
+        "while both colleagues work, the map at 1280x820 draws the brief and the lead with lines to both branches",
+        "with a question on one branch, the map at 900x700 shows both branches whole and folds neither",
         "a colleague's failure does not promote the lead's progress note to a result",
         "a failed map read cannot turn a progress note into a result",
         "every model call was one the scenario scripted",

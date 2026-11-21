@@ -73,8 +73,13 @@ at most two fifths of the pane. Each visible branch fits in full; open any
 remaining branches from the one colleagues control. The map uses the width beside the roster,
 leaving the transcript in its reading column. At 740 pixels of pane width
 the brief sits above the lead on the left, with connectors branching to
-colleagues on the right. Below that they stack, and finished replies in the
-live map take one line. The branches take priority if space is tight. From an empty composer,
+colleagues on the right. Below that they stack, and finished replies and
+working colleagues in the live map take one line each. The map counts rows of
+height, not branches: it shows every branch that fits and folds only the rest.
+The brief keeps to one line in the live map, with Read brief whenever that line
+is cut, so the brief and lead fit beside the branches from the first hand-off to
+the result. The branches take priority if space is tight: a stacked map drops
+the brief and lead only when that shows more branches. From an empty composer,
 Tab goes to the visible branch question when the agent has not asked one
 directly; a number picks an answer. Escape from the composer still opens
 the Questions tray. A colleague's own hand-off is

@@ -15,6 +15,31 @@ export interface TaskMap {
   branches: TaskBranch[];
 }
 
+export interface MapRows {
+  room: number;
+  root: number;
+  beside: boolean;
+  gap: number;
+  branches: readonly number[];
+}
+
+export function fitRows({ room, root, beside, gap, branches }: MapRows) {
+  const count = (space: number) => {
+    let used = -gap;
+    let shown = 0;
+    for (const height of branches) {
+      used += gap + height;
+      if (used > space + 0.5) break;
+      shown += 1;
+    }
+    return shown;
+  };
+  if (beside) return { shown: count(room), root: root <= room + 0.5 };
+  const withRoot = count(room - root);
+  const without = count(room);
+  return without > withRoot ? { shown: without, root: false } : { shown: withRoot, root: true };
+}
+
 const due = (question: Approval) => question.lapsesAt ?? Infinity;
 
 export function taskMaps(

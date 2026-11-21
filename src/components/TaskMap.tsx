@@ -6,7 +6,7 @@ import { focusWriting } from "../lib/focus";
 import { useShown } from "../lib/held";
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
-import { type TaskMap as MapData, type TaskBranch, taskMaps } from "../lib/taskMap";
+import { fitRows, type TaskMap as MapData, type TaskBranch, taskMaps } from "../lib/taskMap";
 import { clockLabel } from "../lib/time";
 import type { Lookups } from "../lib/transcript";
 import { RECONNECTED } from "../lib/transport";
@@ -257,6 +257,7 @@ export function TaskMapCard({
     "colleagues" | "brief" | { name: string; message: Envelope }
   >();
   const [fitted, setFitted] = useState(DIRECT_BRANCHES);
+  const [briefCut, setBriefCut] = useState(false);
   const first = useRef<HTMLDivElement>(null);
   const graph = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLUListElement>(null);
@@ -295,45 +296,46 @@ export function TaskMapCard({
     const measure = () => {
       if (!node.getClientRects().length) return;
       const candidates = Array.from(branches.querySelectorAll<HTMLElement>(":scope > li"));
-      const roots = Array.from(node.querySelectorAll(".task-map__root > .task-map__node"));
-      const fitFromStart = () => {
-        const box = node.getBoundingClientRect();
-        const style = getComputedStyle(node);
-        const top = box.top + parseFloat(style.paddingTop);
-        const bottom = box.bottom - parseFloat(style.paddingBottom);
-        if (
-          roots.some((root) => {
-            const rect = root.getBoundingClientRect();
-            return rect.height > 0 && (rect.top < top - 0.5 || rect.bottom > bottom + 0.5);
-          })
-        )
-          return 0;
-        const firstHidden = candidates.findIndex(
-          (branch) => branch.getBoundingClientRect().bottom > bottom + 0.5,
-        );
-        return firstHidden === -1 ? candidates.length : firstHidden;
-      };
       for (const branch of candidates) branch.hidden = false;
       node.removeAttribute("data-compact");
-      let fit = fitFromStart();
-      const stacked =
-        branches.getBoundingClientRect().left === roots[0]?.getBoundingClientRect().left;
-      if (fit === 0 || (stacked && candidates.length === 2 && fit === 1)) {
+      const brief = node.querySelector(".task-map__brief");
+      if (brief) setBriefCut(brief.scrollWidth > Math.ceil(brief.getBoundingClientRect().width));
+      const box = node.getBoundingClientRect();
+      const style = getComputedStyle(node);
+      const top = box.top + (parseFloat(style.paddingTop) || 0);
+      const room = box.bottom - (parseFloat(style.paddingBottom) || 0) - top;
+      const gap = parseFloat(getComputedStyle(branches).rowGap) || 0;
+      const heights = () => candidates.map((branch) => branch.getBoundingClientRect().height);
+      const root = node.querySelector(".task-map__root")?.getBoundingClientRect();
+      const beside = root !== undefined && root.right <= branches.getBoundingClientRect().left;
+      const firstTop = candidates[0]?.getBoundingClientRect().top ?? top;
+      let fit = fitRows({
+        room,
+        root: beside ? (root?.height ?? 0) : firstTop - top,
+        beside,
+        gap,
+        branches: heights(),
+      });
+      if (!fit.root) {
         node.setAttribute("data-compact", "true");
-        const compactFit = fitFromStart();
-        if (compactFit > fit || fit === 0) fit = compactFit;
-        else node.removeAttribute("data-compact");
+        if (beside)
+          fit = {
+            ...fitRows({ room, root: 0, beside: false, gap, branches: heights() }),
+            root: false,
+          };
       }
       candidates.forEach((branch, index) => {
-        branch.hidden = index >= fit;
+        branch.hidden = index >= fit.shown;
       });
-      setFitted(fit);
+      setFitted(fit.shown);
     };
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(node);
     observer.observe(branches);
     for (const branch of branches.children) observer.observe(branch);
+    const root = node.querySelector(".task-map__root");
+    if (root) observer.observe(root);
     const pane = node.closest(".pane__body");
     if (pane) observer.observe(pane);
     return () => observer.disconnect();
@@ -408,7 +410,9 @@ export function TaskMapCard({
         </span>
       </div>
       {!branch.questions.length && !branch.reply && (
-        <p className="task-map__excerpt">{preview(plainText(branch.asked), PREVIEW_LENGTH)}</p>
+        <p className="task-map__excerpt" title={plainText(branch.asked)}>
+          {preview(plainText(branch.asked), PREVIEW_LENGTH)}
+        </p>
       )}
       {branch.questions.map((request, questionIndex) => (
         <BranchQuestion
@@ -485,8 +489,8 @@ export function TaskMapCard({
             <div className="task-map__root">
               <div className="task-map__node">
                 <span>Your brief</span>
-                <p>{visibleBrief}</p>
-                {text.length > PREVIEW_LENGTH && (
+                <p className="task-map__brief">{visibleBrief}</p>
+                {(text.length > PREVIEW_LENGTH || briefCut) && (
                   <button
                     type="button"
                     className="btn btn--compact"

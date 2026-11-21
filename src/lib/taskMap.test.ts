@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { taskMaps } from "./taskMap";
+import { fitRows, taskMaps } from "./taskMap";
 import type { Approval, Envelope } from "./types";
 
 const lead = { kind: "agent", id: "lead" } as const;
@@ -140,5 +140,44 @@ describe("task map", () => {
     )[0]?.branches;
     expect(branches?.[0]?.reply).toEqual(reply);
     expect(branches?.[0]?.delegatedTo).toEqual([analyst.id]);
+  });
+});
+
+describe("fitting a task map by rows", () => {
+  it("folds the branch that does not fit the map's height", () => {
+    expect(fitRows({ room: 167, root: 138, beside: true, gap: 6, branches: [68, 68, 68] })).toEqual(
+      {
+        shown: 2,
+        root: true,
+      },
+    );
+  });
+
+  it("drops the brief and lead from a stacked map when that keeps a second branch whole", () => {
+    expect(fitRows({ room: 131.7, root: 60, beside: false, gap: 6, branches: [88, 32] })).toEqual({
+      shown: 2,
+      root: false,
+    });
+  });
+
+  it("drops the brief and lead beside the branches only when they alone overflow", () => {
+    expect(fitRows({ room: 63, root: 138, beside: true, gap: 6, branches: [32] })).toEqual({
+      shown: 1,
+      root: false,
+    });
+  });
+
+  it("keeps the brief and lead beside two working branches when its column fits", () => {
+    expect(fitRows({ room: 167, root: 138, beside: true, gap: 6, branches: [68, 68] })).toEqual({
+      shown: 2,
+      root: true,
+    });
+  });
+
+  it("keeps the brief and lead above the branches when dropping them shows no more", () => {
+    expect(fitRows({ room: 179.7, root: 57, beside: false, gap: 6, branches: [32, 32] })).toEqual({
+      shown: 2,
+      root: true,
+    });
   });
 });

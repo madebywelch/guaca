@@ -87,6 +87,28 @@ describe("pinned task maps", () => {
     ).toHaveLength(2);
   });
 
+  it("offers no second copy of a brief that fits its line", () => {
+    render(<ActiveTaskMaps maps={[task("Compare the lease options", 70)]} lookups={lookups} />);
+    expect(screen.queryByRole("button", { name: "Read brief" })).toBeNull();
+  });
+
+  it("offers the whole brief when its line in the map is cut", () => {
+    const shown = vi
+      .spyOn(Element.prototype, "getClientRects")
+      .mockReturnValue([new DOMRect()] as unknown as DOMRectList);
+    const wide = vi.spyOn(Element.prototype, "scrollWidth", "get").mockReturnValue(320);
+    const box = vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(200);
+    try {
+      render(<ActiveTaskMaps maps={[task("Compare the lease options", 70)]} lookups={lookups} />);
+      expect(screen.getByRole("button", { name: "Read brief" })).toBeTruthy();
+      expect(document.querySelector(".task-map__graph")?.hasAttribute("data-compact")).toBe(false);
+    } finally {
+      shown.mockRestore();
+      wide.mockRestore();
+      box.mockRestore();
+    }
+  });
+
   it("keeps a reader open through a fold and settlement without reopening it", () => {
     const current = task("First task", 100, 5);
     const sooner = task("Next task", 50);
