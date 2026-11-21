@@ -233,8 +233,10 @@ class Browser:
         self.listen(paused)
         self.send("Fetch.enable", {"patterns": [{"urlPattern": pattern, "requestStage": "Request"}]})
 
-    def evaluate(self, expression: str) -> Any:
-        result = self.send("Runtime.evaluate", {"expression": expression, "returnByValue": True})
+    def evaluate(self, expression: str, *, await_promise: bool = False) -> Any:
+        result = self.send("Runtime.evaluate", {
+            "expression": expression, "returnByValue": True, "awaitPromise": await_promise,
+        })
         if "exceptionDetails" in result:
             raise BrowserError(f"evaluate: {result['exceptionDetails'].get('text')}")
         return result["result"].get("value")

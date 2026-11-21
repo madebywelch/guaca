@@ -272,12 +272,21 @@ function answers(row: Extract<Row, { kind: "message" }>): boolean {
   return parts.length > 0 && parts.every((part) => part.type === "text" || part.type === "file");
 }
 
-export function withResults(rows: Row[], running: ReadonlySet<RunId>): Row[] {
+export function withResults(
+  rows: Row[],
+  running: ReadonlySet<RunId>,
+  recorded: ReadonlyMap<RunId, MessageId | null> = new Map(),
+): Row[] {
   const last = new Map<RunId, Extract<Row, { kind: "message" }>>();
   const cutShort = new Set<RunId>();
   for (const row of rows) {
     if (row.kind !== "message") continue;
     const { runId, parts } = row.message;
+    if (recorded.has(runId)) {
+      if (!running.has(runId) && toPerson(row) && recorded.get(runId) === row.message.id)
+        last.set(runId, row);
+      continue;
+    }
     if (
       parts.some(
         (part) =>

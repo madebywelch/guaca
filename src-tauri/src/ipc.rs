@@ -344,6 +344,7 @@ surface! {
     clear_agent_working_notes(id: AgentId) -> (),
     agent_last_active() -> HashMap<AgentId, i64>,
     channel_messages(channel_id: AgentId, limit: Option<u32>, through: Option<MessageId>) -> Vec<Envelope>,
+    task_record(channel_id: AgentId, run_id: RunId) -> Option<crate::domain::outcome::TaskRecord>,
     pair_messages(a: AgentId, b: AgentId, limit: Option<u32>) -> Vec<Envelope>,
     conversation_flow(group: GroupId, limit: Option<u32>) -> Vec<Envelope>,
     search(query: String, limit: Option<u32>) -> SearchHits,

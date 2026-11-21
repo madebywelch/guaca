@@ -63,8 +63,30 @@ the result is decided by `withResults` in `lib/transcript.ts` from the
 transcript and the host's running list, so it agrees with the outcome's note
 without asking for it.
 
-**Tool steps are one quiet line.** See the next section. **A hand-off is shown,
-not footnoted.** When an agent asks colleagues, `HandoffRow` draws a card: each
+**Tool steps are one quiet line.** See the next section. **A delegated brief
+has a task map.** The map uses the recorded run, not the latest conversation
+message. The host reads its original envelopes across the participating
+agents. The map stays pinned above that conversation while the task runs.
+The task with the soonest-due question opens automatically; a
+person can fold it and open another. Three direct colleagues appear first,
+with questions before other work. The map uses at most two fifths of the
+pane. Each visible branch fits in full; anything that does not fit opens
+from the one colleagues control. The map uses the width beside the roster,
+leaving the transcript in its reading column. At 740 pixels of pane width
+the brief, lead, and branches sit side by side. Below that they stack, with
+the branches taking priority if space is tight. From an empty composer,
+Tab goes to the visible branch question when the agent has not asked one
+directly; a number picks an answer. Escape from the composer still opens
+the Questions tray. A colleague's own hand-off is
+a named link. A colleague's recorded reply opens as a message and stays
+open if the task finishes while it is being read. The finished map folds immediately
+above that result. When no result was delivered, it says the hand-off ended
+instead. A map that could not refresh keeps its last recorded view and
+offers a retry rather than calling a progress note the result. A task too
+large to draw still keeps the host's recorded result in the transcript.
+
+The older hand-off record still covers exchanges not rooted in an operator's
+brief and conversations with an older host. `HandoffRow` draws each
 colleague's face and name, the question in the interface role, a status word
 with elapsed time (asked, working, writing, waiting its turn, waiting for you,
 or answered in), and the answer at reading size when it lands. The words come

@@ -476,6 +476,21 @@ describe("the result a conversation ends in", () => {
     expect(withResults(rows, new Set()).some((row) => row.kind === "result")).toBe(false);
   });
 
+  it("does not raise a dispatch note when the recorded task has no result", () => {
+    const rows = transcriptRows(conversation().slice(0, 3), lookups);
+    expect(withResults(rows, new Set(), new Map([["r1", null]]))).toBe(rows);
+  });
+
+  it("raises the recorded result rather than a later message from the same run", () => {
+    const recorded = reply("Use Friday.");
+    const rows = transcriptRows(
+      [envelope({}), recorded, reply("I can also check Saturday.")],
+      lookups,
+    );
+    const shown = withResults(rows, new Set(), new Map([["r1", recorded.id]]));
+    expect(shown.find((row) => row.kind === "result")?.message).toEqual(recorded);
+  });
+
   it("is never a line said on the way when the conversation then ended in a failure", () => {
     const failed = envelope({
       from: { kind: "system" },
