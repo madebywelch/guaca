@@ -6604,7 +6604,11 @@ mod tests {
             (
                 Participant::System,
                 me,
-                vec![Part::Notice { kind: NoticeKind::GuardStop, text: "hop limit".into() }],
+                vec![Part::Notice {
+                    kind: NoticeKind::GuardStop,
+                    text: "hop limit".into(),
+                    detail: None,
+                }],
             ),
             (
                 Participant::Human,
@@ -7296,7 +7300,7 @@ mod tests {
         e.parts = vec![
             Part::text("hello"),
             Part::Json { name: "report".into(), value: serde_json::json!({"ok": true, "n": 3}) },
-            Part::Notice { kind: NoticeKind::GuardStop, text: "hop limit".into() },
+            Part::Notice { kind: NoticeKind::GuardStop, text: "hop limit".into(), detail: None },
             Part::tool_call(
                 "send_message",
                 serde_json::json!({"to": "Chef"}),

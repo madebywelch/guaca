@@ -290,6 +290,23 @@
   margin-top: var(--space-2);
 }
 
+.task-map__failure {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+.task-map__failure .task-map__excerpt {
+  flex: 1;
+  min-width: 0;
+}
+
+.task-map__failure .btn {
+  flex: none;
+  white-space: nowrap;
+}
+
 .task-map-stack .task-map__reply {
   display: flex;
   align-items: center;

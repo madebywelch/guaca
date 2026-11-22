@@ -18,7 +18,7 @@ import { doing } from "../lib/doing";
 import { useFollowBottom } from "../lib/follow";
 import { api } from "../lib/ipc";
 import { exchange, headline, liveReply, panelOrder, said, workingCount } from "../lib/menubar";
-import { finished, moreLine, newestByAgent, PANEL_LINES } from "../lib/outcomes";
+import { didNotFinish, finished, moreLine, newestByAgent, PANEL_LINES } from "../lib/outcomes";
 import { groupNamed } from "../lib/presence";
 import { questions } from "../lib/questions";
 import { useLiveAgents, useStore } from "../lib/store";
@@ -27,7 +27,7 @@ import { BEFORE_RELOAD, workspaceOrigin } from "../lib/transport";
 import { type AgentCard, type AgentId, errorMessage, type Tokens } from "../lib/types";
 import { Brand } from "./Brand";
 import { Desk } from "./Desk";
-import { FinishedLine } from "./ForYou";
+import { FinishedLine, UnfinishedLine } from "./ForYou";
 import { Markdown } from "./Markdown";
 import { compact, money, priced } from "./Spend";
 
@@ -190,8 +190,11 @@ function Overview({ agents, onOpen }: { agents: AgentCard[]; onOpen: (id: AgentI
   const now = useNow();
 
   const open = decisions.filter(needsAnswer).length;
-  const news = finished(outcomes);
+  const unseen = finished(outcomes);
+  const stalled = unseen.filter(didNotFinish);
+  const news = unseen.filter((outcome) => !didNotFinish(outcome));
   const more = moreLine(news.length, PANEL_LINES);
+  const moreStalled = moreLine(stalled.length, PANEL_LINES);
   const crewOf = (agent: AgentCard) => groupNamed(groups, agent.groupId);
 
   return (
@@ -208,6 +211,33 @@ function Overview({ agents, onOpen }: { agents: AgentCard[]; onOpen: (id: AgentI
       )}
 
       <Desk onOpenChannel={(id) => void api.openWindow({ kind: "agent", id })} />
+
+      {stalled.length > 0 && (
+        <section className="menubar__finished" aria-labelledby="menubar-unfinished">
+          <h3 id="menubar-unfinished">Did not finish</h3>
+          {stalled.slice(0, PANEL_LINES).map((outcome) => (
+            <UnfinishedLine
+              key={outcome.runId}
+              outcome={outcome}
+              agent={agents.find((agent) => agent.id === outcome.agentId)}
+              now={now}
+              onOpen={() => {
+                void seeOutcomes({ runIds: [outcome.runId] });
+                void api.openWindow({ kind: "agent", id: outcome.agentId });
+              }}
+            />
+          ))}
+          {moreStalled && (
+            <button
+              type="button"
+              className="menubar__more"
+              onClick={() => void api.openWindow({ kind: "forYou" })}
+            >
+              {moreStalled}
+            </button>
+          )}
+        </section>
+      )}
 
       {news.length > 0 && (
         <section className="menubar__finished" aria-labelledby="menubar-finished">

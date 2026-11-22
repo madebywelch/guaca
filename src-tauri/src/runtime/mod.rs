@@ -548,6 +548,7 @@ fn spent_notice(limits: GuardLimits, name: &str) -> Part {
             "This conversation hit its budget of {} model calls, so {name} stopped early.",
             limits.max_steps_per_run
         ),
+        detail: None,
     }
 }
 
@@ -558,6 +559,7 @@ fn stopped_notice(name: &str) -> Part {
             "You stopped this conversation. {name} dropped the model call it was in, started \
              nothing else, and nothing was sent on. Send it again if you want it finished."
         ),
+        detail: None,
     }
 }
 
@@ -2307,7 +2309,20 @@ impl Runtime {
         kind: NoticeKind,
         text: String,
     ) {
-        self.record_for(agent, run_id, cause, vec![Part::Notice { kind, text }]);
+        self.record_for(agent, run_id, cause, vec![Part::Notice { kind, text, detail: None }]);
+    }
+
+    fn failed(
+        &self,
+        agent: AgentId,
+        run_id: RunId,
+        cause: Option<MessageId>,
+        text: String,
+        err: &LlmError,
+    ) {
+        let notice =
+            Part::Notice { kind: NoticeKind::UpstreamError, text, detail: Some(err.to_string()) };
+        self.record_for(agent, run_id, cause, vec![notice]);
     }
 
     fn record_for(
@@ -3223,9 +3238,10 @@ impl Runtime {
             tool_parts.push(Part::Notice {
                 kind: NoticeKind::GuardStop,
                 text: format!(
-                    "{} reached the limit of {max_rounds} tool calls in one turn.",
+                    "{} reached the limit of {max_rounds} tool calls before it stopped.",
                     card.name
                 ),
+                detail: None,
             });
         }
         if budget_exhausted {
@@ -3562,7 +3578,7 @@ impl Runtime {
         if !tool_parts.is_empty() {
             self.record_activity(card, run_id, hop, cause, tool_parts);
         }
-        let mut said = format!("{} could not reply: {}", card.name, err);
+        let mut said = format!("{} could not reply: {}", card.name, err.plainly());
         if matches!(err, LlmError::ModelRejected { .. }) && own_model {
             said.push_str(&format!(
                 "\n\nThat model is {name}'s own setting, not its group's. Choose one its \
@@ -3572,13 +3588,13 @@ impl Runtime {
         }
         if calls > 0 {
             said.push_str(&format!(
-                "\n\nIt had already made {calls} {} in this turn, listed above. Check them \
+                "\n\nIt had already made {calls} {} before it stopped, listed above. Check them \
                  before you send this again: a message, a file or a connector call may \
                  already have happened.",
                 if calls == 1 { "call" } else { "calls" }
             ));
         }
-        self.notice(card.id, run_id, cause, NoticeKind::UpstreamError, said);
+        self.failed(card.id, run_id, cause, said, &err);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3755,6 +3771,7 @@ impl Runtime {
                                 "Reply to {peer_name} was not delivered: {}.",
                                 refusal.headline()
                             ),
+                            detail: None,
                         });
                     }
                 }
@@ -3776,6 +3793,7 @@ impl Runtime {
                      if the work still needs doing.",
                     card.name
                 ),
+                detail: None,
             });
         }
 

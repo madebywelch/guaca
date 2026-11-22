@@ -179,7 +179,7 @@ function ActivityRecord({
     }
     close();
     if (part.type === "notice") {
-      blocks.push(<NoticeRow key={key} kind={part.kind} text={part.text} />);
+      blocks.push(<NoticeRow key={key} kind={part.kind} text={part.text} detail={part.detail} />);
     }
     if (part.type === "text") {
       blocks.push(<AsideRow key={key} text={part.text} />);
@@ -277,6 +277,7 @@ function ChatBubble({
             key={key}
             kind={part.kind}
             text={part.text}
+            detail={part.detail}
             onRetry={
               (part.kind === "upstreamError" || part.kind === "interrupted") && message.cause
                 ? () => onRetry(message.channelId, message.cause as MessageId)

@@ -308,7 +308,7 @@ async fn one_errand_failing_leaves_the_others_answers_and_is_on_the_bill() {
     assert!(
         h.envelopes(&["Writer"]).iter().flat_map(|e| e.parts.clone()).any(|part| matches!(
             part,
-            Part::Notice { kind: NoticeKind::UpstreamError, ref text }
+            Part::Notice { kind: NoticeKind::UpstreamError, ref text, .. }
                 if text.contains("An errand Writer sent could not reach the model")
         )),
         "the operator was not told: {}",

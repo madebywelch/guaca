@@ -40,6 +40,7 @@ function task(subject: string, deadline: number, count = 1): TaskMap {
       asked: brief,
       reply: null,
       delegatedTo: [],
+      failed: null,
       questions: index
         ? []
         : [
