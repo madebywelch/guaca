@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HIREABLE } from "./cafeteria";
-import { FIRST_TASKS, readFirstTask, saveFirstTask } from "./onboarding";
+import {
+  crewFor,
+  FIRST_TASKS,
+  named,
+  readCrewOffer,
+  readFirstTask,
+  saveCrewOffer,
+  saveFirstTask,
+} from "./onboarding";
 
 const { origin } = vi.hoisted(() => ({ origin: vi.fn(() => "https://first.example") }));
 vi.mock("./transport", () => ({ workspaceOrigin: origin }));
@@ -60,11 +68,15 @@ describe("the first task", () => {
     expect(readFirstTask()).toEqual(draft);
   });
 
-  it("hires three different existing presets per task, led by the same coordinator", () => {
-    for (const task of FIRST_TASKS) {
-      const ids = task.group.map((member) => member.agent);
+  it("hires one existing preset for a suggested task, and keeps a coordinator and a colleague for later", () => {
+    for (const task of FIRST_TASKS.filter((entry) => entry.brief)) {
+      const crew = crewFor(task.id);
+      expect(task.group, task.id).toHaveLength(1);
+      expect(crew, task.id).not.toBeNull();
+      const ids = [...task.group, ...crew!.group].map((member) => member.agent);
       expect(new Set(ids).size, task.id).toBe(3);
-      expect(ids[0], task.id).toBe("chief-of-staff");
+      expect(ids[0], task.id).not.toBe("chief-of-staff");
+      expect(ids[1], task.id).toBe("chief-of-staff");
       for (const id of ids)
         expect(
           HIREABLE.filter((agent) => agent.id === id),
@@ -73,16 +85,82 @@ describe("the first task", () => {
     }
   });
 
-  it("writes each suggested brief so the coordinator asks both colleagues before it asks you", () => {
+  it("still hires a group of three, led by the coordinator, for a task in the person's own words", () => {
+    const own = FIRST_TASKS.find((task) => task.id === "own")!;
+    expect(own.group.map((member) => member.agent)).toEqual([
+      "chief-of-staff",
+      "market-researcher",
+      "product-manager",
+    ]);
+    expect(crewFor("own")).toBeNull();
+  });
+
+  it("writes each suggested brief for one agent to finish alone, naming no colleague", () => {
+    const names = HIREABLE.map((agent) => agent.name);
     for (const task of FIRST_TASKS.filter((entry) => entry.brief)) {
-      const [, first, second] = task.group.map(
-        (member) => HIREABLE.find((agent) => agent.id === member.agent)!.name,
-      );
-      expect(task.brief, task.id).toContain(`Ask ${first} and ${second} at the same time`);
+      expect(
+        names.filter((name) => task.brief.includes(name)),
+        task.id,
+      ).toEqual([]);
+      expect(task.brief, task.id).not.toMatch(/\bask\b(?! me)/i);
       expect(task.brief.match(/\bask me\b/gi) ?? [], task.id).toHaveLength(1);
       expect(task.brief, task.id).toMatch(
         /Ask me a question only if you cannot go on without one\.$/,
       );
+    }
+  });
+
+  it("writes each deeper pass so the coordinator asks the first agent and the new colleague at once", () => {
+    for (const task of FIRST_TASKS.filter((entry) => entry.brief)) {
+      const crew = crewFor(task.id)!;
+      const [solo, , colleague] = [...task.group, ...crew.group].map(
+        (member) => HIREABLE.find((agent) => agent.id === member.agent)!.name,
+      );
+      expect(crew.brief, task.id).toContain(`Ask ${solo} and ${colleague} at the same time`);
+      expect(crew.brief.split("{brief}"), task.id).toHaveLength(2);
+      expect(crew.brief, task.id).toMatch(
+        /Ask me a question only if you cannot go on without one\.$/,
+      );
+      expect(crew.offer, task.id).toContain(solo);
+      expect(crew.offer, task.id).toContain(colleague);
+    }
+  });
+
+  it("writes the names the host gave into a text, and leaves names it kept alone", () => {
+    expect(
+      named(
+        "Ask Product Manager and QA Tester at the same time.",
+        new Map([
+          ["Product Manager", "Product Manager"],
+          ["QA Tester", "QA Tester 2"],
+        ]),
+      ),
+    ).toBe("Ask Product Manager and QA Tester 2 at the same time.");
+  });
+
+  it("keeps the crew offer through reloads, scoped to the host, and forgets it once cleared", () => {
+    const offer = { task: "research" as const, agentId: "agent-1", brief: "Buy or lease?" };
+    saveCrewOffer(offer);
+    expect(readCrewOffer()).toEqual(offer);
+    saveCrewOffer({ ...offer, key: "crew-key" });
+    expect(readCrewOffer()?.key).toBe("crew-key");
+    origin.mockReturnValue("https://second.example");
+    expect(readCrewOffer()).toBeNull();
+    origin.mockReturnValue("https://first.example");
+    saveCrewOffer(null);
+    expect(readCrewOffer()).toBeNull();
+  });
+
+  it("offers no crew from an unreadable checkpoint or for a task that has none", () => {
+    for (const value of [
+      "{",
+      "null",
+      '{"task":"own","agentId":"agent-1","brief":"Hello"}',
+      '{"task":"plan","agentId":7,"brief":"Hello"}',
+      '{"task":"plan","agentId":"agent-1"}',
+    ]) {
+      localStorage.setItem("guaca.crewOffer.https://first.example", value);
+      expect(readCrewOffer(), value).toBeNull();
     }
   });
 

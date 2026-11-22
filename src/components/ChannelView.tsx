@@ -33,6 +33,7 @@ import {
 } from "../lib/types";
 import { AgentPanel, type AgentSection } from "./AgentPanel";
 import { Composer } from "./Composer";
+import { CrewOffer } from "./CrewOffer";
 import { Answering } from "./HtmlArtifact";
 import { Icon } from "./Icon";
 import { MessageItem, ResultItem, StreamingMessage, WhenRow } from "./MessageItem";
@@ -398,6 +399,11 @@ export function ChannelView({
               })
             )}
 
+            {agent &&
+              activity[agent.id]?.state !== "thinking" &&
+              shown.some((row) => row.kind === "result") && (
+                <CrewOffer key={`crew:${agent.id}`} agent={agent} />
+              )}
             {agent && <TurnWork key={agent.id} agent={agent.id} follow={follow} />}
             <LiveStreams channel={channel} lookups={lookups} follow={follow} asked={asked} />
           </Answering.Provider>
