@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { rememberConversation } from "./lib/frame";
 import { expectRestart, forgetRestart } from "./lib/link";
-import { holdStart, saveFirstTask } from "./lib/onboarding";
+import { heldStart, holdStart, saveFirstTask } from "./lib/onboarding";
 import type {
   AgentCard,
   Approval,
@@ -19,6 +19,7 @@ const runningRuns = vi.fn<() => Promise<Running[]>>(async () => []);
 const markOutcomesSeen = vi.fn(async (target: { runIds?: string[] }) => target.runIds ?? []);
 const listGroups = vi.fn(async () => [aGroup({ agentCount: 3 })]);
 const listAgents = vi.fn<() => Promise<AgentCard[]>>(async () => []);
+const testConnection = vi.fn(async () => "Connected");
 const agentLastActive = vi.fn<() => Promise<Record<string, number>>>(async () => ({}));
 const agentActivity = vi.fn<() => Promise<Record<string, unknown>>>(async () => ({}));
 const agentRoutines = vi.fn<() => Promise<Routine[]>>(async () => []);
@@ -59,6 +60,8 @@ vi.mock("./lib/ipc", () => ({
   api: {
     listAgents: () => listAgents(),
     listGroups: () => listGroups(),
+    testConnection: () => testConnection(),
+    updateSettings: async () => ({ ...(await getSettings()), apiKeySet: true }),
     agentActivity: () => agentActivity(),
     usageSummary: async () => [],
     approvalStates: async () => ({}),
@@ -1127,6 +1130,99 @@ describe("App", () => {
     try {
       render(<App />);
       expect(await screen.findByRole("heading", { name: "Ready when you are." })).toBeTruthy();
+    } finally {
+      holdStart(null);
+      saveFirstTask(null);
+    }
+  });
+
+  it("drops a key typed while the host started when that host already has a workspace and nothing was queued", async () => {
+    const said = [
+      vi.spyOn(console, "log"),
+      vi.spyOn(console, "info"),
+      vi.spyOn(console, "warn"),
+      vi.spyOn(console, "error"),
+    ];
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    holdStart({
+      task: "plan",
+      brief: "Plan our launch",
+      step: "start",
+      provider: {
+        provider: "compatible",
+        baseUrl: "https://openrouter.ai/api/v1",
+        model: "anthropic/claude-sonnet-4.5",
+        apiKey: "sk-typed-early",
+        subscriptionModel: "",
+        effort: "auto",
+      },
+      chosen: true,
+      queued: false,
+      focus: null,
+    });
+    listAgents.mockResolvedValue([agent("Product Manager")]);
+    try {
+      render(<App />);
+      const notice = await screen.findByText(/the API key you typed while it started was not/);
+      expect(notice.textContent).toContain("Guaca did not save it anywhere");
+      expect(heldStart()).toBeNull();
+      expect(screen.queryByRole("heading", { name: "Ready when you are." })).toBeNull();
+      expect(testConnection).not.toHaveBeenCalled();
+      for (const [, value] of setItem.mock.calls) expect(value).not.toContain("sk-typed-early");
+      for (const spy of said)
+        for (const call of spy.mock.calls) expect(JSON.stringify(call)).not.toContain("sk-typed");
+      fireEvent.click(within(notice.closest(".banner")!).getByRole("button", { name: "Dismiss" }));
+      expect(screen.queryByText(/the API key you typed while it started/)).toBeNull();
+    } finally {
+      for (const spy of said) spy.mockRestore();
+      setItem.mockRestore();
+      holdStart(null);
+    }
+  });
+
+  it("forgets what was held without a word when no key was typed and the host already has a workspace", async () => {
+    holdStart({
+      task: "plan",
+      brief: "Plan our launch",
+      step: "task",
+      provider: null,
+      chosen: false,
+      queued: false,
+      focus: null,
+    });
+    listAgents.mockResolvedValue([agent("Product Manager")]);
+    try {
+      render(<App />);
+      await waitFor(() => expect(heldStart()).toBeNull());
+      expect(screen.queryByText(/the API key you typed/)).toBeNull();
+    } finally {
+      holdStart(null);
+    }
+  });
+
+  it("still tests and saves a key typed early on a new host's first run", async () => {
+    holdStart({
+      task: "plan",
+      brief: "Plan our launch",
+      step: "start",
+      provider: {
+        provider: "compatible",
+        baseUrl: "https://openrouter.ai/api/v1",
+        model: "anthropic/claude-sonnet-4.5",
+        apiKey: "sk-typed-early",
+        subscriptionModel: "",
+        effort: "auto",
+      },
+      chosen: true,
+      queued: false,
+      focus: null,
+    });
+    listGroups.mockResolvedValue([aGroup({ apiKeySet: false })]);
+    try {
+      render(<App />);
+      await waitFor(() => expect(testConnection).toHaveBeenCalledOnce());
+      expect(heldStart()).toBeNull();
+      expect(screen.queryByText(/the API key you typed/)).toBeNull();
     } finally {
       holdStart(null);
       saveFirstTask(null);

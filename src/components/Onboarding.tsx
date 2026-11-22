@@ -48,7 +48,7 @@ export function Onboarding({
   onCreate,
 }: Props) {
   const waiting = host !== undefined;
-  const [held] = useState(heldStart);
+  const [held, setHeld] = useState(heldStart);
   const [draft, setDraft] = useState<FirstTask>(() =>
     held
       ? { task: held.task, brief: held.brief, agentId: null, sent: false }
@@ -158,6 +158,7 @@ export function Onboarding({
     if (waiting || !held || adopted.current) return;
     adopted.current = true;
     holdStart(null);
+    setHeld(null);
     try {
       saveFirstTask(draft);
     } catch {
