@@ -5,12 +5,13 @@ import {
   type HeldProvider,
   heldStart,
   holdStart,
+  readCrewOffer,
   readFirstTask,
   saveFirstTask,
 } from "../lib/onboarding";
 import { useStore } from "../lib/store";
 import { BEFORE_RELOAD } from "../lib/transport";
-import type { AgentCard, Settings } from "../lib/types";
+import type { AgentCard, AgentDraft, Settings } from "../lib/types";
 import { aGroup } from "../test-fixtures";
 import { Onboarding } from "./Onboarding";
 
@@ -71,10 +72,9 @@ vi.mock("./OnboardingProvider", () => ({
   ),
 }));
 
-const PLAN_GROUP = ["chief-of-staff", "product-manager", "qa-tester"];
-const presets = PLAN_GROUP.map((id) => HIREABLE.find((agent) => agent.id === id)!);
-const card = (index: number): AgentCard => ({
-  ...toDraft(presets[index]!),
+const PLAN_AGENT = HIREABLE.find((agent) => agent.id === "product-manager")!;
+const card = (draft: AgentDraft, index: number): AgentCard => ({
+  ...draft,
   id: index === 0 ? "first-agent" : "colleague-" + index,
   groupId: aGroup().id,
   model: "",
@@ -93,8 +93,8 @@ const card = (index: number): AgentCard => ({
   updatedAt: 1,
   discardedAt: null,
 });
-const group = presets.map((_, index) => card(index));
-const agent = group[0]!;
+const cards = (drafts: AgentDraft[]) => drafts.map(card);
+const agent = card(toDraft(PLAN_AGENT), 0);
 const refresh = vi.fn(async () => {});
 const select = vi.fn(async () => {});
 const done = vi.fn();
@@ -137,7 +137,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   platform.desktop = true;
   localStorage.clear();
-  hire.mockResolvedValue(group);
+  hire.mockImplementation(async (_group, drafts) => cards(drafts));
   send.mockResolvedValue("run-1");
   rename.mockImplementation(async (_id, draft) => aGroup({ name: draft.name }));
   refresh.mockResolvedValue();
@@ -202,42 +202,48 @@ describe("guided first task", () => {
     ).toContain("one draft I can send");
   });
 
-  it("says on the first step that a task goes to a group of three, and keeps the way to set up alone", () => {
+  it("says on the first step that one agent answers first and colleagues can follow, and keeps the way to set up alone", () => {
     mount();
-    expect(screen.getByText(/Guaca hires a group of three for it/)).toBeTruthy();
+    expect(screen.getByText(/Guaca hires the agent suited to it/).textContent).toContain(
+      "bring in two colleagues for a deeper pass",
+    );
     expect(screen.getByRole("button", { name: "Create one agent" })).toBeTruthy();
   });
 
-  it("names the three it will hire and what each is for before anything is created", () => {
+  it("names the one agent it will hire and who can join later, before anything is created", () => {
     mount();
     toReview();
-    const listed = screen.getByRole("region", { name: "Your group for this task" });
+    const listed = screen.getByRole("region", { name: "Your agent for this task" });
     expect(
       Array.from(listed.querySelectorAll("li")).map(
         (row) => row.querySelector("strong")!.textContent,
       ),
-    ).toEqual(["Chief of Staff", "Product Manager", "QA Tester"]);
-    expect(listed.textContent).toContain("Looks for the ways that plan could go wrong.");
-    expect(
-      screen.getByText(/asks Product Manager and QA Tester at the same time/).textContent,
-    ).toContain("one question if it cannot go on without you");
-    expect(screen.getByText(/at least five instead of one/).textContent).toContain(
-      "stays inside your group's limits",
+    ).toEqual(["Product Manager"]);
+    expect(listed.textContent).toContain("Finds the smallest plan that would work");
+    expect(listed.textContent).toContain(
+      "Once its result is in, you can bring in Chief of Staff and QA Tester for a deeper pass.",
     );
+    expect(screen.getByText(/Product Manager takes it, works on it alone/).textContent).toContain(
+      "one question if it cannot go on without you",
+    );
+    expect(screen.getByText(/waits on nobody else/).textContent).toContain(
+      "Start task hires Product Manager",
+    );
+    expect(screen.queryByText(/at least five instead of one/)).toBeNull();
     expect(hire).not.toHaveBeenCalled();
   });
 
-  it("writes the names the host gave the colleagues into the brief it sends", async () => {
-    hire.mockResolvedValueOnce([group[0], group[1], { ...group[2]!, name: "QA Tester 2" }]);
+  it("still names a group of three for a task in the person's own words", () => {
     mount();
-    fireEvent.click(screen.getByRole("button", { name: /Plan a project/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Something else/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Your first brief" }), {
+      target: { value: "Plan a small team offsite." },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     fireEvent.click(screen.getByRole("button", { name: "Connect test provider" }));
-    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
-    await waitFor(() => expect(done).toHaveBeenCalledOnce());
-    const sent = send.mock.calls[0]![1] as string;
-    expect(sent).toContain("Ask Product Manager and QA Tester 2 at the same time");
-    expect(sent).not.toMatch(/QA Tester(?! 2)/);
+    const listed = screen.getByRole("region", { name: "Your group for this task" });
+    expect(listed.querySelectorAll("li")).toHaveLength(3);
+    expect(screen.queryByText(/deeper pass/)).toBeNull();
   });
 
   it("does not promise a split it cannot see in a brief the person wrote", () => {
@@ -254,7 +260,7 @@ describe("guided first task", () => {
     expect(screen.queryByText(/at the same time/)).toBeNull();
   });
 
-  it("hires the task's group of three in one keyed request and sends only after the explicit Start action", async () => {
+  it("hires only the task's one agent in one keyed request and sends only after the explicit Start action", async () => {
     mount();
     toReview();
     expect(hire).not.toHaveBeenCalled();
@@ -263,17 +269,51 @@ describe("guided first task", () => {
     await waitFor(() => expect(done).toHaveBeenCalledOnce());
     const key = hire.mock.calls[0]![2];
     expect(key).toMatch(/^[0-9a-f-]{36}$/);
-    expect(hire).toHaveBeenCalledExactlyOnceWith(aGroup().id, presets.map(toDraft), key);
+    expect(hire).toHaveBeenCalledExactlyOnceWith(aGroup().id, [toDraft(PLAN_AGENT)], key);
     expect(send).toHaveBeenCalledExactlyOnceWith(agent.id, "Plan our launch next month.", [], key);
     expect(select).toHaveBeenCalledWith(agent.id);
     expect(readFirstTask().brief).toBe("");
-    expect(useStore.getState().agents.map((hired) => hired.id)).toEqual(
-      group.map((hired) => hired.id),
-    );
+    expect(useStore.getState().agents.map((hired) => hired.id)).toEqual([agent.id]);
+  });
+
+  it("leaves the crew offer for after the first result, with the brief that was sent", async () => {
+    mount();
+    toReview();
+    expect(readCrewOffer()).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    await waitFor(() => expect(done).toHaveBeenCalledOnce());
+    expect(readCrewOffer()).toEqual({
+      task: "plan",
+      agentId: agent.id,
+      brief: "Plan our launch next month.",
+    });
+  });
+
+  it("leaves no crew offer when Start fails before the brief is sent", async () => {
+    send.mockRejectedValueOnce(new Error("Connection lost"));
+    mount();
+    toReview();
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    await screen.findByRole("alert");
+    expect(readCrewOffer()).toBeNull();
+  });
+
+  it("leaves no crew offer for a task in the person's own words, whose group is already there", async () => {
+    mount();
+    fireEvent.click(screen.getByRole("button", { name: /Something else/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Your first brief" }), {
+      target: { value: "Sort out my week." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Connect test provider" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    await waitFor(() => expect(done).toHaveBeenCalledOnce());
+    expect(hire.mock.calls[0]![1]).toHaveLength(3);
+    expect(readCrewOffer()).toBeNull();
   });
 
   it("sends nothing and keeps no agent when the host answers with less than the whole group", async () => {
-    hire.mockResolvedValueOnce([agent]);
+    hire.mockResolvedValueOnce([]);
     mount();
     toReview();
     fireEvent.click(screen.getByRole("button", { name: "Start task" }));
@@ -372,7 +412,7 @@ describe("guided first task", () => {
     expect(
       (screen.getByRole("textbox", { name: "Your first brief" }) as HTMLTextAreaElement).readOnly,
     ).toBe(true);
-    expect(screen.getByText(/previous start may have hired this group/i)).toBeTruthy();
+    expect(screen.getByText(/previous start may have hired Product Manager/i)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Start task" }));
     await waitFor(() => expect(done).toHaveBeenCalledOnce());
     expect(hire.mock.calls[1]![2]).toBe(key);
@@ -447,6 +487,7 @@ describe("guided first task", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Task was delivered" }));
     expect(done).toHaveBeenCalledOnce();
     expect(readFirstTask().agentId).toBeNull();
+    expect(readCrewOffer()).toEqual({ task: "plan", agentId: agent.id, brief: "Saved brief" });
     expect(send).not.toHaveBeenCalled();
   });
 
@@ -656,6 +697,73 @@ describe("a first task chosen while the host is still coming", () => {
     expect(starting).toHaveBeenCalled();
     expect(heldStart()).toBeNull();
     for (const [, value] of store.setItem.mock.calls) expect(String(value)).not.toContain(KEY);
+  });
+
+  it("hires only the task's one agent when a queued Start fires, and leaves the crew offer a Start after the host would", async () => {
+    early.fields = fields();
+    queue().unmount();
+    expect(readCrewOffer()).toBeNull();
+    mount();
+    await waitFor(() => expect(done).toHaveBeenCalledOnce());
+    const key = hire.mock.calls[0]![2];
+    expect(key).toMatch(/^[0-9a-f-]{36}$/);
+    expect(hire).toHaveBeenCalledExactlyOnceWith(aGroup().id, [toDraft(PLAN_AGENT)], key);
+    expect(send).toHaveBeenCalledExactlyOnceWith(agent.id, "Plan our launch next month.", [], key);
+    expect(useStore.getState().agents.map((hired) => hired.id)).toEqual([agent.id]);
+    expect(readCrewOffer()).toEqual({
+      task: "plan",
+      agentId: agent.id,
+      brief: "Plan our launch next month.",
+    });
+  });
+
+  it("retries a queued Start whose hire reply was lost under the same key after reload, without sending twice", async () => {
+    hire.mockRejectedValueOnce(new Error("Connection lost"));
+    early.fields = fields();
+    queue().unmount();
+    const view = mount();
+    await screen.findByRole("alert");
+    const key = hire.mock.calls[0]![2];
+    expect(readFirstTask()).toMatchObject({ key, agentId: null, sent: false });
+    expect(send).not.toHaveBeenCalled();
+    expect(readCrewOffer()).toBeNull();
+    view.unmount();
+    mount();
+    expect(hire).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    await waitFor(() => expect(done).toHaveBeenCalledOnce());
+    expect(hire).toHaveBeenCalledTimes(2);
+    expect(hire).toHaveBeenLastCalledWith(aGroup().id, [toDraft(PLAN_AGENT)], key);
+    expect(send).toHaveBeenCalledExactlyOnceWith(agent.id, "Plan our launch next month.", [], key);
+    expect(readCrewOffer()).toEqual({
+      task: "plan",
+      agentId: agent.id,
+      brief: "Plan our launch next month.",
+    });
+  });
+
+  it("resends a queued Start whose send reply was lost under the same key after reload, without hiring twice", async () => {
+    send.mockRejectedValueOnce(new Error("Connection lost"));
+    early.fields = fields();
+    queue().unmount();
+    const view = mount();
+    await screen.findByRole("alert");
+    const key = hire.mock.calls[0]![2];
+    expect(readFirstTask()).toMatchObject({ key, agentId: agent.id, sent: false });
+    expect(readCrewOffer()).toBeNull();
+    view.unmount();
+    mount();
+    expect(send).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "Send brief again" }));
+    await waitFor(() => expect(done).toHaveBeenCalledOnce());
+    expect(hire).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenLastCalledWith(agent.id, "Plan our launch next month.", [], key);
+    expect(readCrewOffer()).toEqual({
+      task: "plan",
+      agentId: agent.id,
+      brief: "Plan our launch next month.",
+    });
   });
 
   it("brings back the provider step when the held key fails its test, and starts once it connects", async () => {

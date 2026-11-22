@@ -2101,6 +2101,33 @@ input[type="file"]::file-selector-button {
   margin-left: var(--column-face);
 }
 
+.crew-offer {
+  display: grid;
+  row-gap: var(--space-4);
+  max-width: calc(var(--measure-turn) + var(--column-face) + 2 * var(--space-5));
+  margin: 0 var(--column-inset) var(--space-5);
+  padding: 0 var(--space-5) 0 calc(var(--space-5) + var(--column-face));
+  font-family: var(--font-ui);
+  font-size: var(--type-support);
+  line-height: var(--lead-read);
+  color: var(--muted);
+}
+
+.crew-offer__text,
+.crew-offer__error {
+  margin: 0;
+}
+
+.crew-offer__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.crew-offer__error {
+  color: var(--danger);
+}
+
 .decision__label {
   margin: 0 0 var(--space-2);
   font-family: var(--font-ui);
@@ -5443,6 +5470,15 @@ input[type="file"]:disabled {
 
 .onboarding-group li span {
   color: var(--muted);
+  line-height: var(--lead-read);
+}
+
+.onboarding-later {
+  margin: var(--space-5) 0 0;
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--rule);
+  color: var(--muted);
+  font-size: var(--type-support);
   line-height: var(--lead-read);
 }
 

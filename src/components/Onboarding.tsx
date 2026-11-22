@@ -4,12 +4,14 @@ import { HIREABLE, toDraft } from "../lib/cafeteria";
 import { api } from "../lib/ipc";
 import { PLACE_LABELS } from "../lib/menu";
 import {
+  crewFor,
   FIRST_TASKS,
   type FirstTask,
   type HeldProvider,
   heldStart,
   holdStart,
   readFirstTask,
+  saveCrewOffer,
   saveFirstTask,
   waitsForHost,
 } from "../lib/onboarding";
@@ -99,6 +101,8 @@ export function Onboarding({
     preset: HIREABLE.find((entry) => entry.id === member.agent)!,
   }));
   const [lead, first, second] = members.map((member) => member.preset.name);
+  const crew = crewFor(task.id);
+  const later = crew?.group.map((member) => HIREABLE.find((entry) => entry.id === member.agent)!);
   const hired = agents.find(
     (agent) => agent.id === draft.agentId && agent.lifecycle !== "terminated",
   );
@@ -223,9 +227,11 @@ export function Onboarding({
     }
   };
 
-  const finish = () => {
-    setDraft((current) => ({ ...current, sent: true }));
+  const finish = (current: FirstTask) => {
+    setDraft({ ...current, sent: true });
     try {
+      if (crewFor(current.task) && current.agentId)
+        saveCrewOffer({ task: current.task, agentId: current.agentId, brief: current.brief });
       saveFirstTask(null);
       setStorageError(false);
       onDone();
@@ -234,10 +240,10 @@ export function Onboarding({
     }
   };
 
-  const open = async (agentId: string, sent = false) => {
+  const open = async (agentId: string, sent?: FirstTask) => {
     await refreshAgents();
     await select(agentId);
-    if (sent) finish();
+    if (sent) finish(sent);
     else {
       setChecking(true);
       onInspect(true);
@@ -285,7 +291,7 @@ export function Onboarding({
         next = { ...next, sent: true };
         if (!keep(next)) return setUnsaved(true);
       }
-      await open(next.agentId!, true);
+      await open(next.agentId!, next);
     } catch (cause) {
       fail(cause);
     } finally {
@@ -316,6 +322,12 @@ export function Onboarding({
     : applying
       ? "your AI is connected"
       : `you sign in to ${PROVIDER_NAMES[fields?.provider ?? "compatible"]}`;
+
+  const using = waiting
+    ? " as soon as your host is ready, so you can press it now"
+    : applying
+      ? " once Guaca has tested your key on your host"
+      : ", using the provider you just connected";
 
   const warning = storageError && (
     <div className="banner banner--error" role="alert">
@@ -349,7 +361,7 @@ export function Onboarding({
             >
               Return to first task
             </button>
-            <button type="button" className="btn" onClick={finish}>
+            <button type="button" className="btn" onClick={() => finish(draft)}>
               Task was delivered
             </button>
           </div>
@@ -382,8 +394,8 @@ export function Onboarding({
               <p className="onboarding-eyebrow">A little help to get going</p>
               <h1>What would you like help with?</h1>
               <p>
-                Pick a task and Guaca hires a group of three for it. They work it out between
-                themselves and come back with a result.
+                Pick a task and Guaca hires the agent suited to it, who comes back with a result.
+                Once it has, you can bring in two colleagues for a deeper pass.
               </p>
             </div>
             <fieldset className="onboarding-options" aria-label="First task">
@@ -464,12 +476,12 @@ export function Onboarding({
               <h1>Connect your AI</h1>
               <p>
                 {waiting
-                  ? "Choose what powers your group. Your host is still starting; your choice waits for it here."
+                  ? "Choose what powers your agents. Your host is still starting; your choice waits for it here."
                   : failure !== undefined
                     ? `Your host is ready, but your key did not pass its test. Fix it below${queued ? " and your task starts right after" : ""}.`
                     : chosen && !linked && fields && waitsForHost(fields.provider)
                       ? `Your host is ready. Sign in to ${PROVIDER_NAMES[fields.provider]} to finish connecting${queued ? ", and your task starts right after" : ""}.`
-                      : "Choose what powers your group. Your first brief is waiting for you."}
+                      : "Choose what powers your agents. Your first brief is waiting for you."}
               </p>
             </div>
             <OnboardingProvider
@@ -485,19 +497,25 @@ export function Onboarding({
         ) : (
           <>
             <div className="onboarding-intro">
-              <p className="onboarding-eyebrow">One task. A group of three.</p>
+              <p className="onboarding-eyebrow">
+                {later ? "One task. One agent first." : "One task. A group of three."}
+              </p>
               <h1>Ready when you are.</h1>
               <p>
                 Review your brief. {name} takes it,{" "}
-                {task.brief
-                  ? `asks ${first} and ${second} at the same time,`
-                  : `decides what to hand ${first} and ${second},`}{" "}
-                and comes back with a result, or with one question if it cannot go on without you.
+                {later ? "works on it alone," : `decides what to hand ${first} and ${second},`} and
+                comes back with a result, or with one question if it cannot go on without you.
               </p>
             </div>
             <section className="onboarding-group" aria-labelledby={groupHeading}>
               <h2 className="onboarding-eyebrow" id={groupHeading}>
-                {draft.agentId ? "Your group" : "Your group for this task"}
+                {later
+                  ? draft.agentId
+                    ? "Your agent"
+                    : "Your agent for this task"
+                  : draft.agentId
+                    ? "Your group"
+                    : "Your group for this task"}
               </h2>
               <ul>
                 {members.map((member) => (
@@ -513,6 +531,12 @@ export function Onboarding({
                   </li>
                 ))}
               </ul>
+              {later && (
+                <p className="onboarding-later">
+                  Once its result is in, you can bring in {later[0]!.name} and {later[1]!.name} for
+                  a deeper pass.
+                </p>
+              )}
             </section>
             <label className="field">
               <span className="field__label">Your first brief</span>
@@ -534,10 +558,12 @@ export function Onboarding({
                   : draft.sent
                     ? "Your task was sent. Open the conversation to see how it is going."
                     : draft.agentId
-                      ? "Your group is already hired. If a connection failed, check the conversation before sending again."
+                      ? `${later ? `${name} is` : "Your group is"} already hired. If a connection failed, check the conversation before sending again.`
                       : draft.key
-                        ? "Your previous start may have hired this group. Retry with the same brief to continue safely."
-                        : `Start task hires these three and sends your brief to ${name}${waiting ? " as soon as your host is ready, so you can press it now" : applying ? " once Guaca has tested your key on your host" : ", using the provider you just connected"}. A group task uses more model calls than one agent would, at least five instead of one, and it stays inside your group's limits.`}
+                        ? `Your previous start may have hired ${later ? name : "this group"}. Retry with the same brief to continue safely.`
+                        : later
+                          ? `Start task hires ${name} and sends your brief to it${using}. It answers alone, so your first result waits on nobody else.`
+                          : `Start task hires these three and sends your brief to ${name}${using}. A group task uses more model calls than one agent would, at least five instead of one, and it stays inside your group's limits.`}
             </p>
             {desktop && !queued && (
               <p className="onboarding-notice">
