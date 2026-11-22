@@ -823,7 +823,8 @@ GUACAD=src-tauri/target/debug/guacad CHROME_BIN=/path/to/chrome node scripts/hos
 The browser check uses a fresh Chrome profile, a temporary workspace and an
 offline streaming model. It verifies partial-reply recovery, completion with
 no client, artifact isolation and answer delivery, and crash recovery without
-automatic replay. No account or provider credential is used. Chrome's macOS
+automatic replay. No account or provider credential is used. `./scripts/ci.sh e2e`
+runs it on every pull request with the Chromium the scenarios use. Chrome's macOS
 installation is the default when `CHROME_BIN` is absent. Live provider sign-ins
 and a real E2B desktop remain separate integration checks requiring accounts.
 

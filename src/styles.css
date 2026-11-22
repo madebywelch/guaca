@@ -8260,7 +8260,6 @@ button.artifacts__version[aria-pressed="true"] {
   }
 
   .pane__header > .avatar,
-  .rail__search,
   .rail__foot > button:last-child {
     display: none;
   }
