@@ -297,7 +297,7 @@ describe("each language", () => {
   });
 });
 
-const STATED = { PATH: process.env.PATH };
+const STATED = Object.fromEntries(["PATH", "RUSTUP_HOME", "CARGO_HOME"].filter((name) => name in process.env).map((name) => [name, process.env[name]]));
 
 function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], env: STATED }).trim();
