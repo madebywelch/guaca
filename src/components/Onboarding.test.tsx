@@ -55,6 +55,7 @@ const card = (index: number): AgentCard => ({
   hasComputer: false,
   hasBrowser: false,
   runsErrands: false,
+  readsWeb: true,
   browserConsent: "open",
   lifecycle: "active",
   pinned: false,

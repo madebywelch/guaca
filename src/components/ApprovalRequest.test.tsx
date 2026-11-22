@@ -25,6 +25,7 @@ const MANAGER: AgentCard = {
   hasComputer: false,
   hasBrowser: false,
   runsErrands: false,
+  readsWeb: true,
   browserConsent: "open",
   name: "Manager",
   avatar: "avocado",

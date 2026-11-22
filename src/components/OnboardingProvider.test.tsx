@@ -45,6 +45,9 @@ function stored(over: Partial<Settings> = {}): Settings {
     kernelKeyHint: "",
     browserIdleMinutes: 60,
     browserStealth: false,
+    searchKeySet: false,
+    searchKeyHint: "",
+    searchesWith: "",
     requestTimeoutSecs: 120,
     limits: {
       maxHops: 8,

@@ -62,6 +62,7 @@ lists what has already been broken by changing it.
 | Whether an agent may have a computer or a browser at all | *A computer is given to one agent, not to the workspace* in `docs/MACHINES.md`, then `Runtime::surfaces_for` |
 | Sandboxes, the desktop, the screen, sign-ins on it | `docs/MACHINES.md` |
 | Hosted browsers, CDP, `browse`, live view, browser profiles | `docs/BROWSERS.md` |
+| `web_search` and `read_page`: which service a search goes to, the page fetch and its address guard, the Web reading switch, the search key | *Reading the web needs no account, and a page fetch never looks inward* in `docs/ARCHITECTURE.md`, then `src-tauri/src/llm/search.rs`, `src-tauri/src/web.rs` and `Reading::may_open`, and run `scripts/verify.py web` |
 | Which of the two a piece of work belongs on, and credentials | *Connectors* in `docs/PROTOCOL.md`, then both files above |
 | Plugins: what is on the list, signing one in, calling its tools | `docs/PLUGINS.md`, then `oauth.rs` and `mcp.rs` |
 | A server the operator added: its name, its address, a pasted key | *A server the operator added* in `docs/PLUGINS.md`, then `PluginKind::custom` and `PluginKind::from_row` |

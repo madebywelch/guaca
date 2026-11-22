@@ -35,6 +35,9 @@ function stored(over: Partial<Settings> = {}): Settings {
     kernelKeyHint: "",
     browserIdleMinutes: 60,
     browserStealth: false,
+    searchKeySet: false,
+    searchKeyHint: "",
+    searchesWith: "",
     baseUrl: "https://openrouter.ai/api/v1",
     defaultModel: "anthropic/claude-sonnet-4.5",
     provider: "compatible",
@@ -508,6 +511,25 @@ describe("what a save sends", () => {
     expect("apiKey" in sentPatch()).toBe(false);
     expect("e2bApiKey" in sentPatch()).toBe(false);
     expect("kernelApiKey" in sentPatch()).toBe(false);
+  });
+
+  it("sends a web search key once, trimmed, and says where a query goes", async () => {
+    open(stored({ searchesWith: "This endpoint cannot search the web for agents." }));
+    pane("Provider");
+    expect(screen.getByText("This endpoint cannot search the web for agents.")).toBeTruthy();
+    type(/^Web search key/, "  BSA-typed  ");
+    fireEvent.click(save());
+
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    expect(sentPatch().searchApiKey).toBe("BSA-typed");
+  });
+
+  it("shows only the end of a saved search key", () => {
+    open(stored({ searchKeySet: true, searchKeyHint: "...4r7t" }));
+    pane("Provider");
+    expect(screen.getByRole("button", { name: "Change Web search key" })).toBeTruthy();
+    expect(screen.getByText("...4r7t")).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: /^Web search key/ })).toBeNull();
   });
 
   it("refuses anything but digits in a duration, so no patch can carry NaN", async () => {

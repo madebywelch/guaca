@@ -601,6 +601,7 @@ fn build(
         limits,
         e2b,
         kernel,
+        search: Default::default(),
         webhook: Default::default(),
         quick_actions: Vec::new(),
         widgets: Vec::new(),

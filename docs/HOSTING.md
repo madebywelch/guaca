@@ -8,7 +8,7 @@ that stays awake.
 
 ## What self-hosting guarantees
 
-Guaca is one product with one build. These are the four promises that build
+Guaca is one product with one build. These are the five promises that build
 makes to someone who runs it themselves.
 
 - **The same open-source build.** There is no edition a self-hoster cannot
@@ -36,6 +36,19 @@ makes to someone who runs it themselves.
   workspace is a directory and a volume anyone can copy. Nothing asks this
   project's service for permission to exist, and nothing stops working because
   an address changed.
+- **What leaves the host is what you set up, and nothing else.** Turns go to
+  the provider you chose. The other destinations are each a key or a switch you
+  can see: E2B and Kernel for computers and browsers, connectors, the push
+  address, the update feed, and the web. An agent's web search goes to the
+  provider that answers its turns (OpenAI for a ChatGPT plan, Anthropic through
+  the `claude` program, OpenRouter), or, for any other endpoint, to Brave Search
+  or Tavily only once you paste that service's key in **Settings → Provider**,
+  which names the destination under the field. A page an agent reads with
+  `read_page` is fetched by the host itself, straight from the site at that
+  address: the site sees the host's address and a request for that page, and
+  nothing else of the workspace. That fetch never reaches the host's own
+  network or a cloud metadata address, and each agent's **Web reading** switch
+  turns both off. There is no telemetry.
 
 [`src-tauri/tests/unreachable.rs`](../src-tauri/tests/unreachable.rs) holds the
 second and third as a test: it starts a host with every `guaca.bot` route
