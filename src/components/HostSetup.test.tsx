@@ -279,6 +279,154 @@ describe("a first run while the host image downloads", () => {
   });
 });
 
+describe("a first run while Docker is not running yet", () => {
+  const down = {
+    state: "unavailable",
+    message: "Docker is installed but is not ready.",
+    updateAvailable: false,
+  };
+  const up = { state: "ready", message: "Docker is ready.", updateAvailable: false };
+  function firstRun() {
+    return render(
+      <HostSetup>
+        <div>Workspace mounted</div>
+      </HostSetup>,
+    );
+  }
+  async function wait(ms: number) {
+    for (let left = ms; left >= 0; left -= 1_000)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(Math.min(left, 1_000));
+      });
+  }
+
+  it("checks Docker again by itself and moves on to setup once it runs", async () => {
+    vi.useFakeTimers();
+    try {
+      status.mockResolvedValueOnce(down).mockResolvedValueOnce(down).mockResolvedValue(up);
+      start.mockReturnValue(new Promise(() => {}));
+      firstRun();
+      await wait(0);
+      expect(screen.getByText("Docker is installed but is not ready.")).toBeTruthy();
+      expect(
+        screen.getByText(
+          "Guaca checks Docker every few seconds and carries on by itself once it is running.",
+        ),
+      ).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
+      expect(status).toHaveBeenCalledTimes(1);
+      await wait(2_999);
+      expect(status).toHaveBeenCalledTimes(1);
+      await wait(1);
+      expect(status).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole("button", { name: "Use this Mac" })).toBeTruthy();
+      expect(start).not.toHaveBeenCalled();
+      await wait(3_000);
+      expect(screen.getByRole("heading", { name: "What would you like help with?" })).toBeTruthy();
+      expect(start).toHaveBeenCalledTimes(1);
+      await wait(30_000);
+      expect(status).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps checking gently while Docker never comes up, one check at a time, and Check again still works", async () => {
+    vi.useFakeTimers();
+    try {
+      status.mockResolvedValue(down);
+      firstRun();
+      await wait(0);
+      await wait(10 * 60_000);
+      expect(status).toHaveBeenCalledTimes(1 + (10 * 60_000) / 3_000);
+      expect(screen.getByText("Docker is installed but is not ready.")).toBeTruthy();
+      expect(start).not.toHaveBeenCalled();
+
+      status.mockReset();
+      let answer!: (value: typeof down) => void;
+      status.mockReturnValueOnce(
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+      );
+      await wait(3_000);
+      expect(status).toHaveBeenCalledTimes(1);
+      await wait(30_000);
+      expect(status).toHaveBeenCalledTimes(1);
+      status.mockResolvedValue(down);
+      await act(async () => answer(down));
+      await wait(3_000);
+      expect(status).toHaveBeenCalledTimes(2);
+
+      status.mockResolvedValueOnce(up);
+      start.mockReturnValue(new Promise(() => {}));
+      fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+      await wait(0);
+      expect(
+        (screen.getByRole("button", { name: "Use this Mac" }) as HTMLButtonElement).disabled,
+      ).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops checking once the screen is left", async () => {
+    vi.useFakeTimers();
+    try {
+      status.mockResolvedValue(down);
+      const view = firstRun();
+      await wait(0);
+      await wait(3_000);
+      expect(status).toHaveBeenCalledTimes(2);
+      fireEvent.click(screen.getByRole("button", { name: "Remote host" }));
+      await wait(30_000);
+      expect(status).toHaveBeenCalledTimes(2);
+      fireEvent.click(screen.getByRole("button", { name: "On this Mac" }));
+      await wait(0);
+      expect(status).toHaveBeenCalledTimes(3);
+      view.unmount();
+      await wait(30_000);
+      expect(status).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not check Docker on its own once a host is connected", async () => {
+    vi.useFakeTimers();
+    try {
+      status.mockResolvedValue(down);
+      render(<HostChoice showUpdate={false} inUse />);
+      await wait(0);
+      expect(screen.getByText("Docker is installed but is not ready.")).toBeTruthy();
+      await wait(60_000);
+      expect(status).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText(/checks Docker every few seconds/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets the person choose when Docker comes up holding a host already, rather than starting another", async () => {
+    vi.useFakeTimers();
+    try {
+      status.mockResolvedValueOnce(down).mockResolvedValue(up);
+      existing.mockResolvedValue([
+        { name: "guaca-host-1", label: "guaca", origin: "http://127.0.0.1:4100" },
+      ]);
+      firstRun();
+      await wait(3_000);
+      expect(screen.getByRole("button", { name: /Use guaca/ })).toBeTruthy();
+      expect(screen.queryByRole("heading", { name: "What would you like help with?" })).toBeNull();
+      expect(start).not.toHaveBeenCalled();
+      await wait(30_000);
+      expect(status).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 const LOCAL = { origin: "http://127.0.0.1:54321", token: "private" };
 const COLIMA = { context: "colima", label: "Colima", action: "Start Colima" };
 const colimaDown = {

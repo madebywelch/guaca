@@ -874,7 +874,13 @@ still produces a client for remote hosts.
 
 On first launch choose **On this Mac** or **Remote host**. Local setup detects
 Docker and, while Docker cannot be used, offers installation, an action that
-opens or starts the engine, and retry. Once On this Mac starts, the first task
+opens or starts the engine, and retry. While that setup screen is showing
+and Docker cannot be used, it also reads Docker's status by itself every three
+seconds, one read at a time, so starting Docker Desktop is enough: on a first
+launch the setup moves on as soon as Docker answers, unless Docker turns out to
+hold an earlier host, which is left to the person to choose. The reads stop
+when the screen is left or another host is chosen, and a window already
+connected to a host never polls. Once On this Mac starts, the first task
 and the provider are chosen while the image downloads and the host starts;
 `local_host_progress` reports which of the three the setup is in, from memory
 and without asking Docker, so the line above the steps can be polled every
