@@ -11,7 +11,9 @@ export type Call =
   | { do: "click"; role: string; name: string }
   | { do: "type"; role: string; name: string; text: string }
   | { do: "key"; key: string }
-  | { do: "text"; role?: string; name?: string };
+  | { do: "text"; role?: string; name?: string }
+  | { do: "box"; role: string; name: string }
+  | { do: "focus" };
 
 export type Answer = { ok: true; value: unknown } | { ok: false; error: string };
 
@@ -178,6 +180,56 @@ function key(document: Document, name: string): void {
   }
 }
 
+function box(element: Element) {
+  const view = element.ownerDocument.defaultView ?? window;
+  const rect = element.getBoundingClientRect();
+  const node = element as HTMLElement;
+  return {
+    left: rect.left,
+    right: rect.right,
+    top: rect.top,
+    bottom: rect.bottom,
+    width: rect.width,
+    gutter:
+      node.offsetWidth -
+      node.clientWidth -
+      node.clientLeft -
+      Number.parseFloat(view.getComputedStyle(element).borderRightWidth || "0"),
+    viewport: { width: view.innerWidth, height: view.innerHeight },
+  };
+}
+
+function ring(element: Element): { ring: boolean; clipped: boolean } {
+  const view = element.ownerDocument.defaultView ?? window;
+  const style = view.getComputedStyle(element);
+  const width = Number.parseFloat(style.outlineWidth || "0");
+  if (style.outlineStyle === "none" || !(width > 0)) return { ring: false, clipped: false };
+  const reach = Number.parseFloat(style.outlineOffset || "0") + width;
+  const rect = element.getBoundingClientRect();
+  for (let at = element.parentElement; at; at = at.parentElement) {
+    const clips = view.getComputedStyle(at);
+    if (clips.overflowX === "visible" && clips.overflowY === "visible") continue;
+    const edge = at.getBoundingClientRect();
+    const left = edge.left + at.clientLeft;
+    const top = edge.top + at.clientTop;
+    if (
+      rect.left - reach < left - 0.5 ||
+      rect.right + reach > left + at.clientWidth + 0.5 ||
+      rect.top - reach < top - 0.5 ||
+      rect.bottom + reach > top + at.clientHeight + 0.5
+    ) {
+      return { ring: true, clipped: true };
+    }
+  }
+  return { ring: true, clipped: false };
+}
+
+function focused(document: Document) {
+  const element = document.activeElement;
+  if (!element || element === document.body) return null;
+  return { role: roleOf(element), name: nameOf(element), ...ring(element) };
+}
+
 function view() {
   const state = useStore.getState();
   return {
@@ -196,6 +248,7 @@ export function run(call: Call, document: Document = window.document): Answer {
             page: document.location?.pathname ?? null,
             loaded: document.readyState,
             attached: attached() !== null,
+            since: performance.timeOrigin,
           },
         };
       case "view":
@@ -228,6 +281,10 @@ export function run(call: Call, document: Document = window.document): Answer {
         // biome-ignore lint/performance/useDomNodeTextContent: the question is what a person can read, and only innerText leaves hidden text out.
         return { ok: true, value: squash(element.innerText ?? element.textContent) };
       }
+      case "box":
+        return { ok: true, value: box(only(document, call.role, call.name)) };
+      case "focus":
+        return { ok: true, value: focused(document) };
       default:
         return { ok: false, error: `no such call: ${JSON.stringify(call)}` };
     }

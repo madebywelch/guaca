@@ -293,7 +293,7 @@ AWAY = 5.0
 
 INPUT_SLACK = 0.5
 
-REAL_INPUT = frozenset({"click-icon", "escape"})
+REAL_INPUT = frozenset({"click-icon", "escape", "key"})
 
 OWN_INPUT = {"at": -math.inf}
 
@@ -527,6 +527,7 @@ class StandIn:
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
         stand_in = self
+        self.answers: list[str] = []
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *_: Any) -> None:
@@ -553,6 +554,7 @@ class StandIn:
         if isinstance(text, list):
             text = " ".join(part.get("text", "") for part in text if isinstance(part, dict))
         answered = any(m.get("role") == "tool" for m in messages[messages.index(asked) + 1:]) if asked else False
+        self.answers = [str(m.get("content")) for m in messages if m.get("role") == "tool"] or self.answers
         usage = {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}
         if self.ASK in text and not answered:
             call = {"index": 0, "id": "call_ask", "type": "function",
@@ -727,7 +729,7 @@ class App:
         scratch.track(self.forget)
         scratch.track(self.quit)
 
-    def launch(self, background: bool = True, hidden: bool = True) -> Client:
+    def launch(self, background: bool = True, hidden: bool = True, scroll_bars: str | None = None) -> Client:
         if self.socket.exists():
             self.socket.unlink()
         args = ["open", "-n"]
@@ -746,6 +748,8 @@ class App:
             args += ["--env", f"{key}={value}"]
         log = str(self.scratch.root / "app.log")
         args += ["--stdout", log, "--stderr", log, "-a", str(self.path)]
+        if scroll_bars:
+            args += ["--args", "-AppleShowScrollBars", scroll_bars]
         self.scratch.launches.append(None)
         opened = run(args)
         if opened.returncode != 0:
@@ -803,10 +807,13 @@ def connect(app: App, host: Host) -> None:
     assert app.client
     client = app.client
     wait_until("the window's page answers", lambda: client.page("main", do="ready")["loaded"] == "complete", 30)
+    before = client.page("main", do="ready")["since"]
     client.page("main", do="attach", origin=host.origin, token=host.token)
     wait_until(
-        "the window shows the seeded workspace",
-        lambda: sorted(client.page("main", do="view")["agents"]) == sorted(AGENTS),
+        "the window reloads and shows the seeded workspace",
+        lambda: (ready := client.page("main", do="ready"))["since"] != before and ready["loaded"] == "complete"
+        and sorted(client.page("main", do="view")["agents"]) == sorted(AGENTS)
+        and client.page("main", do="find", role="button", name="App settings")["count"] == 1,
         60,
         every=0.25,
     )
@@ -982,16 +989,34 @@ def notification_center() -> int:
     return int(found[0])
 
 
+def on_screen(frame: dict, screen: dict) -> bool:
+    return (screen["x"] <= frame["x"] and frame["x"] + frame["width"] <= screen["x"] + screen["width"]
+            and screen["y"] <= frame["y"] and frame["y"] + frame["height"] <= screen["y"] + screen["height"])
+
+
 def press_when_shown(what: str, *press: str) -> Any:
     center = str(notification_center())
     last = ""
+    seen: list[dict] = []
+    pressed = False
 
     def attempt() -> Any:
-        nonlocal last
+        nonlocal last, pressed
         try:
+            if press[0] == "press-group":
+                placed = helper("group-frame", center, press[-1])
+                frame = {key: placed["frame"][key] for key in ("x", "y", "width", "height")}
+                settled = bool(seen) and seen[-1] == frame and on_screen(frame, placed["screen"])
+                seen.append(frame)
+                if not settled:
+                    last = f"the banner is not yet still and whole on screen: {frame}"
+                    return None
+                pressed = True
             return helper(press[0], center, *press[1:])
         except Failed as why:
             last = str(why)
+            if pressed:
+                raise
             return None
 
     try:
@@ -1785,6 +1810,443 @@ def scenario_escape(record: Record, scratch: Scratch) -> None:
         app.forget()
 
 
+SCROLL_BARS = {"classic": "Always", "overlay": "WhenScrolling"}
+NEW_AGENT = "New agentSomebody new in this group"
+NO_KEY = "Add an API key before your agents can reply."
+ASKER = "Researcher"
+UNDO = "Undo⌘Z"
+GLYPH_AMBER = 20
+GLYPH_OUTLINED = 0.8
+GLYPH_EYE = 2
+CROWDED = (900, 700)
+SETTINGS_SECTIONS = ("General", "Host", "Provider", "Limits", "Permissions", "Machines", "Account", "Appearance",
+                     "Notifications", "Shortcuts", "Skills", "Compost", "About")
+
+
+class AtWindow:
+
+    def __init__(self, record: Record, scratch: Scratch, what: str, scroll_bars: str = "",
+                 model: bool = False, host: Host | None = None) -> None:
+        self.record = record
+        self.scratch = scratch
+        self.what = what
+        self.scroll_bars = scroll_bars
+        self.model = model
+        self.shared = host
+        self.app: App | None = None
+        self.host: Host | None = host
+        self.stand_in: StandIn | None = None
+        self.before: dict | None = None
+        self.window: dict = {}
+
+    def __enter__(self) -> "AtWindow":
+        try:
+            self._open()
+        except BaseException:
+            self.__exit__(None, None, None)
+            raise
+        return self
+
+    def _open(self) -> None:
+        if not self.shared:
+            self.host = Host(self.scratch)
+            self.record.secrets.append(self.host.token)
+            self.host.seed()
+        assert self.host
+        if self.model:
+            self.stand_in = StandIn(self.scratch)
+            self.host.use(self.stand_in)
+        self.app = App(self.scratch, folder=self.scroll_bars)
+        screen_step(self.what)
+        self.before = front()
+        self.app.launch(background=False, hidden=False, scroll_bars=SCROLL_BARS.get(self.scroll_bars))
+        connect(self.app, self.host)
+        app = self.app
+        wait_until("the test build is in front", lambda: front().get("pid") == app.pid, 10)
+        self.window = wait_until("the window is on screen", lambda: next(
+            (w for w in helper("windows", str(app.pid)) if w["layer"] == 0 and w["width"] >= 250), None), 10)
+
+    def __exit__(self, *_: Any) -> None:
+        if self.app and self.before and self.app.alive():
+            try:
+                hand_back(self.app, self.before)
+            except (Failed, Refused, OSError):
+                pass
+        if self.app:
+            self.app.quit()
+        if self.host and not self.shared:
+            self.host.stop()
+        if self.app:
+            self.app.forget()
+        self.app = self.host = None
+
+
+def count(app: App, role: str, name: str, window: str = "main") -> int:
+    assert app.client
+    return app.client.page(window, do="find", role=role, name=name)["count"]
+
+
+def press_in_page(app: App, role: str, name: str) -> None:
+    assert app.client
+    app.client.page("main", do="click", role=role, name=name)
+
+
+def real_key(app: App, chord: str) -> None:
+    person_away(f"pressing {chord}")
+    if front().get("pid") != app.pid:
+        raise Failed(f"the test build is no longer in front for {chord}")
+    helper("key", chord)
+
+
+def focus_in(app: App, window: str = "main") -> dict:
+    assert app.client
+    return app.client.page(window, do="focus") or {}
+
+
+def settled_find(app: App, role: str, name: str) -> list[dict]:
+    return wait_quietly(lambda: found if len(found := helper("find", str(app.pid), role, name)) == 1 else None,
+                        10) or helper("find", str(app.pid), role, name)
+
+
+def open_new_agent(app: App) -> None:
+    press_in_page(app, "button", "Make something new")
+    wait_until("the menu opens", lambda: count(app, "menuitem", NEW_AGENT) == 1, 10)
+    press_in_page(app, "menuitem", NEW_AGENT)
+    wait_until("New agent opens", lambda: count(app, "dialog", "New agent") == 1, 10)
+
+
+def open_asking(app: App, agent: str) -> None:
+    row = f"{agent}, Has a question"
+    wait_until(f"the sidebar shows {agent} has a question", lambda: count(app, "button", row) == 1, 15)
+    press_in_page(app, "button", row)
+
+
+def open_questions(app: App) -> None:
+    wait_until("the sidebar counts one question waiting", lambda: count(app, "button", "1 question waiting") == 1, 15)
+    press_in_page(app, "button", "1 question waiting")
+    wait_until("Questions opens", lambda: count(app, "dialog", "Questions") == 1, 10)
+
+
+def close_dialog(app: App, name: str) -> None:
+    press_in_page(app, "button", "Close dialog")
+    wait_until(f"{name} closes", lambda: count(app, "dialog", name) == 0, 10)
+
+
+def scenario_newagent(record: Record, scratch: Scratch) -> None:
+    with AtWindow(record, scratch, "opening New agent in the window") as at:
+        assert at.app and at.app.client
+        app, window = at.app, at.window
+        record.check("the window opens at 1280 by 820", (window["width"], window["height"]) == (1280, 820),
+                     window, stop=True)
+        open_new_agent(app)
+        app.client.page("main", do="type", role="textbox", name="Name", text="Probe agent")
+        buttons = settled_find(app, "AXButton", "Create agent")
+        inside = [b for b in buttons if window["y"] <= b["y"] and b["y"] + b["height"] <= window["y"] + window["height"]
+                  and window["x"] <= b["x"] and b["x"] + b["width"] <= window["x"] + window["width"]]
+        record.check("New agent shows one Create agent button, inside the window without scrolling",
+                     len(buttons) == 1 and len(inside) == 1, {"buttons": buttons, "window": window}, stop=True)
+        person_away("pressing Create agent through Accessibility")
+        helper("press-one", str(app.pid), "AXButton", "Create agent")
+        made = wait_quietly(lambda: "Probe agent" in app.client.page("main", do="view")["agents"], 10)
+        record.check("an Accessibility press on Create agent creates the agent", made is not None,
+                     None if made else {"agents": app.client.page("main", do="view")["agents"]})
+
+
+def waiting_glyph(item: dict) -> bool:
+    return (item["amber"] >= GLYPH_AMBER and item["outlined"] >= item["sides"] * GLYPH_OUTLINED
+            and item["eye"] >= GLYPH_EYE)
+
+
+def tray_shows(item: dict, waiting: bool) -> bool:
+    asking = f"{ASKER} is waiting on you" in item["help"] and item["title"] == "1"
+    if waiting:
+        return waiting_glyph(item) and asking
+    return not item["amber"] and "waiting on you" not in item["help"]
+
+
+def tray_faults(states: dict) -> list[str]:
+    faults = []
+    if states["idle"]["amber"]:
+        faults.append(f"with nothing waiting the glyph shows {states['idle']['amber']} amber pixels")
+    for name in ("waiting", "undone"):
+        item = states[name]
+        if item["amber"] < GLYPH_AMBER:
+            faults.append(f"{name}: the glyph shows {item['amber']} amber pixels while a question waits")
+        elif item["outlined"] < item["sides"] * GLYPH_OUTLINED:
+            faults.append(f"{name}: a dark outline meets the amber on {item['outlined']} of {item['sides']} sides")
+        elif item["eye"] < GLYPH_EYE:
+            faults.append(f"{name}: the amber glyph has {item['eye']} dark eye pixels")
+        if f"{ASKER} is waiting on you" not in item["help"]:
+            faults.append(f"{name}: the tooltip reads {item['help']!r}")
+        if item["title"] != "1":
+            faults.append(f"{name}: the count beside the glyph reads {item['title']!r}")
+    if states["heldPending"] != 1:
+        faults.append(f"the held answer was read with {states['heldPending']} questions on the host, not one held")
+    if states["held"]["amber"] or "waiting on you" in states["held"]["help"]:
+        faults.append(f"while the answer is held the glyph shows {states['held']['amber']} amber pixels "
+                      f"and the tooltip reads {states['held']['help']!r}")
+    return faults
+
+
+def scenario_trayquestion(record: Record, scratch: Scratch) -> None:
+    with AtWindow(record, scratch, "reading the menu bar icon while a question waits", model=True) as at:
+        assert at.app and at.host
+        app, host = at.app, at.host
+        shot = str(scratch.root / "status-item.png")
+
+        def item() -> dict:
+            return helper("status-item", str(app.pid), shot)
+
+        wait_until("the panel is made", lambda: app.state()["menubar"]["attached"], 20)
+        states: dict[str, Any] = {"idle": item()}
+        host.send(ASKER, f"{StandIn.ASK}: ask me something")
+        wait_until("the question waits for an answer", lambda: host.call("pending_approvals"), 30)
+        open_questions(app)
+        first = f"{StandIn.ANSWER}1"
+        wait_until("Questions shows the first choice with its key", lambda: count(app, "button", first) == 1, 15)
+        states["waiting"] = wait_quietly(lambda: now if tray_shows(now := item(), True) else None, 15) or item()
+        press_in_page(app, "button", first)
+        states["heldPending"] = len(host.call("pending_approvals"))
+        seen: list[dict] = []
+
+        def held() -> dict | None:
+            seen.append(item())
+            return seen[-1] if tray_shows(seen[-1], False) else None
+
+        states["held"] = wait_quietly(held, 2) or seen[-1]
+        record.check("the held answer still offers Undo", count(app, "button", UNDO) == 1,
+                     {"states": states}, stop=True)
+        press_in_page(app, "button", UNDO)
+        states["undone"] = wait_quietly(lambda: now if tray_shows(now := item(), True) else None, 5) or item()
+        faults = tray_faults(states)
+        record.check("the menu bar glyph is amber with a dark outline and the tooltip names who waits while a "
+                     "question waits, clears while the answer is held, and comes back on Undo", not faults,
+                     {"faults": faults, "states": states} if faults else None)
+
+
+def scenario_menuanswer(record: Record, scratch: Scratch) -> None:
+    with AtWindow(record, scratch, "answering from the command menu", model=True) as at:
+        assert at.app and at.host
+        app, host = at.app, at.host
+        host.send(ASKER, f"{StandIn.ASK}: ask me something")
+        wait_until("the question waits for an answer", lambda: host.call("pending_approvals"), 30)
+        open_asking(app, ASKER)
+        wait_until("the window shows the question", lambda: count(app, "button", StandIn.ANSWER) >= 1, 15)
+        real_key(app, "cmd+k")
+        opened = wait_quietly(lambda: count(app, "dialog", "Command menu") == 1, 5)
+        record.check("Command K opens the command menu", opened is not None, stop=True)
+        real_key(app, "tab")
+        real_key(app, "return")
+        answered = wait_quietly(lambda: not host.call("pending_approvals"), 15)
+        record.check("Command K, Tab, Return answers the waiting question", answered is not None,
+                     None if answered else {"pending": len(host.call("pending_approvals")), "focus": focus_in(app)},
+                     stop=True)
+        assert at.stand_in
+        stand_in = at.stand_in
+        given = wait_quietly(lambda: stand_in.answers, 15) or []
+        record.check(f"the answer the model receives is {StandIn.ANSWER}, the first choice",
+                     any(one.startswith(f"The operator answered: {StandIn.ANSWER}\n") for one in given), given)
+
+
+def scenario_settingstabs(record: Record, scratch: Scratch) -> None:
+    with AtWindow(record, scratch, "moving through Settings with the keyboard") as at:
+        assert at.app
+        app = at.app
+        press_in_page(app, "button", "App settings")
+        wait_until("Settings opens", lambda: count(app, "tab", "General") == 1, 10)
+        press_in_page(app, "tab", "General")
+        first = wait_quietly(lambda: now if ((now := focus_in(app)).get("role"), now.get("name")) == ("tab", "General")
+                             else None, 3) or focus_in(app)
+        real_key(app, "down")
+        moved = wait_quietly(lambda: (now if (now := focus_in(app)).get("role") == "tab"
+                                      and now.get("name") != first.get("name") else None), 3)
+        record.check("an arrow key moves along the Settings sections", first.get("role") == "tab" and moved,
+                     {"first": first, "after": focus_in(app)}, stop=True)
+        real_key(app, "tab")
+        left = wait_quietly(lambda: now if (now := focus_in(app)).get("role") not in (None, "tab") else None, 3)
+        record.check("the next Tab leaves the sections", left is not None, left or focus_in(app))
+        real_key(app, "shift+tab")
+        back = wait_quietly(lambda: now if ((now := focus_in(app)).get("role"), now.get("name")) == ("tab", moved["name"])
+                            else None, 3)
+        record.check("Shift Tab comes back to the section chosen, so the sections are one Tab stop",
+                     back is not None, back or focus_in(app))
+
+
+def bars_apart(laid: dict[str, dict]) -> list[str]:
+    classic, overlay = laid["classic"], laid["overlay"]
+    faults = []
+    if classic["sections"]["gutter"] <= 0:
+        faults.append(f"classic scroll bars did not take: the section list has a {classic['sections']['gutter']} pt gutter")
+    if overlay["sections"]["gutter"] != 0:
+        faults.append(f"overlay scroll bars did not take: the section list has a {overlay['sections']['gutter']} pt gutter")
+    for mode, one in laid.items():
+        box = one["newAgent"]
+        off = (box["left"] + box["right"] - box["viewport"]["width"]) / 2
+        if abs(off) > 1:
+            faults.append(f"newAgent sits {off:+g} pt off the window's center with {mode} scroll bars")
+    for key in ("sections", "general", "yourName", "pane", "newAgent"):
+        a, b = classic[key], overlay[key]
+        if abs(a["width"] - b["width"]) > 1 or abs(a["left"] - b["left"]) > 1:
+            faults.append(f"{key} is {a['width']:g} wide at {a['left']:g} with classic scroll bars "
+                          f"and {b['width']:g} wide at {b['left']:g} with overlay ones")
+    return faults
+
+
+def ring_faults(mode: str, pointer: dict, keyboard: dict | None) -> list[str]:
+    faults = []
+    if pointer.get("ring"):
+        faults.append(f"with {mode} scroll bars the panel shows a focus ring on {pointer.get('name')!r} "
+                      "after a pointer click")
+    if not keyboard:
+        faults.append(f"with {mode} scroll bars Tab in the panel reached no agent row")
+    elif not keyboard["ring"]:
+        faults.append(f"with {mode} scroll bars Tab focused {keyboard['name']!r} and drew no ring")
+    elif keyboard["clipped"]:
+        faults.append(f"with {mode} scroll bars the ring on {keyboard['name']!r} is cut off")
+    return faults
+
+
+def held_still(what: str, read: Callable[[], Any]) -> Any:
+    seen: list[Any] = []
+
+    def still() -> Any:
+        now = read()
+        steady = bool(seen) and seen[-1] == now
+        seen.append(now)
+        return now if steady else None
+
+    return wait_until(what, still, 5)
+
+
+def lay_out(app: App) -> dict:
+    assert app.client
+    client = app.client
+
+    def box(role: str, name: str) -> dict:
+        return held_still(f"{name} holds still", lambda: client.page("main", do="box", role=role, name=name))
+
+    press_in_page(app, "button", "App settings")
+    wait_until("Settings opens", lambda: count(app, "textbox", "Your name") == 1, 10)
+    laid = {"sections": box("tablist", "Settings sections"), "general": box("tab", "General"),
+            "yourName": box("textbox", "Your name")}
+    press_in_page(app, "tab", "Provider")
+    wait_until("Provider opens", lambda: count(app, "tabpanel", "Provider") == 1, 10)
+    laid["pane"] = box("tabpanel", "Provider")
+    app.client.page("main", do="key", key="Escape")
+    wait_until("Settings closes", lambda: count(app, "tablist", "Settings sections") == 0, 10)
+    open_new_agent(app)
+    laid["newAgent"] = box("dialog", "New agent")
+    close_dialog(app, "New agent")
+    return laid
+
+
+def panel_focus(app: App) -> tuple[dict, dict | None]:
+    assert app.client and app.pid
+    person_away("clicking the icon for real")
+    helper("click-icon", str(app.pid))
+    wait_until("the panel opens with the keyboard", lambda: any(
+        w["label"] == "menubar" and w["visible"] and w["focused"] for w in app.state()["windows"]), 5)
+    wait_until("the panel lists the group", lambda: all(a in app.client.page("menubar", do="text") for a in AGENTS), 10)
+    pointer = focus_in(app, "menubar")
+    real_key(app, "tab")
+    keyboard = wait_quietly(lambda: (now if (now := focus_in(app, "menubar")).get("ring") and any(
+        now.get("name", "").startswith(agent) for agent in AGENTS) else None), 3) or focus_in(app, "menubar")
+    helper("escape")
+    wait_until("the panel closes", lambda: not app.state()["menubar"]["panelVisible"], 5)
+    return pointer, keyboard
+
+
+def scenario_scrollbars(record: Record, scratch: Scratch) -> None:
+    laid: dict[str, dict] = {}
+    faults: list[str] = []
+    host = Host(scratch)
+    record.secrets.append(host.token)
+    host.seed()
+    try:
+        for mode in SCROLL_BARS:
+            with AtWindow(record, scratch, f"measuring the window with {mode} scroll bars", scroll_bars=mode,
+                          host=host) as at:
+                assert at.app
+                laid[mode] = lay_out(at.app)
+                pointer, keyboard = panel_focus(at.app)
+                faults += ring_faults(mode, pointer, keyboard)
+                record.observe(f"the panel's focus with {mode} scroll bars", {"pointer": pointer, "keyboard": keyboard})
+    finally:
+        host.stop()
+    record.check("Settings and New agent lay out the same with classic scroll bars as with overlay ones, New agent centered",
+                 not bars_apart(laid), {"faults": bars_apart(laid), "laid": laid} if bars_apart(laid) else None)
+    record.check("the panel draws a whole focus ring only after a key press, with either scroll bars",
+                 not faults, faults or None)
+
+
+def crowded_layout(app: App) -> dict:
+    sections = settled_find(app, "AXTabGroup", "Settings sections")
+    return {"sections": sections,
+            "tabs": {name: helper("find", str(app.pid), "AXRadioButton", name) for name in SETTINGS_SECTIONS},
+            "banner": settled_find(app, "AXStaticText", NO_KEY),
+            "window": next(w for w in helper("windows", str(app.pid)) if w["layer"] == 0 and w["width"] >= 250)}
+
+
+def crowded_faults(tag: str, laid: dict) -> list[str]:
+    window = laid["window"]
+    if (window["width"], window["height"]) != CROWDED:
+        return [f"{tag}: the window is {window['width']:g} by {window['height']:g}"]
+    if len(laid["sections"]) != 1 or len(laid["banner"]) != 1:
+        return [f"{tag}: {len(laid['sections'])} section lists and {len(laid['banner'])} no-key banners on screen"]
+    box, banner = laid["sections"][0], laid["banner"][0]
+    bottom = window["y"] + window["height"]
+    faults = []
+    if box["y"] + box["height"] > bottom + 0.5:
+        faults.append(f"{tag}: the section list ends {box['y'] + box['height'] - bottom:g} pt below the window")
+    for name, found in laid["tabs"].items():
+        if len(found) != 1:
+            faults.append(f"{tag}: {len(found)} {name} sections")
+        elif found[0]["y"] < box["y"] - 0.5 or found[0]["y"] + found[0]["height"] > box["y"] + box["height"] + 0.5:
+            faults.append(f"{tag}: {name} is cut off by the section list")
+    if banner["x"] < box["x"] + box["width"] - 0.5:
+        faults.append(f"{tag}: the no-key banner starts at {banner['x']:g}, over the section list ending at "
+                      f"{box['x'] + box['width']:g}")
+    if banner["y"] + banner["height"] > bottom + 0.5:
+        faults.append(f"{tag}: the no-key banner is below the window")
+    return faults
+
+
+def scenario_nokey(record: Record, scratch: Scratch) -> None:
+    faults: list[str] = []
+    host = Host(scratch)
+    record.secrets.append(host.token)
+    host.seed()
+    try:
+        for mode in SCROLL_BARS:
+            with AtWindow(record, scratch, f"crowding Settings with {mode} scroll bars", scroll_bars=mode,
+                          host=host) as at:
+                assert at.app
+                app = at.app
+                helper("size", str(app.pid), *map(str, CROWDED))
+                wait_until(f"the window takes {CROWDED[0]} by {CROWDED[1]}", lambda: any(
+                    (w["width"], w["height"]) == CROWDED for w in helper("windows", str(app.pid))), 10)
+                wait_until("the window asks for an API key", lambda: count(app, "button", "Open settings") == 1, 10)
+                press_in_page(app, "button", "App settings")
+                wait_until("Settings opens", lambda: count(app, "tablist", "Settings sections") == 1, 10)
+                for surface in ("Light", "Dark"):
+                    press_in_page(app, "tab", "Appearance")
+                    press_in_page(app, "button", f"Reading surface: {surface}")
+                    wait_until(f"the {surface} reading surface is chosen", lambda: [
+                        b["value"] for b in helper("find", str(app.pid), "AXCheckBox", f"Reading surface: {surface}")
+                    ] == [1], 10)
+                    press_in_page(app, "tab", "General")
+                    wait_until("General opens", lambda: count(app, "textbox", "Your name") == 1, 10)
+                    laid = crowded_layout(app)
+                    tag = f"{surface.lower()} with {mode} scroll bars"
+                    record.observe(f"Settings without a key, {tag}", laid)
+                    faults += crowded_faults(tag, laid)
+    finally:
+        host.stop()
+    record.check(f"without a key at {CROWDED[0]} by {CROWDED[1]}, light and dark, with either scroll bars, all "
+                 f"{len(SETTINGS_SECTIONS)} sections show without scrolling and the no-key banner sits in the "
+                 "content column", not faults, faults or None)
+
+
 SCENARIOS: dict[str, Callable[[Record, Scratch], None]] = {
     "launch": scenario_launch,
     "permission": scenario_permission,
@@ -1809,6 +2271,12 @@ SCENARIOS: dict[str, Callable[[Record, Scratch], None]] = {
     "refused": scenario_refused,
     "draft": scenario_draft,
     "escape": scenario_escape,
+    "newagent": scenario_newagent,
+    "menuanswer": scenario_menuanswer,
+    "settingstabs": scenario_settingstabs,
+    "scrollbars": scenario_scrollbars,
+    "nokey": scenario_nokey,
+    "trayquestion": scenario_trayquestion,
 }
 
 SUMMARIES: dict[str, str] = {
@@ -1835,6 +2303,12 @@ SUMMARIES: dict[str, str] = {
     "refused": "Screen: a banner the system refuses is given back, and pushed once although the window is present.",
     "draft": "Screen: a draft typed to one agent in the panel is not on another, and is there when you come back; read through Accessibility.",
     "escape": "Screen: a real click on the icon gives the panel the keyboard; a real Escape closes it and gives the keyboard back.",
+    "newagent": "Screen: at 1280 by 820, New agent shows one Create agent button without scrolling, and an Accessibility press on it creates the agent.",
+    "menuanswer": "Screen: with a question waiting, real Command K, Tab and Return answer it.",
+    "settingstabs": "Screen: the Settings sections are one Tab stop; real arrow keys move along them and the next Tab leaves.",
+    "scrollbars": "Screen: Settings and New agent lay out the same with classic scroll bars as with overlay ones, New agent centered, and the panel draws a whole focus ring only after a key press.",
+    "trayquestion": "Screen: with a question waiting the menu bar glyph is amber with a dark outline, its tooltip names who waits and its count reads 1; it clears while the answer is held behind Undo and comes back on Undo.",
+    "nokey": "Screen: without a key at 900 by 700, light and dark, with either scroll bars, every Settings section shows without scrolling and the no-key banner sits in the content column.",
 }
 
 

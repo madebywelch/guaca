@@ -632,5 +632,272 @@ class PresenceWindowTests(unittest.TestCase):
         self.assertGreater(scaled_away, heartbeat)
 
 
+class ScrollBarTests(unittest.TestCase):
+    def box(self, left, width, gutter=0):
+        return {"left": left, "right": left + width, "width": width, "gutter": gutter,
+                "viewport": {"width": 1280, "height": 820}}
+
+    def laid(self, shift=0, classic_gutter=15, overlay_gutter=0):
+        def one(gutter, shift):
+            return {"sections": self.box(179, 186, gutter), "newAgent": self.box(336 + shift, 608),
+                    "general": self.box(187, 153), "yourName": self.box(389 + shift, 688),
+                    "pane": self.box(365 + shift, 736, 10)}
+        return {"classic": one(classic_gutter, shift), "overlay": one(overlay_gutter, 0)}
+
+    def test_a_layout_pushed_aside_by_classic_bars_is_a_fault(self):
+        faults = probe.bars_apart(self.laid(shift=-17))
+        self.assertIn("newAgent sits -17 pt off the window's center with classic scroll bars", faults)
+        self.assertTrue(any(f.startswith("yourName is 688 wide at 372") for f in faults), faults)
+
+    def test_a_mode_that_did_not_take_is_a_fault_rather_than_a_pass(self):
+        faults = probe.bars_apart(self.laid(classic_gutter=0))
+        self.assertEqual(faults, ["classic scroll bars did not take: the section list has a 0 pt gutter"])
+        self.assertEqual(probe.bars_apart(self.laid(overlay_gutter=15)),
+                         ["overlay scroll bars did not take: the section list has a 15 pt gutter"])
+
+    def held(self, reads):
+        values = iter(reads)
+
+        def polls(what, check, *_, **__):
+            for _ in reads:
+                value = check()
+                if value:
+                    return value
+            raise probe.Failed(what)
+
+        with patch.object(probe, "wait_until", side_effect=polls):
+            try:
+                return probe.held_still("New agent holds still", lambda: next(values))
+            except probe.Failed as why:
+                return why
+
+    def test_a_dialog_still_growing_is_measured_only_once_it_holds_still(self):
+        growing = [self.box(342.08, 595.84), self.box(340.694, 598.612)]
+        self.assertIsInstance(self.held(growing), probe.Failed)
+        self.assertEqual(self.held([*growing, self.box(336, 608), self.box(336, 608)]), self.box(336, 608))
+
+    def test_the_same_layout_in_both_modes_has_no_fault(self):
+        self.assertEqual(probe.bars_apart(self.laid()), [])
+
+    def test_a_ring_after_a_pointer_click_or_a_cut_off_ring_is_a_fault(self):
+        row = {"role": "button", "name": "Researcher, idle"}
+        self.assertEqual(probe.ring_faults("classic", {**row, "ring": True, "clipped": False},
+                                           {**row, "ring": True, "clipped": False}),
+                         ["with classic scroll bars the panel shows a focus ring on 'Researcher, idle' after a pointer click"])
+        self.assertEqual(probe.ring_faults("classic", {}, {**row, "ring": True, "clipped": True}),
+                         ["with classic scroll bars the ring on 'Researcher, idle' is cut off"])
+        self.assertEqual(probe.ring_faults("overlay", {}, {**row, "ring": False, "clipped": False}),
+                         ["with overlay scroll bars Tab focused 'Researcher, idle' and drew no ring"])
+        self.assertEqual(probe.ring_faults("overlay", {}, None),
+                         ["with overlay scroll bars Tab in the panel reached no agent row"])
+        self.assertEqual(probe.ring_faults("overlay", {}, {**row, "ring": True, "clipped": False}), [])
+
+    def test_launch_sets_scroll_bars_for_the_app_alone(self):
+        scratch = probe.Scratch()
+        self.addCleanup(scratch.close)
+        with patch.object(probe, "run") as run, patch.object(probe.shutil, "copytree"), \
+                patch.object(probe, "Client") as client, patch.object(probe, "wait_until"):
+            run.return_value = subprocess.CompletedProcess([], 0, "", "")
+            client.return_value.ask.return_value = {"pid": 42}
+            app = probe.App(scratch)
+            app.launch(background=False, hidden=False, scroll_bars="Always")
+            classic = run.call_args.args[0]
+            app.launch()
+            plain = run.call_args.args[0]
+        app.client = app.pid = None
+        self.assertEqual(classic[-4:], [str(app.path), "--args", "-AppleShowScrollBars", "Always"])
+        self.assertNotIn("--args", plain)
+
+    def test_a_real_key_is_stamped_as_the_probe_own_input(self):
+        done = subprocess.CompletedProcess([], 0, '{"key": "tab"}', "")
+        with patch.object(probe, "run", return_value=done), \
+             patch.object(probe.time, "monotonic", return_value=77.0), \
+             patch.object(probe, "HELPER", Mock(exists=Mock(return_value=True), stat=Mock(return_value=Mock(st_mtime=2)))), \
+             patch.object(probe, "HELPER_SOURCE", Mock(stat=Mock(return_value=Mock(st_mtime=1)))), \
+             patch.dict(probe.OWN_INPUT, {"at": -1.0}):
+            probe.helper("key", "tab")
+            self.assertEqual(probe.OWN_INPUT["at"], 77.0)
+
+
+class TrayTests(unittest.TestCase):
+    WAITING = {"amber": 47, "sides": 40, "outlined": 38, "eye": 4,
+               "help": "Guaca · Researcher is waiting on you · 120 tokens this session", "title": "1"}
+    CLEAR = {"amber": 0, "sides": 0, "outlined": 0, "eye": 0, "help": "Guaca · 1 agent working", "title": ""}
+
+    def states(self, **changes):
+        return {"idle": self.CLEAR, "waiting": self.WAITING, "held": self.CLEAR, "heldPending": 1,
+                "undone": self.WAITING, **changes}
+
+    def test_an_amber_glyph_with_its_eye_but_no_outline_is_a_fault(self):
+        eye_only = {**self.WAITING, "outlined": 6}
+        self.assertFalse(probe.waiting_glyph(eye_only))
+        self.assertEqual(probe.tray_faults(self.states(waiting=eye_only)),
+                         ["waiting: a dark outline meets the amber on 6 of 40 sides"])
+
+    def test_an_outlined_glyph_without_its_eye_is_a_fault(self):
+        self.assertEqual(probe.tray_faults(self.states(undone={**self.WAITING, "eye": 0})),
+                         ["undone: the amber glyph has 0 dark eye pixels"])
+
+    def test_amber_with_nothing_waiting_or_a_wrong_count_is_a_fault(self):
+        self.assertEqual(probe.tray_faults(self.states(idle={**self.CLEAR, "amber": 30})),
+                         ["with nothing waiting the glyph shows 30 amber pixels"])
+        self.assertEqual(probe.tray_faults(self.states(waiting={**self.WAITING, "title": "2"})),
+                         ["waiting: the count beside the glyph reads '2'"])
+
+    def test_a_glyph_still_amber_while_the_answer_is_held_is_a_fault(self):
+        faults = probe.tray_faults(self.states(held=self.WAITING))
+        self.assertEqual(len(faults), 1)
+        self.assertTrue(faults[0].startswith("while the answer is held the glyph shows 47 amber pixels"), faults)
+
+    def test_a_held_read_taken_after_the_answer_was_sent_is_a_fault(self):
+        self.assertEqual(probe.tray_faults(self.states(heldPending=0)),
+                         ["the held answer was read with 0 questions on the host, not one held"])
+
+    def test_undo_that_brings_back_neither_glyph_nor_tooltip_is_a_fault(self):
+        self.assertEqual(probe.tray_faults(self.states(undone=self.CLEAR)),
+                         ["undone: the glyph shows 0 amber pixels while a question waits",
+                          "undone: the tooltip reads 'Guaca · 1 agent working'",
+                          "undone: the count beside the glyph reads ''"])
+
+    def test_the_poll_waits_for_the_tooltip_as_well_as_the_glyph(self):
+        self.assertFalse(probe.tray_shows({**self.WAITING, "help": "Guaca · 1 agent working"}, True))
+        self.assertTrue(probe.tray_shows(self.WAITING, True))
+        self.assertFalse(probe.tray_shows({**self.CLEAR, "help": self.WAITING["help"]}, False))
+        self.assertTrue(probe.tray_shows(self.CLEAR, False))
+
+    def test_the_whole_round_trip_has_no_fault(self):
+        self.assertEqual(probe.tray_faults(self.states()), [])
+
+
+class ConnectTests(unittest.TestCase):
+    def test_connect_waits_for_the_reloaded_page_to_show_the_workspace(self):
+        documents = iter([1, 1, 1, 2, 2])
+        shown = iter([0, 1])
+        calls = []
+
+        def page(window, do, **call):
+            calls.append(do)
+            if do == "ready":
+                return {"loaded": "complete", "since": next(documents)}
+            if do == "view":
+                return {"agents": list(probe.AGENTS)}
+            if do == "find":
+                return {"count": next(shown)}
+            return None
+
+        app = Mock(client=Mock(page=Mock(side_effect=page)))
+        probe.connect(app, Mock(origin="http://127.0.0.1:1", token="t"))
+        self.assertEqual(calls, ["ready", "ready", "attach", "ready", "ready", "view", "find", "ready", "view", "find"])
+
+
+class StandInTests(unittest.TestCase):
+    def test_the_stand_in_keeps_the_answer_it_was_given(self):
+        scratch = probe.Scratch()
+        self.addCleanup(scratch.close)
+        stand_in = probe.StandIn(scratch)
+        asked = {"role": "user", "content": f"{probe.StandIn.ASK}: ask me something"}
+        self.assertEqual(stand_in.answers, [])
+        stand_in.answer([asked])
+        self.assertEqual(stand_in.answers, [])
+        stand_in.answer([asked, {"role": "assistant", "content": ""}, {"role": "tool", "content": "Second"}])
+        self.assertEqual(stand_in.answers, ["Second"])
+        stand_in.answer([{"role": "user", "content": "carry on"}])
+        self.assertEqual(stand_in.answers, ["Second"])
+
+
+class CrowdedSettingsTests(unittest.TestCase):
+    def laid(self, list_height=640, banner_x=530, width=900, banners=1):
+        return {"window": {"x": 320, "y": 65, "width": width, "height": 700, "layer": 0},
+                "sections": [{"x": 330, "y": 110, "width": 186, "height": list_height}],
+                "tabs": {name: [{"x": 338, "y": 120 + 40 * i, "width": 170, "height": 32}]
+                         for i, name in enumerate(probe.SETTINGS_SECTIONS)},
+                "banner": [{"x": banner_x, "y": 110, "width": 400, "height": 20}] * banners}
+
+    def test_a_banner_over_the_section_list_is_a_fault(self):
+        self.assertEqual(probe.crowded_faults("dark", self.laid(banner_x=340)),
+                         ["dark: the no-key banner starts at 340, over the section list ending at 516"])
+
+    def test_a_section_cut_off_by_a_shorter_list_is_a_fault(self):
+        faults = probe.crowded_faults("light", self.laid(list_height=500))
+        self.assertIn("light: About is cut off by the section list", faults)
+        self.assertNotIn("light: General is cut off by the section list", faults)
+
+    def test_a_window_that_kept_its_size_or_a_missing_banner_fails_instead_of_passing(self):
+        self.assertEqual(probe.crowded_faults("light", self.laid(width=1280)), ["light: the window is 1280 by 700"])
+        self.assertEqual(probe.crowded_faults("light", self.laid(banners=0)),
+                         ["light: 1 section lists and 0 no-key banners on screen"])
+
+    def test_every_section_in_the_list_with_the_banner_beside_it_has_no_fault(self):
+        self.assertEqual(probe.crowded_faults("dark", self.laid()), [])
+
+
+class BannerPressTests(unittest.TestCase):
+    SCREEN = {"x": 0, "y": 0, "width": 1920, "height": 1080}
+
+    def press(self, frames, refuse=False, how="press-group", absent=0):
+        calls = []
+        placed = iter(frames)
+
+        def helper(*args):
+            calls.append(args[0])
+            if args[0] == "group-frame":
+                return {"frame": {**next(placed), "name": "x"}, "screen": self.SCREEN}
+            if calls.count(args[0]) <= absent:
+                raise probe.Failed("nothing on screen names Guaca Probe")
+            if refuse:
+                raise probe.Failed("the press was refused (AXError -25204)")
+            return {"pressed": "banner"}
+
+        def polls(what, check, *_, **__):
+            for _ in frames:
+                value = check()
+                if value:
+                    return value
+            raise probe.Failed(what)
+
+        with patch.object(probe, "helper", side_effect=helper), \
+             patch.object(probe, "notification_center", return_value=7), \
+             patch.object(probe, "wait_until", side_effect=polls):
+            try:
+                return probe.press_when_shown("clicking the banner", how, "Guaca probe"), calls
+            except probe.Failed as why:
+                return why, calls
+
+    def test_a_banner_still_sliding_in_is_never_pressed(self):
+        sliding = [{"x": 2100 - 60 * n, "y": 142, "width": 344, "height": 74} for n in range(4)]
+        result, calls = self.press(sliding)
+        self.assertIsInstance(result, probe.Failed)
+        self.assertNotIn("press-group", calls)
+
+    def test_a_banner_moving_on_screen_is_never_pressed(self):
+        moving = [{"x": 1560 - 60 * n, "y": 142, "width": 344, "height": 74} for n in range(4)]
+        result, calls = self.press(moving)
+        self.assertIsInstance(result, probe.Failed)
+        self.assertNotIn("press-group", calls)
+
+    def test_a_banner_half_off_screen_is_never_pressed_even_when_still(self):
+        result, calls = self.press([{"x": 1786, "y": 142, "width": 344, "height": 74}] * 3)
+        self.assertIsInstance(result, probe.Failed)
+        self.assertNotIn("press-group", calls)
+
+    def test_a_prompt_not_yet_on_screen_is_looked_for_again(self):
+        result, calls = self.press([{}] * 4, how="press", absent=2)
+        self.assertEqual(result, {"pressed": "banner"})
+        self.assertEqual(calls, ["press", "press", "press"])
+
+    def test_a_press_that_fails_is_never_repeated(self):
+        still = {"x": 1560, "y": 142, "width": 344, "height": 74}
+        result, calls = self.press([still] * 4, refuse=True)
+        self.assertIsInstance(result, probe.Failed)
+        self.assertEqual(calls.count("press-group"), 1)
+
+    def test_a_settled_banner_is_pressed_once(self):
+        moving = {"x": 1700, "y": 142, "width": 344, "height": 74}
+        still = {"x": 1560, "y": 142, "width": 344, "height": 74}
+        result, calls = self.press([moving, still, still, still])
+        self.assertEqual(result, {"pressed": "banner"})
+        self.assertEqual(calls.count("press-group"), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
