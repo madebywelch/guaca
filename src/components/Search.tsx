@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { useDismiss } from "../lib/dismiss";
 import { inScope, type SearchResult, scopeLabel, searchResults } from "../lib/search";
@@ -53,7 +53,7 @@ export function Search({ onClose }: { onClose: () => void }) {
   );
 
   const isTop = useDismiss(onClose);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.isComposing || !isTop()) return;
       if (event.key === "ArrowDown") {
