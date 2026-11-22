@@ -5406,6 +5406,24 @@ input[type="file"]:disabled {
   margin: 0;
 }
 
+.onboarding-keyhelp {
+  grid-column: 1 / -1;
+  margin: 0 0 var(--space-6);
+  color: var(--muted);
+  font-size: var(--type-support);
+  line-height: var(--lead-read);
+}
+
+.onboarding-keyhelp p {
+  margin: 0;
+}
+
+.onboarding-keyhelp ol {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-7);
+  list-style: decimal;
+}
+
 .onboarding-provider > .onboarding-options {
   margin-bottom: var(--space-6);
 }

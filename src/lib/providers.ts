@@ -6,6 +6,8 @@ export interface Provider {
   baseUrl: string;
   model: string;
   local?: boolean;
+  keyPage?: string;
+  keySteps?: string[];
 }
 
 export const PROVIDERS: Provider[] = [
@@ -14,12 +16,24 @@ export const PROVIDERS: Provider[] = [
     name: "OpenRouter",
     baseUrl: "https://openrouter.ai/api/v1",
     model: "anthropic/claude-sonnet-4.5",
+    keyPage: "https://openrouter.ai/settings/keys",
+    keySteps: [
+      "Sign in or create an OpenRouter account.",
+      "Create a key, name it, and copy it.",
+      "Add credits to your account; most models need them.",
+    ],
   },
   {
     id: "openai",
     name: "OpenAI",
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-4.1",
+    keyPage: "https://platform.openai.com/api-keys",
+    keySteps: [
+      "Sign in or create an OpenAI Platform account.",
+      "Create a new secret key and copy it. It is shown only once.",
+      "Add a payment method under Billing. A ChatGPT plan does not cover API use.",
+    ],
   },
   {
     id: "groq",
