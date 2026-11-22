@@ -72,6 +72,7 @@ function agent(id: string, name: string, groupId = DEFAULT_GROUP): AgentCard {
     hasComputer: false,
     hasBrowser: false,
     runsErrands: false,
+    readsWeb: true,
     browserConsent: "open",
     name,
     avatar: "avocado",

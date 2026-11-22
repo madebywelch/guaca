@@ -346,6 +346,8 @@ export function AgentEditor({ agent, onClose }: Props) {
 
             {agent && <GrantList agent={agent} />}
 
+            {agent && <WebSwitch agent={agent} />}
+
             {agent && <ErrandSwitch agent={agent} />}
 
             <label className="field">
@@ -423,6 +425,46 @@ export function AgentEditor({ agent, onClose }: Props) {
         </div>
       </div>
     </Scrim>
+  );
+}
+
+function WebSwitch({ agent }: { agent: AgentCard }) {
+  const [on, setOn] = useState(agent.readsWeb);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const change = async (next: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.setAgentWeb(agent.id, next);
+      setOn(next);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <label
+      className="field field--row"
+      title={`${agent.name} searches the web through the provider this group uses, or the search key in Settings, and reads pages as text fetched by this host. It reads only: it cannot sign in, click or fill in a form, and it never fetches an address on this host's own network.`}
+    >
+      <input
+        type="checkbox"
+        checked={on}
+        disabled={busy}
+        onChange={(event) => void change(event.target.checked)}
+      />
+      <span>
+        <span className="field__label">Web reading</span>
+        <span className="field__hint">
+          Searches the web and reads pages as text, with no browser or account.
+        </span>
+        {error && <span className="field__hint">{error}</span>}
+      </span>
+    </label>
   );
 }
 

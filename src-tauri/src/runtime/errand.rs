@@ -86,7 +86,7 @@ impl Runtime {
                 for (done, parts, files, read) in ran {
                     errands.push(done);
                     trail.extend(parts);
-                    reading.ingested |= read;
+                    reading.absorb(read);
                     for file in files {
                         if !attached.iter().any(|held| held.digest == file.digest) {
                             attached.push(file);
@@ -144,7 +144,7 @@ impl Runtime {
         call: &ToolCall,
         index: usize,
         brief: &str,
-    ) -> (Errand, Vec<Part>, Vec<Attachment>, bool) {
+    ) -> (Errand, Vec<Part>, Vec<Attachment>, Reading) {
         let card = from.card;
         let rounds = errand::ROUNDS.min(from.limits.max_tool_rounds);
         let mut messages = vec![
@@ -153,6 +153,7 @@ impl Runtime {
         ];
 
         let mut reading = sent.for_errand();
+        reading.saw_in(brief);
         let mut addressed = HashSet::new();
         let mut attached: Vec<Attachment> = Vec::new();
 
@@ -314,7 +315,7 @@ impl Runtime {
             Errand { brief: brief.to_string(), ending, answer: said, calls, model_calls },
             trail,
             attached,
-            reading.ingested,
+            reading,
         )
     }
 

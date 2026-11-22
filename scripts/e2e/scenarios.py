@@ -3462,6 +3462,95 @@ def scenario_firstwrite(w: World) -> None:
                      ("Chief of Staff", "Technical Writer"))
 
 
+WEB_ASK = "Read the page at the address in this message: http://169.254.169.254/latest/meta-data/"
+WEB_SEARCH_ASK = "Search the web for lease or buy."
+SEARCH_KEY = "BSA-verify-search-key-4r7t"
+INWARD_REFUSED = "on this host's own network"
+NO_SEARCH_SAID = "This endpoint cannot search the web for agents."
+
+
+def scenario_web(w: World) -> None:
+    turns: list[Call] = []
+
+    def web_tools() -> list[list[str]]:
+        return [[name for name in c.tools if name in ("web_search", "read_page")] for c in turns]
+
+    def script(c: Call) -> Reply | None:
+        if c.last_user == "ping":
+            return say("pong")
+        if c.speaker != AGENT:
+            return None
+        turns.append(c)
+        if c.last_user.endswith("Say hello."):
+            return say(HELLO)
+        if c.last_user.endswith(WEB_ASK):
+            if not c.tool_results():
+                return call("read_page", url="http://169.254.169.254/latest/meta-data/")
+            return say("That address is refused: " + c.tool_results()[-1][:200])
+        if c.last_user.endswith(WEB_SEARCH_ASK):
+            if not c.tool_results():
+                return call("web_search", query="lease or buy")
+            return say("The search came back: " + c.tool_results()[-1][:200])
+        if c.last_user.endswith("Are you still reading the web?"):
+            return say("No.")
+        return None
+
+    w.model.script = script
+    w.secrets.append(SEARCH_KEY)
+    w.start()
+    first_run(w)
+    settled(w, 1)
+    offered = web_tools()
+    w.check("with only a local endpoint connected, an agent is offered read_page and not a search nothing can run",
+            offered and offered[-1] == ["read_page"], observed=offered)
+
+    write(w, AGENT, WEB_ASK)
+    settled(w, 2, "the page read settles")
+    refused = [c.tool_results()[-1] for c in turns if c.last_user.endswith(WEB_ASK) and c.tool_results()]
+    reached = [a for a in w.egress.attempts if "169.254" in a]
+    w.check("a page at a cloud metadata address is refused on the host, and nothing was sent anywhere",
+            refused and INWARD_REFUSED in refused[-1] and refused[-1].startswith("Error:") and not reached,
+            observed={"refused": bool(refused) and INWARD_REFUSED in refused[-1], "egress": reached},
+            detail=refused[-1][:400] if refused else None)
+
+    ui = w.ui
+    ui.press(ui.one("button", "App settings"))
+    w.wait("Settings opens", lambda: ui.find("region", "Settings"))
+    ui.click("tab", "Provider")
+    w.wait("the Provider pane is shown", lambda: ui.find("heading", "Provider"))
+    w.check("Settings says this endpoint cannot search, and where a key would send a query",
+            NO_SEARCH_SAID in ui.text() and bool(ui.find("textbox", "Web search key")),
+            observed={"said": NO_SEARCH_SAID in ui.text(), "field": bool(ui.find("textbox", "Web search key"))},
+            shot=True)
+    ui.fill("textbox", "Web search key", SEARCH_KEY)
+    ui.click("button", "Save")
+    w.wait("the key is saved", lambda: "using the key here" in ui.text())
+    w.check("with a Brave Search key saved, Settings names Brave Search as where a query goes, and shows only its end",
+            "Agents search with Brave Search" in ui.text() and SEARCH_KEY not in ui.text()
+            and "...4r7t" in ui.text(),
+            observed={"brave": "Agents search with Brave Search" in ui.text(), "hint": "...4r7t" in ui.text()},
+            shot=True)
+    ui.key("Escape")
+    w.wait("Settings closes", lambda: not ui.find("region", "Settings"))
+
+    write(w, AGENT, WEB_SEARCH_ASK)
+    settled(w, 3, "the search settles")
+    offered = web_tools()
+    searched = [a for a in w.egress.attempts if "api.search.brave.com" in a]
+    elsewhere = [a for a in w.egress.attempts if "brave" not in a and "search" in a]
+    w.check("once a key is set the agent is offered web_search, and the query goes to Brave Search and nowhere else",
+            offered[-1] == ["web_search", "read_page"] and searched and not elsewhere,
+            observed={"offered": offered[-1], "egress": w.egress.attempts})
+
+    agent = agent_id(w, AGENT)
+    w.host.call("set_agent_web", id=agent, given=False)
+    write(w, AGENT, "Are you still reading the web?")
+    settled(w, 4, "the last turn settles")
+    w.check("an agent switched off the web is offered neither web tool",
+            web_tools()[-1] == [], observed=web_tools()[-1])
+    no_unscripted(w)
+
+
 LONE_RESULT = """(() => {
   const result = [...document.querySelectorAll('.msg--result')].at(-1);
   return {
@@ -4133,6 +4222,20 @@ SCENARIOS: dict[str, Scenario] = {
         "Home and End reach the first and the last section",
         "Tab goes from the section list into the open panel",
         "the section list is one Tab stop",
+        "every model call was one the scenario scripted",
+    )),
+    "web": Scenario(scenario_web, "With only a local endpoint connected an agent reads a page without a browser "
+                    "and is not offered a search nothing can run; a page on the host's own network is refused "
+                    "with nothing sent; Settings says where a query would go, and once a Brave Search key is saved "
+                    "the agent searches and the query goes to Brave Search alone; switched off, an agent gets "
+                    "neither tool.",
+    (
+        "with only a local endpoint connected, an agent is offered read_page and not a search nothing can run",
+        "a page at a cloud metadata address is refused on the host, and nothing was sent anywhere",
+        "Settings says this endpoint cannot search, and where a key would send a query",
+        "with a Brave Search key saved, Settings names Brave Search as where a query goes, and shows only its end",
+        "once a key is set the agent is offered web_search, and the query goes to Brave Search and nowhere else",
+        "an agent switched off the web is offered neither web tool",
         "every model call was one the scenario scripted",
     )),
     "settings": Scenario(scenario_settings, "A person opens Settings from the gear as a page in the window, with the "

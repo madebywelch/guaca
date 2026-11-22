@@ -292,6 +292,8 @@ export function SettingsPage({ request, onSection, notices }: Props) {
   const [idleMinutes, setIdleMinutes] = useState(initial?.idleMinutes ?? "");
   const [kernelKey, setKernelKey] = useState("");
   const [editingKernelKey, setEditingKernelKey] = useState(false);
+  const [searchKey, setSearchKey] = useState("");
+  const [editingSearchKey, setEditingSearchKey] = useState(false);
   const [browserIdleMinutes, setBrowserIdleMinutes] = useState(initial?.browserIdleMinutes ?? "");
   const [stealth, setStealth] = useState(initial?.stealth ?? settings?.browserStealth ?? false);
   const [timeout, setTimeoutSecs] = useState(initial?.timeout ?? "");
@@ -356,8 +358,8 @@ export function SettingsPage({ request, onSection, notices }: Props) {
     useStore.setState({ settingsDraft: null });
   }, []);
 
-  const currentKeys = useRef({ apiKey, e2bKey, kernelKey });
-  currentKeys.current = { apiKey, e2bKey, kernelKey };
+  const currentKeys = useRef({ apiKey, e2bKey, kernelKey, searchKey });
+  currentKeys.current = { apiKey, e2bKey, kernelKey, searchKey };
 
   const [subscription, setSubscription] = useState<SubscriptionStatus | null>(null);
   const [pendingCode, setPendingCode] = useState<DeviceCode | null>(null);
@@ -412,6 +414,7 @@ export function SettingsPage({ request, onSection, notices }: Props) {
     ...(e2bKey.trim() ? { e2bApiKey: e2bKey.trim() } : {}),
     ...(idleMinutes.trim() ? { computerIdleMinutes: Number(idleMinutes) } : {}),
     ...(kernelKey.trim() ? { kernelApiKey: kernelKey.trim() } : {}),
+    ...(searchKey.trim() ? { searchApiKey: searchKey.trim() } : {}),
     ...(browserIdleMinutes.trim() ? { browserIdleMinutes: Number(browserIdleMinutes) } : {}),
     browserStealth: stealth,
     ...(timeout.trim() ? { requestTimeoutSecs: Number(timeout) } : {}),
@@ -428,6 +431,7 @@ export function SettingsPage({ request, onSection, notices }: Props) {
     apiKey.trim() !== "" ||
     e2bKey.trim() !== "" ||
     kernelKey.trim() !== "" ||
+    searchKey.trim() !== "" ||
     differs(idleMinutes, settings?.computerIdleMinutes) ||
     differs(browserIdleMinutes, settings?.browserIdleMinutes) ||
     differs(timeout, settings?.requestTimeoutSecs) ||
@@ -605,6 +609,8 @@ export function SettingsPage({ request, onSection, notices }: Props) {
       setKernelKey((value) => (value === kernelKey ? "" : value));
       if (e2bKey && currentKeys.current.e2bKey === e2bKey) setEditingE2bKey(false);
       if (kernelKey && currentKeys.current.kernelKey === kernelKey) setEditingKernelKey(false);
+      setSearchKey((value) => (value === searchKey ? "" : value));
+      if (searchKey && currentKeys.current.searchKey === searchKey) setEditingSearchKey(false);
       setIdleMinutes((value) => (value === idleMinutes ? "" : value));
       setBrowserIdleMinutes((value) => (value === browserIdleMinutes ? "" : value));
       setTimeoutSecs((value) => (value === timeout ? "" : value));
@@ -675,9 +681,11 @@ export function SettingsPage({ request, onSection, notices }: Props) {
     setApiKey("");
     setE2bKey("");
     setKernelKey("");
+    setSearchKey("");
     setEditingApiKey(false);
     setEditingE2bKey(false);
     setEditingKernelKey(false);
+    setEditingSearchKey(false);
     setIdleMinutes("");
     setBrowserIdleMinutes("");
     setTimeoutSecs("");
@@ -1169,6 +1177,21 @@ export function SettingsPage({ request, onSection, notices }: Props) {
                     </button>
                   </div>
                 )}
+
+                <ApiKeyField
+                  label="Web search key"
+                  title="Agents search the web through the provider in use when it can: a ChatGPT plan, the claude program or OpenRouter. Any other endpoint, a local model included, searches only with a Brave Search or Tavily key here, and each query then goes to that service. Reading a page needs no key: this host fetches it."
+                  stored={settings?.searchKeySet ?? false}
+                  hint={settings?.searchKeyHint ?? ""}
+                  value={searchKey}
+                  onChange={setSearchKey}
+                  editing={editingSearchKey}
+                  onEdit={setEditingSearchKey}
+                  busy={busy}
+                  placeholder="Brave Search or Tavily key (optional)"
+                >
+                  {settings?.searchesWith || undefined}
+                </ApiKeyField>
 
                 <label className="field">
                   <span className="field__label">Give up on a call after</span>
