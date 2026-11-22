@@ -699,6 +699,16 @@ describe("a first task chosen while the host is still coming", () => {
     for (const [, value] of store.setItem.mock.calls) expect(String(value)).not.toContain(KEY);
   });
 
+  it("says before the host exists that Start task can be pressed now and hires only the task's one agent", () => {
+    waiting();
+    toReview();
+    expect(
+      screen.getByText(
+        "Start task hires Product Manager and sends your brief to it as soon as your host is ready, so you can press it now. It answers alone, so your first result waits on nobody else.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("hires only the task's one agent when a queued Start fires, and leaves the crew offer a Start after the host would", async () => {
     early.fields = fields();
     queue().unmount();
