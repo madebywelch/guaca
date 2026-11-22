@@ -35,6 +35,8 @@ const PROBE_DEADLINE_MS = 15_000;
 const ENGINE_POLL_MS = 3_000;
 const ENGINE_POLLS = 100;
 const PROGRESS_POLL_MS = 1_000;
+const DOCKER_POLL_MS = 3_000;
+const USABLE = ["ready", "running", "stopped"];
 
 const PHASES: Record<HostPhase | "connecting", string> = {
   preparing: "Setting up your host on this Mac",
@@ -691,21 +693,49 @@ export function HostChoice({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(initialError);
   const [imageFailed, setImageFailed] = useState(false);
+  const [cameUp, setCameUp] = useState(false);
+  const [checks, setChecks] = useState(0);
   const refresh = useCallback(async () => {
     try {
-      setDocker(await localHost.status());
+      const status = await localHost.status();
+      setDocker(status);
       setExisting(await localHost.existing().catch(() => []));
+      return USABLE.includes(status.state);
     } catch (cause) {
       setDocker({
         state: "unavailable",
         message: errorMessage(cause),
         updateAvailable: false,
       });
+      return false;
+    } finally {
+      setChecks((n) => n + 1);
     }
   }, []);
   useEffect(() => {
     if (desktop && mode === "local") void refresh();
   }, [mode, refresh]);
+  const watching =
+    desktop &&
+    !!onConnected &&
+    mode === "local" &&
+    !busy &&
+    !!docker &&
+    !USABLE.includes(docker.state);
+  useEffect(() => {
+    if (!watching) return;
+    const timer = setTimeout(() => {
+      void refresh().then((up) => {
+        if (up) setCameUp(true);
+      });
+    }, DOCKER_POLL_MS);
+    return () => clearTimeout(timer);
+  }, [watching, checks, refresh]);
+  useEffect(() => {
+    if (!cameUp) return;
+    setCameUp(false);
+    if (mode === "local" && !busy && !existing.length && !docker?.previous) onStartHere?.();
+  }, [cameUp, mode, busy, existing, docker, onStartHere]);
   useEffect(() => {
     if (changing) address.current?.focus();
   }, [changing]);
@@ -782,7 +812,7 @@ export function HostChoice({
     setError("");
     requestAnimationFrame(() => change.current?.focus());
   };
-  const usable = !!docker && ["ready", "running", "stopped"].includes(docker.state);
+  const usable = !!docker && USABLE.includes(docker.state);
   const failed = showUpdate && docker?.operation?.error ? docker.operation : null;
 
   return (
@@ -898,6 +928,13 @@ export function HostChoice({
                   Check again
                 </button>
               </div>
+            )}
+            {watching && (
+              <p className="field__hint">
+                {onStartHere
+                  ? "Guaca checks Docker every few seconds and carries on by itself once it is running."
+                  : "Guaca checks Docker every few seconds while this is open."}
+              </p>
             )}
             {showUpdate && docker?.updateAvailable && (
               <div className="host-status__update">
