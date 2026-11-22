@@ -11,13 +11,23 @@ export const FIRST_TASKS = [
     description: "Compare options and make the tradeoffs clear.",
     group: [
       {
-        agent: "chief-of-staff",
-        role: "Takes your brief, asks both colleagues at once, and brings back one recommendation.",
+        agent: "financial-analyst",
+        role: "Works out what each option costs and comes back with one recommendation.",
       },
-      { agent: "market-researcher", role: "Reads what current sources say about each option." },
-      { agent: "financial-analyst", role: "Works out the cost and what would change the answer." },
     ],
-    brief: `Help me decide whether to buy or lease my next car. Ask Market Researcher and Financial Analyst at the same time: Market Researcher for what current sources say about each option, Financial Analyst for the cost over three years and what would change the answer. When both have answered, come back to me with one recommendation that says where they disagreed. ${ASK_ONLY_IF_STUCK}`,
+    brief: `Help me decide whether to buy or lease my next car. Work out what each costs over three years, tell me which you would pick and why, and say what would change the answer. Where you need a figure I have not given, assume a typical one and say so. ${ASK_ONLY_IF_STUCK}`,
+    crew: {
+      group: [
+        {
+          agent: "chief-of-staff",
+          role: "Asks both colleagues at once and brings back one recommendation.",
+        },
+        { agent: "market-researcher", role: "Reads what current sources say about each option." },
+      ],
+      offer:
+        "For a deeper pass, Chief of Staff can ask Market Researcher what current sources say, check it with Financial Analyst, and bring back one recommendation.",
+      brief: `Take a deeper pass at what I asked Financial Analyst, which has answered once: "{brief}" Ask Financial Analyst and Market Researcher at the same time: Financial Analyst to test its answer and say what would change it, Market Researcher for what current sources say about each option. When both have answered, come back to me with one recommendation that says where they disagreed. ${ASK_ONLY_IF_STUCK}`,
+    },
   },
   {
     id: "plan",
@@ -26,34 +36,46 @@ export const FIRST_TASKS = [
     description: "Turn an idea into a manageable first step.",
     group: [
       {
-        agent: "chief-of-staff",
-        role: "Takes your brief, asks both colleagues at once, and brings back one plan.",
-      },
-      {
         agent: "product-manager",
-        role: "Finds the smallest plan that would work, and its first step.",
+        role: "Finds the smallest plan that would work, its first step, and its risks.",
       },
-      { agent: "qa-tester", role: "Looks for the ways that plan could go wrong." },
     ],
-    brief: `Help me plan a neighborhood cleanup day for about 30 volunteers next month. Ask Product Manager and QA Tester at the same time: Product Manager for the smallest plan that would work and its first step, QA Tester for the ways that plan could go wrong. When both have answered, come back to me with one plan, its first step, and the risks worth fixing first. ${ASK_ONLY_IF_STUCK}`,
+    brief: `Help me plan a neighborhood cleanup day for about 30 volunteers next month. Give me the smallest plan that would work, its first step, and the risks worth fixing first. ${ASK_ONLY_IF_STUCK}`,
+    crew: {
+      group: [
+        {
+          agent: "chief-of-staff",
+          role: "Asks both colleagues at once and brings back one plan.",
+        },
+        { agent: "qa-tester", role: "Looks for the ways that plan could go wrong." },
+      ],
+      offer:
+        "For a deeper pass, Chief of Staff can ask QA Tester how this plan could go wrong, have Product Manager tighten it, and bring back one plan.",
+      brief: `Take a deeper pass at what I asked Product Manager, which has answered once: "{brief}" Ask Product Manager and QA Tester at the same time: Product Manager to tighten its plan and first step, QA Tester for the ways that plan could go wrong. When both have answered, come back to me with one plan, its first step, and the risks worth fixing first. ${ASK_ONLY_IF_STUCK}`,
+    },
   },
   {
     id: "write",
     title: "Draft content",
     groupName: "Writing",
     description: "Find the words for something you need to say.",
-    group: [
-      {
-        agent: "chief-of-staff",
-        role: "Takes your brief, asks both colleagues at once, and brings back one draft.",
-      },
-      { agent: "content-marketer", role: "Writes a warm first draft." },
-      {
-        agent: "technical-writer",
-        role: "Checks it says what people need to know, and nothing unclear.",
-      },
-    ],
-    brief: `Help me write a short note telling my team that our weekly meeting moves from Monday to Thursday morning, starting next week. Ask Content Marketer and Technical Writer at the same time: Content Marketer for a warm, friendly draft, Technical Writer for the facts people need and anything that reads as unclear. When both have answered, come back to me with one draft I can send. ${ASK_ONLY_IF_STUCK}`,
+    group: [{ agent: "content-marketer", role: "Writes a warm draft you can send." }],
+    brief: `Help me write a short note telling my team that our weekly meeting moves from Monday to Thursday morning, starting next week. Keep it warm and friendly, and give me one draft I can send. ${ASK_ONLY_IF_STUCK}`,
+    crew: {
+      group: [
+        {
+          agent: "chief-of-staff",
+          role: "Asks both colleagues at once and brings back one draft.",
+        },
+        {
+          agent: "technical-writer",
+          role: "Checks it says what people need to know, and nothing unclear.",
+        },
+      ],
+      offer:
+        "For a deeper pass, Chief of Staff can ask Technical Writer what reads as unclear, have Content Marketer polish the draft, and bring back one you can send.",
+      brief: `Take a deeper pass at what I asked Content Marketer, which has answered once: "{brief}" Ask Content Marketer and Technical Writer at the same time: Content Marketer to polish its draft, Technical Writer for the facts people need and anything that reads as unclear. When both have answered, come back to me with one draft I can send. ${ASK_ONLY_IF_STUCK}`,
+    },
   },
   {
     id: "own",
@@ -141,4 +163,53 @@ export function holdStart(value: HeldStart | null): void {
 
 export function waitsForHost(provider: Provider): boolean {
   return provider !== "compatible";
+}
+
+type Crew = Extract<(typeof FIRST_TASKS)[number], { crew: unknown }>["crew"];
+
+export function crewFor(task: FirstTask["task"]): Crew | null {
+  const entry = FIRST_TASKS.find((one) => one.id === task);
+  return entry && "crew" in entry ? entry.crew : null;
+}
+
+export function named(text: string, names: ReadonlyMap<string, string>): string {
+  let out = text;
+  for (const [preset, name] of names) if (preset !== name) out = out.replaceAll(preset, name);
+  return out;
+}
+
+export interface CrewOffer {
+  task: FirstTask["task"];
+  agentId: string;
+  brief: string;
+  key?: string;
+}
+
+export function readCrewOffer(): CrewOffer | null {
+  try {
+    const value = JSON.parse(
+      localStorage.getItem(`guaca.crewOffer.${workspaceOrigin()}`) ?? "null",
+    );
+    if (
+      !value ||
+      !crewFor(value.task) ||
+      typeof value.agentId !== "string" ||
+      typeof value.brief !== "string"
+    )
+      return null;
+    return {
+      task: value.task,
+      agentId: value.agentId,
+      brief: value.brief,
+      ...(typeof value.key === "string" && value.key ? { key: value.key } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function saveCrewOffer(value: CrewOffer | null): void {
+  const key = `guaca.crewOffer.${workspaceOrigin()}`;
+  if (value) localStorage.setItem(key, JSON.stringify(value));
+  else localStorage.removeItem(key);
 }

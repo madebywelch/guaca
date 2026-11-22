@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { useEffect, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { saveCrewOffer } from "../lib/onboarding";
 import { DEFAULT_PREFS } from "../lib/prefs";
 import { useStore } from "../lib/store";
 import type { LiveCall } from "../lib/trail";
@@ -375,6 +376,49 @@ describe("who said what", () => {
     expect(screen.queryByRole("article", { name: /^Result from/ })).toBeNull();
     act(() => useStore.setState({ runningKnown: true }));
     expect(screen.getByRole("article", { name: /^Result from Manager/ })).toBeTruthy();
+  });
+
+  it("offers the crew under the first agent's result only once that result has landed", () => {
+    saveCrewOffer({ task: "research", agentId: MANAGER, brief: "Buy or lease?" });
+    const exchange = [
+      envelope({ parts: [{ type: "text", text: "Buy or lease?" }] }),
+      envelope({
+        from: { kind: "agent", id: MANAGER },
+        to: { kind: "human" },
+        parts: [{ type: "text", text: "Lease." }],
+      }),
+    ];
+    useStore.setState({
+      running: [{ runId: "r1", agentId: MANAGER, groupId: "g", startedAt: 0, note: null }],
+      runningKnown: true,
+    });
+    const view = open(exchange);
+    expect(screen.queryByRole("region", { name: "A deeper pass" })).toBeNull();
+    act(() => useStore.setState({ running: [] }));
+    const offer = screen.getByRole("region", { name: "A deeper pass" });
+    const result = screen.getByRole("article", { name: /^Result from Manager/ });
+    expect(result.compareDocumentPosition(offer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(offer.textContent).toContain("check it with Manager");
+    act(() => useStore.setState({ activity: { [MANAGER]: { state: "thinking" } as Activity } }));
+    expect(screen.queryByRole("region", { name: "A deeper pass" })).toBeNull();
+    view.unmount();
+    saveCrewOffer(null);
+  });
+
+  it("offers no crew in a conversation the first task did not start", () => {
+    saveCrewOffer({ task: "research", agentId: CHEF, brief: "Buy or lease?" });
+    useStore.setState({ running: [], runningKnown: true });
+    open([
+      envelope({ parts: [{ type: "text", text: "Buy or lease?" }] }),
+      envelope({
+        from: { kind: "agent", id: MANAGER },
+        to: { kind: "human" },
+        parts: [{ type: "text", text: "Lease." }],
+      }),
+    ]);
+    expect(screen.getByRole("article", { name: /^Result from Manager/ })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "A deeper pass" })).toBeNull();
+    saveCrewOffer(null);
   });
 
   it("says when the conversation picked up again, where it did", () => {

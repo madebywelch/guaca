@@ -2022,6 +2022,31 @@ in memory, warns the operator, and guards reload until saving works again.
 The runtime still owns
 every agent and turn; the first-run page only forwards the operator's intent.
 
+A suggested task hires one agent, the specialist the brief needs, and its brief
+names no colleague. The first result is the one a new person waits for, and a
+coordinator that fans out waits on every colleague's model call and on its own
+again to put the answers together: five calls and four messages between agents
+before anything lands, at best. Alone in a fresh workspace the agent has nobody
+to message, so a single answer is a fact of the roster rather than a request in
+the prompt, and the presets are not touched to get it. The coordinator is not
+the one hired first: its preset prefers delegating and keeps its own replies to
+two sentences, which alone is a stub. A task in the person's own words still
+hires the group of three, because sorting an unknown brief between colleagues
+is the coordinator's job.
+
+The rest of the group is offered after the result, not before it. Once the
+first agent's run has ended in a result, one line under it in that conversation
+says who would join and what they would add, with Bring them in and Not now. It
+is not a notification, a question or a dialog, and it is not drawn while the
+agent is working. Bring them in hires the coordinator and the other colleague
+into the same group under one key, then sends the coordinator a deeper pass that
+quotes the first brief and asks both colleagues at once; the key is saved before
+the hire, so a lost reply or a reload retries the same hire and the same message
+instead of adding more. Not now forgets the offer on this device. The offer
+lives beside the draft, scoped to the host, and `CrewOffer.test.tsx` covers it.
+A Start queued while the host came up is the same Start once it fires: it hires
+the one agent and leaves the same offer.
+
 Two things on that page say what they are doing rather than leaving it to be
 worked out. Continue cannot be pressed with an empty brief, so the row beside it
 carries the reason — pick one of the tasks, or write your own — and the button is
@@ -2037,7 +2062,7 @@ install it, or that this deployment does not offer it.
 Start task names the group it hires into for the task, before hiring: Research,
 Planning or Writing, and My group for a task in the person's own words. The
 group a fresh workspace holds is the one the migrations seed, called Everyone,
-and every header said Everyone about a group of three hired for one decision.
+and every header said Everyone about a group hired for one decision.
 Only a group with nobody in it is renamed, and a rename that fails stops Start
 before anyone is hired, so a retry renames and hires in the same order.
 
@@ -2053,7 +2078,7 @@ too. A message placed above a bar held to the bottom of the pane lands under
 the bar once the step is taller than the pane: a failed Start task did, at 1280
 by 820, and looked like a button that did nothing. In a window 45rem tall or
 less the steps sit closer together and the brief is three control heights
-tall, so the Start step's three colleagues, what each is for and the brief
+tall, so the Start step's agents, what each is for and the brief
 clear the bar at 900 by 700. The bar is painted with the page's own ground, so it reads as the
 foot of the step rather than a slab over it.
 
