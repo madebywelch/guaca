@@ -1152,8 +1152,9 @@ deleted, the same choice picks a live conversation. First run still opens the
 onboarding screen.
 
 Working covers runs still in flight and agents thinking or queued. Has a result
-shows an unread result and clears when its conversation opens. Failed,
-interrupted and stopped work says Needs attention while it is unread. Results
+shows an unread result and clears when its conversation opens. Failed work says
+Task failed, and interrupted and stopped work says Needs attention, while it is
+unread. Results
 remain in the conversation and For you. The working line in the conversation
 keeps the host's clock and Stop control. Calendar and an agent's Routines tab
 show scheduled work without an hour ruler in the window.
@@ -2888,8 +2889,8 @@ one, and a browser showing anything does not.
 
 **What it shows is the window's, smaller.** The desk from For you, card for card,
 with "Open conversation" bringing the window back at that conversation. Under it, For
-you's Finished lines, five of them and then one line that says how many more and
-opens For you; a line brings the window back at its agent's channel and marks the
+you's Did not finish lines, each with Try again, then its Finished lines, five of
+each and then one line that says how many more and opens For you; a line brings the window back at its agent's channel and marks the
 run seen. The rail's rows,
 ordered for the question the panel is opened to answer: whoever is working,
 then whoever spoke last, then the paused. A group named on a row only when there

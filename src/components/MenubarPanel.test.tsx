@@ -451,16 +451,19 @@ describe("finished work in the panel", () => {
     useStore.setState({ outcomes: [outcome("r1", { status: "interrupted" })] });
     render(<MenubarPanel ready />);
 
-    const line = within(screen.getByRole("region", { name: "Finished" })).getByRole("button", {
-      name: /Report r1/,
-    });
+    const line = within(screen.getByRole("region", { name: "Did not finish" })).getByRole(
+      "button",
+      {
+        name: /Report r1/,
+      },
+    );
     expect(within(line).getByText("interrupted 2h")).toBeTruthy();
     await act(async () => {
       fireEvent.click(line);
     });
     expect(mocks.markOutcomesSeen).toHaveBeenCalledWith({ runIds: ["r1"] });
     expect(mocks.openWindow).toHaveBeenCalledWith({ kind: "agent", id: "id-Scout" });
-    expect(screen.queryByRole("region", { name: "Finished" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Did not finish" })).toBeNull();
   });
 
   it("says on an agent's row that it finished something, with the headline on hover", () => {

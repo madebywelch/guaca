@@ -106,8 +106,110 @@ describe("a call answered", () => {
     });
   });
 
+  it("names the document it answers from, so a caller can tell a reload happened", () => {
+    const answer = run({ do: "ready" }, page(""));
+    expect(answer).toMatchObject({
+      ok: true,
+      value: { loaded: "complete", since: performance.timeOrigin },
+    });
+  });
+
   it("answers a call it does not know instead of throwing", () => {
     const answer = run({ do: "format" } as never, page(""));
     expect(answer.ok).toBe(false);
+  });
+});
+
+function placed(element: Element, left: number, top: number, width: number, height: number): void {
+  element.getBoundingClientRect = () =>
+    ({
+      left,
+      top,
+      width,
+      height,
+      right: left + width,
+      bottom: top + height,
+      x: left,
+      y: top,
+    }) as DOMRect;
+}
+
+function inner(element: Element, values: Record<string, number>): void {
+  for (const [key, value] of Object.entries(values)) {
+    Object.defineProperty(element, key, { configurable: true, value });
+  }
+}
+
+describe("where things are drawn, for layout checks", () => {
+  it("refuses to measure what is not shown", () => {
+    expect(run({ do: "box", role: "dialog", name: "Settings" }, page(""))).toEqual({
+      ok: false,
+      error: 'no dialog named "Settings" is shown',
+    });
+  });
+
+  it("gives an element's edges, its scroll bar gutter and the window's size", () => {
+    const doc = page(
+      `<div role="tabpanel" aria-label="General" style="border-right: 1px solid">x</div>`,
+    );
+    const pane = doc.querySelector("div") as Element;
+    placed(pane, 434, 120, 598, 500);
+    inner(pane, { offsetWidth: 598, clientWidth: 582, clientLeft: 0 });
+    expect(run({ do: "box", role: "tabpanel", name: "General" }, doc)).toEqual({
+      ok: true,
+      value: {
+        left: 434,
+        right: 1032,
+        top: 120,
+        bottom: 620,
+        width: 598,
+        gutter: 15,
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+      },
+    });
+  });
+});
+
+describe("where the focus is, and whether its ring is drawn whole", () => {
+  function row(offset: string, outline = "solid"): { doc: Document; button: HTMLElement } {
+    const doc = page(
+      `<div id="list" style="overflow-x: auto; overflow-y: auto"><button style="outline-width: 2px; outline-style: ${outline}; outline-offset: ${offset}">Researcher</button></div>`,
+    );
+    const list = doc.getElementById("list") as Element;
+    const button = doc.querySelector("button") as HTMLElement;
+    placed(list, 0, 0, 360, 200);
+    inner(list, { clientWidth: 360, clientHeight: 200, clientLeft: 0, clientTop: 0 });
+    placed(button, 0, 40, 360, 44);
+    button.focus();
+    return { doc, button };
+  }
+
+  it("says a ring that a scrolling parent cuts off is clipped", () => {
+    const { doc } = row("2px");
+    expect(run({ do: "focus" }, doc)).toEqual({
+      ok: true,
+      value: { role: "button", name: "Researcher", ring: true, clipped: true },
+    });
+  });
+
+  it("says a ring drawn inside the row is whole", () => {
+    const { doc } = row("-2px");
+    expect(run({ do: "focus" }, doc)).toEqual({
+      ok: true,
+      value: { role: "button", name: "Researcher", ring: true, clipped: false },
+    });
+  });
+
+  it("says no ring is drawn when the focused element paints no outline, whatever :focus-visible says", () => {
+    const { doc, button } = row("2px", "none");
+    vi.spyOn(button, "matches").mockImplementation((selector) => selector === ":focus-visible");
+    expect(run({ do: "focus" }, doc)).toEqual({
+      ok: true,
+      value: { role: "button", name: "Researcher", ring: false, clipped: false },
+    });
+  });
+
+  it("answers nothing when nothing has the focus", () => {
+    expect(run({ do: "focus" }, page("<p>Quiet</p>"))).toEqual({ ok: true, value: null });
   });
 });

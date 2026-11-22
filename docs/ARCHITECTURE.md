@@ -934,6 +934,11 @@ Two rules keep it honest:
 
 What survives all three becomes a notice carrying the `cause` of the turn, which
 is what the operator's "Try again" sends again, as a new run at the original hop.
+The notice's text is `LlmError::plainly`: what happened and what to do next, in
+words a person reads, mapped from the error's kind and never from a provider's
+name. The error's own line (status code and the provider's words) goes in the
+notice's `detail`, which the conversation shows behind Details and nothing
+renders into a prompt.
 
 ## A thought is shown and never kept
 

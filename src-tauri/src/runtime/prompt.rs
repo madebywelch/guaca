@@ -3255,7 +3255,8 @@ mod tests {
             artifact: None,
             ruled: None,
         };
-        let paused = Part::Notice { kind: NoticeKind::Lifecycle, text: "stopped here".into() };
+        let paused =
+            Part::Notice { kind: NoticeKind::Lifecycle, text: "stopped here".into(), detail: None };
         let brief = resumed(&[
             record(vec![sent, Part::text("Asked the researcher."), paused.clone()]),
             record(vec![failed, paused]),
@@ -3287,7 +3288,8 @@ mod tests {
     #[test]
     fn a_turn_stopped_before_it_did_anything_is_picked_up_as_though_it_never_started() {
         use crate::domain::envelope::NoticeKind;
-        let paused = Part::Notice { kind: NoticeKind::Lifecycle, text: "stopped here".into() };
+        let paused =
+            Part::Notice { kind: NoticeKind::Lifecycle, text: "stopped here".into(), detail: None };
         assert_eq!(resumed(&[record(vec![paused])]), None);
         assert_eq!(resumed(&[]), None);
     }

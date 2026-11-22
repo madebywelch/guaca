@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
@@ -11,6 +11,7 @@ const agentComputer = vi.fn<(id: string) => Promise<Computer | null>>();
 const agentBrowser = vi.fn<(id: string) => Promise<Browser | null>>();
 const agentRoutines = vi.fn<() => Promise<never[]>>();
 const agentMemory = vi.fn<(id: string) => Promise<string>>();
+const retryTurn = vi.fn<(agent: string, message: string) => Promise<string>>();
 
 vi.mock("../lib/ipc", () => ({
   api: {
@@ -32,6 +33,7 @@ vi.mock("../lib/ipc", () => ({
     deleteAgentComputer: vi.fn(),
     startAgentBrowser: vi.fn(),
     stopAgentBrowser: vi.fn(),
+    retryTurn: (agent: string, message: string) => retryTurn(agent, message),
   },
 }));
 
@@ -208,6 +210,45 @@ describe("the agent's page, past the conversation", () => {
       "Routines",
       "Profile",
     ]);
+  });
+
+  it("offers Try again beside a failed last run, and sends the message that failed", async () => {
+    retryTurn.mockResolvedValue("r2");
+    useStore.setState({
+      agents: [card("a1", "Cook")],
+      activity: { a1: { state: "idle" } },
+      activeRun: {},
+      trail: {},
+      messages: {
+        a1: [
+          {
+            id: "m2",
+            runId: "r1",
+            channelId: "a1",
+            trust: "system",
+            hop: 0,
+            expectsReply: false,
+            intent: "courtesy",
+            cause: "m1",
+            from: { kind: "system" },
+            to: { kind: "agent", id: "a1" },
+            parts: [
+              {
+                type: "notice",
+                kind: "upstreamError",
+                text: "Cook could not reply: the provider had a problem on its side.",
+              },
+            ],
+            createdAt: Date.now(),
+          },
+        ],
+      },
+    });
+    render(<AgentPanel section="now" agent={card("a1", "Cook")} onEditProfile={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
+    expect(retryTurn).toHaveBeenCalledWith("a1", "m1");
+    expect(await screen.findByRole("button", { name: "Sent again" })).toBeTruthy();
   });
 
   it("says the last run failed, and when, for an idle agent whose run failed", async () => {

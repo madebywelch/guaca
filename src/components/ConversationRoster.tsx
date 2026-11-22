@@ -40,13 +40,15 @@ export function ConversationRoster({
       ? "Has a question"
       : working.has(agent.id) || state === "thinking" || state === "queued"
         ? "Working"
-        : result === "failed" || result === "interrupted" || result === "stopped"
-          ? "Needs attention"
-          : result === "done"
-            ? "Has a result"
-            : agent.lifecycle === "paused"
-              ? "Paused"
-              : "Idle";
+        : result === "failed"
+          ? "Task failed"
+          : result === "interrupted" || result === "stopped"
+            ? "Needs attention"
+            : result === "done"
+              ? "Has a result"
+              : agent.lifecycle === "paused"
+                ? "Paused"
+                : "Idle";
     const key = index < 9 ? formatCombo({ key: String(index + 1), mod: true }) : undefined;
     return { agent, index, status, key };
   });

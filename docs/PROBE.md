@@ -187,7 +187,10 @@ with the same `id` and either `value` or `error`.
 
 The bridge answers `ready`, `view` (which conversation is open and the agents
 the store holds), `attach` (save a Host and reload, which is what the host
-chooser does), `find`, `click`, `type`, `key` and `text`. Elements are named
+chooser does), `find`, `click`, `type`, `key`, `text`, `box` (an element's edges,
+its scroll bar gutter and the window's size) and `focus` (the focused element's
+role and name, whether it paints an outline ring, and whether a clipping parent
+cuts that ring off). Elements are named
 by role and accessible name, as a screen reader would read them:
 `{"do": "click", "role": "button", "name": "Send a test notification"}`. A name
 that matches nothing is answered with the names that are shown; one that
@@ -313,11 +316,20 @@ keeps a walk of the tree to a fraction of a second.
 | `refused` | Screen: a question whose banner the system refuses is given back by the window, pushed once although the window is present, and not taken again by that window. |
 | `escape` | Screen: with the window closed and Finder in front, a real click on the icon, through the window server, opens the panel and gives it the keyboard; a real Escape closes it, and Finder is in front again. The hand-back is asserted only once the panel had the keyboard. |
 | `draft` | Screen: a draft typed to one agent in the panel is not in another agent's box and is still there after going back, and after the panel closes and opens; read through Accessibility, as assistive technology reads it. |
+| `newagent` | Screen: the window opens at 1280 by 820; New agent shows exactly one Create agent button in the accessibility tree, inside the window without scrolling, and an Accessibility press on it creates the agent. A form taller than the window once pushed the button below its bottom edge, where only scrolling could reach it. |
+| `menuanswer` | Screen: with a question from the stand-in model waiting, real Command K, Tab and Return, posted through the window server, answer it. Real keys go through WebKit's own keyboard handling, which the Linux run in Chromium does not exercise. |
+| `settingstabs` | Screen: in Settings, a real arrow key moves along the sections, the next real Tab leaves them, and Shift Tab comes back to the section chosen, so the sections are one Tab stop. |
+| `scrollbars` | Screen: the app launched twice, with `-AppleShowScrollBars Always` and then `WhenScrolling` for that process alone, never the global preference. The Settings section list, the General section, the Your name field and the Provider pane are as wide and at the same place in both, and New agent is centered on the window and as wide; the section list's gutter proves each mode took. In both, the menu bar panel opened by a real click draws no focus ring, and a real Tab draws a whole one on an agent row. Two layout changes passed Linux and moved on the Mac, where classic scroll bars take room. |
+| `nokey` | Screen: with no API key and a seeded group, the window sized to 900 by 700 through Accessibility, Settings opened in light and then dark, with classic and then overlay scroll bars. Each time the section list ends inside the window, all thirteen sections lie inside it, and the "Add an API key" banner starts right of the list, in the content column. Above the page, that banner once pushed About out of view at this size. |
+| `trayquestion` | Screen: the menu bar icon read through Accessibility (its tooltip and count) and captured from its own frame. With nothing waiting it has no amber; with the stand-in model's question waiting it is amber, a dark outline meets the amber on at least four in five of its sides, a dark eye sits inside it, the tooltip says Researcher is waiting on you and the count reads 1; while the answer is held behind Undo, with the question still on the host, the amber and the tooltip clear; Undo brings both back. On a dark menu bar the bar itself passes for the outline, so the outline is only proven on a light one. |
 
 The screen scenarios press system UI found by accessibility role and name, only
 inside the group whose text names the test build, and only while nobody has
 touched the keyboard or pointer for five seconds; otherwise the run is
-reported as not run rather than forced. They need Accessibility (and, for
+reported as not run rather than forced. A notification banner is pressed only
+once its frame lies wholly on the main display and is unchanged since the
+previous read, so a banner still sliding in is never pressed, and a press that
+fails is not repeated. These scenarios need Accessibility (and, for
 `capture`, Screen Recording) for the app that runs the command, and fail with
 that reason until it has them. macOS grants both to the responsible process:
 the terminal a person runs the command in, or the agent or service that
