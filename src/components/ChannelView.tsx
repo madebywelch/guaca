@@ -37,6 +37,7 @@ import { Answering } from "./HtmlArtifact";
 import { Icon } from "./Icon";
 import { MessageItem, ResultItem, StreamingMessage, WhenRow } from "./MessageItem";
 import { PairThread } from "./PairThread";
+import { SeasonGarland } from "./Seasonal";
 import { ActiveTaskMaps, TaskMapCard, useTaskMaps } from "./TaskMap";
 import { TrailRow } from "./Trail";
 import { TurnWork } from "./TurnWork";
@@ -240,6 +241,7 @@ export function ChannelView({
         ) : (
           <h1 className="pane__title">Channel unavailable</h1>
         )}
+        <SeasonGarland />
       </header>
 
       {agent && view !== "conversation" && view !== "now" && (

@@ -83,6 +83,7 @@ export function Brand({ waiting }: { waiting: boolean }) {
               gesture={cue.gesture}
               seed={seat.seed}
               title=""
+              plain
             />
           </span>
         ))}

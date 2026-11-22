@@ -95,6 +95,31 @@ export const ATTENTIONS: Record<AttentionKey, Attention> = {
 
 export const CONTRASTS: readonly ContrastLevel[] = ["standard", "more"];
 
+export type Season = "thanksgiving";
+
+export const SEASONS: Record<Season, { h: number; c: number; system: { h: number; c: number } }> = {
+  thanksgiving: { h: 74, c: 0.0156, system: { h: 47, c: 0.075 } },
+};
+
+export function takesSeason(theme: Theme): boolean {
+  return (
+    theme.grays === "neutral" &&
+    theme.temperature === "plain" &&
+    theme.contrast === "standard" &&
+    theme.attention === "amber"
+  );
+}
+
+const STEADY = [
+  "--attention",
+  "--attention-wash",
+  "--attention-fill",
+  "--on-attention-fill",
+  "--danger",
+  "--danger-fill",
+  "--on-danger-fill",
+] as const;
+
 const GROUNDS: Record<Surface, Record<ContrastLevel, Record<string, number>>> = {
   light: {
     standard: {
@@ -231,11 +256,12 @@ export const THEME_TOKENS = [
 export type ThemeToken = (typeof THEME_TOKENS)[number];
 export type Tokens = Record<ThemeToken, string>;
 
-export function themeTokens(theme: Theme, surface: Surface): Tokens {
+export function themeTokens(theme: Theme, surface: Surface, season: Season | null = null): Tokens {
   const dark = surface === "dark";
   const base = GROUNDS[surface][theme.contrast];
+  const palette = season && takesSeason(theme) ? SEASONS[season] : null;
   const ladder =
-    dark || theme.contrast !== "standard"
+    dark || palette || theme.contrast !== "standard"
       ? base
       : theme.grays === "slate"
         ? {
@@ -257,15 +283,15 @@ export function themeTokens(theme: Theme, surface: Surface): Tokens {
             }
           : base;
   const ratio = RATIOS[theme.contrast];
-  const { h, c } = GRAYS[theme.grays];
-  const climate = TEMPERATURES[theme.temperature];
+  const { h, c } = palette ?? GRAYS[theme.grays];
+  const climate = TEMPERATURES[palette ? "warm" : theme.temperature];
   const lift = dark ? 0 : climate.lift;
   const ground = (name: string) =>
     hex(
       Math.min(1, Math.max(dark ? 0.03 : 0, (ladder[name] as number) + lift)),
       c *
         (TINT_DEFAULT[name] ?? 1) *
-        (theme.grays === "slate" || theme.grays === "avocado" ? 1 : climate.tint),
+        (!palette && (theme.grays === "slate" || theme.grays === "avocado") ? 1 : climate.tint),
       h,
     );
 
@@ -309,18 +335,19 @@ export function themeTokens(theme: Theme, surface: Surface): Tokens {
   const attention = ATTENTIONS[theme.attention];
   const attentionFill = hex(attention.fill, attention.c, attention.h);
   const dangerFill = hex(DANGER_FILL.L, DANGER_FILL.c, DANGER_FILL.h);
-  const systemHue =
-    theme.grays === "neutral"
+  const systemHue = palette
+    ? palette.system.h
+    : theme.grays === "neutral"
       ? 295
       : theme.grays === "avocado"
         ? 210
         : theme.grays === "slate"
           ? 255
           : 237;
-  const systemChroma = theme.grays === "warm" ? 0.045 : 0.16;
+  const systemChroma = palette ? palette.system.c : theme.grays === "warm" ? 0.045 : 0.16;
   const system = solve(systemChroma, systemHue, worst, ratio.system, dark ? 0.75 : 0.39, dark);
 
-  return {
+  const tokens: Tokens = {
     ...rail,
     "--rail-text": text,
     "--rail-muted": muted,
@@ -341,14 +368,18 @@ export function themeTokens(theme: Theme, surface: Surface): Tokens {
     "--danger-fill": dangerFill,
     "--on-danger-fill": onFill(dangerFill),
   };
+  if (!palette) return tokens;
+  const everyday = themeTokens(theme, surface);
+  for (const name of STEADY) tokens[name] = everyday[name];
+  return tokens;
 }
 
-export function themeCss(theme: Theme): string {
+export function themeCss(theme: Theme, season: Season | null = null): string {
   const block = (selector: string, tokens: Tokens) =>
     `${selector} {\n${THEME_TOKENS.map((name) => `  ${name}: ${tokens[name]};`).join("\n")}\n}`;
   return [
-    block(":root", themeTokens(theme, "light")),
-    block(':root[data-surface="dark"]', themeTokens(theme, "dark")),
+    block(":root", themeTokens(theme, "light", season)),
+    block(':root[data-surface="dark"]', themeTokens(theme, "dark", season)),
   ].join("\n");
 }
 

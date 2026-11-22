@@ -8,6 +8,7 @@ import { numbered } from "../lib/rail";
 import { useStore } from "../lib/store";
 import { useNow } from "../lib/time";
 import type { AgentId } from "../lib/types";
+import { SeasonGreeting, SeasonScene } from "./Seasonal";
 
 export function ConversationRoster({
   onOpen,
@@ -133,6 +134,7 @@ export function ConversationRoster({
             </section>
           ))}
         </div>
+        <SeasonScene />
       </nav>
       <footer className="roster__foot">
         {foot}
@@ -148,6 +150,7 @@ export function ConversationRoster({
             {new Date(now).toLocaleDateString([], { month: "short", day: "numeric" })}
           </span>
         </p>
+        <SeasonGreeting />
       </footer>
     </div>
   );

@@ -41,6 +41,7 @@ export interface Prefs extends Theme {
   readingSize: ReadingSize;
   cast: Cast;
   showReasoning: boolean;
+  seasonal: boolean;
 }
 
 export const DEFAULT_PREFS: Prefs = Object.freeze({
@@ -54,6 +55,7 @@ export const DEFAULT_PREFS: Prefs = Object.freeze({
   readingSize: 16,
   cast: "drawn",
   showReasoning: false,
+  seasonal: true,
 }) as Prefs;
 
 const KEY = "guac.prefs";
@@ -112,6 +114,7 @@ export function readPrefs(raw: unknown): Prefs {
       typeof stored.showReasoning === "boolean"
         ? stored.showReasoning
         : DEFAULT_PREFS.showReasoning,
+    seasonal: typeof stored.seasonal === "boolean" ? stored.seasonal : DEFAULT_PREFS.seasonal,
   };
 }
 

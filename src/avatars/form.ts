@@ -207,3 +207,12 @@ export function outline(pts: Point[]): string {
   }
   return d.join("");
 }
+
+export function perch(lump: Lump, angle: number): Point {
+  let rr = SILHOUETTES[lump.form](angle);
+  for (const lobe of lump.sig) rr += lobe.amp * Math.sin(lobe.k * angle + lobe.phase);
+  return [
+    FORM.center + Math.cos(angle) * FORM.radius * rr * lump.ax,
+    FORM.center + Math.sin(angle) * FORM.radius * rr * lump.ay,
+  ];
+}

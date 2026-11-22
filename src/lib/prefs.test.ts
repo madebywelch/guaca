@@ -28,6 +28,7 @@ const DEFAULTS: Prefs = {
   readingSize: 16,
   cast: "drawn",
   showReasoning: false,
+  seasonal: true,
 };
 
 function withStorage(stub: Partial<Storage>, body: () => void): void {
@@ -210,6 +211,7 @@ describe("a preference that outlives the window", () => {
       readingSize: 20,
       cast: "cut",
       showReasoning: true,
+      seasonal: false,
     };
     savePrefs(chosen);
     expect(loadPrefs()).toEqual(chosen);
@@ -271,5 +273,12 @@ it("validates the reasoning display preference without coercing old or malformed
   expect(readPrefs({ showReasoning: true }).showReasoning).toBe(true);
   for (const showReasoning of [undefined, null, "true", 1, false]) {
     expect(readPrefs({ showReasoning }).showReasoning).toBe(false);
+  }
+});
+
+it("keeps seasonal looks on unless they were switched off, whatever else was stored", () => {
+  expect(readPrefs({ seasonal: false }).seasonal).toBe(false);
+  for (const seasonal of [undefined, null, "false", 0, true]) {
+    expect(readPrefs({ seasonal }).seasonal).toBe(true);
   }
 });

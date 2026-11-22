@@ -1694,6 +1694,19 @@ describe("appearance", () => {
     expect(useStore.getState().prefs.showReasoning).toBe(false);
   });
 
+  it("keeps seasonal looks on until the switch turns them off, and remembers that", () => {
+    open();
+    pane("Appearance");
+    const toggle = screen.getByRole("switch", { name: "Seasonal looks" });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(toggle);
+    expect(useStore.getState().prefs.seasonal).toBe(false);
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(JSON.parse(localStorage.getItem("guac.prefs")!).seasonal).toBe(false);
+    fireEvent.click(toggle);
+    expect(useStore.getState().prefs.seasonal).toBe(true);
+  });
+
   function choice(label: string): HTMLInputElement {
     const input = screen.getByRole("radio", { name: label });
     if (!(input instanceof HTMLInputElement)) throw new Error("Expected a native radio");

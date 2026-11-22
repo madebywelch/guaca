@@ -2,8 +2,10 @@ import { type CSSProperties, useContext, useEffect, useRef } from "react";
 
 import { prefersReducedMotion } from "../lib/motion";
 import type { Cast } from "../lib/prefs";
+import { SeasonContext } from "../lib/season";
 import type { LiveCall } from "../lib/trail";
 import type { Activity, Lifecycle } from "../lib/types";
+import { Accent } from "./Accent";
 import { CutArt } from "./CutArt";
 import { CastContext } from "./cast";
 import { lookupCharacter } from "./catalog";
@@ -33,6 +35,7 @@ interface Props {
   gesture?: Gesture;
   says?: string | null;
   title?: string;
+  plain?: boolean;
 }
 
 const TURN = 0.2;
@@ -75,9 +78,11 @@ export function AgentAvatar({
   gesture = null,
   says = null,
   title,
+  plain = false,
 }: Props) {
   const character = lookupCharacter(avatar);
   const chosen = useContext(CastContext);
+  const season = useContext(SeasonContext);
   const drawing = cast ?? chosen;
 
   const box = useRef<HTMLSpanElement>(null);
@@ -256,6 +261,7 @@ export function AgentAvatar({
     >
       <svg viewBox={`0 0 ${FORM.box} ${FORM.box}`} className="avatar__body" aria-hidden="true">
         {drawing === "drawn" ? <DrawnArt paint={art} /> : <CutArt paint={art} />}
+        {season && !plain && <Accent lump={character} season={season} />}
       </svg>
       {says && (
         <span className="avatar__says" aria-hidden="true">

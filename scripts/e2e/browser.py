@@ -23,6 +23,25 @@ SEEDED_RANDOM = """(() => {
   };
 })();"""
 
+CLOCK = """(() => {
+  if (globalThis.__verifyClock) return;
+  const Real = Date;
+  let shift = 0;
+  class Shifted extends Real {
+    constructor(...args) {
+      if (args.length === 0) super(Real.now() + shift);
+      else super(...args);
+    }
+    static now() {
+      return Real.now() + shift;
+    }
+  }
+  globalThis.Date = Shifted;
+  globalThis.__verifyClock = (at) => {
+    shift = at - Real.now();
+  };
+})();"""
+
 WINDOW = (1280, 860)
 ACTIONABLE_SECONDS = 10
 
@@ -320,6 +339,13 @@ class Browser:
     def viewport(self, width: int, height: int) -> None:
         self.send("Emulation.setDeviceMetricsOverride",
                   {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": False})
+
+    def clock(self, at_ms: int) -> None:
+        setting = f"{CLOCK}\nglobalThis.__verifyClock({at_ms});"
+        if getattr(self, "_clock", None):
+            self.send("Page.removeScriptToEvaluateOnNewDocument", {"identifier": self._clock})
+        self._clock = self.send("Page.addScriptToEvaluateOnNewDocument", {"source": setting})["identifier"]
+        self.evaluate(setting)
 
     def scrollbars(self, classic: bool) -> None:
         self.send("Emulation.setScrollbarsHidden", {"hidden": not classic})
