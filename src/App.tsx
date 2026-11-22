@@ -39,7 +39,7 @@ import { bindingFor } from "./lib/keybinds";
 import { PLACE_LABELS } from "./lib/menu";
 import { FEED_COALESCE_MS, presenceOf, presenceReporter, samePresence } from "./lib/menubar";
 import { catchUp, deliver, land } from "./lib/notify";
-import { readFirstTask } from "./lib/onboarding";
+import { heldStart, readFirstTask } from "./lib/onboarding";
 import { inferenceOf, providerFor } from "./lib/providers";
 import { numbered, stepped } from "./lib/rail";
 import { useRuntime } from "./lib/runtime";
@@ -85,7 +85,7 @@ export default function App() {
   const allAgents = useStore((s) => s.agents);
   const [onboardingActive, setOnboardingActive] = useState(() => {
     const task = readFirstTask();
-    return !!(task.agentId || task.key);
+    return !!(task.agentId || task.key || heldStart()?.queued);
   });
   const [checkingFirstTask, setCheckingFirstTask] = useState(false);
   const selected = useStore((s) => s.selected);

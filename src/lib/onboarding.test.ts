@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HIREABLE } from "./cafeteria";
-import { FIRST_TASKS, readFirstTask, saveFirstTask } from "./onboarding";
+import { FIRST_TASKS, heldStart, holdStart, readFirstTask, saveFirstTask } from "./onboarding";
 
 const { origin } = vi.hoisted(() => ({ origin: vi.fn(() => "https://first.example") }));
 vi.mock("./transport", () => ({ workspaceOrigin: origin }));
@@ -88,5 +88,32 @@ describe("the first task", () => {
 
   it("writes no em dash in anything onboarding shows", () => {
     for (const task of FIRST_TASKS) expect(JSON.stringify(task), task.id).not.toContain("\u2014");
+  });
+});
+
+describe("what is held before the host exists", () => {
+  it("lives in memory only, so a key entered early never reaches this device's storage", () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    holdStart({
+      task: "plan",
+      brief: "Plan a launch",
+      step: "start",
+      provider: {
+        provider: "compatible",
+        baseUrl: "https://openrouter.ai/api/v1",
+        model: "a-model",
+        apiKey: "sk-held",
+        subscriptionModel: "",
+        effort: "auto",
+      },
+      chosen: true,
+      queued: true,
+      focus: null,
+    });
+    expect(heldStart()?.provider?.apiKey).toBe("sk-held");
+    expect(setItem).not.toHaveBeenCalled();
+    expect(localStorage.length).toBe(0);
+    holdStart(null);
+    expect(heldStart()).toBeNull();
   });
 });

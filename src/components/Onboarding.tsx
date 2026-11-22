@@ -1,28 +1,82 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { HIREABLE, toDraft } from "../lib/cafeteria";
 import { api } from "../lib/ipc";
 import { PLACE_LABELS } from "../lib/menu";
-import { FIRST_TASKS, type FirstTask, readFirstTask, saveFirstTask } from "../lib/onboarding";
+import {
+  FIRST_TASKS,
+  type FirstTask,
+  type HeldProvider,
+  heldStart,
+  holdStart,
+  readFirstTask,
+  saveFirstTask,
+  waitsForHost,
+} from "../lib/onboarding";
 import { useStore } from "../lib/store";
 import { BEFORE_RELOAD, desktop, isUnreachable } from "../lib/transport";
 import { asSentence, errorMessage, type Group } from "../lib/types";
 import { OnboardingProvider } from "./OnboardingProvider";
 
 interface Props {
-  group: Group;
-  onStarting: () => void;
-  onDone: () => void;
-  onInspect: (checking: boolean) => void;
-  onBrowse: () => void;
-  onCreate: () => void;
+  group?: Group;
+  host?: ReactNode;
+  hostDown?: boolean;
+  onStarting?: () => void;
+  onDone?: () => void;
+  onInspect?: (checking: boolean) => void;
+  onBrowse?: () => void;
+  onCreate?: () => void;
 }
 
-export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onCreate }: Props) {
-  const [draft, setDraft] = useState(readFirstTask);
-  const [step, setStep] = useState<"task" | "provider" | "start">(
-    draft.agentId || draft.key ? "start" : "task",
+const PROVIDER_NAMES = {
+  chatgpt: "ChatGPT",
+  claude: "Claude",
+  compatible: "your provider",
+} as const;
+
+export function Onboarding({
+  group,
+  host,
+  hostDown = false,
+  onStarting = () => {},
+  onDone = () => {},
+  onInspect = () => {},
+  onBrowse,
+  onCreate,
+}: Props) {
+  const waiting = host !== undefined;
+  const [held] = useState(heldStart);
+  const [draft, setDraft] = useState<FirstTask>(() =>
+    held
+      ? { task: held.task, brief: held.brief, agentId: null, sent: false }
+      : waiting
+        ? { task: "own", brief: "", agentId: null, sent: false }
+        : readFirstTask(),
   );
+  const [step, setStep] = useState<"task" | "provider" | "start">(() =>
+    held
+      ? !waiting &&
+        held.chosen &&
+        held.step === "start" &&
+        held.provider &&
+        waitsForHost(held.provider.provider)
+        ? "provider"
+        : held.step
+      : draft.agentId || draft.key
+        ? "start"
+        : "task",
+  );
+  const [fields, setFields] = useState<HeldProvider | null>(held?.provider ?? null);
+  const [chosen, setChosen] = useState(held?.chosen ?? false);
+  const [queued, setQueued] = useState(held?.queued ?? false);
+  const [linked, setLinked] = useState(!held && !waiting);
+  const [applying, setApplying] = useState(
+    () => !waiting && !!held?.chosen && !!held.provider && !waitsForHost(held.provider.provider),
+  );
+  const [failure, setFailure] = useState<unknown>(undefined);
+  const resumed = useRef(held?.focus ?? null);
+  const adopted = useRef(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [storageError, setStorageError] = useState(false);
@@ -38,6 +92,7 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
   const agents = useStore((state) => state.agents);
   const refreshAgents = useStore((state) => state.refreshAgents);
   const select = useStore((state) => state.select);
+  const setSettings = useStore((state) => state.setSettings);
   const task = FIRST_TASKS.find((entry) => entry.id === draft.task)!;
   const members = task.group.map((member) => ({
     ...member,
@@ -51,8 +106,84 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
 
   useEffect(() => {
     if (pane.current) pane.current.scrollTop = 0;
-    opening.current?.focus({ preventScroll: true });
+    const back = resumed.current;
+    resumed.current = null;
+    const field =
+      back &&
+      pane.current?.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+        `[data-hold="${back.hold}"]`,
+      );
+    if (field) {
+      field.focus({ preventScroll: true });
+      field.setSelectionRange(back.at, back.at);
+    } else opening.current?.focus({ preventScroll: true });
   }, [step, checking]);
+
+  useEffect(() => {
+    if (hostDown && pane.current) pane.current.scrollTop = 0;
+  }, [hostDown]);
+
+  useEffect(() => {
+    if (waiting)
+      holdStart({
+        task: draft.task,
+        brief: draft.brief,
+        step,
+        provider: fields,
+        chosen,
+        queued,
+        focus: null,
+      });
+  }, [waiting, draft, step, fields, chosen, queued]);
+
+  useLayoutEffect(() => {
+    if (!waiting) return;
+    return () => {
+      const now = heldStart();
+      const field = document.activeElement;
+      if (
+        now &&
+        (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) &&
+        field.dataset.hold
+      )
+        holdStart({ ...now, focus: { hold: field.dataset.hold, at: field.selectionStart ?? 0 } });
+    };
+  }, [waiting]);
+
+  useEffect(() => {
+    if (waiting || !held || adopted.current) return;
+    adopted.current = true;
+    holdStart(null);
+    try {
+      saveFirstTask(draft);
+    } catch {
+      setStorageError(true);
+    }
+    const early = held.provider;
+    if (!held.chosen || !early || waitsForHost(early.provider)) return;
+    const patch = {
+      provider: early.provider,
+      baseUrl: early.baseUrl.trim(),
+      defaultModel: early.model.trim(),
+      apiKey: early.apiKey.trim(),
+    };
+    void api
+      .testConnection(patch)
+      .then(() => api.updateSettings(patch))
+      .then(
+        (next) => {
+          setSettings(next);
+          setFields((current) => current && { ...current, apiKey: "" });
+          setApplying(false);
+          setLinked(true);
+        },
+        (cause) => {
+          setApplying(false);
+          setFailure(cause);
+          setStep("provider");
+        },
+      );
+  }, [waiting, held, draft, setSettings]);
 
   useEffect(() => {
     if (!storageError && !busy) return;
@@ -81,6 +212,7 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
 
   const keep = (next: FirstTask) => {
     setDraft(next);
+    if (waiting) return true;
     try {
       saveFirstTask(next);
       setStorageError(false);
@@ -113,7 +245,7 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
   };
 
   const start = async () => {
-    if (sending.current || !draft.brief.trim()) return;
+    if (sending.current || !draft.brief.trim() || !group) return;
     let next = { ...draft, key: draft.key ?? crypto.randomUUID() };
     setError("");
     setUnsaved(false);
@@ -162,6 +294,29 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
     }
   };
 
+  useEffect(() => {
+    if (waiting || !queued || !linked || sending.current) return;
+    setQueued(false);
+    void start();
+  });
+
+  const begin = () => {
+    if (waiting || !linked) setQueued(true);
+    else void start();
+  };
+
+  const connected = () => {
+    if (waiting) setChosen(true);
+    else setLinked(true);
+    setStep("start");
+  };
+
+  const waitingFor = waiting
+    ? "your host is ready"
+    : applying
+      ? "your AI is connected"
+      : `you sign in to ${PROVIDER_NAMES[fields?.provider ?? "compatible"]}`;
+
   const warning = storageError && (
     <div className="banner banner--error" role="alert">
       <span>
@@ -206,6 +361,7 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
     <section ref={pane} className="onboarding" aria-label="Get started with Guaca" aria-busy={busy}>
       <div className="onboarding-content">
         {warning}
+        {host}
         <ol className="onboarding-steps" aria-label="Getting started">
           {(
             [
@@ -261,6 +417,7 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
                 aria-label="Your first brief"
                 aria-describedby={briefHint}
                 rows={4}
+                data-hold="brief"
                 value={draft.brief}
                 placeholder="What are you working on, and what would a useful result look like?"
                 onChange={(event) => keep({ ...draft, brief: event.target.value })}
@@ -275,7 +432,9 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
                 className="btn btn--primary"
                 aria-describedby={continueHint}
                 disabled={!draft.brief.trim()}
-                onClick={() => setStep("provider")}
+                onClick={() =>
+                  setStep(!waiting && chosen && (linked || applying) ? "start" : "provider")
+                }
               >
                 Continue
               </button>
@@ -287,24 +446,39 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
                     : "No Guaca account needed."}
               </span>
             </div>
-            <div className="onboarding-alternatives">
-              <span>Prefer to set things up yourself?</span>
-              <button type="button" className="btn btn--quiet" onClick={onBrowse}>
-                {PLACE_LABELS.cafeteria}
-              </button>
-              <button type="button" className="btn btn--quiet" onClick={onCreate}>
-                Create one agent
-              </button>
-            </div>
+            {!waiting && (
+              <div className="onboarding-alternatives">
+                <span>Prefer to set things up yourself?</span>
+                <button type="button" className="btn btn--quiet" onClick={onBrowse}>
+                  {PLACE_LABELS.cafeteria}
+                </button>
+                <button type="button" className="btn btn--quiet" onClick={onCreate}>
+                  Create one agent
+                </button>
+              </div>
+            )}
           </>
         ) : step === "provider" ? (
           <>
             <div className="onboarding-intro">
               <h1>Connect your AI</h1>
-              <p>Choose what powers your group. Your first brief is waiting for you.</p>
+              <p>
+                {waiting
+                  ? "Choose what powers your group. Your host is still starting; your choice waits for it here."
+                  : failure !== undefined
+                    ? `Your host is ready, but your key did not pass its test. Fix it below${queued ? " and your task starts right after" : ""}.`
+                    : chosen && !linked && fields && waitsForHost(fields.provider)
+                      ? `Your host is ready. Sign in to ${PROVIDER_NAMES[fields.provider]} to finish connecting${queued ? ", and your task starts right after" : ""}.`
+                      : "Choose what powers your group. Your first brief is waiting for you."}
+              </p>
             </div>
             <OnboardingProvider
-              onConnected={() => setStep("start")}
+              key={failure === undefined ? "fresh" : "failed"}
+              waiting={waiting}
+              initial={fields}
+              failure={failure}
+              onDraft={waiting ? setFields : undefined}
+              onConnected={connected}
               onBack={() => setStep("task")}
             />
           </>
@@ -347,27 +521,32 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
                 rows={5}
                 aria-label="Your first brief"
                 value={draft.brief}
-                readOnly={busy || !!draft.key || !!draft.agentId}
+                readOnly={busy || queued || !!draft.key || !!draft.agentId}
+                data-hold="brief"
                 onChange={(event) => keep({ ...draft, brief: event.target.value })}
               />
             </label>
-            <p className="onboarding-notice">
-              {draft.sent
-                ? "Your task was sent. Open the conversation to see how it is going."
-                : draft.agentId
-                  ? "Your group is already hired. If a connection failed, check the conversation before sending again."
-                  : draft.key
-                    ? "Your previous start may have hired this group. Retry with the same brief to continue safely."
-                    : `Start task hires these three and sends your brief to ${name}, using the provider you just connected. A group task uses more model calls than one agent would, at least five instead of one, and it stays inside your group's limits.`}
+            <p className="onboarding-notice" role={queued ? "status" : undefined}>
+              {queued && hostDown
+                ? "Your host could not start, so nothing has been sent. Your task stays queued: once Try again works, it starts by itself."
+                : queued
+                  ? `Your task is queued. It starts by itself as soon as ${waitingFor}. Keep this window open until then.`
+                  : draft.sent
+                    ? "Your task was sent. Open the conversation to see how it is going."
+                    : draft.agentId
+                      ? "Your group is already hired. If a connection failed, check the conversation before sending again."
+                      : draft.key
+                        ? "Your previous start may have hired this group. Retry with the same brief to continue safely."
+                        : `Start task hires these three and sends your brief to ${name}${waiting ? " as soon as your host is ready, so you can press it now" : applying ? " once Guaca has tested your key on your host" : ", using the provider you just connected"}. A group task uses more model calls than one agent would, at least five instead of one, and it stays inside your group's limits.`}
             </p>
-            {desktop && (
+            {desktop && !queued && (
               <p className="onboarding-notice">
                 After you start, you can close this window: Guaca stays in the menu bar, and its
                 icon opens a panel of what is waiting on you and who is working.
               </p>
             )}
             <div className="onboarding-actions">
-              {!draft.agentId && !draft.key && (
+              {!draft.agentId && !draft.key && !queued && (
                 <button
                   type="button"
                   className="btn"
@@ -375,6 +554,11 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
                   onClick={() => setStep("provider")}
                 >
                   Back
+                </button>
+              )}
+              {queued && (
+                <button type="button" className="btn" onClick={() => setQueued(false)}>
+                  Don't start yet
                 </button>
               )}
               {draft.agentId && !hired && (
@@ -405,16 +589,18 @@ export function Onboarding({ group, onStarting, onDone, onInspect, onBrowse, onC
                 ref={opening}
                 type="button"
                 className="btn btn--primary"
-                disabled={busy || !draft.brief.trim() || (!!draft.agentId && !hired)}
-                onClick={() => void start()}
+                disabled={busy || queued || !draft.brief.trim() || (!!draft.agentId && !hired)}
+                onClick={begin}
               >
                 {busy
                   ? "Starting your task…"
-                  : draft.sent
-                    ? "Open conversation"
-                    : draft.agentId
-                      ? "Send brief again"
-                      : "Start task"}
+                  : queued
+                    ? `Starts when ${waitingFor}`
+                    : draft.sent
+                      ? "Open conversation"
+                      : draft.agentId
+                        ? "Send brief again"
+                        : "Start task"}
               </button>
               {error ? (
                 <p className="onboarding-notice" role="alert">

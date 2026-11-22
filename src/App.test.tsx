@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { rememberConversation } from "./lib/frame";
 import { expectRestart, forgetRestart } from "./lib/link";
-import { saveFirstTask } from "./lib/onboarding";
+import { holdStart, saveFirstTask } from "./lib/onboarding";
 import type {
   AgentCard,
   Approval,
@@ -1109,6 +1109,26 @@ describe("App", () => {
       expect(await screen.findByRole("heading", { name: "Ready when you are." })).toBeTruthy();
       expect(screen.getByRole("button", { name: "Start task" })).toBeTruthy();
     } finally {
+      saveFirstTask(null);
+    }
+  });
+
+  it("keeps a task queued before the host was up on screen, even on a host that already has an agent", async () => {
+    holdStart({
+      task: "plan",
+      brief: "Plan our launch",
+      step: "start",
+      provider: null,
+      chosen: false,
+      queued: true,
+      focus: null,
+    });
+    listAgents.mockResolvedValue([agent("Product Manager")]);
+    try {
+      render(<App />);
+      expect(await screen.findByRole("heading", { name: "Ready when you are." })).toBeTruthy();
+    } finally {
+      holdStart(null);
       saveFirstTask(null);
     }
   });

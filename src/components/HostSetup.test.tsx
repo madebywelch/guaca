@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   status,
   start,
+  progress,
   update,
   existing,
   connect,
@@ -45,12 +46,14 @@ const {
   preflight: vi.fn(),
   persist: vi.fn(),
   restart: vi.fn(),
+  progress: vi.fn(),
 }));
 vi.mock("../lib/host", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/host")>()),
   localHost: {
     status,
     start,
+    progress,
     update,
     existing,
     connect,
@@ -74,6 +77,9 @@ vi.mock("../lib/transport", () => ({
   restart,
   probe,
   openExternal: vi.fn(),
+  BEFORE_RELOAD: "guaca:before-reload",
+  isUnreachable: () => false,
+  workspaceOrigin: () => "",
 }));
 vi.mock("./GroupTransfer", () => ({ LegacyGroups: () => null }));
 const { sent } = vi.hoisted(() => ({ sent: [] as string[] }));
@@ -89,6 +95,7 @@ vi.mock("../lib/ipc", () => ({
   ),
 }));
 
+import { heldStart, holdStart } from "../lib/onboarding";
 import { HostChoice, HostSetup } from "./HostSetup";
 
 it("does not send a stale panel command after another window commits a host", async () => {
@@ -199,6 +206,77 @@ beforeEach(() => {
   openDocker.mockResolvedValue(undefined);
   elsewhere.mockResolvedValue({ from: null, to: null, data: false });
   source.mockResolvedValue({ checkout: null, unavailable: "release", running: false });
+  progress.mockResolvedValue(null);
+  holdStart(null);
+});
+
+describe("a first run while the host image downloads", () => {
+  function pending() {
+    let reject!: (reason: unknown) => void;
+    const promise = new Promise<never>((_, no) => {
+      reject = no;
+    });
+    return { promise, reject };
+  }
+
+  it("offers the first task during the download, says what the host is doing, and keeps the brief through a failed pull and a retry", async () => {
+    const pull = pending();
+    start.mockReturnValueOnce(pull.promise);
+    progress.mockResolvedValue("downloading");
+    render(
+      <HostSetup>
+        <div>Workspace mounted</div>
+      </HostSetup>,
+    );
+    await screen.findByText("Docker is ready.");
+    fireEvent.click(screen.getByRole("button", { name: "Use this Mac" }));
+    await screen.findByRole("heading", { name: "What would you like help with?" });
+    expect(screen.getByRole("status").textContent).toContain("Setting up your host on this Mac");
+    await screen.findByText("Downloading your host…", {}, { timeout: 3000 });
+    fireEvent.click(screen.getByRole("button", { name: /Plan a project/ }));
+    const brief = screen.getByRole("textbox", { name: "Your first brief" }) as HTMLTextAreaElement;
+    fireEvent.change(brief, { target: { value: "Plan our launch next month." } });
+
+    await act(async () => pull.reject({ kind: "image", message: "The registry refused it." }));
+    const failure = await screen.findByRole("alert");
+    expect(failure.textContent).toContain("Your host could not start.");
+    expect(failure.textContent).toContain("The registry refused it.");
+    expect(failure.textContent).toContain("Your brief and your choices are kept here.");
+    expect(brief.value).toBe("Plan our launch next month.");
+    expect(
+      screen.getByRole("button", { name: /Plan a project/ }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(screen.queryByText("Workspace mounted")).toBeNull();
+
+    start.mockResolvedValueOnce(LOCAL);
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await screen.findByText("Workspace mounted");
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(persist).toHaveBeenCalledWith(LOCAL, "local");
+    expect(heldStart()).toMatchObject({ task: "plan", brief: "Plan our launch next month." });
+  });
+
+  it("goes back to the host choice from a failed pull and still has the brief on the next try", async () => {
+    start.mockRejectedValueOnce("Docker stopped answering.");
+    render(
+      <HostSetup>
+        <div>Workspace mounted</div>
+      </HostSetup>,
+    );
+    await screen.findByText("Docker is ready.");
+    fireEvent.click(screen.getByRole("button", { name: "Use this Mac" }));
+    fireEvent.change(await screen.findByRole("textbox", { name: "Your first brief" }), {
+      target: { value: "Draft a note to the team." },
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Choose another host" }));
+    expect(await screen.findByRole("button", { name: "Remote host" })).toBeTruthy();
+    start.mockReturnValueOnce(pending().promise);
+    fireEvent.click(screen.getByRole("button", { name: "Use this Mac" }));
+    const brief = (await screen.findByRole("textbox", {
+      name: "Your first brief",
+    })) as HTMLTextAreaElement;
+    expect(brief.value).toBe("Draft a note to the team.");
+  });
 });
 
 const LOCAL = { origin: "http://127.0.0.1:54321", token: "private" };

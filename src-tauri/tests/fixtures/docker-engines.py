@@ -2,6 +2,7 @@
 import json
 import pathlib
 import sys
+import time
 
 root = pathlib.Path(__file__).parent
 path = root / "engines-state.json"
@@ -60,6 +61,10 @@ elif args[0] == "tag":
     image(args[1])["refs"].append(args[2])
     save()
 elif args[0] == "pull":
+    for _ in range(1000):
+        if not state.get("holdPull") or (root / "pull-gate").exists():
+            break
+        time.sleep(0.02)
     if args[1] not in state.get("registry", {}):
         refuse(f"Error response from daemon: pull access denied for {args[1]}, repository does not exist or may require 'docker login': denied")
     images.append({"id": state["registry"][args[1]], "refs": [args[1]], "labels": {}})

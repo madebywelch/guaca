@@ -324,7 +324,10 @@ reads with it.
 ## One bundle, and the host is read at runtime
 
 The daemon serves the same frontend bundle that Tauri embeds. `HostSetup`
-runs before the workspace mounts. A saved local connection starts the managed
+runs before the workspace mounts. On a first launch it is also where the first
+task is written: once On this Mac is chosen, the onboarding steps run while the
+host is set up, and the workspace mounts when it answers (*A first task comes
+before a first group* in `docs/WORKSPACE.md`). A saved local connection starts the managed
 Docker container and retrieves its token automatically; a saved remote
 connection is probed before the UI opens. The saved host is named while it is
 being checked, and another host can be chosen immediately. Setup gives the
@@ -871,7 +874,11 @@ still produces a client for remote hosts.
 
 On first launch choose **On this Mac** or **Remote host**. Local setup detects
 Docker and, while Docker cannot be used, offers installation, an action that
-opens or starts the engine, and retry. Guaca creates
+opens or starts the engine, and retry. Once On this Mac starts, the first task
+and the provider are chosen while the image downloads and the host starts;
+`local_host_progress` reports which of the three the setup is in, from memory
+and without asking Docker, so the line above the steps can be polled every
+second. Guaca creates
 an unprivileged container, binds a free loopback port, generates an access key
 and connects without exposing the key. The named volume survives app and
 container restarts. Existing containers are reused rather than silently

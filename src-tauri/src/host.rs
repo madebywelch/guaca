@@ -149,6 +149,22 @@ impl Operation {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Phase {
+    Preparing,
+    Downloading,
+    Starting,
+}
+
+struct Progress<'a>(&'a parking_lot::Mutex<Option<Phase>>);
+
+impl Drop for Progress<'_> {
+    fn drop(&mut self) {
+        *self.0.lock() = None;
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
@@ -243,6 +259,7 @@ pub struct LocalHost {
     record: Option<PathBuf>,
     engine: parking_lot::Mutex<Option<Engine>>,
     previous: parking_lot::Mutex<Option<Engine>>,
+    phase: parking_lot::Mutex<Option<Phase>>,
 }
 
 pub fn zone() -> Option<String> {
@@ -700,6 +717,18 @@ impl LocalHost {
             record: None,
             engine: parking_lot::Mutex::new(None),
             previous: parking_lot::Mutex::new(None),
+            phase: parking_lot::Mutex::new(None),
+        }
+    }
+
+    pub fn progress(&self) -> Option<Phase> {
+        *self.phase.lock()
+    }
+
+    fn advance(&self, phase: Phase) {
+        let mut now = self.phase.lock();
+        if now.is_some() {
+            *now = Some(phase);
         }
     }
 
@@ -1017,6 +1046,8 @@ impl LocalHost {
     }
 
     pub async fn start(&self) -> Result<Connection, Stall> {
+        *self.phase.lock() = Some(Phase::Preparing);
+        let _progress = Progress(&self.phase);
         let _lock = self.lock.lock().await;
         let _process_lock = self.process_lock()?;
         let before = self.recorded();
@@ -1041,6 +1072,7 @@ impl LocalHost {
         if self.inspect().await?.is_none() {
             self.image_ready(&self.image).await.map_err(|message| Stall::Image { message })?;
         }
+        self.advance(Phase::Starting);
         Ok(self.start_unlocked(&self.image, None).await?)
     }
 
@@ -1054,6 +1086,7 @@ impl LocalHost {
         if !fetchable(image) {
             return Err(format!("Guaca's host image, {image}, is not on this Mac. It was made on this Mac rather than published, so there is nowhere to download it from."));
         }
+        self.advance(Phase::Downloading);
         self.docker(&["pull", image], 900).await.map_err(|error| {
             tracing::warn!(%image, %error, "could not download the host image");
             pull_failure(image, &error)
@@ -2878,6 +2911,44 @@ pub(crate) mod tests {
         let made: Vec<String> =
             engines.made_anything().iter().map(|call| call[1].clone()).collect();
         assert_eq!(made, ["pull", "pull", "run"], "the refused pull, then the one that worked");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn setup_says_what_it_is_doing_while_it_downloads_and_starts() {
+        let published = format!("ghcr.io/madebywelch/guaca/guacad@sha256:{}", "e".repeat(64));
+        let engines = Engines::new(|state| {
+            state["registry"] = json!({published.as_str(): "sha256:ee"});
+            state["holdPull"] = json!(true);
+        })
+        .await;
+        let host = std::sync::Arc::new(engines.host(&published));
+        assert_eq!(host.progress(), None, "nothing is said before setup starts");
+        let starting = tokio::spawn({
+            let host = host.clone();
+            async move { host.start().await.map(drop).map_err(|stall| format!("{stall:?}")) }
+        });
+        let mut said = Vec::new();
+        for _ in 0..500 {
+            let now = host.progress();
+            if said.last() != Some(&now) {
+                said.push(now);
+            }
+            if now == Some(Phase::Downloading) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(said.last(), Some(&Some(Phase::Downloading)), "{said:?}");
+        std::fs::write(engines.dir.path().join("pull-gate"), "").unwrap();
+        starting.await.unwrap().unwrap();
+        assert_eq!(host.progress(), None, "a finished setup says nothing");
+
+        let refused = format!("ghcr.io/madebywelch/guaca/guacad@sha256:{}", "f".repeat(64));
+        let failing = Engines::new(|_| {}).await;
+        let host = failing.host(&refused);
+        assert!(host.start().await.is_err());
+        assert_eq!(host.progress(), None, "a failed setup says nothing either");
     }
 
     #[test]

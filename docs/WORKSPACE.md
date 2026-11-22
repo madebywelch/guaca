@@ -1981,10 +1981,33 @@ always on screen.
 ## A first task comes before a first group
 
 A new workspace starts with a brief, a provider connection, and a review of one
-recommended agent. The host must already be connected: credentials belong to
-that host, not to a welcome page. The task choices copy existing cafeteria
-presets without changing their prompts, and the operator can still open the
-cafeteria or create an agent by hand.
+recommended agent. The task choices copy existing cafeteria presets without
+changing their prompts, and the operator can still open the cafeteria or create
+an agent by hand once the host is up.
+
+The steps do not wait for the host. On a first launch, choosing On this Mac
+starts the host and opens the steps at once, with one line above them saying
+what the host is doing (setting up, downloading, starting, connecting) and for
+how long; the image download alone can take minutes, and that time used to be
+spent watching it. `HostComing` in `HostSetup.tsx` owns the start and draws
+the line, and `Onboarding` draws the steps without a host. Start task pressed
+before the host answers queues: the button says what it waits for, Don't start
+yet takes it back, and the task starts by itself once the host is up, so
+nothing has to be pressed twice. A failed download or start says so in place of
+that line, with Try again and Choose another host, and keeps the brief, the
+step and the provider choice; a retry starts the same queued task.
+
+Credentials still belong to the host, not to a welcome page. Before the host
+exists, what the person enters is held by `holdStart` in `lib/onboarding.ts`,
+in this window's memory only: never in local storage, never on disk. When the
+host answers, the held key is tested and stored there by the same two calls
+Test and continue makes, and only then does a queued task start; a key the
+test refuses brings back the provider step with the key in place and the
+reason at the field. A ChatGPT or Claude plan can be chosen early, but its
+sign-in is run by the host, so it waits: the card says so, and once the host is
+up the provider step asks for the sign-in and the queued task starts right
+after it. The pickup of a sign-in this Mac already has is offered only once
+there is a host to ask.
 
 The brief stays on this device, scoped to the host, while the operator connects
 AI or reloads the window. No credential is part of that draft. Connecting a
@@ -2051,9 +2074,11 @@ permission as a key. An endpoint that does not answer comes back as
 cannot be reached is said as that, in plain words, at Test and continue and at
 Start task, rather than as the transport's address.
 
-`Onboarding.test.tsx` covers that handoff and recovery, `OnboardingProvider.test.tsx`
-covers connection failures, and `lib/onboarding.test.ts` holds the host boundary
-around the saved brief. Existing workspaces and emptied groups keep their normal
+`Onboarding.test.tsx` covers that handoff and recovery, and the steps and
+queued start before the host exists, `OnboardingProvider.test.tsx` covers
+connection failures and the provider step without a host, `HostSetup.test.tsx`
+covers the steps during a download and a failed one, and `lib/onboarding.test.ts`
+holds the host boundary around the saved brief and the memory-only hold. Existing workspaces and emptied groups keep their normal
 workspace view.
 
 ## The cafeteria is a copy machine, not a registry

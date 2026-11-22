@@ -1,4 +1,4 @@
-use crate::host::{Connection, Elsewhere, LocalHost, Stall, Status};
+use crate::host::{Connection, Elsewhere, LocalHost, Phase, Stall, Status};
 use crate::tray::{self, Tray};
 use std::sync::Arc;
 use tauri::Manager;
@@ -6,6 +6,10 @@ use tauri::Manager;
 #[tauri::command]
 async fn local_host_status(state: tauri::State<'_, LocalHost>) -> Result<Status, String> {
     Ok(state.status().await)
+}
+#[tauri::command]
+fn local_host_progress(state: tauri::State<'_, LocalHost>) -> Option<Phase> {
+    state.progress()
 }
 #[tauri::command]
 async fn local_host_start(state: tauri::State<'_, LocalHost>) -> Result<Connection, Stall> {
@@ -218,6 +222,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             local_host_status,
             local_host_start,
+            local_host_progress,
             local_host_resume,
             local_host_choose,
             local_host_elsewhere,

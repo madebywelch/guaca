@@ -1,21 +1,36 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HIREABLE, toDraft } from "../lib/cafeteria";
-import { readFirstTask, saveFirstTask } from "../lib/onboarding";
+import {
+  type HeldProvider,
+  heldStart,
+  holdStart,
+  readFirstTask,
+  saveFirstTask,
+} from "../lib/onboarding";
 import { useStore } from "../lib/store";
 import { BEFORE_RELOAD } from "../lib/transport";
-import type { AgentCard } from "../lib/types";
+import type { AgentCard, Settings } from "../lib/types";
 import { aGroup } from "../test-fixtures";
 import { Onboarding } from "./Onboarding";
 
-const { hire, send, rename } = vi.hoisted(() => ({
+const { hire, send, rename, test, update } = vi.hoisted(() => ({
   hire: vi.fn(),
   send: vi.fn(),
   rename: vi.fn(),
+  test: vi.fn(),
+  update: vi.fn(),
 }));
 vi.mock("../lib/ipc", () => ({
-  api: { hireAgents: hire, sendMessage: send, updateGroup: rename },
+  api: {
+    hireAgents: hire,
+    sendMessage: send,
+    updateGroup: rename,
+    testConnection: test,
+    updateSettings: update,
+  },
 }));
+const early = vi.hoisted(() => ({ fields: null as HeldProvider | null }));
 const platform = vi.hoisted(() => ({ desktop: true }));
 vi.mock("../lib/transport", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/transport")>()),
@@ -27,12 +42,26 @@ vi.mock("./OnboardingProvider", () => ({
   OnboardingProvider: ({
     onConnected,
     onBack,
+    onDraft,
+    waiting,
+    failure,
   }: {
     onConnected: () => void;
     onBack: () => void;
+    onDraft?: (fields: HeldProvider) => void;
+    waiting?: boolean;
+    failure?: unknown;
   }) => (
     <>
-      <button type="button" onClick={onConnected}>
+      {waiting && <p>The provider waits for the host</p>}
+      {failure !== undefined && <p>The provider shows the failed test</p>}
+      <button
+        type="button"
+        onClick={() => {
+          if (early.fields) onDraft?.(early.fields);
+          onConnected();
+        }}
+      >
         Connect test provider
       </button>
       <button type="button" onClick={onBack}>
@@ -114,6 +143,10 @@ beforeEach(() => {
   refresh.mockResolvedValue();
   select.mockResolvedValue();
   useStore.setState({ agents: [], refreshAgents: refresh, select });
+  holdStart(null);
+  early.fields = null;
+  test.mockResolvedValue(undefined);
+  update.mockResolvedValue({ provider: "compatible", apiKeySet: true } as Settings);
 });
 
 afterEach(() => {
@@ -542,5 +575,162 @@ describe("guided first task", () => {
     fireEvent.click(screen.getByRole("button", { name: "Task was delivered" }));
     expect(done).toHaveBeenCalledOnce();
     expect(readFirstTask().agentId).toBeNull();
+  });
+});
+
+describe("a first task chosen while the host is still coming", () => {
+  const KEY = "sk-or-v1-held-only-in-memory";
+  const fields = (over: Partial<HeldProvider> = {}): HeldProvider => ({
+    provider: "compatible",
+    baseUrl: "https://openrouter.ai/api/v1",
+    model: "anthropic/claude-sonnet-4.5",
+    apiKey: KEY,
+    subscriptionModel: "",
+    effort: "auto",
+    ...over,
+  });
+  const waiting = () => render(<Onboarding host={<p>Downloading your host…</p>} />);
+  const queue = () => {
+    const view = waiting();
+    toReview();
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    return view;
+  };
+
+  it("finishes the task and provider steps before the host exists and queues Start without sending or saving anything", () => {
+    const store = storage();
+    early.fields = fields();
+    queue();
+    expect(screen.getByText("Downloading your host…")).toBeTruthy();
+    const queued = screen.getByRole("button", {
+      name: "Starts when your host is ready",
+    }) as HTMLButtonElement;
+    expect(queued.disabled).toBe(true);
+    expect(screen.getByRole("status").textContent).toContain(
+      "It starts by itself as soon as your host is ready.",
+    );
+    expect(hire).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+    expect(test).not.toHaveBeenCalled();
+    expect(store.setItem).not.toHaveBeenCalled();
+    expect(heldStart()).toMatchObject({
+      task: "plan",
+      brief: "Plan our launch next month.",
+      step: "start",
+      chosen: true,
+      queued: true,
+      provider: { apiKey: KEY },
+    });
+  });
+
+  it("tells the provider step the host is not there yet, and offers no setup that needs one", () => {
+    waiting();
+    expect(screen.queryByRole("button", { name: "Create one agent" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Plan a project/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(screen.getByText("The provider waits for the host")).toBeTruthy();
+  });
+
+  it("starts the queued task by itself once the host is up, after testing and storing the held key there", async () => {
+    const store = storage();
+    early.fields = fields();
+    queue().unmount();
+    mount();
+    await waitFor(() => expect(done).toHaveBeenCalledOnce());
+    const patch = {
+      provider: "compatible",
+      baseUrl: "https://openrouter.ai/api/v1",
+      defaultModel: "anthropic/claude-sonnet-4.5",
+      apiKey: KEY,
+    };
+    expect(test).toHaveBeenCalledExactlyOnceWith(patch);
+    expect(update).toHaveBeenCalledExactlyOnceWith(patch);
+    expect(update.mock.invocationCallOrder[0]!).toBeLessThan(hire.mock.invocationCallOrder[0]!);
+    expect(hire).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledExactlyOnceWith(
+      agent.id,
+      "Plan our launch next month.",
+      [],
+      expect.any(String),
+    );
+    expect(starting).toHaveBeenCalled();
+    expect(heldStart()).toBeNull();
+    for (const [, value] of store.setItem.mock.calls) expect(String(value)).not.toContain(KEY);
+  });
+
+  it("brings back the provider step when the held key fails its test, and starts once it connects", async () => {
+    test.mockRejectedValueOnce({ kind: "keyRejected", message: "401" });
+    early.fields = fields();
+    queue().unmount();
+    mount();
+    expect(await screen.findByText("The provider shows the failed test")).toBeTruthy();
+    expect(
+      screen.getByText(
+        /your key did not pass its test\. Fix it below and your task starts right after/,
+      ),
+    ).toBeTruthy();
+    expect(update).not.toHaveBeenCalled();
+    expect(hire).not.toHaveBeenCalled();
+    early.fields = null;
+    fireEvent.click(screen.getByRole("button", { name: "Connect test provider" }));
+    await waitFor(() => expect(done).toHaveBeenCalledOnce());
+    expect(hire).toHaveBeenCalledOnce();
+  });
+
+  it("leaves a ChatGPT sign-in until the host is ready, says so, and starts right after it", async () => {
+    early.fields = fields({ provider: "chatgpt", apiKey: "" });
+    queue().unmount();
+    mount();
+    expect(
+      screen.getByText(
+        "Your host is ready. Sign in to ChatGPT to finish connecting, and your task starts right after.",
+      ),
+    ).toBeTruthy();
+    expect(test).not.toHaveBeenCalled();
+    expect(hire).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Connect test provider" }));
+    await waitFor(() => expect(done).toHaveBeenCalledOnce());
+    expect(test).not.toHaveBeenCalled();
+  });
+
+  it("does not start a task the person took back before the host came up", async () => {
+    early.fields = fields();
+    const view = queue();
+    fireEvent.click(screen.getByRole("button", { name: "Don't start yet" }));
+    expect(heldStart()?.queued).toBe(false);
+    view.unmount();
+    mount();
+    await waitFor(() => expect(update).toHaveBeenCalledOnce());
+    expect(hire).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    await waitFor(() => expect(done).toHaveBeenCalledOnce());
+  });
+
+  it("says a failed host start held nothing back and the task is still queued", () => {
+    early.fields = fields();
+    queue().unmount();
+    render(<Onboarding host={<p>Your host could not start.</p>} hostDown />);
+    expect(screen.getByRole("status").textContent).toContain(
+      "Your host could not start, so nothing has been sent. Your task stays queued",
+    );
+    expect(screen.getByRole("textbox", { name: "Your first brief" })).toHaveProperty(
+      "value",
+      "Plan our launch next month.",
+    );
+  });
+
+  it("keeps the caret where it was in the brief when the host arrives mid-sentence", () => {
+    const view = waiting();
+    const brief = screen.getByRole("textbox", { name: "Your first brief" }) as HTMLTextAreaElement;
+    fireEvent.change(brief, { target: { value: "Plan a small offsite" } });
+    brief.focus();
+    brief.setSelectionRange(4, 4);
+    view.unmount();
+    mount();
+    const again = screen.getByRole("textbox", { name: "Your first brief" }) as HTMLTextAreaElement;
+    expect(again.value).toBe("Plan a small offsite");
+    expect(document.activeElement).toBe(again);
+    expect(again.selectionStart).toBe(4);
+    expect(readFirstTask().brief).toBe("Plan a small offsite");
   });
 });
