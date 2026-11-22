@@ -3017,6 +3017,8 @@ zoom does not resize that layout.
 
 `scripts/hosting-browser.mjs` checks touch hit targets, phone widths, draft
 preservation, constrained viewport height, dialogs and the wide layout against
-a scratch daemon. Set `GUACA_BROWSER_SHOTS` to retain screenshots for visual
+a scratch daemon. On a phone it finds an agent by name through the Groups
+sheet's Command menu, the one place that finds agents now that Search finds
+messages and files. Set `GUACA_BROWSER_SHOTS` to retain screenshots for visual
 review. The viewport event suite covers keyboard resize, pan and zoom without
 depending on a particular device keyboard.
