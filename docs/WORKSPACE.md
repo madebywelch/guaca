@@ -2691,8 +2691,8 @@ The theme reaches the document as a second pair of token blocks, `:root` and
 properties on the root: those would pin the columns to whichever surface was
 current when they were written, and the surface would stop switching in CSS.
 
-One day a year the window is decorated: Thanksgiving, the fourth Thursday of
-November by the US rule wherever the operator is. It is one
+Two days a year the window is decorated: Thanksgiving, the fourth Thursday of
+November by the US rule wherever the operator is, and December 25. Each is one
 local calendar day on the viewing device, read by `seasonOn` in
 `lib/season.ts`, which is checked again at the next local midnight and whenever
 the window is focused or shown, because a sleeping laptop skips its timers. The

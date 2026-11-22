@@ -5,6 +5,7 @@ import type { Season } from "./theme";
 export type { Season } from "./theme";
 
 const NOVEMBER = 10;
+const DECEMBER = 11;
 const THURSDAY = 4;
 
 export function thanksgiving(year: number): number {
@@ -15,6 +16,7 @@ export function thanksgiving(year: number): number {
 export function seasonOn(date: Date): Season | null {
   const month = date.getMonth();
   const day = date.getDate();
+  if (month === DECEMBER && day === 25) return "christmas";
   if (month === NOVEMBER && day === thanksgiving(date.getFullYear())) return "thanksgiving";
   return null;
 }
@@ -50,6 +52,7 @@ export function watchSeason(
 
 const FORCED: Record<string, Season | null> = {
   thanksgiving: "thanksgiving",
+  christmas: "christmas",
   none: null,
 };
 

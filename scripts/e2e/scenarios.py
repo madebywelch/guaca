@@ -2019,7 +2019,13 @@ def scenario_season(w: World) -> None:
             after == {**after, "season": None, "greeting": None, "accents": [], "garland": False, "scene": False},
             observed=after, shot=True)
 
-    on_day(w, utc_ms(2026, 11, 26, 18), "Thanksgiving comes back when the clock does", "thanksgiving")
+    christmas = on_day(w, utc_ms(2026, 12, 25, 9), "Christmas is drawn", "christmas")
+    christmas = w.wait("the greeting says Merry Christmas",
+                       lambda: (state := ui.evaluate(SEASON_STATE))["greeting"] == "Merry Christmas" and state)
+    w.check("on December 25 the root, the greeting and every face say Christmas",
+            christmas["accents"] == ["christmas"] * christmas["avatars"] and christmas["garland"]
+            and christmas["scene"], observed=christmas, shot=True)
+
     ui.click("button", "App settings")
     w.wait("Settings opens", lambda: ui.find("region", "Settings"))
     ui.click("tab", "Appearance")
@@ -2028,7 +2034,7 @@ def scenario_season(w: World) -> None:
     dismiss(w)
     off = w.wait("switching seasonal looks off clears the season",
                  lambda: (state := ui.evaluate(SEASON_STATE))["season"] is None and state)
-    w.check("with Seasonal looks off, Thanksgiving draws no palette, greeting, accent or decoration",
+    w.check("with Seasonal looks off, Christmas Day draws no palette, greeting, accent or decoration",
             off == {**off, "greeting": None, "accents": [], "garland": False, "scene": False}
             and ui.evaluate("localStorage.getItem('guac.prefs')").count('"seasonal":false') == 1,
             observed=off, shot=True)
@@ -3687,15 +3693,16 @@ SCENARIOS: dict[str, Scenario] = {
         "the routine's history shows the one firing",
         "every model call was one the scenario scripted",
     )),
-    "season": Scenario(scenario_season, "On the fourth Thursday of November the window marks "
+    "season": Scenario(scenario_season, "On the fourth Thursday of November and on December 25 the window marks "
                        "its root, writes the greeting under the date and puts an accent on every face, and the "
                        "next day, read when the window is focused, clears all of it; with Seasonal looks switched "
-                       "off, Thanksgiving draws none of it.",
+                       "off, Christmas Day draws none of it.",
     (
         "on the fourth Thursday of November the root, the greeting and every face say Thanksgiving",
         "the decorated conversation keeps to the six type roles, the control family and the radii",
         "the day after, focusing the window clears the season, the greeting and every accent",
-        "with Seasonal looks off, Thanksgiving draws no palette, greeting, accent or decoration",
+        "on December 25 the root, the greeting and every face say Christmas",
+        "with Seasonal looks off, Christmas Day draws no palette, greeting, accent or decoration",
         "every model call was one the scenario scripted",
     )),
     "look": Scenario(scenario_look, "Questions, a conversation, Settings, New agent, the Groups sheet and Search, in "

@@ -53,9 +53,12 @@
   --picker-h: 24rem;
   --season-garland-h: 1.75rem;
   --season-scene-h: 5rem;
+  --season-pines-h: 8rem;
   --season-mark: 1rem;
   --season-leaves-w: 13.75rem;
   --season-leaves-h: 25rem;
+  --season-snow-w: 11.25rem;
+  --season-snow-h: 18.75rem;
   --space-lights: 80px;
   --space-safe-top: env(safe-area-inset-top, 0px);
   --space-safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -140,6 +143,7 @@
   --tempo-wait: 150ms;
   --tempo-pending: 900ms;
   --tempo-drift: 90s;
+  --tempo-twinkle: 4s;
 
   --pop-rise: 0.5rem;
   --pop-origin: center;
@@ -9656,6 +9660,28 @@ button.artifacts__version[aria-pressed="true"] {
   --decor-gutter: 0.7;
 }
 
+:root[data-season="christmas"] {
+  --decor-cranberry: #a3283c;
+  --decor-gold: #c9972b;
+  --decor-pine: #2f6b52;
+  --decor-cream: #f6e7b4;
+  --decor-hat: #b3253a;
+  --decor-fur: #ffffff;
+  --decor-snow: #ffffff;
+  --decor-mound: #ffffff;
+  --decor-bark: #6b4a2a;
+  --decor-wire: #3e4c44;
+  --decor-socket: #56625b;
+  --decor-gutter: 1;
+}
+
+:root[data-season="christmas"][data-surface="dark"] {
+  --decor-mound: #43524a;
+  --decor-wire: #84948a;
+  --decor-socket: #9aa69f;
+  --decor-gutter: 0.55;
+}
+
 .d-rust { fill: var(--decor-rust); }
 .d-ochre { fill: var(--decor-ochre); }
 .d-olive { fill: var(--decor-olive); }
@@ -9664,16 +9690,24 @@ button.artifacts__version[aria-pressed="true"] {
 .d-gloss { fill: var(--decor-gloss); }
 .d-bark { fill: var(--decor-bark); }
 .d-mound { fill: var(--decor-mound); }
+.d-cranberry { fill: var(--decor-cranberry); }
+.d-gold { fill: var(--decor-gold); }
+.d-pine { fill: var(--decor-pine); }
+.d-cream { fill: var(--decor-cream); }
+.d-hat { fill: var(--decor-hat); }
+.d-fur { fill: var(--decor-fur); }
+.d-snow { fill: var(--decor-snow); }
+.d-socket { fill: var(--decor-socket); }
 
-.d-vine {
+.d-vine,
+.d-wire {
   fill: none;
   stroke-width: 1.4;
   stroke-linecap: round;
 }
 
-.d-vine {
-  stroke: var(--decor-bark);
-}
+.d-vine { stroke: var(--decor-bark); }
+.d-wire { stroke: var(--decor-wire); }
 
 .decor,
 .avatar__accent {
@@ -9710,6 +9744,10 @@ button.artifacts__version[aria-pressed="true"] {
   flex: none;
   width: 100%;
   height: min(var(--season-scene-h), 100cqh);
+}
+
+.roster__scene[data-season="christmas"] .roster__scene-art {
+  height: min(var(--season-pines-h), 100cqh);
 }
 
 @container (max-height: 3rem) {
@@ -9768,14 +9806,42 @@ button.artifacts__version[aria-pressed="true"] {
   animation: season-leaves var(--tempo-drift) linear infinite;
 }
 
+:root[data-season="christmas"] .pane__body::before {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='300'%3E%3Ccircle cx='20' cy='30' r='2' fill='%23ffffff' stroke='%232f6b52' stroke-opacity='.22' stroke-width='.6'/%3E%3Ccircle cx='95' cy='62' r='1.5' fill='%23ffffff' stroke='%232f6b52' stroke-opacity='.22' stroke-width='.6'/%3E%3Ccircle cx='150' cy='20' r='2.4' fill='%23ffffff' stroke='%232f6b52' stroke-opacity='.22' stroke-width='.6'/%3E%3Ccircle cx='60' cy='122' r='1.8' fill='%23ffffff' stroke='%232f6b52' stroke-opacity='.22' stroke-width='.6'/%3E%3Ccircle cx='132' cy='142' r='2.2' fill='%23ffffff' stroke='%232f6b52' stroke-opacity='.22' stroke-width='.6'/%3E%3Ccircle cx='30' cy='204' r='1.4' fill='%23ffffff' stroke='%232f6b52' stroke-opacity='.22' stroke-width='.6'/%3E%3Ccircle cx='110' cy='222' r='2' fill='%23ffffff' stroke='%232f6b52' stroke-opacity='.22' stroke-width='.6'/%3E%3Ccircle cx='166' cy='262' r='1.6' fill='%23ffffff' stroke='%232f6b52' stroke-opacity='.22' stroke-width='.6'/%3E%3Ccircle cx='70' cy='282' r='2.3' fill='%23ffffff' stroke='%232f6b52' stroke-opacity='.22' stroke-width='.6'/%3E%3Ccircle cx='10' cy='112' r='1.2' fill='%23ffffff' stroke='%232f6b52' stroke-opacity='.22' stroke-width='.6'/%3E%3C/svg%3E");
+  background-size: var(--season-snow-w) var(--season-snow-h);
+  animation: season-snow var(--tempo-drift) linear infinite;
+}
+
 @keyframes season-leaves {
   to {
     background-position: var(--season-leaves-w) var(--season-leaves-h);
   }
 }
 
+@keyframes season-snow {
+  to {
+    background-position: 0 var(--season-snow-h);
+  }
+}
+
+.lights__bulb--a {
+  animation: season-twinkle var(--tempo-twinkle) var(--ease-loop) infinite alternate;
+}
+
+.lights__bulb--b {
+  animation: season-twinkle var(--tempo-twinkle) var(--ease-loop) infinite alternate-reverse;
+}
+
+@keyframes season-twinkle {
+  to {
+    opacity: 0.62;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  :root[data-season] .pane__body::before {
+  :root[data-season] .pane__body::before,
+  .lights__bulb--a,
+  .lights__bulb--b {
     animation: none;
   }
 }

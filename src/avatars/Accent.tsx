@@ -6,6 +6,7 @@ export const MAPLE =
 
 export const SEAT: Record<Season, { angle: number; sink: number }> = {
   thanksgiving: { angle: -Math.PI / 2 + 0.75, sink: 3 },
+  christmas: { angle: -Math.PI / 2 + 0.38, sink: 4 },
 };
 
 export function seatOf(lump: Lump, season: Season): { x: number; y: number; tilt: number } {
@@ -19,6 +20,16 @@ export function seatOf(lump: Lump, season: Season): { x: number; y: number; tilt
     y: py - (dy / out) * sink,
     tilt: ((angle + Math.PI / 2) * 180) / Math.PI,
   };
+}
+
+function Hat() {
+  return (
+    <>
+      <path className="d-hat" d="M-10 0Q-7-16 5-15.5Q11.5-15 15-8Q9.5-11.5 5-8.5Q8-4.5 10 0Z" />
+      <circle className="d-fur" cx="15" cy="-7.6" r="3.3" />
+      <rect className="d-fur" x="-11.5" y="-2.8" width="23" height="5.6" rx="2.8" />
+    </>
+  );
 }
 
 function Leaf() {
@@ -37,7 +48,7 @@ export function Accent({ lump, season }: { lump: Lump; season: Season }) {
       data-accent={season}
       transform={`translate(${x.toFixed(2)} ${y.toFixed(2)}) rotate(${tilt.toFixed(1)})`}
     >
-      <Leaf />
+      {season === "christmas" ? <Hat /> : <Leaf />}
     </g>
   );
 }

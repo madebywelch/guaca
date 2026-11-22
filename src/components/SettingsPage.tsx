@@ -1468,7 +1468,8 @@ export function SettingsPage({ request, onSection, notices }: Props) {
                     <span className="switch-row__text">
                       <span className="switch-row__label">Seasonal looks</span>
                       <span className="switch-row__hint">
-                        A holiday palette, greeting and decorations on Thanksgiving.
+                        A holiday palette, greeting and decorations on Thanksgiving and Christmas
+                        Day.
                       </span>
                     </span>
                     <button

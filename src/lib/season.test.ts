@@ -51,11 +51,24 @@ describe("the day a season is on", () => {
     expect(seasonOn(day(2026, 11, 27, 0))).toBeNull();
   });
 
+  it("is Christmas on December 25 only, with no Eve and no Boxing Day", () => {
+    expect(seasonOn(day(2026, 12, 24, 23))).toBeNull();
+    expect(seasonOn(day(2026, 12, 25, 0))).toBe("christmas");
+    expect(seasonOn(day(2026, 12, 25, 23))).toBe("christmas");
+    expect(seasonOn(day(2026, 12, 26, 0))).toBeNull();
+  });
+
   it("is off across the year boundary and on an ordinary day", () => {
     expect(seasonOn(day(2026, 12, 31, 23))).toBeNull();
     expect(seasonOn(day(2027, 1, 1, 0))).toBeNull();
     expect(seasonOn(day(2026, 11, 22))).toBeNull();
     expect(seasonOn(day(2026, 7, 4))).toBeNull();
+  });
+
+  it("is Christmas on the 25th whichever weekday it falls on", () => {
+    for (let year = 2024; year < 2031; year++) {
+      expect(seasonOn(day(year, 12, 25))).toBe("christmas");
+    }
   });
 });
 
@@ -89,19 +102,19 @@ describe("a window left open across midnight", () => {
 
   it("checks the date again when the window is focused or shown, since a sleeping laptop skips timers", () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date(2026, 10, 25, 22, 0));
+    vi.setSystemTime(new Date(2026, 11, 24, 22, 0));
     let shown: string | null = "unset";
     const stop = watchSeason((season) => {
       shown = season;
     });
     expect(shown).toBeNull();
 
-    vi.setSystemTime(new Date(2026, 10, 26, 9, 0));
+    vi.setSystemTime(new Date(2026, 11, 25, 9, 0));
     expect(shown).toBeNull();
     window.dispatchEvent(new Event("focus"));
-    expect(shown).toBe("thanksgiving");
+    expect(shown).toBe("christmas");
 
-    vi.setSystemTime(new Date(2026, 10, 27, 9, 0));
+    vi.setSystemTime(new Date(2026, 11, 26, 9, 0));
     document.dispatchEvent(new Event("visibilitychange"));
     expect(shown).toBeNull();
     stop();
@@ -137,24 +150,24 @@ describe("a window left open across midnight", () => {
 describe("the hook a window reads", () => {
   it("follows the date across midnight", () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date(2026, 10, 25, 23, 59));
+    vi.setSystemTime(new Date(2026, 11, 24, 23, 59));
     const { result } = renderHook(() => useSeason(true));
     expect(result.current).toBeNull();
     act(() => {
       vi.advanceTimersByTime(60_000);
     });
-    expect(result.current).toBe("thanksgiving");
+    expect(result.current).toBe("christmas");
   });
 
   it("is off whatever the date when seasonal looks are switched off", () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date(2026, 10, 26, 12));
+    vi.setSystemTime(new Date(2026, 11, 25, 12));
     const { result, rerender } = renderHook(({ on }) => useSeason(on), {
       initialProps: { on: false },
     });
     expect(result.current).toBeNull();
     rerender({ on: true });
-    expect(result.current).toBe("thanksgiving");
+    expect(result.current).toBe("christmas");
     rerender({ on: false });
     expect(result.current).toBeNull();
   });
@@ -162,16 +175,38 @@ describe("the hook a window reads", () => {
 
 describe("forcing a season to preview it", () => {
   it("is refused outside a development build, whatever is asked", () => {
-    for (const asked of ["thanksgiving", "none"]) {
+    for (const asked of ["thanksgiving", "christmas", "none"]) {
       expect(forcedSeason(asked, false)).toBeUndefined();
     }
   });
 
   it("names a season, none, or nothing it recognizes in a development build", () => {
     expect(forcedSeason("thanksgiving", true)).toBe("thanksgiving");
+    expect(forcedSeason("christmas", true)).toBe("christmas");
     expect(forcedSeason("none", true)).toBeNull();
-    expect(forcedSeason("christmas", true)).toBeUndefined();
+    expect(forcedSeason("easter", true)).toBeUndefined();
     expect(forcedSeason("constructor", true)).toBeUndefined();
     expect(forcedSeason(null, true)).toBeUndefined();
+  });
+});
+
+describe("a preview forced from the address in a development build", () => {
+  afterEach(() => {
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("shows the season asked for on any day, and still honors the switch", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 6, 4, 12));
+    window.history.replaceState(null, "", "/?season=christmas");
+    expect(renderHook(() => useSeason(true)).result.current).toBe("christmas");
+    expect(renderHook(() => useSeason(false)).result.current).toBeNull();
+  });
+
+  it("can force the season off on the day itself", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 10, 26, 12));
+    window.history.replaceState(null, "", "/?season=none");
+    expect(renderHook(() => useSeason(true)).result.current).toBeNull();
   });
 });

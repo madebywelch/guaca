@@ -31,7 +31,7 @@ function Window() {
 function shown(container: HTMLElement) {
   return {
     accents: container.querySelectorAll(".avatar__accent").length,
-    greeting: screen.queryByText(/Happy Thanksgiving/)?.textContent ?? null,
+    greeting: screen.queryByText(/Happy Thanksgiving|Merry Christmas/)?.textContent ?? null,
     scene: container.querySelector(".roster__scene") !== null,
     garland: container.querySelector(".pane__garland") !== null,
   };
@@ -60,29 +60,29 @@ describe("on an ordinary day", () => {
 });
 
 describe("on the day", () => {
-  it.each([["thanksgiving", new Date(2026, 10, 26, 9), "Happy Thanksgiving"]] as const)(
-    "draws %s's greeting, accents and decorations",
-    (season, at, greeting) => {
-      vi.useFakeTimers();
-      vi.setSystemTime(at);
-      const { container } = render(
-        <SeasonalLooks>
-          <Window />
-        </SeasonalLooks>,
-      );
-      expect(shown(container)).toEqual({ accents: 2, greeting, scene: true, garland: true });
-      for (const accent of container.querySelectorAll(".avatar__accent")) {
-        expect(accent.getAttribute("data-accent")).toBe(season);
-      }
-      for (const art of container.querySelectorAll("svg.decor")) {
-        expect(art.getAttribute("aria-hidden")).toBe("true");
-      }
-    },
-  );
+  it.each([
+    ["thanksgiving", new Date(2026, 10, 26, 9), "Happy Thanksgiving"],
+    ["christmas", new Date(2026, 11, 25, 9), "Merry Christmas"],
+  ] as const)("draws %s's greeting, accents and decorations", (season, at, greeting) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(at);
+    const { container } = render(
+      <SeasonalLooks>
+        <Window />
+      </SeasonalLooks>,
+    );
+    expect(shown(container)).toEqual({ accents: 2, greeting, scene: true, garland: true });
+    for (const accent of container.querySelectorAll(".avatar__accent")) {
+      expect(accent.getAttribute("data-accent")).toBe(season);
+    }
+    for (const art of container.querySelectorAll("svg.decor")) {
+      expect(art.getAttribute("aria-hidden")).toBe("true");
+    }
+  });
 
   it("turns everything off when seasonal looks are switched off, and back on with the switch", () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date(2026, 10, 26, 9));
+    vi.setSystemTime(new Date(2026, 11, 25, 9));
     const { container } = render(
       <SeasonalLooks>
         <Window />
@@ -94,7 +94,7 @@ describe("on the day", () => {
     expect(shown(container)).toEqual({ accents: 0, greeting: null, scene: false, garland: false });
 
     act(() => useStore.getState().setPrefs({ seasonal: true }));
-    expect(shown(container).greeting).toBe("Happy Thanksgiving");
+    expect(shown(container).greeting).toBe("Merry Christmas");
   });
 
   it("puts the decorations away at midnight in a window left open", () => {
@@ -116,7 +116,7 @@ describe("on the day", () => {
 describe("an avatar's accent", () => {
   it("can be left off where a face stands for a choice rather than an agent", () => {
     const { container } = render(
-      <SeasonContext.Provider value="thanksgiving">
+      <SeasonContext.Provider value="christmas">
         <AgentAvatar avatar="orb" color="#5a7d99" plain />
       </SeasonContext.Provider>,
     );
@@ -124,7 +124,7 @@ describe("an avatar's accent", () => {
   });
 
   it("sits on top of every character, anchored to its own outline rather than its box", () => {
-    for (const season of ["thanksgiving"] as Season[]) {
+    for (const season of ["thanksgiving", "christmas"] as Season[]) {
       const seats = new Set<string>();
       for (const lump of CHARACTERS) {
         const { x, y } = seatOf(lump, season);

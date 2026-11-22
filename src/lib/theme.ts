@@ -95,10 +95,11 @@ export const ATTENTIONS: Record<AttentionKey, Attention> = {
 
 export const CONTRASTS: readonly ContrastLevel[] = ["standard", "more"];
 
-export type Season = "thanksgiving";
+export type Season = "thanksgiving" | "christmas";
 
 export const SEASONS: Record<Season, { h: number; c: number; system: { h: number; c: number } }> = {
   thanksgiving: { h: 74, c: 0.0156, system: { h: 47, c: 0.075 } },
+  christmas: { h: 158, c: 0.009, system: { h: 160, c: 0.1 } },
 };
 
 export function takesSeason(theme: Theme): boolean {

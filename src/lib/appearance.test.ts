@@ -272,7 +272,7 @@ describe("a season on the document", () => {
   });
 
   it("clears the mark and the palette the day after", () => {
-    applyAppearance({ ...look(100, "light"), season: "thanksgiving" }, false);
+    applyAppearance({ ...look(100, "light"), season: "christmas" }, false);
     applyAppearance({ ...look(100, "light"), season: null }, false);
     expect(document.documentElement.hasAttribute("data-season")).toBe(false);
     expect(themeStyle()?.textContent).toBe(themeCss(DEFAULT_PREFS));
@@ -286,8 +286,8 @@ describe("a season on the document", () => {
 
   it("keeps a chosen theme's colors and still marks the root for the decorations", () => {
     const chosen = { ...look(100, "light"), grays: "slate" as const, temperature: "cool" as const };
-    applyAppearance({ ...chosen, season: "thanksgiving" }, false);
-    expect(document.documentElement.dataset.season).toBe("thanksgiving");
+    applyAppearance({ ...chosen, season: "christmas" }, false);
+    expect(document.documentElement.dataset.season).toBe("christmas");
     expect(themeStyle()?.textContent).toBe(themeCss(chosen));
   });
 });
