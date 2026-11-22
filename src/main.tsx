@@ -9,6 +9,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { HostSetup } from "./components/HostSetup";
 import { HostMonitor } from "./components/HostUpdates";
 import { Roster } from "./components/Markdown";
+import { SeasonalLooks } from "./components/Seasonal";
 import { TokenEntry } from "./components/TokenEntry";
 import { useStore } from "./lib/store";
 
@@ -25,7 +26,9 @@ function Guaca() {
   return (
     <Roster.Provider value={roster}>
       <CastContext.Provider value={cast}>
-        <App />
+        <SeasonalLooks>
+          <App />
+        </SeasonalLooks>
       </CastContext.Provider>
     </Roster.Provider>
   );

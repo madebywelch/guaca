@@ -218,7 +218,13 @@ export function AgentEditor({ agent, onClose }: Props) {
                     checked={draft.avatar === entry.key}
                     onChange={() => patch({ avatar: entry.key })}
                   />
-                  <AgentAvatar avatar={entry.key} color={draft.color} size="sm" seed={entry.key} />
+                  <AgentAvatar
+                    avatar={entry.key}
+                    color={draft.color}
+                    size="sm"
+                    seed={entry.key}
+                    plain
+                  />
                 </label>
               ))}
             </div>

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { contrast, distance, linear, luminance, oklab } from "./color";
-
+import { DEFAULT_PREFS } from "./prefs";
 import {
   ATTENTIONS,
   type AttentionKey,
@@ -13,11 +13,14 @@ import {
   GRAYS,
   type GrayKey,
   measure,
+  SEASONS,
+  type Season,
   TEMPERATURE_KEYS,
   THEME_PRESETS,
   THEME_TOKENS,
   type Theme,
   type Tokens,
+  takesSeason,
   themeCss,
   themeTokens,
 } from "./theme";
@@ -312,5 +315,91 @@ describe("the grays", () => {
     for (const [key, gray] of Object.entries(GRAYS)) {
       expect(gray.c, `${key} grays`).toBeLessThan(0.02);
     }
+  });
+});
+
+describe("a season's palette", () => {
+  const DEFAULT_LOOK: Theme = {
+    grays: DEFAULT_PREFS.grays,
+    attention: DEFAULT_PREFS.attention,
+    contrast: DEFAULT_PREFS.contrast,
+    temperature: DEFAULT_PREFS.temperature,
+  };
+  const seasons = Object.keys(SEASONS) as Season[];
+
+  it("passes every contrast gate the solver measures, in light and in dark", () => {
+    for (const season of seasons) {
+      for (const surface of ["light", "dark"] as const) {
+        const tokens = themeTokens(DEFAULT_LOOK, surface, season);
+        expect(failures(tokens, DEFAULT_LOOK.contrast)).toEqual([]);
+        expect(contrast(tokens["--muted"], tokens["--raised"])).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+  });
+
+  it("moves the grounds and the system's voice off the everyday palette", () => {
+    for (const season of seasons) {
+      for (const surface of ["light", "dark"] as const) {
+        const everyday = themeTokens(DEFAULT_LOOK, surface);
+        const seasonal = themeTokens(DEFAULT_LOOK, surface, season);
+        for (const token of ["--ground", "--rail-ground", "--sunken", "--system"] as const) {
+          expect(distance(seasonal[token], everyday[token])).toBeGreaterThan(0.5);
+        }
+      }
+    }
+  });
+
+  it("leaves amber and red exactly as they are every other day", () => {
+    const steady = [
+      "--attention",
+      "--attention-wash",
+      "--attention-fill",
+      "--on-attention-fill",
+      "--danger",
+      "--danger-fill",
+      "--on-danger-fill",
+    ] as const;
+    for (const season of seasons) {
+      for (const surface of ["light", "dark"] as const) {
+        const everyday = themeTokens(DEFAULT_LOOK, surface);
+        const seasonal = themeTokens(DEFAULT_LOOK, surface, season);
+        for (const token of steady) expect(seasonal[token]).toBe(everyday[token]);
+      }
+    }
+  });
+
+  it("keeps the action in ink: the text color, with the ground written on it", () => {
+    for (const season of seasons) {
+      for (const surface of ["light", "dark"] as const) {
+        const tokens = themeTokens(DEFAULT_LOOK, surface, season);
+        expect(tokens["--action-fill"]).toBe(tokens["--text"]);
+        expect(tokens["--on-action-fill"]).toBe(tokens["--ground"]);
+      }
+    }
+  });
+
+  it("applies to the default look only, and leaves a theme the operator chose alone", () => {
+    expect(takesSeason(DEFAULT_LOOK)).toBe(true);
+    for (const [name, preset] of Object.entries(THEME_PRESETS)) {
+      const same = takesSeason(preset);
+      expect(same, name).toBe(name === "Violet");
+      for (const season of seasons) {
+        if (same) continue;
+        expect(themeCss(preset, season), name).toBe(themeCss(preset));
+      }
+    }
+    for (const season of seasons) {
+      expect(themeCss({ ...DEFAULT_LOOK, contrast: "more" }, season)).toBe(
+        themeCss({ ...DEFAULT_LOOK, contrast: "more" }),
+      );
+      expect(themeCss({ ...DEFAULT_LOOK, attention: "blue" }, season)).toBe(
+        themeCss({ ...DEFAULT_LOOK, attention: "blue" }),
+      );
+    }
+  });
+
+  it("writes exactly the everyday blocks when there is no season", () => {
+    expect(themeCss(DEFAULT_LOOK, null)).toBe(themeCss(DEFAULT_LOOK));
+    expect(themeTokens(DEFAULT_LOOK, "light", null)).toEqual(themeTokens(DEFAULT_LOOK, "light"));
   });
 });

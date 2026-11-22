@@ -65,6 +65,7 @@ beforeEach(() => {
   root.removeAttribute("data-surface");
   root.removeAttribute("data-typeface");
   root.removeAttribute("data-reading");
+  root.removeAttribute("data-season");
   themeStyle()?.remove();
 });
 
@@ -259,5 +260,34 @@ describe("watching the OS", () => {
 
     query.flip(true);
     expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+describe("a season on the document", () => {
+  it("marks the root and writes the season's palette on the default look", () => {
+    applyAppearance({ ...look(100, "light"), season: "thanksgiving" }, false);
+    expect(document.documentElement.dataset.season).toBe("thanksgiving");
+    expect(themeStyle()?.textContent).toBe(themeCss(DEFAULT_PREFS, "thanksgiving"));
+    expect(themeStyle()?.textContent).not.toBe(themeCss(DEFAULT_PREFS));
+  });
+
+  it("clears the mark and the palette the day after", () => {
+    applyAppearance({ ...look(100, "light"), season: "christmas" }, false);
+    applyAppearance({ ...look(100, "light"), season: null }, false);
+    expect(document.documentElement.hasAttribute("data-season")).toBe(false);
+    expect(themeStyle()?.textContent).toBe(themeCss(DEFAULT_PREFS));
+  });
+
+  it("writes the same document as before seasons existed when none is named", () => {
+    applyAppearance(look(100, "light"), false);
+    expect(document.documentElement.hasAttribute("data-season")).toBe(false);
+    expect(themeStyle()?.textContent).toBe(themeCss(DEFAULT_PREFS));
+  });
+
+  it("keeps a chosen theme's colors and still marks the root for the decorations", () => {
+    const chosen = { ...look(100, "light"), grays: "slate" as const, temperature: "cool" as const };
+    applyAppearance({ ...chosen, season: "christmas" }, false);
+    expect(document.documentElement.dataset.season).toBe("christmas");
+    expect(themeStyle()?.textContent).toBe(themeCss(chosen));
   });
 });

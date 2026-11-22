@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { AgentAvatar } from "./avatars/AgentAvatar";
 import { AgentEditor } from "./components/AgentEditor";
@@ -43,6 +43,7 @@ import { readFirstTask } from "./lib/onboarding";
 import { inferenceOf, providerFor } from "./lib/providers";
 import { numbered, stepped } from "./lib/rail";
 import { useRuntime } from "./lib/runtime";
+import { SeasonContext } from "./lib/season";
 import { asSection, type Section } from "./lib/sections";
 import { type Banner, useLiveAgents, useStore } from "./lib/store";
 import { attached, desktop } from "./lib/transport";
@@ -101,6 +102,7 @@ export default function App() {
   const railGroup = useStore((s) => s.railGroup);
   const dropAgent = useStore((s) => s.dropAgent);
   const prefs = useStore((s) => s.prefs);
+  const season = useContext(SeasonContext);
 
   const [agentView, setAgentView] = useState<AgentView>("conversation");
   const [chosenQuestion, setChosenQuestion] = useState<string | null>(null);
@@ -262,10 +264,22 @@ export default function App() {
       typeface,
       reading,
       readingSize,
+      season,
     };
     applyAppearance(look);
     return watchSystemSurface(() => applyAppearance(look));
-  }, [uiScale, surface, grays, attention, contrast, temperature, typeface, reading, readingSize]);
+  }, [
+    uiScale,
+    surface,
+    grays,
+    attention,
+    contrast,
+    temperature,
+    typeface,
+    reading,
+    readingSize,
+    season,
+  ]);
 
   const ready = useRuntime(onEvent);
 

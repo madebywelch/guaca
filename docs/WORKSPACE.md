@@ -2692,6 +2692,22 @@ The theme reaches the document as a second pair of token blocks, `:root` and
 properties on the root: those would pin the columns to whichever surface was
 current when they were written, and the surface would stop switching in CSS.
 
+Two days a year the window is decorated: Thanksgiving, the fourth Thursday of
+November by the US rule wherever the operator is, and December 25. Each is one
+local calendar day on the viewing device, read by `seasonOn` in
+`lib/season.ts`, which is checked again at the next local midnight and whenever
+the window is focused or shown, because a sleeping laptop skips its timers. The
+date is recomputed every time rather than counted down, so a clock change or
+DST cannot strand a season. On the default look the season moves the grays
+and the system's voice through the same solver, with amber and red held to
+their everyday values; on a look the operator chose, their palette stays and
+only the decorations come. The decorations are illustration only: an accent on
+every face anchored to its own outline, a greeting under the date, a garland
+along the conversation's header rule, a scene in the roster's spare room, and
+a slow pattern in the gutters masked off the reading column. None of their
+colors is spent on text, a chip or a control, and none of it moves under
+reduced motion. Appearance's Seasonal looks switch turns all of it off.
+
 ## Type is one interface face, one reading face, six roles and a reading size
 
 Inter carries the interface, loaded with its optical-size axis so a title comes

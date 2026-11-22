@@ -1,5 +1,5 @@
 import type { Prefs, SurfaceMode } from "./prefs";
-import { themeCss } from "./theme";
+import { type Season, themeCss } from "./theme";
 
 export const ROOT_PX = 16;
 
@@ -16,7 +16,7 @@ export type Appearance = Pick<
   | "typeface"
   | "reading"
   | "readingSize"
->;
+> & { season?: Season | null };
 
 const THEME_STYLE = "guac-theme";
 
@@ -39,8 +39,10 @@ export function applyAppearance(look: Appearance, dark = prefersDark()): Surface
   root.dataset.typeface = look.typeface;
   root.dataset.reading = look.reading;
   root.style.colorScheme = surface;
+  if (look.season) root.dataset.season = look.season;
+  else delete root.dataset.season;
 
-  writeTheme(themeCss(look));
+  writeTheme(themeCss(look, look.season ?? null));
   return surface;
 }
 

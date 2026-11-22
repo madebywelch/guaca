@@ -2107,6 +2107,79 @@ def hello(c: Call) -> Reply | None:
     return None
 
 
+SEASON_STATE = """(() => ({
+  season: document.documentElement.dataset.season || null,
+  greeting: document.querySelector('.roster__greeting')?.innerText.trim() || null,
+  avatars: document.querySelectorAll('.roster .avatar, .pane__header .avatar').length,
+  accents: [...document.querySelectorAll('.roster .avatar__accent, .pane__header .avatar__accent')]
+    .map((accent) => accent.getAttribute('data-accent')),
+  garland: !!document.querySelector('.pane__garland'),
+  scene: !!document.querySelector('.roster__scene'),
+}))()"""
+
+
+def utc_ms(year: int, month: int, day: int, hour: int = 0, minute: int = 0, second: int = 0) -> int:
+    from datetime import datetime, timezone
+    return int(datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc).timestamp() * 1000)
+
+
+def on_day(w: World, at_ms: int, what: str, season: str | None) -> dict:
+    w.ui.clock(at_ms)
+    w.ui.evaluate("window.dispatchEvent(new Event('focus'))")
+    return w.wait(what, lambda: (state := w.ui.evaluate(SEASON_STATE))["season"] == season and state)
+
+
+def scenario_season(w: World) -> None:
+    w.model.script = hello
+    w.start()
+    first_run(w)
+    settled(w, 1)
+    ui = w.ui
+    open_agent(w, AGENT)
+
+    ui.clock(utc_ms(2026, 11, 26, 9))
+    ui.evaluate("location.reload()")
+    w.wait("the page comes back on Thanksgiving", lambda: ui.find("button", "App settings")
+           and ui.evaluate(SEASON_STATE)["avatars"] > 0)
+    ui.viewport(*look.FRAME)
+    open_agent(w, AGENT)
+    thanksgiving = w.wait("Thanksgiving is drawn", lambda: (state := ui.evaluate(SEASON_STATE))["greeting"] and state)
+    w.check("on the fourth Thursday of November the root, the greeting and every face say Thanksgiving",
+            thanksgiving["season"] == "thanksgiving" and thanksgiving["greeting"] == "Happy Thanksgiving"
+            and thanksgiving["accents"] == ["thanksgiving"] * thanksgiving["avatars"]
+            and thanksgiving["garland"] and thanksgiving["scene"],
+            observed=thanksgiving, shot=True)
+    seen = look.judge("a conversation on Thanksgiving", ui.evaluate(look.MEASURE))
+    w.check("the decorated conversation keeps to the six type roles, the control family and the radii",
+            not seen.faults, observed=seen.styles, detail=seen.faults or None)
+
+    after = on_day(w, utc_ms(2026, 11, 27, 0, 0, 30), "the season ends the day after", None)
+    w.check("the day after, focusing the window clears the season, the greeting and every accent",
+            after == {**after, "season": None, "greeting": None, "accents": [], "garland": False, "scene": False},
+            observed=after, shot=True)
+
+    christmas = on_day(w, utc_ms(2026, 12, 25, 9), "Christmas is drawn", "christmas")
+    christmas = w.wait("the greeting says Merry Christmas",
+                       lambda: (state := ui.evaluate(SEASON_STATE))["greeting"] == "Merry Christmas" and state)
+    w.check("on December 25 the root, the greeting and every face say Christmas",
+            christmas["accents"] == ["christmas"] * christmas["avatars"] and christmas["garland"]
+            and christmas["scene"], observed=christmas, shot=True)
+
+    ui.click("button", "App settings")
+    w.wait("Settings opens", lambda: ui.find("region", "Settings"))
+    ui.click("tab", "Appearance")
+    w.wait("the Appearance pane is shown", lambda: ui.find("heading", "Appearance"))
+    ui.click("switch", "Seasonal looks")
+    dismiss(w)
+    off = w.wait("switching seasonal looks off clears the season",
+                 lambda: (state := ui.evaluate(SEASON_STATE))["season"] is None and state)
+    w.check("with Seasonal looks off, Christmas Day draws no palette, greeting, accent or decoration",
+            off == {**off, "greeting": None, "accents": [], "garland": False, "scene": False}
+            and ui.evaluate("localStorage.getItem('guac.prefs')").count('"seasonal":false') == 1,
+            observed=off, shot=True)
+    no_unscripted(w)
+
+
 def scenario_newagent(w: World) -> None:
     w.model.script = hello
     w.start()
@@ -3772,6 +3845,18 @@ SCENARIOS: dict[str, Scenario] = {
         "one delivery fires the routine once, with its body, in a run of its own",
         "a retry of the same delivery does not fire it again",
         "the routine's history shows the one firing",
+        "every model call was one the scenario scripted",
+    )),
+    "season": Scenario(scenario_season, "On the fourth Thursday of November and on December 25 the window marks "
+                       "its root, writes the greeting under the date and puts an accent on every face, and the "
+                       "next day, read when the window is focused, clears all of it; with Seasonal looks switched "
+                       "off, Christmas Day draws none of it.",
+    (
+        "on the fourth Thursday of November the root, the greeting and every face say Thanksgiving",
+        "the decorated conversation keeps to the six type roles, the control family and the radii",
+        "the day after, focusing the window clears the season, the greeting and every accent",
+        "on December 25 the root, the greeting and every face say Christmas",
+        "with Seasonal looks off, Christmas Day draws no palette, greeting, accent or decoration",
         "every model call was one the scenario scripted",
     )),
     "look": Scenario(scenario_look, "Questions, a conversation, Settings, New agent, the Groups sheet and Search, in "

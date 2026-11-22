@@ -1,4 +1,12 @@
-import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useContext,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { ACCENTS, DEFAULT_ACCENT } from "../avatars/catalog";
@@ -27,6 +35,7 @@ import {
   UI_SCALES,
 } from "../lib/prefs";
 import { type Provider as Preset, planLabel, providerFor } from "../lib/providers";
+import { SeasonContext } from "../lib/season";
 import { SECTION_LABELS, SECTIONS, type Section } from "../lib/sections";
 import { type SettingsDraft, useStore } from "../lib/store";
 import { moveAlongTabs } from "../lib/tablist";
@@ -247,9 +256,10 @@ export function SettingsPage({ request, onSection, notices }: Props) {
   const setPrefs = useStore((s) => s.setPrefs);
   const place = hostPlace();
   const keeps = clientKeeps({ desktop, attached: attached() !== null });
+  const season = useContext(SeasonContext);
   const setLook = (patch: Partial<Prefs>) => {
     setPrefs(patch);
-    applyAppearance({ ...prefs, ...patch });
+    applyAppearance({ ...prefs, ...patch, season });
   };
 
   const [section, setSection] = useState<Section>(opening ?? "general");
@@ -1454,6 +1464,25 @@ export function SettingsPage({ request, onSection, notices }: Props) {
                       <span aria-hidden="true" className="toggle__track" />
                     </button>
                   </div>
+                  <div className="switch-row">
+                    <span className="switch-row__text">
+                      <span className="switch-row__label">Seasonal looks</span>
+                      <span className="switch-row__hint">
+                        A holiday palette, greeting and decorations on Thanksgiving and Christmas
+                        Day.
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      className="toggle"
+                      role="switch"
+                      aria-label="Seasonal looks"
+                      aria-checked={prefs.seasonal}
+                      onClick={() => setPrefs({ seasonal: !prefs.seasonal })}
+                    >
+                      <span aria-hidden="true" className="toggle__track" />
+                    </button>
+                  </div>
                   <SettingChoice
                     name="Reading surface"
                     title="The whole window follows this setting."
@@ -1565,6 +1594,7 @@ export function SettingsPage({ request, onSection, notices }: Props) {
                               mood="idle"
                               cast={value}
                               seed={`settings-${one.avatar}`}
+                              plain
                             />
                           ))}
                         </span>

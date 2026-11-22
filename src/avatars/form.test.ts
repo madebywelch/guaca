@@ -17,7 +17,7 @@ import {
   saccadeBlink,
   settle,
 } from "./eyes";
-import { blend, bodyPoints, FORM, grip, outline, PULL, press } from "./form";
+import { blend, bodyPoints, FORM, grip, outline, PULL, perch, press } from "./form";
 import { MOODS, type Mood } from "./moods";
 
 const MOOD_KEYS = Object.keys(MOODS) as Mood[];
@@ -631,5 +631,31 @@ describe("the icon's bodies", () => {
     samples.forEach((sample, at) => {
       expect(icon[at], `press(${sample.join(", ")})`).toBeCloseTo(press(...sample), 12);
     });
+  });
+});
+
+describe("where an accent sits", () => {
+  it("is on each character's own resting outline, whatever its shape", () => {
+    const up = (24 / FORM.samples) * Math.PI * 2;
+    for (const lump of CHARACTERS) {
+      const [x, y] = perch(lump, up);
+      const rest = bodyPoints(lump, {}, 0).pts[24]!;
+      expect(Math.hypot(x - rest[0], y - rest[1]), lump.key).toBeLessThan(1e-9);
+    }
+  });
+
+  it("follows the shape, so a cloud's crown and a drop's point are not one height", () => {
+    const tops = new Map<string, number>();
+    for (const lump of CHARACTERS) {
+      tops.set(
+        lump.form,
+        Math.min(tops.get(lump.form) ?? Number.POSITIVE_INFINITY, perch(lump, -Math.PI / 2)[1]),
+      );
+    }
+    expect(new Set([...tops.values()].map((y) => y.toFixed(1))).size).toBeGreaterThan(2);
+    for (const y of tops.values()) {
+      expect(y).toBeLessThan(FORM.center - FORM.radius * 0.8);
+      expect(y).toBeGreaterThan(FORM.center - FORM.reach);
+    }
   });
 });

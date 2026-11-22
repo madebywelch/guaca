@@ -51,6 +51,14 @@
   --control-touch: 2.75rem;
   --picker-w: 14rem;
   --picker-h: 24rem;
+  --season-garland-h: 1.75rem;
+  --season-scene-h: 5rem;
+  --season-pines-h: 8rem;
+  --season-mark: 1rem;
+  --season-leaves-w: 13.75rem;
+  --season-leaves-h: 25rem;
+  --season-snow-w: 11.25rem;
+  --season-snow-h: 18.75rem;
   --space-lights: 80px;
   --space-safe-top: env(safe-area-inset-top, 0px);
   --space-safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -134,6 +142,8 @@
   --tempo-enter: 300ms;
   --tempo-wait: 150ms;
   --tempo-pending: 900ms;
+  --tempo-drift: 90s;
+  --tempo-twinkle: 4s;
 
   --pop-rise: 0.5rem;
   --pop-origin: center;
@@ -9656,4 +9666,214 @@ button.artifacts__version[aria-pressed="true"] {
 
 :root:not([data-keyboard]) .menubar :focus-visible {
   outline: none;
+}
+
+:root[data-season="thanksgiving"] {
+  --decor-rust: #b5532a;
+  --decor-ochre: #d29a2f;
+  --decor-olive: #6f7a35;
+  --decor-pumpkin: #d9722b;
+  --decor-rind: #c4612a;
+  --decor-gloss: #e89552;
+  --decor-bark: #6b4a2a;
+  --decor-mound: #f0e0c8;
+  --decor-gutter: 1;
+}
+
+:root[data-season="thanksgiving"][data-surface="dark"] {
+  --decor-bark: #9c7650;
+  --decor-mound: #3b3023;
+  --decor-gutter: 0.7;
+}
+
+:root[data-season="christmas"] {
+  --decor-cranberry: #a3283c;
+  --decor-gold: #c9972b;
+  --decor-pine: #2f6b52;
+  --decor-cream: #f6e7b4;
+  --decor-hat: #b3253a;
+  --decor-fur: #ffffff;
+  --decor-snow: #ffffff;
+  --decor-mound: #ffffff;
+  --decor-bark: #6b4a2a;
+  --decor-wire: #3e4c44;
+  --decor-socket: #56625b;
+  --decor-gutter: 1;
+}
+
+:root[data-season="christmas"][data-surface="dark"] {
+  --decor-mound: #43524a;
+  --decor-wire: #84948a;
+  --decor-socket: #9aa69f;
+  --decor-gutter: 0.55;
+}
+
+.d-rust { fill: var(--decor-rust); }
+.d-ochre { fill: var(--decor-ochre); }
+.d-olive { fill: var(--decor-olive); }
+.d-pumpkin { fill: var(--decor-pumpkin); }
+.d-rind { fill: var(--decor-rind); }
+.d-gloss { fill: var(--decor-gloss); }
+.d-bark { fill: var(--decor-bark); }
+.d-mound { fill: var(--decor-mound); }
+.d-cranberry { fill: var(--decor-cranberry); }
+.d-gold { fill: var(--decor-gold); }
+.d-pine { fill: var(--decor-pine); }
+.d-cream { fill: var(--decor-cream); }
+.d-hat { fill: var(--decor-hat); }
+.d-fur { fill: var(--decor-fur); }
+.d-snow { fill: var(--decor-snow); }
+.d-socket { fill: var(--decor-socket); }
+
+.d-vine,
+.d-wire {
+  fill: none;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+}
+
+.d-vine { stroke: var(--decor-bark); }
+.d-wire { stroke: var(--decor-wire); }
+
+.decor,
+.avatar__accent {
+  pointer-events: none;
+}
+
+.roster__greeting {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0 var(--space-3);
+  color: var(--system);
+  font-size: var(--type-support);
+}
+
+.roster__greeting-mark {
+  flex: none;
+  width: var(--season-mark);
+  height: var(--season-mark);
+}
+
+.roster__scene {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  align-items: flex-end;
+  container-type: size;
+  margin: 0 calc(var(--space-4) * -1) calc(var(--space-4) * -1);
+}
+
+.roster__scene-art {
+  display: block;
+  flex: none;
+  width: 100%;
+  height: min(var(--season-scene-h), 100cqh);
+}
+
+.roster__scene[data-season="christmas"] .roster__scene-art {
+  height: min(var(--season-pines-h), 100cqh);
+}
+
+@container (max-height: 3rem) {
+  .roster__scene-art {
+    display: none;
+  }
+}
+
+:root[data-season] .pane__header {
+  position: relative;
+}
+
+.pane__garland {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 1;
+  width: 100%;
+  height: var(--season-garland-h);
+  overflow: hidden;
+}
+
+:root[data-season] .pane__body > .pane__scroll {
+  padding-top: var(--space-8);
+  mask-image: linear-gradient(
+    to bottom,
+    transparent var(--season-garland-h),
+    #000 calc(var(--season-garland-h) + var(--space-5))
+  );
+}
+
+:root[data-season] .pane__body {
+  position: relative;
+  isolation: isolate;
+}
+
+:root[data-season] .pane__body::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: var(--decor-gutter);
+  mask-image: linear-gradient(
+    to right,
+    #000 calc(50% - var(--scrollbar-size) / 2 - var(--column-w) / 2 - var(--space-7)),
+    transparent calc(50% - var(--scrollbar-size) / 2 - var(--column-w) / 2),
+    transparent calc(50% - var(--scrollbar-size) / 2 + var(--column-w) / 2),
+    #000 calc(50% - var(--scrollbar-size) / 2 + var(--column-w) / 2 + var(--space-7))
+  );
+}
+
+:root[data-season="thanksgiving"] .pane__body::before {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='400'%3E%3Cpath d='M12 1 13.4 4.6 15.4 3.8 14.8 8.2 17.8 5.8 18.6 7.6 21.8 7 20.4 10.4 22.6 11.6 17.4 15.6 18 17.6 12.9 16.8 12.9 22.6 11.1 22.6 11.1 16.8 6 17.6 6.6 15.6 1.4 11.6 3.6 10.4 2.2 7 5.4 7.6 6.2 5.8 9.2 8.2 8.6 3.8 10.6 4.6Z' fill='%23b5532a' fill-opacity='.42' transform='translate(40 60) rotate(20) scale(1.0) translate(-12 -12)'/%3E%3Cpath d='M12 1 13.4 4.6 15.4 3.8 14.8 8.2 17.8 5.8 18.6 7.6 21.8 7 20.4 10.4 22.6 11.6 17.4 15.6 18 17.6 12.9 16.8 12.9 22.6 11.1 22.6 11.1 16.8 6 17.6 6.6 15.6 1.4 11.6 3.6 10.4 2.2 7 5.4 7.6 6.2 5.8 9.2 8.2 8.6 3.8 10.6 4.6Z' fill='%23d29a2f' fill-opacity='.42' transform='translate(172 140) rotate(-30) scale(0.85) translate(-12 -12)'/%3E%3Cpath d='M12 1 13.4 4.6 15.4 3.8 14.8 8.2 17.8 5.8 18.6 7.6 21.8 7 20.4 10.4 22.6 11.6 17.4 15.6 18 17.6 12.9 16.8 12.9 22.6 11.1 22.6 11.1 16.8 6 17.6 6.6 15.6 1.4 11.6 3.6 10.4 2.2 7 5.4 7.6 6.2 5.8 9.2 8.2 8.6 3.8 10.6 4.6Z' fill='%236f7a35' fill-opacity='.42' transform='translate(92 236) rotate(50) scale(0.95) translate(-12 -12)'/%3E%3Cpath d='M12 1 13.4 4.6 15.4 3.8 14.8 8.2 17.8 5.8 18.6 7.6 21.8 7 20.4 10.4 22.6 11.6 17.4 15.6 18 17.6 12.9 16.8 12.9 22.6 11.1 22.6 11.1 16.8 6 17.6 6.6 15.6 1.4 11.6 3.6 10.4 2.2 7 5.4 7.6 6.2 5.8 9.2 8.2 8.6 3.8 10.6 4.6Z' fill='%23d9722b' fill-opacity='.42' transform='translate(188 322) rotate(12) scale(0.9) translate(-12 -12)'/%3E%3Cpath d='M12 1 13.4 4.6 15.4 3.8 14.8 8.2 17.8 5.8 18.6 7.6 21.8 7 20.4 10.4 22.6 11.6 17.4 15.6 18 17.6 12.9 16.8 12.9 22.6 11.1 22.6 11.1 16.8 6 17.6 6.6 15.6 1.4 11.6 3.6 10.4 2.2 7 5.4 7.6 6.2 5.8 9.2 8.2 8.6 3.8 10.6 4.6Z' fill='%23b5532a' fill-opacity='.42' transform='translate(26 360) rotate(-18) scale(0.7) translate(-12 -12)'/%3E%3C/svg%3E");
+  background-size: var(--season-leaves-w) var(--season-leaves-h);
+  animation: season-leaves var(--tempo-drift) linear infinite;
+}
+
+:root[data-season="christmas"] .pane__body::before {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='300'%3E%3Ccircle cx='20' cy='30' r='2' fill='%23ffffff' stroke='%232f6b52' stroke-opacity='.22' stroke-width='.6'/%3E%3Ccircle cx='95' cy='62' r='1.5' fill='%23ffffff' stroke='%232f6b52' stroke-opacity='.22' stroke-width='.6'/%3E%3Ccircle cx='150' cy='20' r='2.4' fill='%23ffffff' stroke='%232f6b52' stroke-opacity='.22' stroke-width='.6'/%3E%3Ccircle cx='60' cy='122' r='1.8' fill='%23ffffff' stroke='%232f6b52' stroke-opacity='.22' stroke-width='.6'/%3E%3Ccircle cx='132' cy='142' r='2.2' fill='%23ffffff' stroke='%232f6b52' stroke-opacity='.22' stroke-width='.6'/%3E%3Ccircle cx='30' cy='204' r='1.4' fill='%23ffffff' stroke='%232f6b52' stroke-opacity='.22' stroke-width='.6'/%3E%3Ccircle cx='110' cy='222' r='2' fill='%23ffffff' stroke='%232f6b52' stroke-opacity='.22' stroke-width='.6'/%3E%3Ccircle cx='166' cy='262' r='1.6' fill='%23ffffff' stroke='%232f6b52' stroke-opacity='.22' stroke-width='.6'/%3E%3Ccircle cx='70' cy='282' r='2.3' fill='%23ffffff' stroke='%232f6b52' stroke-opacity='.22' stroke-width='.6'/%3E%3Ccircle cx='10' cy='112' r='1.2' fill='%23ffffff' stroke='%232f6b52' stroke-opacity='.22' stroke-width='.6'/%3E%3C/svg%3E");
+  background-size: var(--season-snow-w) var(--season-snow-h);
+  animation: season-snow var(--tempo-drift) linear infinite;
+}
+
+@keyframes season-leaves {
+  to {
+    background-position: var(--season-leaves-w) var(--season-leaves-h);
+  }
+}
+
+@keyframes season-snow {
+  to {
+    background-position: 0 var(--season-snow-h);
+  }
+}
+
+.lights__bulb--a {
+  animation: season-twinkle var(--tempo-twinkle) var(--ease-loop) infinite alternate;
+}
+
+.lights__bulb--b {
+  animation: season-twinkle var(--tempo-twinkle) var(--ease-loop) infinite alternate-reverse;
+}
+
+@keyframes season-twinkle {
+  to {
+    opacity: 0.62;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-season] .pane__body::before,
+  .lights__bulb--a,
+  .lights__bulb--b {
+    animation: none;
+  }
+}
+
+@media (max-width: 40rem) {
+  .roster__scene {
+    display: none;
+  }
 }
