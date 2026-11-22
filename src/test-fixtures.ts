@@ -74,6 +74,7 @@ export function anAgent(id: string, over: Partial<AgentCard> = {}): AgentCard {
     hasComputer: false,
     hasBrowser: false,
     runsErrands: false,
+    readsWeb: true,
     browserConsent: "open",
     name: id.charAt(0).toUpperCase() + id.slice(1),
     avatar: "plain",

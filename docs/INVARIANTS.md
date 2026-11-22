@@ -189,6 +189,20 @@ providers, unrelated cookie jars, separate sign-ins, either configurable without
 the other. Anything that describes one to a model has to disclaim the other, or
 the model takes a screenshot to see what `browse` did.
 
+**Reading the web is a third thing, and it reads only.** `web_search` and
+`read_page` need no computer, no browser and no key beyond the provider's, so a
+workspace with nothing but a provider can still cite a source. A search is a
+provider question asked in the one place providers meet, `llm/search.rs` and
+`LlmClient::search`, beside `stream_chat`: the runtime holds a `Backend` and asks
+it whether a search spends a model call, and never which provider it is. A page
+is fetched by the host, so `web.rs` refuses every loopback, private, link-local
+and metadata address, by literal, after DNS and after every redirect, and caps
+the bytes and the seconds. What a turn reads is labeled as data, and once it has
+read anything `read_page` opens only addresses the turn was shown: an address a
+model composes after reading a page is how that page sends the operator's
+things somewhere. Every destination it adds is listed in *What self-hosting
+guarantees* in `docs/HOSTING.md`; keep it that way.
+
 **A comment, a suppression or a new prose file needs the owner's grant.** A
 comment that excuses a workaround, a document that records a gotcha instead of
 making it impossible, and a suppression that silences a check are the same

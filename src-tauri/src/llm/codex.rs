@@ -129,7 +129,7 @@ struct Request<'a> {
     instructions: String,
     input: Vec<Item>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    tools: Vec<Function<'a>>,
+    tools: Vec<Tool<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<&'static str>,
     parallel_tool_calls: bool,
@@ -145,6 +145,16 @@ struct Reasoning {
     #[serde(skip_serializing_if = "Option::is_none")]
     effort: Option<crate::domain::effort::ReasoningEffort>,
     summary: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum Tool<'a> {
+    Function(Function<'a>),
+    Hosted {
+        #[serde(rename = "type")]
+        kind: &'static str,
+    },
 }
 
 #[derive(Debug, Serialize)]
@@ -259,12 +269,14 @@ fn build<'a>(
         tools: request
             .tools
             .iter()
-            .map(|tool: &ToolSpec| Function {
-                kind: "function",
-                name: &tool.name,
-                description: &tool.description,
-                parameters: &tool.parameters,
-                strict: false,
+            .map(|tool: &ToolSpec| {
+                Tool::Function(Function {
+                    kind: "function",
+                    name: &tool.name,
+                    description: &tool.description,
+                    parameters: &tool.parameters,
+                    strict: false,
+                })
             })
             .collect(),
         tool_choice: if request.tools.is_empty() { None } else { Some("auto") },
@@ -384,11 +396,59 @@ pub(super) async fn stream<F>(
 where
     F: FnMut(Token<'_>),
 {
+    let body = build(request, &request.model, cfg.reasoning_effort);
+    send(http, subscription, cfg, &body, on_token).await
+}
+
+fn searching<'a>(
+    request: &'a ChatRequest,
+    effort: crate::domain::effort::ReasoningEffort,
+) -> Request<'a> {
+    let mut body = build(request, &request.model, effort);
+    body.tools.push(Tool::Hosted { kind: "web_search" });
+    body.tool_choice = Some("auto");
+    body
+}
+
+pub(super) async fn search(
+    http: &reqwest::Client,
+    subscription: &Subscription,
+    cfg: &InferenceConfig,
+    model: &str,
+    query: &str,
+    count: usize,
+) -> Result<crate::llm::search::Searched, LlmError> {
+    let request = ChatRequest {
+        model: model.to_string(),
+        messages: vec![
+            ChatMessage::system(crate::llm::search::SEARCHER),
+            ChatMessage::user(crate::llm::search::ask(query, count)),
+        ],
+        tools: Vec::new(),
+        temperature: None,
+    };
+    let body = searching(&request, cfg.reasoning_effort);
+    let completion = send(http, subscription, cfg, &body, &mut |_| {}).await?;
+    Ok(crate::llm::search::Searched {
+        hits: crate::llm::search::kept(crate::llm::search::listed(&completion.content), count),
+        usage: completion.usage,
+    })
+}
+
+async fn send<F>(
+    http: &reqwest::Client,
+    subscription: &Subscription,
+    cfg: &InferenceConfig,
+    body: &Request<'_>,
+    on_token: &mut F,
+) -> Result<Completion, LlmError>
+where
+    F: FnMut(Token<'_>),
+{
     let mut access = subscription.access().await.map_err(auth_error)?;
 
     let url = format!("{}/responses", subscription.backend().trim_end_matches('/'));
     let timeout = Duration::from_secs(cfg.request_timeout_secs.clamp(5, 900));
-    let body = build(request, &request.model, cfg.reasoning_effort);
 
     let mut renewed = false;
     loop {
@@ -398,7 +458,7 @@ where
             .header("originator", ORIGINATOR)
             .header("Accept", "text/event-stream")
             .timeout(timeout)
-            .json(&body);
+            .json(body);
 
         if !access.account_id.is_empty() {
             send = send.header("ChatGPT-Account-Id", &access.account_id);
@@ -429,7 +489,7 @@ where
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<u64>().ok());
         let text = response.text().await.unwrap_or_default();
-        return Err(classify(status.as_u16(), &text, &request.model, retry_after));
+        return Err(classify(status.as_u16(), &text, body.model, retry_after));
     }
 }
 
@@ -621,6 +681,20 @@ mod tests {
 
     fn wire(body: &Request<'_>) -> serde_json::Value {
         serde_json::to_value(body).unwrap()
+    }
+
+    #[test]
+    fn a_search_asks_for_the_hosted_web_search_tool_and_stores_nothing() {
+        let request = ChatRequest {
+            model: "gpt-5".into(),
+            messages: vec![ChatMessage::system("search"), ChatMessage::user("lease or buy")],
+            tools: Vec::new(),
+            temperature: None,
+        };
+        let body = wire(&searching(&request, Default::default()));
+        assert_eq!(body["tools"], serde_json::json!([{ "type": "web_search" }]));
+        assert_eq!(body["tool_choice"], "auto");
+        assert_eq!(body["store"], false);
     }
 
     #[test]

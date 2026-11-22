@@ -45,6 +45,9 @@ const getSettings = vi.fn<() => Promise<Settings>>(async () => ({
   kernelKeyHint: "",
   browserIdleMinutes: 60,
   browserStealth: false,
+  searchKeySet: false,
+  searchKeyHint: "",
+  searchesWith: "",
   apiKeyHint: "...9999",
   requestTimeoutSecs: 120,
   limits: {
@@ -144,6 +147,7 @@ function agent(name: string, railOrder = 0): AgentCard {
     hasComputer: false,
     hasBrowser: false,
     runsErrands: false,
+    readsWeb: true,
     browserConsent: "open",
     name,
     avatar: "avocado",
@@ -1083,6 +1087,9 @@ describe("App", () => {
       kernelKeyHint: "",
       browserIdleMinutes: 60,
       browserStealth: false,
+      searchKeySet: false,
+      searchKeyHint: "",
+      searchesWith: "",
       apiKeyHint: "",
       requestTimeoutSecs: 120,
       limits: {
@@ -1329,6 +1336,9 @@ describe("App", () => {
       kernelKeyHint: "",
       browserIdleMinutes: 60,
       browserStealth: false,
+      searchKeySet: false,
+      searchKeyHint: "",
+      searchesWith: "",
       apiKeyHint: "",
       requestTimeoutSecs: 120,
       limits: {

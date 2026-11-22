@@ -92,6 +92,14 @@
     "expected": null
   },
   {
+    "input": "web_search",
+    "expected": null
+  },
+  {
+    "input": "read_page",
+    "expected": null
+  },
+  {
     "input": "google__gmail_search",
     "expected": null
   },

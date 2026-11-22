@@ -47,6 +47,21 @@ describe("what one call was", () => {
     expect(step?.target).toBe("https://www.cnn.com/world");
   });
 
+  it("names what a turn searched for and the site of a page it read", () => {
+    const [search, page] = steps(
+      call("web_search", { query: "lease or buy" }),
+      call("read_page", { url: "https://www.edmunds.com/car-leasing/" }),
+    );
+    expect(search?.title).toBe("Searched the web for lease or buy");
+    expect(search?.target).toBe("lease or buy");
+    expect(page?.title).toBe("Read edmunds.com");
+    expect(page?.where).toBe("edmunds.com");
+    expect(callInFlight("read_page", { url: "https://www.edmunds.com/a" })).toBe(
+      "Reading edmunds.com",
+    );
+    expect(callInFlight("web_search", { query: "x" })).toBe("Searching the web");
+  });
+
   it("shows a url that will not parse exactly as it was written", () => {
     const [step] = steps(call("browse", { action: "open", url: "cnn.com" }));
     expect(step?.title).toBe("Opened cnn.com");
