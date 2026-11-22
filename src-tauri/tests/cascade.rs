@@ -908,6 +908,61 @@ async fn an_upstream_failure_is_reported_in_the_channel_rather_than_swallowed() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_failed_model_call_is_told_plainly_and_keeps_the_provider_words_as_detail() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let app = Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                (
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                    axum::Json(
+                        serde_json::json!({"error": {"message": "The model is overloaded."}}),
+                    ),
+                )
+                    .into_response()
+            }),
+        );
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let stub = Stub {
+        base_url: format!("http://{addr}/v1"),
+        calls: Arc::new(AtomicUsize::new(0)),
+        transcript: Arc::new(parking_lot::Mutex::new(Vec::new())),
+    };
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "hello").unwrap();
+    h.settle(run).await;
+
+    let notices: Vec<(String, Option<String>)> = h
+        .runtime
+        .store()
+        .channel_messages(h.id("Manager"), 50)
+        .unwrap()
+        .into_iter()
+        .flat_map(|e| e.parts)
+        .filter_map(|part| match part {
+            Part::Notice { kind: NoticeKind::UpstreamError, text, detail } => Some((text, detail)),
+            _ => None,
+        })
+        .collect();
+    let [(text, detail)] = notices.as_slice() else {
+        panic!("one failure notice, got {notices:?}");
+    };
+    assert_eq!(
+        text,
+        "Manager could not reply: the provider had a problem on its side. Wait a minute, then try again."
+    );
+    let detail = detail.as_deref().unwrap_or_default();
+    assert!(
+        detail.contains("503") && detail.contains("The model is overloaded."),
+        "the provider's words stay one click away: {detail:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_progress_note_is_in_the_next_turn_with_how_long_ago_it_was_written() {
     let stub = serve(|body| {
         let system = body["messages"][0]["content"].as_str().unwrap_or_default();
@@ -5476,6 +5531,7 @@ async fn a_call_that_fails_after_tool_calls_keeps_the_record_of_them() {
                 Part::Notice {
                     kind: guac_lib::domain::envelope::NoticeKind::UpstreamError,
                     text,
+                    ..
                 } => Some((at, text.as_str())),
                 _ => None,
             })
@@ -6216,7 +6272,7 @@ fn notices_of(h: &Harness, name: &str, kind: NoticeKind) -> Vec<String> {
         .iter()
         .flat_map(|m| m.parts.clone())
         .filter_map(|part| match part {
-            Part::Notice { kind: found, text } if found == kind => Some(text),
+            Part::Notice { kind: found, text, .. } if found == kind => Some(text),
             _ => None,
         })
         .collect()
@@ -8372,7 +8428,7 @@ fn assert_cut_short(h: &Harness, run: RunId, text: &str) {
     assert_eq!(notices[0].cause, Some(asked.id), "Try again would not send this message");
     assert_eq!(
         notices[0].parts,
-        vec![Part::Notice { kind: NoticeKind::Interrupted, text: text.into() }]
+        vec![Part::Notice { kind: NoticeKind::Interrupted, text: text.into(), detail: None }]
     );
     let outcome = h.runtime.store().outcome(run).unwrap().expect("the conversation has an outcome");
     assert_eq!(outcome.status, OutcomeStatus::Interrupted);
@@ -8582,6 +8638,7 @@ async fn a_message_whose_start_cannot_be_recorded_says_so_at_once() {
             text: "Researcher could not start on this because the workspace could not record it. \
                    Nothing was done. It will be delivered again when the host next starts."
                 .into(),
+            detail: None,
         }]
     );
     assert_eq!(stub.calls.load(Ordering::SeqCst), 0);

@@ -56,6 +56,33 @@ describe("a system notice", () => {
   });
 });
 
+describe("a failure notice", () => {
+  const plain = "Analyst could not reply: the provider had a problem on its side.";
+  const raw = "inference endpoint returned HTTP 500: The model is overloaded.";
+
+  it("keeps the provider's words behind Details until they are asked for", () => {
+    const { container } = render(<NoticeRow kind="upstreamError" text={plain} detail={raw} />);
+    const details = screen.getByRole("button", { name: "Details" });
+    expect(details.getAttribute("aria-expanded")).toBe("false");
+    const hidden = container.querySelector<HTMLElement>(".chip__detail");
+    expect(hidden?.hidden).toBe(true);
+    expect(container.querySelector(".chip__said")?.textContent).toBe(plain);
+    fireEvent.click(details);
+    expect(details.getAttribute("aria-expanded")).toBe("true");
+    expect(hidden?.hidden).toBe(false);
+    expect(hidden?.textContent).toBe(raw);
+  });
+
+  it("offers no Details for a notice that has none, and one Try again that sends once", () => {
+    const retry = vi.fn();
+    render(<NoticeRow kind="upstreamError" text={plain} onRetry={retry} />);
+    expect(screen.queryByRole("button", { name: "Details" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sent again" }));
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("a peer message arriving", () => {
   it("is announced by name while it is written", () => {
     const { container } = render(<WritingRow peer={GOV} />);

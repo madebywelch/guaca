@@ -351,7 +351,7 @@ pub fn read(events: &[UiEvent], run: RunId, name_of: &dyn Fn(AgentId) -> String)
                                 outcome: outcome.clone(),
                             });
                         }
-                        Part::Notice { kind, text } => {
+                        Part::Notice { kind, text, .. } => {
                             resolve(channel, &mut names);
                             records.push(Record::Noticed {
                                 agent: channel,
@@ -722,6 +722,7 @@ mod tests {
                 vec![Part::Notice {
                     kind: NoticeKind::UpstreamError,
                     text: "Manager could not reply: the provider is unavailable".into(),
+                    detail: None,
                 }],
             ),
         );

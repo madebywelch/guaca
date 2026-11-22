@@ -46,12 +46,16 @@ Needs you, lists the ones the operator has not seen: one line each, newest
 first, under a heading per group when the lines come from more than one. A line
 is the agent's face and name, the first line of the closing note, a word when
 the run ended some other way than finishing (failed, interrupted, stopped,
-needs you) and its age. Clicking it opens that note in its channel and marks
+needs you) and its age. A run that failed or was interrupted is not listed with
+finished work: it sits above Finished under **Did not finish**, with Try again
+beside it, and the sentence under the title counts it apart ("1 did not
+finish"). Clicking a line opens that note in its channel and marks
 the run seen, as opening the channel any other way does. A run with no note, or
 whose note was cleared, opens the channel at its end. **Mark all seen** marks
 everything up to the newest line drawn, so a run that finishes while the list is
 open stays. Runs seen in the last seven days stay one click away under
-**Earlier**. A recurring check that found nothing is not listed anywhere.
+**Earlier**, where the ones that did not finish keep their own heading and Try
+again. A recurring check that found nothing is not listed anywhere.
 
 Finished is read when there is time, so it never competes with what needs an
 answer. It is not in For you's count, on either For you entry or on the menu

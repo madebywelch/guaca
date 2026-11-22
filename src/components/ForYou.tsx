@@ -6,12 +6,14 @@ import { useDismiss } from "../lib/dismiss";
 import { useShown } from "../lib/held";
 import { api } from "../lib/ipc";
 import {
+  didNotFinish,
   drawnThrough,
   EARLIER_LIMIT,
   EARLIER_MS,
   earlier,
   finished,
   forYouSummary,
+  retryOutcome,
   type Shelf,
   shelves,
   statusWord,
@@ -72,7 +74,9 @@ export function ForYou({ onClose }: { onClose: () => void }) {
       current = false;
     };
   }, [outcomes]);
-  const news = finished(outcomes);
+  const unseen = finished(outcomes);
+  const stalled = unseen.filter(didNotFinish);
+  const news = unseen.filter((outcome) => !didNotFinish(outcome));
   const past = earlier(recent, now);
   const openOutcome = (outcome: Outcome) => {
     if (outcome.seenAt === null) void seeOutcomes({ runIds: [outcome.runId] });
@@ -132,7 +136,7 @@ export function ForYou({ onClose }: { onClose: () => void }) {
             </button>
           </div>
           <p>
-            {forYouSummary(waiting, news.length)}{" "}
+            {forYouSummary(waiting, news.length, stalled.length)}{" "}
             {following.length > 0 ? `${following.length} in progress after your answer.` : ""}
           </p>
           <nav className="for-you__tabs" aria-label="For you views">
@@ -233,6 +237,22 @@ export function ForYou({ onClose }: { onClose: () => void }) {
                 : "Nothing you answered is still in progress."}
             </p>
           )}
+          {view === "needs" && stalled.length > 0 && (
+            <section className="for-you__finished" aria-labelledby="for-you-unfinished">
+              <header className="for-you__finished-head">
+                <h3 id="for-you-unfinished">Did not finish</h3>
+              </header>
+              {stalled.map((outcome) => (
+                <UnfinishedLine
+                  key={outcome.runId}
+                  outcome={outcome}
+                  agent={agents.find((agent) => agent.id === outcome.agentId)}
+                  now={now}
+                  onOpen={() => openOutcome(outcome)}
+                />
+              ))}
+            </section>
+          )}
           {view === "needs" && news.length > 0 && (
             <section className="for-you__finished" aria-labelledby="for-you-finished">
               <header className="for-you__finished-head">
@@ -254,7 +274,28 @@ export function ForYou({ onClose }: { onClose: () => void }) {
           {view === "needs" && past.length > 0 && (
             <details className="for-you__later">
               <summary>Earlier · {past.length}</summary>
-              <FinishedShelves shelves={shelves(past, groups)} now={now} onOpen={openOutcome} />
+              {past.some(didNotFinish) && (
+                <div className="for-you__shelf">
+                  <h4>Did not finish</h4>
+                  {past.filter(didNotFinish).map((outcome) => (
+                    <UnfinishedLine
+                      key={outcome.runId}
+                      outcome={outcome}
+                      agent={agents.find((agent) => agent.id === outcome.agentId)}
+                      now={now}
+                      onOpen={() => openOutcome(outcome)}
+                    />
+                  ))}
+                </div>
+              )}
+              <FinishedShelves
+                shelves={shelves(
+                  past.filter((outcome) => !didNotFinish(outcome)),
+                  groups,
+                )}
+                now={now}
+                onOpen={openOutcome}
+              />
             </details>
           )}
           {view === "needs" && (
@@ -350,6 +391,45 @@ export function FinishedLine({
       </span>
       <span className="finished-line__meta">{word ? `${word} ${age}` : age}</span>
     </button>
+  );
+}
+
+export function UnfinishedLine({
+  outcome,
+  agent,
+  now,
+  onOpen,
+}: {
+  outcome: Outcome;
+  agent: AgentCard | undefined;
+  now: number;
+  onOpen: () => void;
+}) {
+  const seeOutcomes = useStore((state) => state.seeOutcomes);
+  const showFailure = useStore((state) => state.showFailure);
+  const [state, setState] = useState<"ready" | "sending" | "sent">("ready");
+  return (
+    <div className="unfinished-line">
+      <FinishedLine outcome={outcome} agent={agent} now={now} onOpen={onOpen} />
+      <button
+        type="button"
+        className="btn unfinished-line__retry"
+        disabled={state !== "ready"}
+        onClick={async () => {
+          setState("sending");
+          try {
+            await retryOutcome(outcome);
+            setState("sent");
+            await seeOutcomes({ runIds: [outcome.runId] });
+          } catch (error) {
+            showFailure(error);
+            setState("ready");
+          }
+        }}
+      >
+        {state === "sent" ? "Sent again" : state === "sending" ? "Sending again" : "Try again"}
+      </button>
+    </div>
   );
 }
 

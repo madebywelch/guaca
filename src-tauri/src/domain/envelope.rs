@@ -108,6 +108,8 @@ pub enum Part {
     Notice {
         kind: NoticeKind,
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
     },
     ToolCall {
         name: String,
@@ -360,6 +362,32 @@ fn participant_key(p: Participant) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_notice_carries_its_detail_by_name_and_reads_rows_written_without_one() {
+        let failed = Part::Notice {
+            kind: NoticeKind::UpstreamError,
+            text: "Analyst could not reply.".into(),
+            detail: Some("HTTP 500".into()),
+        };
+        assert_eq!(
+            serde_json::to_value(&failed).unwrap(),
+            serde_json::json!({"type": "notice", "kind": "upstreamError", "text": "Analyst could not reply.", "detail": "HTTP 500"})
+        );
+        let stored: Part = serde_json::from_value(
+            serde_json::json!({"type": "notice", "kind": "upstreamError", "text": "older words"}),
+        )
+        .unwrap();
+        assert_eq!(
+            stored,
+            Part::Notice {
+                kind: NoticeKind::UpstreamError,
+                text: "older words".into(),
+                detail: None
+            }
+        );
+        assert!(!serde_json::to_string(&stored).unwrap().contains("detail"));
+    }
+
     fn agent(id: AgentId) -> Participant {
         Participant::Agent { id }
     }
@@ -490,7 +518,7 @@ mod tests {
             to: agent(AgentId::new()),
             parts: vec![
                 Part::text("visible"),
-                Part::Notice { kind: NoticeKind::GuardStop, text: "hidden".into() },
+                Part::Notice { kind: NoticeKind::GuardStop, text: "hidden".into(), detail: None },
                 Part::text("also visible"),
             ],
             trust: Trust::Operator,
