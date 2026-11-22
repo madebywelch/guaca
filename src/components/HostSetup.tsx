@@ -6,6 +6,7 @@ import {
   type Elsewhere,
   type Engine,
   type ExistingHost,
+  type HostPhase,
   hostMode,
   localHost,
   type Stall,
@@ -27,10 +28,25 @@ import {
 } from "../lib/transport";
 import { errorMessage } from "../lib/types";
 import { LegacyGroups } from "./GroupTransfer";
+import { Onboarding } from "./Onboarding";
+import { TopBar } from "./TopBar";
 
 const PROBE_DEADLINE_MS = 15_000;
 const ENGINE_POLL_MS = 3_000;
 const ENGINE_POLLS = 100;
+const PROGRESS_POLL_MS = 1_000;
+
+const PHASES: Record<HostPhase | "connecting", string> = {
+  preparing: "Setting up your host on this Mac",
+  downloading: "Downloading your host",
+  starting: "Starting your host",
+  connecting: "Connecting to your host",
+};
+
+function clock(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
 
 function within<T>(work: Promise<T>, message: string): Promise<T> {
   let deadline: ReturnType<typeof setTimeout> | undefined;
@@ -449,7 +465,99 @@ export function ImageRecovery() {
   );
 }
 
+export function HostComing({ onReady, onBack }: { onReady: () => void; onBack: () => void }) {
+  const [attempt, setAttempt] = useState(0);
+  const [phase, setPhase] = useState<HostPhase | "connecting">("preparing");
+  const [failed, setFailed] = useState<{ message: string; image: boolean } | null>(null);
+  const [since, setSince] = useState(() => Date.now());
+  const [now, setNow] = useState(() => Date.now());
+  const again = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (failed) again.current?.focus({ preventScroll: true });
+  }, [failed]);
+  useEffect(() => {
+    if (failed) return;
+    const tick = setInterval(() => setNow(Date.now()), PROGRESS_POLL_MS);
+    return () => clearInterval(tick);
+  }, [failed]);
+  useEffect(() => {
+    let disposed = false;
+    const poll = setInterval(() => {
+      void localHost
+        .progress()
+        .then((said) => {
+          if (!disposed && said) setPhase((current) => (current === "connecting" ? current : said));
+        })
+        .catch(() => {});
+    }, PROGRESS_POLL_MS);
+    const reach = async () => {
+      try {
+        const connection = await localHost.start();
+        if (disposed) return;
+        clearInterval(poll);
+        setPhase("connecting");
+        await probe(connection);
+        if (disposed) return;
+        commit(connection, "local", onReady);
+      } catch (cause) {
+        if (disposed) return;
+        setFailed({ message: errorMessage(cause), image: asStall(cause)?.kind === "image" });
+      } finally {
+        clearInterval(poll);
+      }
+    };
+    void reach();
+    return () => {
+      disposed = true;
+      clearInterval(poll);
+    };
+  }, [attempt, onReady]);
+  const retry = () => {
+    setFailed(null);
+    setPhase("preparing");
+    setSince(Date.now());
+    setNow(Date.now());
+    setAttempt((n) => n + 1);
+  };
+  const strip = failed ? (
+    <section className="banner banner--error host-coming__failed" role="alert">
+      <div>
+        <p>
+          <strong>Your host could not start.</strong> {failed.message}
+        </p>
+        <p>Your brief and your choices are kept here. Try again when you are ready.</p>
+        {failed.image && <ImageRecovery />}
+      </div>
+      <div className="host-coming__actions">
+        <button ref={again} type="button" className="btn btn--compact" onClick={retry}>
+          Try again
+        </button>
+        <button type="button" className="btn btn--quiet" onClick={onBack}>
+          Choose another host
+        </button>
+      </div>
+    </section>
+  ) : (
+    <p className="host-coming" role="status">
+      <span className="host-coming__phase">{PHASES[phase]}…</span>
+      <span className="host-coming__clock">{clock(now - since)}</span>
+      <span className="host-coming__hint">
+        You can keep going. Everything you choose here carries over when it is ready.
+      </span>
+    </p>
+  );
+  return (
+    <div className="app">
+      <TopBar back={null} actions={null} />
+      <main>
+        <Onboarding host={strip} hostDown={!!failed} />
+      </main>
+    </div>
+  );
+}
+
 function HostPicker({ onReady }: { onReady: () => void }) {
+  const [coming, setComing] = useState(false);
   const [checking, setChecking] = useState(desktop && !!attached());
   const [error, setError] = useState("");
   const [chooser, setChooser] = useState(false);
@@ -492,6 +600,7 @@ function HostPicker({ onReady }: { onReady: () => void }) {
       disposed = true;
     };
   }, [attempt, name, origin, onReady]);
+  if (coming) return <HostComing onReady={onReady} onBack={() => setComing(false)} />;
   return (
     <main className="threshold">
       <section className="host-setup">
@@ -541,7 +650,7 @@ function HostPicker({ onReady }: { onReady: () => void }) {
             {chooser && <HostChoice onConnected={onReady} />}
           </div>
         ) : (
-          <HostChoice onConnected={onReady} />
+          <HostChoice onConnected={onReady} onStartHere={() => setComing(true)} />
         )}
         <LegacyGroups />
       </section>
@@ -560,12 +669,14 @@ function hostName(origin: string): string {
 export function HostChoice({
   initialError = "",
   onConnected,
+  onStartHere,
   showUpdate = true,
   inUse = false,
 }: {
   initialError?: string;
   showUpdate?: boolean;
   onConnected?: () => void;
+  onStartHere?: () => void;
   inUse?: boolean;
 }) {
   const remote = hostMode() === "remote" ? attached() : null;
@@ -877,7 +988,7 @@ export function HostChoice({
                 ? !origin.trim() || !token.trim()
                 : !docker || ["missing", "unavailable"].includes(docker.state))
             }
-            onClick={() => void connect()}
+            onClick={() => (mode === "local" && onStartHere ? onStartHere() : void connect())}
           >
             {busy
               ? mode === "local"

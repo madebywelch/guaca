@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { hostPlace } from "../lib/host";
 import { api, openExternal } from "../lib/ipc";
+import { type HeldProvider, waitsForHost } from "../lib/onboarding";
 import { PROVIDERS, planLabel, providerFor } from "../lib/providers";
 import { useStore } from "../lib/store";
 import { isUnreachable } from "../lib/transport";
@@ -20,6 +21,10 @@ import { SubscriptionModel } from "./ProviderFields";
 interface Props {
   onConnected: () => void;
   onBack: () => void;
+  waiting?: boolean;
+  initial?: HeldProvider | null;
+  failure?: unknown;
+  onDraft?: (fields: HeldProvider) => void;
 }
 
 type Request = { kind: "idle" } | { kind: "running" };
@@ -38,17 +43,69 @@ function endpoint(value: string): string {
     .replace(/\/+$/, "");
 }
 
-export function OnboardingProvider({ onConnected, onBack }: Props) {
+export function explainFailure(
+  failure: unknown,
+  { name, address, savedOnly }: { name: string; address: string; savedOnly: boolean },
+): { keyError: string; error: string } {
+  if (isCommandError(failure) && failure.kind === "keyRejected")
+    return {
+      keyError: savedOnly
+        ? `${name} did not accept the saved key. Paste a new key, then test again.`
+        : `${name} did not accept that key. Check that you pasted all of it, or create a new key there, then test again.`,
+      error: "",
+    };
+  if (isCommandError(failure) && failure.kind === "endpointUnreachable")
+    return {
+      keyError: "",
+      error: `Guaca could not reach ${address}. Check that the server there is running and the address is right, then test again.`,
+    };
+  if (isUnreachable(failure))
+    return {
+      keyError: "",
+      error:
+        "Guaca could not reach its host, so nothing was tested. Check that the host is running, then try again.",
+    };
+  return {
+    keyError: "",
+    error: `The test did not pass: ${errorMessage(failure).replace(/[.\s]+$/, "")}. Check the endpoint, the key and the model above, then try again.`,
+  };
+}
+
+export function OnboardingProvider({
+  onConnected,
+  onBack,
+  waiting = false,
+  initial = null,
+  failure,
+  onDraft,
+}: Props) {
   const settings = useStore((s) => s.settings);
   const setSettings = useStore((s) => s.setSettings);
   const capabilities = useStore((s) => s.capabilities);
-  const [provider, setProvider] = useState<Provider>(settings?.provider ?? "compatible");
-  const [baseUrl, setBaseUrl] = useState(settings?.baseUrl ?? PROVIDERS[0]!.baseUrl);
-  const [model, setModel] = useState(settings?.defaultModel ?? PROVIDERS[0]!.model);
-  const [subscriptionModel, setSubscriptionModel] = useState(settings?.subscriptionModel ?? "");
-  const [effort, setEffort] = useState(settings?.reasoningEffort ?? "auto");
-  const [apiKey, setApiKey] = useState("");
-  const [keyError, setKeyError] = useState("");
+  const [provider, setProvider] = useState<Provider>(
+    initial?.provider ?? settings?.provider ?? "compatible",
+  );
+  const [baseUrl, setBaseUrl] = useState(
+    initial?.baseUrl ?? settings?.baseUrl ?? PROVIDERS[0]!.baseUrl,
+  );
+  const [model, setModel] = useState(
+    initial?.model ?? settings?.defaultModel ?? PROVIDERS[0]!.model,
+  );
+  const [subscriptionModel, setSubscriptionModel] = useState(
+    initial?.subscriptionModel ?? settings?.subscriptionModel ?? "",
+  );
+  const [effort, setEffort] = useState(initial?.effort ?? settings?.reasoningEffort ?? "auto");
+  const [apiKey, setApiKey] = useState(initial?.apiKey ?? "");
+  const [told] = useState(() =>
+    failure === undefined || !initial
+      ? { keyError: "", error: "" }
+      : explainFailure(failure, {
+          name: providerFor(initial.baseUrl)?.name ?? "This endpoint",
+          address: initial.baseUrl.trim(),
+          savedOnly: false,
+        }),
+  );
+  const [keyError, setKeyError] = useState(told.keyError);
   const keyField = useId();
   const keyProblem = useId();
   const first = useRef<HTMLButtonElement>(null);
@@ -61,13 +118,14 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
   const [pickups, setPickups] = useState<Pickup[]>([]);
   const [skipped, setSkipped] = useState(false);
   const [busy, setBusy] = useState<"signin" | "testing" | "saving" | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(told.error);
   const [advanced, setAdvanced] = useState(false);
   const blockedHint = useId();
   const attempt = useRef(0);
   const request = useRef<Request>({ kind: "idle" });
 
   useEffect(() => {
+    if (waiting) return;
     let live = true;
     void api.claudeProgram().then(
       (value) => {
@@ -80,9 +138,10 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
     return () => {
       live = false;
     };
-  }, []);
+  }, [waiting]);
 
   useEffect(() => {
+    if (waiting) return;
     const current = attempt.current;
     void api.subscriptionStatus().then(
       (value) => {
@@ -95,9 +154,13 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
     return () => {
       attempt.current += 1;
     };
-  }, []);
+  }, [waiting]);
 
-  const offerHere = capabilities.borrowedSignins && hostPlace() === "thisMac";
+  useEffect(() => {
+    if (waiting) onDraft?.({ provider, baseUrl, model, apiKey, subscriptionModel, effort });
+  }, [waiting, onDraft, provider, baseUrl, model, apiKey, subscriptionModel, effort]);
+
+  const offerHere = !waiting && capabilities.borrowedSignins && hostPlace() === "thisMac";
   const unconfigured = provider === "compatible" && !settings?.apiKeySet;
 
   useEffect(() => {
@@ -144,15 +207,19 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
       ? `Runs the claude program, which this host does not have. Install it there with ${claude.install}, sign in, then come back.`
       : "Use a Claude plan through the claude program on your Guaca host. No API key needed.";
 
-  const blockedReason = !settings
-    ? "Waiting for this host to answer with its settings."
-    : provider === "compatible" && needsKey
-      ? `Paste a key for ${preset?.name ?? "this endpoint"}, then test it.`
-      : provider === "claude" && !claudeReady
-        ? "This host cannot run the claude program. Choose another card."
-        : provider === "claude" && !claudeSignedIn
-          ? "Sign in to Claude, then test it."
-          : "";
+  const blockedReason = waiting
+    ? provider === "compatible" && needsKey
+      ? `Paste a key for ${preset?.name ?? "this endpoint"}, then continue.`
+      : ""
+    : !settings
+      ? "Waiting for this host to answer with its settings."
+      : provider === "compatible" && needsKey
+        ? `Paste a key for ${preset?.name ?? "this endpoint"}, then test it.`
+        : provider === "claude" && !claudeReady
+          ? "This host cannot run the claude program. Choose another card."
+          : provider === "claude" && !claudeSignedIn
+            ? "Sign in to Claude, then test it."
+            : "";
 
   const choose = (next: Provider) => {
     if (next !== "claude") setClaudeSignedIn(false);
@@ -236,12 +303,14 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
   };
 
   const connect = async () => {
-    if (request.current.kind === "running" || !settings) return;
-    if (provider === "claude" && (!claudeReady || !claudeSignedIn)) return;
+    if (request.current.kind === "running") return;
     if (provider === "compatible" && (needsKey || !baseUrl.trim() || !model.trim())) {
       setError("Enter an endpoint, a model, and the key for that provider, then try again.");
       return;
     }
+    if (waiting) return onConnected();
+    if (!settings) return;
+    if (provider === "claude" && (!claudeReady || !claudeSignedIn)) return;
     request.current = transitionRequest(request.current, "start");
     const current = ++attempt.current;
     const live = () => attempt.current === current;
@@ -285,24 +354,13 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
       onConnected();
     } catch (failure) {
       if (!live()) return;
-      if (isCommandError(failure) && failure.kind === "keyRejected")
-        setKeyError(
-          savedKey && !apiKey.trim()
-            ? `${preset?.name ?? "This endpoint"} did not accept the saved key. Paste a new key, then test again.`
-            : `${preset?.name ?? "This endpoint"} did not accept that key. Check that you pasted all of it, or create a new key there, then test again.`,
-        );
-      else if (isCommandError(failure) && failure.kind === "endpointUnreachable")
-        setError(
-          `Guaca could not reach ${baseUrl.trim()}. Check that the server there is running and the address is right, then test again.`,
-        );
-      else if (isUnreachable(failure))
-        setError(
-          "Guaca could not reach its host, so nothing was tested. Check that the host is running, then try again.",
-        );
-      else
-        setError(
-          `The test did not pass: ${errorMessage(failure).replace(/[.\s]+$/, "")}. Check the endpoint, the key and the model above, then try again.`,
-        );
+      const said = explainFailure(failure, {
+        name: preset?.name ?? "This endpoint",
+        address: baseUrl.trim(),
+        savedOnly: savedKey && !apiKey.trim(),
+      });
+      if (said.keyError) setKeyError(said.keyError);
+      else setError(said.error);
     } finally {
       if (live()) {
         request.current = transitionRequest(request.current, "finish");
@@ -508,6 +566,7 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
               disabled={Boolean(busy)}
               aria-invalid={keyError ? true : undefined}
               aria-describedby={keyError ? keyProblem : undefined}
+              data-hold="key"
               placeholder={savedKey ? "Saved key will be used" : "Paste your provider's API key"}
               onChange={(event) => {
                 setApiKey(event.target.value);
@@ -540,11 +599,13 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
             />
           </label>
           <p className="field__hint">
-            {savedKey
-              ? "Leave the key blank to keep the one saved for this endpoint."
-              : preset
-                ? `Your ${preset.name} key is stored only on your Guaca host.`
-                : "Any OpenAI-compatible endpoint works, and one on your own machine may not need a key."}
+            {waiting
+              ? "Your host is still starting, so nothing is tested yet. Guaca keeps the key in this window's memory only, then tests it and stores it on your host the moment the host is ready."
+              : savedKey
+                ? "Leave the key blank to keep the one saved for this endpoint."
+                : preset
+                  ? `Your ${preset.name} key is stored only on your Guaca host.`
+                  : "Any OpenAI-compatible endpoint works, and one on your own machine may not need a key."}
             {!capabilities.loopbackEndpoints &&
               " This host cannot reach model endpoints on your own computer."}
           </p>
@@ -557,6 +618,12 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
             Turns use your ChatGPT plan's Codex quota, not API credits. A group can reach that quota
             faster than one person.
           </p>
+          {waiting && (
+            <p>
+              ChatGPT sign-in runs on your Guaca host, which is still starting. Continue now, and
+              Guaca asks you to sign in the moment your host is ready.
+            </p>
+          )}
           {subscription?.signedIn && (
             <p>
               Signed in as {subscription.email || "your ChatGPT account"}
@@ -571,14 +638,21 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
         </div>
       )}
 
-      {provider === "claude" && claudeReady && (
+      {provider === "claude" && waiting && (
+        <div className="onboarding-notice">
+          Claude sign-in runs on your Guaca host, which is still starting. Continue now, and Guaca
+          asks you to sign in the moment your host is ready.
+        </div>
+      )}
+
+      {provider === "claude" && claudeReady && !waiting && (
         <div className="onboarding-notice">
           Claude uses your plan's own model settings. Testing sends one small request.
           <ClaudeSignin onReady={setClaudeSignedIn} />
         </div>
       )}
 
-      {provider === "chatgpt" && (
+      {provider === "chatgpt" && !waiting && (
         <details
           className="onboarding-advanced"
           open={advanced}
@@ -625,20 +699,28 @@ export function OnboardingProvider({ onConnected, onBack }: Props) {
             aria-describedby={blockedReason && !busy ? blockedHint : undefined}
             disabled={
               Boolean(busy) ||
-              !settings ||
               Boolean(provider === "compatible" && needsKey) ||
-              (provider === "claude" && (!claudeReady || !claudeSignedIn))
+              (!waiting &&
+                (!settings || (provider === "claude" && (!claudeReady || !claudeSignedIn))))
             }
             onClick={() => void connect()}
           >
-            {provider === "chatgpt" && (!subscription?.signedIn || ineligible)
-              ? "Sign in with ChatGPT"
-              : "Test and continue"}
+            {waiting
+              ? "Continue"
+              : provider === "chatgpt" && (!subscription?.signedIn || ineligible)
+                ? "Sign in with ChatGPT"
+                : "Test and continue"}
           </button>
         )}
         {saying ??
           (blockedReason ? (
             <span id={blockedHint}>{blockedReason}</span>
+          ) : waiting ? (
+            <span>
+              {waitsForHost(provider)
+                ? "Sign-in waits for your host. Everything else can go ahead."
+                : "Nothing leaves this window until your host is ready."}
+            </span>
           ) : (
             provider === "compatible" && (
               <span>Testing makes a small model request that may be billed.</span>

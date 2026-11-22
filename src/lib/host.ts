@@ -81,6 +81,7 @@ export function parseManager(value: unknown): Manager | null {
     throw unreadable();
   return data as unknown as Manager;
 }
+export type HostPhase = "preparing" | "downloading" | "starting";
 export interface ExistingHost {
   name: string;
   label: string;
@@ -92,6 +93,7 @@ export const localHost = {
   status: () => invokeLocal<DockerStatus>("local_host_status"),
   update: (origin?: string) => invokeLocal<Remote>("local_host_update", { origin }),
   start: () => invokeLocal<Remote>("local_host_start"),
+  progress: () => invokeLocal<HostPhase | null>("local_host_progress"),
   resume: () => invokeLocal<Remote>("local_host_resume"),
   choose: (context: string) => invokeLocal<Remote>("local_host_choose", { context }),
   elsewhere: () => invokeLocal<Elsewhere>("local_host_elsewhere"),

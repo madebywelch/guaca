@@ -1,4 +1,5 @@
 import { workspaceOrigin } from "./transport";
+import type { Provider, ReasoningEffort } from "./types";
 
 const ASK_ONLY_IF_STUCK = "Ask me a question only if you cannot go on without one.";
 
@@ -107,4 +108,37 @@ export function saveFirstTask(value: FirstTask | null): void {
   const key = `guaca.firstGroup.${workspaceOrigin()}`;
   if (value) localStorage.setItem(key, JSON.stringify(value));
   else localStorage.removeItem(key);
+}
+
+export interface HeldProvider {
+  provider: Provider;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+  subscriptionModel: string;
+  effort: ReasoningEffort;
+}
+
+export interface HeldStart {
+  task: FirstTask["task"];
+  brief: string;
+  step: "task" | "provider" | "start";
+  provider: HeldProvider | null;
+  chosen: boolean;
+  queued: boolean;
+  focus: { hold: string; at: number } | null;
+}
+
+let held: HeldStart | null = null;
+
+export function heldStart(): HeldStart | null {
+  return held;
+}
+
+export function holdStart(value: HeldStart | null): void {
+  held = value;
+}
+
+export function waitsForHost(provider: Provider): boolean {
+  return provider !== "compatible";
 }

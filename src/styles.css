@@ -5122,6 +5122,64 @@ input[type="file"]:disabled {
   margin: auto;
 }
 
+.host-coming {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2) var(--space-4);
+  margin: 0 0 var(--space-6);
+  padding: var(--space-4) 0;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--page);
+  border-bottom: 1px solid var(--rule);
+  color: var(--muted);
+  font-size: var(--type-support);
+}
+
+.host-coming__phase {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  color: var(--text);
+}
+
+.host-coming__phase::before {
+  content: "";
+  width: var(--space-4);
+  height: var(--space-4);
+  border-radius: var(--radius-pill);
+  background: var(--muted);
+  animation: pending var(--tempo-pending) var(--ease-loop) infinite alternate both;
+}
+
+.host-coming__clock {
+  font-variant-numeric: tabular-nums;
+}
+
+.host-coming__hint {
+  flex-basis: 100%;
+  color: var(--faint);
+}
+
+.host-coming__failed {
+  align-items: flex-start;
+  margin: 0 0 var(--space-6);
+}
+
+.host-coming__failed p {
+  margin: 0 0 var(--space-2);
+}
+
+.host-coming__actions {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-3);
+}
+
 .onboarding-steps {
   display: flex;
   flex-wrap: wrap;

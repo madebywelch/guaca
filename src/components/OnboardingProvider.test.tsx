@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { HeldProvider } from "../lib/onboarding";
 import { useStore } from "../lib/store";
 import type { DeviceCode, Pickup, Settings, SettingsPatch, SubscriptionStatus } from "../lib/types";
 import { OnboardingProvider, transitionRequest } from "./OnboardingProvider";
@@ -843,4 +844,87 @@ it("does not offer anything to an operator who already configured a provider", a
   await draw();
   expect(screen.queryByRole("button", { name: "Use Claude Code" })).toBeNull();
   expect(mocks.existingSignins).not.toHaveBeenCalled();
+});
+
+describe("before the host exists", () => {
+  async function early(initial: HeldProvider | null = null, failure?: unknown) {
+    const onConnected = vi.fn();
+    const onDraft = vi.fn();
+    const view = render(
+      <OnboardingProvider
+        waiting
+        initial={initial}
+        failure={failure}
+        onConnected={onConnected}
+        onBack={vi.fn()}
+        onDraft={onDraft}
+      />,
+    );
+    await act(async () => {});
+    return { ...view, onConnected, onDraft };
+  }
+
+  beforeEach(() => {
+    useStore.setState({ settings: null });
+  });
+
+  it("asks the host nothing, and holds a pasted key in memory until it can be tested there", async () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    const { onConnected, onDraft } = await early();
+    for (const call of [
+      mocks.claudeProgram,
+      mocks.subscriptionStatus,
+      mocks.existingSignins,
+      mocks.testConnection,
+      mocks.updateSettings,
+    ])
+      expect(call).not.toHaveBeenCalled();
+    const next = screen.getByRole("button", { name: "Continue" }) as HTMLButtonElement;
+    expect(next.disabled).toBe(true);
+    key("sk-early-key");
+    expect(screen.getByText(/keeps the key in this window's memory only/)).toBeTruthy();
+    fireEvent.click(next);
+    expect(onConnected).toHaveBeenCalledOnce();
+    expect(onDraft).toHaveBeenLastCalledWith(expect.objectContaining({ apiKey: "sk-early-key" }));
+    expect(mocks.testConnection).not.toHaveBeenCalled();
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+    for (const [, value] of setItem.mock.calls) expect(value).not.toContain("sk-early-key");
+  });
+
+  it("lets a ChatGPT or Claude plan be chosen, and says its sign-in waits for the host", async () => {
+    const { onConnected } = await early();
+    chatgpt();
+    expect(screen.getByText(/ChatGPT sign-in runs on your Guaca host, which is still starting/));
+    expect(screen.getByText("Sign-in waits for your host. Everything else can go ahead."));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Claude subscription/ }));
+    expect(screen.getByText(/Claude sign-in runs on your Guaca host, which is still starting/));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(onConnected).toHaveBeenCalledTimes(2);
+    expect(mocks.beginSubscriptionSignin).not.toHaveBeenCalled();
+    expect(mocks.beginClaudeSignin).not.toHaveBeenCalled();
+  });
+});
+
+it("opens on what was entered before the host was up and says why the held key failed", async () => {
+  render(
+    <OnboardingProvider
+      initial={{
+        provider: "compatible",
+        baseUrl: "https://openrouter.ai/api/v1",
+        model: "anthropic/claude-sonnet-4.5",
+        apiKey: "sk-early-key",
+        subscriptionModel: "",
+        effort: "auto",
+      }}
+      failure={{ kind: "keyRejected", message: "401" }}
+      onConnected={vi.fn()}
+      onBack={vi.fn()}
+    />,
+  );
+  await act(async () => {});
+  expect((screen.getByLabelText(/^API key/) as HTMLInputElement).value).toBe("sk-early-key");
+  expect(screen.getByRole("alert").textContent).toBe(
+    "OpenRouter did not accept that key. Check that you pasted all of it, or create a new key there, then test again.",
+  );
 });
