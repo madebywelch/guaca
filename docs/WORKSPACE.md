@@ -2034,6 +2034,17 @@ on that card rather than a card that is not there: `claude_program` is asked whe
 the step mounts, and the card says either that the program is missing and how to
 install it, or that this deployment does not offer it.
 
+The plans come first and say so: a line under the heading tells someone who
+already pays for ChatGPT or Claude to sign in with that plan and skip the key,
+and before the host is up it adds that the sign-in starts once the host is
+ready while a key can go in now. Getting a key was the slowest part of a first
+run, minutes spent outside the app with nothing pointing the way, so under the
+key field a preset that names its key page (`keyPage` in `lib/providers.ts`)
+has a Get a key link and at most three steps. The link opens that page in the
+system browser and the app fetches nothing itself. Only OpenRouter and OpenAI
+name one, because those are the two the card offers and the two whose pages
+were checked; a custom endpoint has none, and a saved key hides it.
+
 Start task names the group it hires into for the task, before hiring: Research,
 Planning or Writing, and My group for a task in the person's own words. The
 group a fresh workspace holds is the one the migrations seed, called Everyone,

@@ -232,3 +232,20 @@ describe("whether OpenRouter is what pays", () => {
     expect(onOpenRouter(aGroup(), app({ baseUrl: " HTTPS://OpenRouter.ai/api/v1/ " }))).toBe(true);
   });
 });
+
+describe("where to get a key", () => {
+  it("links only to a key page on the provider's own site, with at most three steps", () => {
+    const linked = PROVIDERS.filter((provider) => provider.keyPage);
+    expect(linked.map((provider) => provider.id)).toEqual(["openrouter", "openai"]);
+    for (const provider of linked) {
+      const page = new URL(provider.keyPage!);
+      const api = new URL(provider.baseUrl);
+      const site = api.hostname.split(".").slice(-2).join(".");
+      expect(page.protocol, provider.id).toBe("https:");
+      expect(page.hostname === site || page.hostname.endsWith(`.${site}`), provider.id).toBe(true);
+      expect(provider.keySteps?.length ?? 0, provider.id).toBeGreaterThan(0);
+      expect(provider.keySteps!.length, provider.id).toBeLessThanOrEqual(3);
+    }
+    expect(PROVIDERS.filter((provider) => provider.local).some((p) => p.keyPage)).toBe(false);
+  });
+});

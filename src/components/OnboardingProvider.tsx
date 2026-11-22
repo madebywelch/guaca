@@ -491,6 +491,11 @@ export function OnboardingProvider({
   return (
     <section className="onboarding-provider" aria-label="Connect a provider">
       <h2>Choose how your agents are paid for</h2>
+      <p>
+        {waiting
+          ? "If you already pay for ChatGPT or Claude, sign in with that plan and skip the key. Sign-in runs on your host, so it starts once your host is ready; a key can go in now."
+          : "If you already pay for ChatGPT or Claude, sign in with that plan and skip the key."}
+      </p>
       <div className="onboarding-options onboarding-options--three">
         <button
           type="button"
@@ -579,6 +584,39 @@ export function OnboardingProvider({
               </p>
             )}
           </div>
+          {preset?.keyPage && !savedKey && (
+            <div className="onboarding-keyhelp">
+              <p>
+                No {preset.name} key yet?{" "}
+                <a
+                  href={preset.keyPage}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="access__docs"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    const current = attempt.current;
+                    void openExternal(preset.keyPage!).catch(() => {
+                      if (attempt.current === current)
+                        setError(
+                          `The browser could not open. Go to ${preset.keyPage} in your browser.`,
+                        );
+                    });
+                  }}
+                >
+                  Get a key
+                </a>{" "}
+                from {new URL(preset.keyPage).hostname} in your browser, then paste it here.
+              </p>
+              {preset.keySteps && (
+                <ol>
+                  {preset.keySteps.map((line) => (
+                    <li key={line}>{line}</li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          )}
           <label className="field">
             <span className="field__label">Inference endpoint</span>
             <input
