@@ -2009,6 +2009,13 @@ up the provider step asks for the sign-in and the queued task starts right
 after it. The pickup of a sign-in this Mac already has is offered only once
 there is a host to ask.
 
+A held key is used only by a first run. When the host that answers already has
+a workspace and nothing was queued, the steps do not open there, so the key
+would otherwise sit in the window's memory with nothing left to send it.
+`App` drops what is held as soon as it knows the first run is not happening,
+never sends the key to that host, whose settings are its own, and says in a
+banner that the key was not used and not saved.
+
 The brief stays on this device, scoped to the host, while the operator connects
 AI or reloads the window. No credential is part of that draft. Connecting a
 provider does not create an agent or send a message: only Start task does both.
