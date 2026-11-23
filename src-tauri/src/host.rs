@@ -14,6 +14,14 @@ pub const IMAGE: &str = match option_env!("GUACA_BACKEND_IMAGE") {
     None => concat!("ghcr.io/madebywelch/guaca/guacad:", env!("CARGO_PKG_VERSION")),
 };
 
+pub const BROWSER_IMAGE: Option<&str> = option_env!("GUACA_BROWSER_IMAGE");
+
+pub const BROWSER_PORT: u16 = 9223;
+
+const BROWSER_SECCOMP: &str = include_str!("../../deploy/browser/seccomp.json");
+
+const BROWSER_RETRY: Duration = Duration::from_secs(60);
+
 pub const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub const PORT: u16 = 8787;
@@ -260,6 +268,16 @@ pub struct LocalHost {
     engine: parking_lot::Mutex<Option<Engine>>,
     previous: parking_lot::Mutex<Option<Engine>>,
     phase: parking_lot::Mutex<Option<Phase>>,
+    browser: Option<Browser>,
+    connected: parking_lot::Mutex<Option<Connection>>,
+}
+
+struct Browser {
+    image: String,
+    profile: PathBuf,
+    busy: Mutex<()>,
+    failed_at: parking_lot::Mutex<Option<std::time::Instant>>,
+    checked: std::sync::atomic::AtomicBool,
 }
 
 pub fn zone() -> Option<String> {
@@ -309,7 +327,7 @@ pub fn docker_binary() -> PathBuf {
         .unwrap_or_else(|| "docker".into())
 }
 
-const STATED_ENV: [&str; 2] = ["TZ", "GUACA_UPDATER_SOCKET"];
+const STATED_ENV: [&str; 3] = ["TZ", "GUACA_UPDATER_SOCKET", "GUACA_BROWSER"];
 
 fn states_a_value(args: &[&str]) -> bool {
     let stated = |assignment: &str| {
@@ -718,7 +736,163 @@ impl LocalHost {
             engine: parking_lot::Mutex::new(None),
             previous: parking_lot::Mutex::new(None),
             phase: parking_lot::Mutex::new(None),
+            browser: None,
+            connected: parking_lot::Mutex::new(None),
         }
+    }
+
+    pub fn with_browser(mut self, image: Option<&str>, profile: PathBuf) -> Self {
+        self.browser = image.filter(|image| !image.trim().is_empty()).map(|image| Browser {
+            image: image.trim().to_string(),
+            profile,
+            busy: Mutex::new(()),
+            failed_at: parking_lot::Mutex::new(None),
+            checked: std::sync::atomic::AtomicBool::new(false),
+        });
+        self
+    }
+
+    fn browser_name(&self) -> String {
+        format!("{}-browser", self.spec.name)
+    }
+
+    fn browser_args<'a>(
+        &self,
+        name: &'a str,
+        label: &'a str,
+        seccomp: &'a str,
+        image: &'a str,
+    ) -> Vec<&'a str> {
+        vec![
+            "run",
+            "--detach",
+            "--name",
+            name,
+            "--label",
+            label,
+            "--network",
+            name,
+            "--restart",
+            "unless-stopped",
+            "--init",
+            "--read-only",
+            "--tmpfs",
+            "/tmp",
+            "--tmpfs",
+            "/run",
+            "--cap-drop",
+            "ALL",
+            "--cap-add",
+            "NET_ADMIN",
+            "--cap-add",
+            "SETUID",
+            "--cap-add",
+            "SETGID",
+            "--cap-add",
+            "SETPCAP",
+            "--cap-add",
+            "CHOWN",
+            "--security-opt",
+            "no-new-privileges",
+            "--security-opt",
+            seccomp,
+            "--memory",
+            "2g",
+            "--cpus",
+            "2",
+            "--pids-limit",
+            "512",
+            image,
+        ]
+    }
+
+    pub async fn watch_browser(&self) {
+        let Some(browser) = &self.browser else { return };
+        let Some(connection) = self.connected.lock().clone() else { return };
+        let Ok(http) = reqwest::Client::builder().timeout(Duration::from_secs(10)).build() else {
+            return;
+        };
+        let Ok(reply) = http
+            .post(format!("{}/v1/call", connection.origin))
+            .bearer_auth(&connection.token)
+            .json(&serde_json::json!({ "name": "local_browser", "args": {} }))
+            .send()
+            .await
+        else {
+            return;
+        };
+        let state: Value = reply.json().await.unwrap_or_default();
+        let wanted = match state["ok"].as_str() {
+            Some("settingUp") => true,
+            Some("ready") => !browser.checked.load(std::sync::atomic::Ordering::SeqCst),
+            _ => false,
+        };
+        if !wanted
+            || browser.failed_at.lock().is_some_and(|failed| failed.elapsed() < BROWSER_RETRY)
+        {
+            return;
+        }
+        match self.prepare_browser().await {
+            Ok(()) => {
+                *browser.failed_at.lock() = None;
+                browser.checked.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            Err(error) => {
+                tracing::warn!(%error, "could not set up the browser beside the local host");
+                *browser.failed_at.lock() = Some(std::time::Instant::now());
+            }
+        }
+    }
+
+    pub async fn prepare_browser(&self) -> Result<(), String> {
+        let Some(browser) = &self.browser else { return Ok(()) };
+        let Ok(_busy) = browser.busy.try_lock() else { return Ok(()) };
+        let name = self.browser_name();
+        let label = format!("{}={name}", self.spec.owner);
+
+        if self.docker(&["network", "inspect", &name], 15).await.is_err() {
+            self.docker(&["network", "create", "--label", &label, &name], 30).await?;
+        }
+        let host = self
+            .inspect()
+            .await?
+            .ok_or("The local host is not running, so there is nothing to give a browser to.")?;
+        if host["NetworkSettings"]["Networks"][name.as_str()].is_null() {
+            self.docker(&["network", "connect", &name, &self.spec.name], 30).await?;
+        }
+
+        let endpoint = self.recorded().map(|engine| engine.endpoint);
+        let existing =
+            owned(&self.binary, endpoint.as_deref(), &name, (self.spec.owner, &name)).await?;
+        if let Some(value) = existing {
+            if value["Config"]["Image"].as_str() == Some(browser.image.as_str()) {
+                if value["State"]["Running"] != true {
+                    self.docker(&["start", &name], 60).await?;
+                }
+                return Ok(());
+            }
+            self.docker(&["rm", "--force", &name], 60).await?;
+        }
+
+        if self.docker(&["image", "inspect", &browser.image], 15).await.is_err() {
+            if !fetchable(&browser.image) {
+                return Err(format!("The browser image, {}, is not on this Mac and there is nowhere to download it from.", browser.image));
+            }
+            self.docker(&["pull", &browser.image], 900).await.map_err(|error| {
+                tracing::warn!(image = %browser.image, %error, "could not download the browser image");
+                "The browser could not be downloaded. Check your connection; Guaca tries again in a minute.".to_string()
+            })?;
+        }
+
+        if let Some(parent) = browser.profile.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Could not save the browser's seccomp profile: {e}"))?;
+        }
+        std::fs::write(&browser.profile, BROWSER_SECCOMP)
+            .map_err(|e| format!("Could not save the browser's seccomp profile: {e}"))?;
+        let seccomp = format!("seccomp={}", browser.profile.display());
+        let args = self.browser_args(&name, &label, &seccomp, &browser.image);
+        self.docker(&args, 60).await.map(drop)
     }
 
     pub fn progress(&self) -> Option<Phase> {
@@ -1490,6 +1664,10 @@ impl LocalHost {
         if let Some(zone) = &zone {
             args.extend(["--env", zone]);
         }
+        let browser = format!("GUACA_BROWSER={}:{BROWSER_PORT}", self.browser_name());
+        if self.browser.is_some() {
+            args.extend(["--env", &browser]);
+        }
         let socket = self
             .spec
             .socket
@@ -1522,7 +1700,9 @@ impl LocalHost {
                         let token = self.token().await?;
                         let origin =
                             if self.spec.reach == Reach::Published { published } else { probe };
-                        return Ok(Connection { origin, token });
+                        let connection = Connection { origin, token };
+                        *self.connected.lock() = Some(connection.clone());
+                        return Ok(connection);
                     }
                 }
             }
@@ -2968,5 +3148,199 @@ pub(crate) mod tests {
             LocalHost::new("com.madebywelch.guac", IMAGE).spec.name,
             LocalHost::new("com.madebywelch.guac.preview", IMAGE).spec.name
         );
+    }
+
+    #[test]
+    fn the_app_starts_the_browser_with_every_flag_the_isolation_check_proves() {
+        let script = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/browser-isolation.sh"),
+        )
+        .unwrap();
+        let start = script.find("SIDECAR_ARGS=(").expect("the flags the check runs with");
+        let block = &script[start..start + script[start..].find("\n)").unwrap()];
+        let proven: Vec<String> = block
+            .lines()
+            .skip(1)
+            .flat_map(|line| line.split_whitespace().map(|word| word.trim_matches('"').to_string()))
+            .collect();
+        let host = LocalHost::new("fixture", "fixture:new")
+            .with_browser(Some("guaca-browser:test"), PathBuf::from("/tmp/seccomp.json"));
+        let name = host.browser_name();
+        let args =
+            host.browser_args(&name, "label", "seccomp=/tmp/seccomp.json", "guaca-browser:test");
+        let flags: Vec<String> = args
+            .windows(2)
+            .filter(|pair| pair[0].starts_with("--"))
+            .map(|pair| pair.join(" "))
+            .chain(
+                args.iter()
+                    .filter(|arg| matches!(**arg, "--init" | "--read-only"))
+                    .map(|arg| arg.to_string()),
+            )
+            .collect();
+        let mut words = proven.iter();
+        while let Some(word) = words.next() {
+            let expected = match word.as_str() {
+                "--init" | "--read-only" => word.clone(),
+                flag => {
+                    let value = words.next().expect("a value after the flag");
+                    let value = if value.starts_with("seccomp=") {
+                        "seccomp=/tmp/seccomp.json"
+                    } else {
+                        value
+                    };
+                    format!("{flag} {value}")
+                }
+            };
+            assert!(flags.contains(&expected), "the app does not pass {expected}: {args:?}");
+        }
+        assert!(
+            !args.iter().any(|arg| arg.starts_with("--publish") || *arg == "-p"),
+            "CDP is never published"
+        );
+        assert!(
+            !args.iter().any(|arg| *arg == "--mount" || *arg == "-v" || *arg == "--volume"),
+            "no volume"
+        );
+        assert!(
+            !args.iter().any(|arg| *arg == "--env" || *arg == "-e"),
+            "nothing of Guaca's is handed in"
+        );
+        assert_eq!(
+            args.windows(2).find(|pair| pair[0] == "--network").map(|pair| pair[1]),
+            Some(name.as_str())
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_host_is_told_where_its_browser_is_only_when_the_app_has_one_to_start() {
+        for (image, told) in [(Some("guaca-browser:test"), true), (None, false)] {
+            let (host, dir, task, _) = simulated("", env!("CARGO_PKG_VERSION")).await;
+            let host = host.with_browser(image, dir.path().join("seccomp.json"));
+            edit(&dir, |state| state["exists"] = json!(false));
+            host.create("fixture:new", None).await.unwrap();
+            let created = state(&dir)["created"].clone();
+            let env = format!("GUACA_BROWSER={}-browser:{BROWSER_PORT}", host.spec.name);
+            assert_eq!(
+                created.as_array().unwrap().iter().any(|arg| *arg == json!(env)),
+                told,
+                "{created}"
+            );
+            task.abort();
+        }
+    }
+
+    #[cfg(unix)]
+    async fn beside_a_browser(
+        answer: &'static str,
+    ) -> (LocalHost, tempfile::TempDir, tokio::task::JoinHandle<()>) {
+        let (host, dir, task, _) = simulated("", env!("CARGO_PKG_VERSION")).await;
+        task.abort();
+        let socket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = socket.local_addr().unwrap();
+        let app = axum::Router::new().route(
+            "/v1/call",
+            axum::routing::post(move || async move { axum::Json(json!({ "ok": answer })) }),
+        );
+        let task = tokio::spawn(async move { axum::serve(socket, app).await.unwrap() });
+        let host = host.with_browser(
+            Some("ghcr.io/madebywelch/guaca/browser:test"),
+            dir.path().join("seccomp.json"),
+        );
+        let name = host.spec.name.clone();
+        edit(&dir, |state| {
+            state["name"] = json!(name);
+            state["container"]["NetworkSettings"]["Networks"] = json!({ "bridge": {} });
+        });
+        *host.connected.lock() =
+            Some(Connection { origin: format!("http://{addr}"), token: "t".into() });
+        (host, dir, task)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn nothing_is_downloaded_until_somebody_wants_a_browser() {
+        for answer in ["absent", "kernel", "idle"] {
+            let (host, dir, task) = beside_a_browser(answer).await;
+            host.watch_browser().await;
+            assert!(
+                !calls(&dir)
+                    .iter()
+                    .any(|call| call[0] == "pull" || call[0] == "run" || call[0] == "network"),
+                "{answer}: {:?}",
+                calls(&dir)
+            );
+            task.abort();
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_wanted_browser_is_downloaded_and_started_beside_the_host_on_a_network_of_its_own() {
+        let (host, dir, task) = beside_a_browser("settingUp").await;
+        edit(&dir, |state| state["failure"] = json!("download"));
+        host.watch_browser().await;
+        assert!(calls(&dir).iter().any(|call| call[0] == "pull"), "{:?}", calls(&dir));
+        assert!(state(&dir).get("others").is_none(), "nothing starts without its image");
+        let tried = calls(&dir).len();
+        host.watch_browser().await;
+        assert_eq!(calls(&dir).len(), tried, "a failure waits before trying again");
+
+        let (host, dir, task2) = beside_a_browser("settingUp").await;
+        host.watch_browser().await;
+        let name = host.browser_name();
+        let made = calls(&dir);
+        assert!(
+            made.contains(&vec![
+                "network".into(),
+                "create".into(),
+                "--label".into(),
+                format!("bot.guaca.desktop={name}"),
+                name.clone()
+            ]),
+            "{made:?}"
+        );
+        assert!(
+            made.contains(&vec![
+                "network".into(),
+                "connect".into(),
+                name.clone(),
+                host.spec.name.clone()
+            ]),
+            "{made:?}"
+        );
+        let sidecar = &state(&dir)["others"][&name];
+        assert_eq!(
+            sidecar["Config"]["Image"], "ghcr.io/madebywelch/guaca/browser:test",
+            "{sidecar}"
+        );
+        assert!(std::fs::read_to_string(dir.path().join("seccomp.json"))
+            .unwrap()
+            .contains("SCMP_ACT_ERRNO"));
+
+        edit(&dir, |state| state["others"][&name]["State"] = json!({ "Running": true }));
+        let before = calls(&dir).len();
+        host.prepare_browser().await.unwrap();
+        assert!(
+            !calls(&dir)[before..].iter().any(|call| call[0] == "run" || call[0] == "rm"),
+            "a running browser is left alone"
+        );
+
+        edit(&dir, |state| {
+            state["others"][&name]["Config"]["Image"] =
+                json!("ghcr.io/madebywelch/guaca/browser:older")
+        });
+        host.prepare_browser().await.unwrap();
+        assert!(
+            calls(&dir).iter().any(|call| call[..2] == ["rm".to_string(), "--force".to_string()]),
+            "an older browser is replaced"
+        );
+        assert_eq!(
+            state(&dir)["others"][&name]["Config"]["Image"],
+            "ghcr.io/madebywelch/guaca/browser:test"
+        );
+        task.abort();
+        task2.abort();
     }
 }

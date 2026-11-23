@@ -3,6 +3,8 @@ use crate::tray::{self, Tray};
 use std::sync::Arc;
 use tauri::Manager;
 
+const BROWSER_WATCH: std::time::Duration = std::time::Duration::from_secs(5);
+
 #[tauri::command]
 async fn local_host_status(state: tauri::State<'_, LocalHost>) -> Result<Status, String> {
     Ok(state.status().await)
@@ -200,8 +202,17 @@ pub fn run() {
             app.manage(
                 LocalHost::new(&app.config().identifier, crate::host::IMAGE)
                     .with_journal(data.join("host-update.json"))
-                    .with_engine_record(data.join("host-engine.json")),
+                    .with_engine_record(data.join("host-engine.json"))
+                    .with_browser(crate::host::BROWSER_IMAGE, data.join("browser-seccomp.json")),
             );
+            let watching = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut every = tokio::time::interval(BROWSER_WATCH);
+                loop {
+                    every.tick().await;
+                    watching.state::<LocalHost>().watch_browser().await;
+                }
+            });
             app.manage(crate::rebuild::Rebuild::new(
                 crate::rebuild::Origin::this_app(),
                 app.path().app_log_dir()?.join("rebuild.log"),
