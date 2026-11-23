@@ -89,6 +89,11 @@ pub async fn serve(settings: Settings) -> Result<(), String> {
 }
 
 pub async fn bind(settings: Settings) -> Result<Bound, String> {
+    let listener = tokio::net::TcpListener::bind(settings.bind)
+        .await
+        .map_err(|err| format!("could not listen on {}: {err}", settings.bind))?;
+    let addr = listener.local_addr().map_err(|err| err.to_string())?;
+
     let (events, _) = broadcast::channel(BACKLOG);
     let sink = Arc::new(live::SocketSink::new(events.clone()));
 
@@ -176,10 +181,6 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
             .expose_headers([header::CONTENT_RANGE, header::CONTENT_DISPOSITION]),
     );
 
-    let listener = tokio::net::TcpListener::bind(settings.bind)
-        .await
-        .map_err(|err| format!("could not listen on {}: {err}", settings.bind))?;
-    let addr = listener.local_addr().map_err(|err| err.to_string())?;
     tracing::info!(%addr, agents = booted.started, "guacad ready");
     if settings.web.is_some() {
         tracing::info!(
