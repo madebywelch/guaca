@@ -3,6 +3,7 @@ pub mod account;
 pub mod app;
 pub mod artifact;
 pub mod boot;
+pub mod browser;
 pub mod cdp;
 pub mod claude_signin;
 pub mod commands;

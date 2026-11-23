@@ -48,6 +48,7 @@ async fn workspace(account: Option<Value>) -> (SocketAddr, tempfile::TempDir) {
         web: None,
         origin: None,
         updater: None,
+        browser: None,
     })
     .await
     .expect("the workspace opens");

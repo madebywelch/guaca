@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::account::{Account, AccountError, Connectors};
 use crate::artifact::Artifacts;
+use crate::browser::{Backend, BrowserError};
 use crate::config::{self, AppConfig, RedactedConfig};
 use crate::domain::agent::{copy_name, hire_names, AgentCard, AgentDraft, Consent, Lifecycle};
 use crate::domain::approval::{Approval, ApprovalState, Decision, ProtectedAction};
@@ -38,7 +39,7 @@ use crate::domain::skill::{Scope as SkillScope, Skill};
 use crate::domain::usage::{GroupUsage, RunUsage};
 use crate::domain::worknote::WorkingNote;
 use crate::e2b::{Computer, E2bClient, E2bError};
-use crate::kernel::{Browser, KernelClient, KernelError};
+use crate::kernel::Browser;
 use crate::runtime::events::{Activity, UiEvent};
 use crate::runtime::Runtime;
 use crate::subscription::{DeviceCode, SigninError, Status, Subscription};
@@ -315,10 +316,14 @@ impl From<E2bError> for CommandError {
     }
 }
 
-impl From<KernelError> for CommandError {
-    fn from(err: KernelError) -> Self {
+impl From<BrowserError> for CommandError {
+    fn from(err: BrowserError) -> Self {
         match err {
-            KernelError::NoKey => CommandError::new("browserUnconfigured", err.to_string()),
+            BrowserError::Unavailable => CommandError::new("browserUnconfigured", err.to_string()),
+            BrowserError::SettingUp => CommandError::new(
+                "browserSettingUp",
+                "The browser on this Mac is being set up. The first time takes a minute or two.",
+            ),
             other => CommandError::new("browser", other.to_string()),
         }
     }
@@ -438,9 +443,8 @@ pub async fn delete_agent_computer(state: &AppState, id: AgentId) -> Reply<()> {
     Ok(())
 }
 
-fn browsers(state: &AppState) -> Reply<KernelClient> {
-    KernelClient::new(&state.runtime.config().kernel.api_key)
-        .ok_or_else(|| KernelError::NoKey.into())
+fn browsers(state: &AppState) -> Reply<Backend> {
+    state.runtime.browsers().ok_or_else(|| BrowserError::Unavailable.into())
 }
 
 pub async fn agent_browser(state: &AppState, id: AgentId) -> Reply<Option<Browser>> {
@@ -487,7 +491,7 @@ pub async fn take_agent_browser(state: &AppState, id: AgentId) -> Reply<()> {
     if let Some(browser) = card.browser_id {
         match browsers(state) {
             Ok(client) => {
-                if let Err(err) = client.delete(&browser).await {
+                if let Err(err) = client.close(&browser).await {
                     tracing::warn!(%err, %browser, "could not close a browser that was taken back");
                 } else {
                     state.runtime.store().clear_agent_browser_if(id, &browser)?;
@@ -511,7 +515,7 @@ pub async fn stop_agent_browser(state: &AppState, id: AgentId) -> Reply<()> {
     let Some(browser) = agent_card(state, id)?.browser_id else {
         return Ok(());
     };
-    browsers(state)?.delete(&browser).await?;
+    browsers(state)?.close(&browser).await?;
     state.runtime.store().clear_agent_browser_if(id, &browser)?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
@@ -2116,8 +2120,12 @@ pub struct GroupReset {
 
 pub use crate::config::SettingsPatch;
 
+pub async fn local_browser(state: &AppState) -> Reply<crate::browser::LocalState> {
+    Ok(state.runtime.local_browser_state().await)
+}
+
 pub async fn capabilities(state: &AppState) -> Reply<Capabilities> {
-    Ok(state.deployment.capabilities())
+    Ok(state.deployment.beside_a_browser(state.runtime.local_browser().is_some()))
 }
 
 pub async fn get_settings(state: &AppState) -> Reply<RedactedConfig> {

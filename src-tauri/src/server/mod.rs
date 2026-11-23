@@ -43,6 +43,7 @@ pub struct Settings {
     pub web: Option<PathBuf>,
     pub origin: Option<String>,
     pub updater: Option<PathBuf>,
+    pub browser: Option<String>,
 }
 
 #[derive(Clone)]
@@ -103,6 +104,9 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
     }
 
     let runtime = booted.runtime;
+    if let Some(local) = settings.browser.as_deref().and_then(crate::browser::Local::new) {
+        runtime.set_local_browser(local);
+    }
     let state = Arc::new(AppState {
         runtime: runtime.clone(),
         secret: Some(Arc::from(settings.token.as_str())),

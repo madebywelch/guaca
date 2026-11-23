@@ -61,6 +61,7 @@ import type {
   GroupReset,
   GroupUsage,
   HeaderPair,
+  LocalBrowser,
   MessageId,
   NotebookEntry,
   NotificationAccess,
@@ -469,6 +470,7 @@ export const api = {
   usageForRuns: (runs: RunId[]) => invoke<RunUsage[]>("usage_for_runs", { runs }),
 
   capabilities: () => invoke<Capabilities>("capabilities"),
+  localBrowser: () => invoke<LocalBrowser>("local_browser"),
 
   getSettings: () => invoke<Settings>("get_settings"),
 

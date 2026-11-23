@@ -346,3 +346,68 @@ async fn a_second_command_in_one_turn_runs_on_the_machine_the_first_rented() {
         "and the token that reaches it is the one that machine was issued"
     );
 }
+
+fn nothing_listens() -> guac_lib::browser::Local {
+    let parked = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+    let address = parked.local_addr().expect("an address");
+    drop(parked);
+    guac_lib::browser::Local::new(&address.to_string()).expect("an address")
+}
+
+#[tokio::test]
+async fn a_kernel_key_wins_over_a_browser_beside_the_host() {
+    let fleet = fleet();
+    let stub = quiet().await;
+    let h = harness_with_browser(&stub, &["Scout"], GuardLimits::default());
+    h.runtime.set_local_browser(nothing_listens());
+    let card = h.agent_named("Scout").unwrap();
+
+    let (browsers, session) = h.runtime.ensure_browser(&card).await.expect("Kernel's browser");
+
+    assert!(matches!(browsers, guac_lib::browser::Backend::Kernel(_)), "{browsers:?}");
+    assert_eq!(fleet.kernel.lock().made_for(&card.id.to_string()), 1);
+    assert!(session.live_view_url.is_some(), "Kernel's browser keeps its live view");
+}
+
+#[tokio::test]
+async fn a_browse_while_the_browser_is_set_up_answers_at_once_and_the_turn_goes_on() {
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("The browser is still being set up; I will look again shortly.".into())
+        } else {
+            Script::Plugin {
+                name: "browse".into(),
+                arguments: json!({ "action": "open", "url": "https://example.com/" }),
+            }
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Reader"], GuardLimits::default());
+    let reader = h.id("Reader");
+    h.runtime.store().set_has_browser(reader, true).unwrap();
+    h.runtime.set_local_browser(nothing_listens());
+    assert!(h.runtime.configured().browser, "a sidecar beside the host is a browser to hand out");
+
+    let run = h.runtime.send_from_human(reader, "What does example.com say?").unwrap();
+    assert!(h.settled_within(run, 20).await, "a browse during setup must never hold the turn");
+
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("being set up"), "{results}");
+    assert!(results.contains("try again shortly"), "{results}");
+    assert_eq!(h.agent_named("Reader").unwrap().browser_id, None, "nothing was opened");
+    assert_eq!(
+        h.runtime.local_browser_state().await,
+        guac_lib::browser::LocalState::SettingUp,
+        "an agent holding a browser is what tells the Mac app to set one up"
+    );
+}
+
+#[tokio::test]
+async fn without_a_key_or_a_browser_beside_the_host_nobody_is_offered_one() {
+    let stub = quiet().await;
+    let h = harness(&stub, &["Reader"], GuardLimits::default());
+    h.runtime.store().set_has_browser(h.id("Reader"), true).unwrap();
+    assert!(!h.runtime.configured().browser);
+    assert!(h.runtime.browsers().is_none());
+    assert_eq!(h.runtime.local_browser_state().await, guac_lib::browser::LocalState::Absent);
+}

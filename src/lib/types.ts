@@ -519,7 +519,10 @@ export interface Capabilities {
   claudeProvider: boolean;
   localFiles: boolean;
   borrowedSignins: boolean;
+  localBrowser?: boolean;
 }
+
+export type LocalBrowser = "absent" | "kernel" | "idle" | "settingUp" | "ready";
 
 export interface Settings {
   operatorName: string;

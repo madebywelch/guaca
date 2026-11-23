@@ -12,6 +12,7 @@ async fn legacy_client_cannot_approve_on_a_new_host() {
         web: None,
         origin: None,
         updater: None,
+        browser: None,
     })
     .await
     .unwrap();

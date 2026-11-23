@@ -16,14 +16,22 @@ impl Deployment {
                 claude_provider: true,
                 local_files: true,
                 borrowed_signins: true,
+                local_browser: false,
             },
             Deployment::Server => Capabilities {
                 loopback_endpoints: true,
                 claude_provider: true,
                 local_files: false,
                 borrowed_signins: false,
+                local_browser: false,
             },
         }
+    }
+
+    pub const fn beside_a_browser(self, sidecar: bool) -> Capabilities {
+        let mut here = self.capabilities();
+        here.local_browser = sidecar && self.is_server();
+        here
     }
 
     pub const fn is_server(self) -> bool {
@@ -38,6 +46,7 @@ pub struct Capabilities {
     pub claude_provider: bool,
     pub local_files: bool,
     pub borrowed_signins: bool,
+    pub local_browser: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +54,7 @@ pub enum Absent {
     LoopbackEndpoints,
     ClaudeProvider,
     LocalFiles,
+    LocalBrowser,
 }
 
 impl Absent {
@@ -64,6 +74,11 @@ impl Absent {
                  Drop the file onto the window or pick it with the file button, and the bytes \
                  are uploaded"
             }
+            Absent::LocalBrowser => {
+                "this workspace has no browser of its own: Guaca runs one only beside the local \
+                 host the Mac app starts. Add a Kernel API key in settings to give agents a hosted \
+                 browser here, or run this group in the local workspace instead"
+            }
         }
     }
 }
@@ -80,6 +95,7 @@ impl Capabilities {
             Absent::LoopbackEndpoints => self.loopback_endpoints,
             Absent::ClaudeProvider => self.claude_provider,
             Absent::LocalFiles => self.local_files,
+            Absent::LocalBrowser => self.local_browser,
         };
         if have {
             Ok(())
@@ -135,7 +151,12 @@ mod tests {
 
     #[test]
     fn every_refusal_says_what_to_do_instead() {
-        for what in [Absent::LoopbackEndpoints, Absent::ClaudeProvider, Absent::LocalFiles] {
+        for what in [
+            Absent::LoopbackEndpoints,
+            Absent::ClaudeProvider,
+            Absent::LocalFiles,
+            Absent::LocalBrowser,
+        ] {
             let said = what.sentence();
             assert!(said.len() > 60, "{what:?} is too short to have said anything: {said}");
             assert!(
@@ -154,6 +175,29 @@ mod tests {
         assert!(Deployment::Desktop.capabilities().borrowed_signins);
         assert!(Deployment::Server.capabilities().claude_provider);
         assert!(!Deployment::Server.capabilities().borrowed_signins);
+    }
+
+    #[test]
+    fn a_browser_of_its_own_is_offered_only_beside_a_host_that_has_one() {
+        for deployment in [Deployment::Desktop, Deployment::Server] {
+            assert!(!deployment.capabilities().local_browser, "{deployment:?}");
+            assert_eq!(
+                deployment.beside_a_browser(false).require(Absent::LocalBrowser),
+                Err(Absent::LocalBrowser),
+                "{deployment:?} with no sidecar"
+            );
+        }
+        assert_eq!(Deployment::Server.beside_a_browser(true).require(Absent::LocalBrowser), Ok(()));
+        assert!(
+            !Deployment::Desktop.beside_a_browser(true).local_browser,
+            "only a host the app runs in Docker has a sidecar beside it"
+        );
+        let server = Deployment::Server.beside_a_browser(true);
+        assert_eq!(
+            Capabilities { local_browser: false, ..server },
+            Deployment::Server.capabilities(),
+            "a sidecar changes nothing else a host can do"
+        );
     }
 
     #[test]
