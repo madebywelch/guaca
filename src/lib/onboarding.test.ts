@@ -114,7 +114,8 @@ describe("the first task", () => {
 
   it("asks research for its arithmetic and the loan still owed, so the verdict rests on sums", () => {
     const brief = FIRST_TASKS.find((task) => task.id === "research")!.brief;
-    expect(brief).toMatch(/show the arithmetic/);
+    expect(brief).toMatch(/Show the arithmetic/);
+    expect(brief).toMatch(/leaving out what I would pay either way/);
     expect(brief).toMatch(/loan still owed at the end of the three years/);
     expect(brief).toMatch(/assume a typical one and say so/);
   });
