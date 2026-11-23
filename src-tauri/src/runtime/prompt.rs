@@ -2769,8 +2769,10 @@ mod tests {
             assert!(sums.contains("never do arithmetic in your head"), "{sums}");
             assert!(sums.contains("show the figures you used"), "{sums}");
             assert!(
-                sums.contains("Never state the weekday of a date unless it was given to you or \
-                               `calculator` returned it"),
+                sums.contains(
+                    "Never state the weekday of a date unless it was given to you or \
+                               `calculator` returned it"
+                ),
                 "{sums}"
             );
         }

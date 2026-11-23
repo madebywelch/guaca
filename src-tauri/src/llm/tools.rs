@@ -3327,8 +3327,10 @@ mod tests {
                 assert!(names.contains(&CALCULATOR.to_string()), "{surfaces:?}: {names:?}");
             }
         }
-        let names: Vec<String> =
-            for_errands(specs(Surfaces::both(), Modalities::seeing())).into_iter().map(|s| s.name).collect();
+        let names: Vec<String> = for_errands(specs(Surfaces::both(), Modalities::seeing()))
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
         assert!(names.contains(&CALCULATOR.to_string()), "an errand can do sums too: {names:?}");
     }
 
@@ -3342,8 +3344,14 @@ mod tests {
             parse(&call(CALCULATOR, r#"{"expressions":["a = 2","a * 3"]}"#)),
             Ok(ToolInvocation::Calculate { expression: "a = 2\na * 3".into() })
         );
-        for bad in [r#"{}"#, r#"{"expression":"  "}"#, r#"{"expression":3}"#, r#"{"expressions":["a",1]}"#] {
-            assert_eq!(parse(&call(CALCULATOR, bad)), Err(ToolParseError::InvalidCalculation), "{bad}");
+        for bad in
+            [r#"{}"#, r#"{"expression":"  "}"#, r#"{"expression":3}"#, r#"{"expressions":["a",1]}"#]
+        {
+            assert_eq!(
+                parse(&call(CALCULATOR, bad)),
+                Err(ToolParseError::InvalidCalculation),
+                "{bad}"
+            );
         }
     }
 

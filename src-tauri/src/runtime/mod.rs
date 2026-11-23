@@ -7946,7 +7946,8 @@ mod tests {
         let sum = ToolInvocation::Calculate { expression: "1 + 1".into() };
         assert_eq!(runtime.not_given(&card, Modalities::text_only(), &sum), None);
 
-        let (said, part) = worked_out("payment = 35000 * 0.5%\nround(payment * 36)", serde_json::json!({}));
+        let (said, part) =
+            worked_out("payment = 35000 * 0.5%\nround(payment * 36)", serde_json::json!({}));
         assert_eq!(said, "payment = 175\nround(payment * 36) = 6300");
         assert!(
             matches!(&part, Part::ToolCall { outcome: ToolOutcome::Ok { summary }, .. }

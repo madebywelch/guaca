@@ -340,7 +340,10 @@ describe("folding a turn's work", () => {
 
   it("counts the sums a turn worked out", () => {
     const groups = foldTrail(
-      steps(call("calculator", { expression: "1 + 1" }), call("calculator", { expression: "2 * 3" })),
+      steps(
+        call("calculator", { expression: "1 + 1" }),
+        call("calculator", { expression: "2 * 3" }),
+      ),
     );
     expect(groups[0]?.label).toBe("Worked out 2 sums");
   });

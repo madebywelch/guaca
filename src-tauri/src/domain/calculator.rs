@@ -65,7 +65,9 @@ impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Value::Number(n) => f.write_str(&number_words(*n)),
-            Value::Date(date) => write!(f, "{}, a {}", date.format("%Y-%m-%d"), day_name(date.weekday())),
+            Value::Date(date) => {
+                write!(f, "{}, a {}", date.format("%Y-%m-%d"), day_name(date.weekday()))
+            }
             Value::Day(day) => f.write_str(day_name(*day)),
         }
     }
@@ -108,7 +110,11 @@ pub fn clean(n: f64) -> f64 {
 
 pub fn number_words(n: f64) -> String {
     let n = clean(n);
-    if n == 0.0 { "0".to_string() } else { format!("{n}") }
+    if n == 0.0 {
+        "0".to_string()
+    } else {
+        format!("{n}")
+    }
 }
 
 pub fn evaluate(input: &str) -> Result<Vec<Worked>, CalcError> {
@@ -155,9 +161,12 @@ fn statement(said: &str, names: &HashMap<String, Value>) -> Result<(Option<Strin
     let value = parser.expression()?;
     if let Some(left) = parser.tokens.get(parser.at) {
         return Err(Fault::Malformed(match left {
-            Token::Comma => "a comma only separates a function's arguments: write 35000, not 35,000"
-                .to_string(),
-            Token::Assign => "only a name goes before `=`, as in `payment = 35000 / 60`".to_string(),
+            Token::Comma => {
+                "a comma only separates a function's arguments: write 35000, not 35,000".to_string()
+            }
+            Token::Assign => {
+                "only a name goes before `=`, as in `payment = 35000 / 60`".to_string()
+            }
             Token::Close => "a `)` with no `(` before it".to_string(),
             other => format!("{} where an operator was expected", other.words()),
         }));
@@ -246,7 +255,9 @@ fn lex(said: &str) -> Result<Vec<Token>, Fault> {
                     "`{c}` is not part of a sum: leave out currency signs and units"
                 )));
             }
-            other => return Err(Fault::Malformed(format!("`{other}` is not something it can read"))),
+            other => {
+                return Err(Fault::Malformed(format!("`{other}` is not something it can read")))
+            }
         };
         tokens.push(token);
         at += 1;
@@ -291,12 +302,10 @@ fn number_or_date(chars: &[char], start: usize) -> Result<(Token, usize), Fault>
     }
     let words: String = chars[start..at].iter().collect();
     if chars.get(at).is_some_and(|c| c.is_ascii_alphabetic() || *c == '.') {
-        return Err(Fault::Malformed(format!(
-            "`{words}{}` is not a number",
-            chars[at]
-        )));
+        return Err(Fault::Malformed(format!("`{words}{}` is not a number", chars[at])));
     }
-    let n: f64 = words.parse().map_err(|_| Fault::Malformed(format!("`{words}` is not a number")))?;
+    let n: f64 =
+        words.parse().map_err(|_| Fault::Malformed(format!("`{words}` is not a number")))?;
     Ok((Token::Number(checked(n)?), at))
 }
 
@@ -329,7 +338,11 @@ impl Parser<'_> {
 
     fn deeper(&mut self) -> Result<(), Fault> {
         self.depth += 1;
-        if self.depth > MAX_DEPTH { Err(Fault::TooDeep) } else { Ok(()) }
+        if self.depth > MAX_DEPTH {
+            Err(Fault::TooDeep)
+        } else {
+            Ok(())
+        }
     }
 
     fn expression(&mut self) -> Result<Value, Fault> {
@@ -430,10 +443,9 @@ impl Parser<'_> {
                     _ => self.names.get(&name).copied().ok_or(Fault::Unknown(name)),
                 }
             }
-            other => Err(Fault::Malformed(format!(
-                "{} where a number was expected",
-                other.words()
-            ))),
+            other => {
+                Err(Fault::Malformed(format!("{} where a number was expected", other.words())))
+            }
         }
     }
 
@@ -460,7 +472,11 @@ impl Parser<'_> {
 }
 
 fn checked(n: f64) -> Result<f64, Fault> {
-    if n.is_finite() && n.abs() <= LARGEST { Ok(n) } else { Err(Fault::Overflow) }
+    if n.is_finite() && n.abs() <= LARGEST {
+        Ok(n)
+    } else {
+        Err(Fault::Overflow)
+    }
 }
 
 fn number(value: Value) -> Result<f64, Fault> {
@@ -555,7 +571,11 @@ fn call(name: &str, arguments: &[Value]) -> Result<Value, Fault> {
                     number_words(x)
                 )));
             }
-            if name == "ln" { x.ln() } else { x.log10() }
+            if name == "ln" {
+                x.ln()
+            } else {
+                x.log10()
+            }
         }
         "exp" => checked(one()?.exp())?,
         "abs" => one()?.abs(),
@@ -595,7 +615,9 @@ fn call(name: &str, arguments: &[Value]) -> Result<Value, Fault> {
                 [Value::Date(from), Value::Date(to)] => {
                     Ok(Value::Number((*to - *from).num_days() as f64))
                 }
-                _ => Err(wants("two dates written as YYYY-MM-DD, as in days(2026-11-23, 2026-12-20)")),
+                _ => Err(wants(
+                    "two dates written as YYYY-MM-DD, as in days(2026-11-23, 2026-12-20)",
+                )),
             };
         }
         "pi" | "e" => return Err(wants("nothing, and is written without brackets")),
@@ -626,7 +648,9 @@ mod tests {
 
     #[test]
     fn a_result_past_the_largest_is_an_overflow_and_not_a_number() {
-        for input in ["10 ^ 16", "pow(2, 60)", "exp(1000)", "1e300 * 1e300", "999999999999999 * 10", "1e16"] {
+        for input in
+            ["10 ^ 16", "pow(2, 60)", "exp(1000)", "1e300 * 1e300", "999999999999999 * 10", "1e16"]
+        {
             assert_eq!(fault(input), Fault::Overflow, "{input}");
         }
         assert_eq!(one("10 ^ 15"), "1000000000000000");
@@ -661,7 +685,15 @@ mod tests {
 
     #[test]
     fn a_number_outside_a_function_domain_is_refused() {
-        for input in ["sqrt(-4)", "ln(0)", "log(-1)", "(-8) ^ 0.5", "round(2.5, 11)", "round(2.5, 1.5)", "2026-01-01 + 0.5"] {
+        for input in [
+            "sqrt(-4)",
+            "ln(0)",
+            "log(-1)",
+            "(-8) ^ 0.5",
+            "round(2.5, 11)",
+            "round(2.5, 1.5)",
+            "2026-01-01 + 0.5",
+        ] {
             assert!(matches!(fault(input), Fault::Domain(_)), "{input}: {:?}", fault(input));
         }
     }
