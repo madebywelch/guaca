@@ -603,7 +603,7 @@ pub fn system_prompt(
          fires and reaches you as a message, and an occasion sits there being true. If you have \
          to prepare for something on this calendar, the occasion goes here and the routine that \
          prepares for it goes there.\n",
-        occasion::when_words(now, true).replace(", all day", "")
+        occasion::day_words(now)
     ));
 
     if calendar.is_empty() {
@@ -2091,7 +2091,10 @@ mod tests {
         let calendar = section(&prompt, "## Your group's calendar");
         let today = crate::domain::local(crate::domain::now_ms()).unwrap();
 
-        assert!(calendar.contains(&today.format("%a %-d %b %Y").to_string()), "{calendar}");
+        assert!(
+            calendar.contains(&format!("Today is {}.", today.format("%A, %-d %B %Y"))),
+            "today with its weekday written out: {calendar}"
+        );
     }
 
     #[test]

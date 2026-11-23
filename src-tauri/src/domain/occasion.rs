@@ -218,6 +218,13 @@ pub fn when_words(at: i64, all_day: bool) -> String {
     }
 }
 
+pub fn day_words(at: i64) -> String {
+    local(at).map_or_else(
+        || "an unreadable date".to_string(),
+        |when| when.format("%A, %-d %B %Y").to_string(),
+    )
+}
+
 pub fn how_far(at: i64, now: i64) -> String {
     let today = day_of(now);
     let that_day = day_of(at);
@@ -279,6 +286,13 @@ mod tests {
 
     fn clean(title: &str, when: When, minutes: Option<u32>) -> Result<Clean, Invalid> {
         Clean::new(group(), None, title, "", "", when, minutes)
+    }
+
+    #[test]
+    fn a_day_is_said_with_its_weekday_on_the_local_calendar() {
+        assert_eq!(day_words(at((2026, 12, 20), (0, 30))), "Sunday, 20 December 2026");
+        assert_eq!(day_words(at((2026, 11, 23), (23, 30))), "Monday, 23 November 2026");
+        assert_eq!(day_words(at((2028, 2, 29), (12, 0))), "Tuesday, 29 February 2028");
     }
 
     #[test]
