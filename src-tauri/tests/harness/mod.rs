@@ -60,6 +60,19 @@ pub enum Script {
 
 pub const HANG: Duration = Duration::from_secs(30);
 
+pub const GATE_DEADLINE: Duration = Duration::from_secs(8);
+
+pub fn hold_until_open(gate: &std::sync::atomic::AtomicBool, name: &str) {
+    let deadline = Instant::now() + GATE_DEADLINE;
+    while !gate.load(Ordering::SeqCst) {
+        assert!(
+            Instant::now() < deadline,
+            "the {name} gate was still shut after {GATE_DEADLINE:?}: the test never opened it"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 pub fn frame(value: serde_json::Value) -> String {
     format!("data: {value}\n\n")
 }
