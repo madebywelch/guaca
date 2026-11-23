@@ -685,7 +685,7 @@ const APPROVAL_WINDOW: Duration = Duration::from_secs(10 * 60);
 const ENDED_BY_RESTART: &str = "The host restarted while this was waiting for the operator, so \
                                 nobody decided anything. Ask again if it still needs doing.";
 
-const SCHEDULE_TICK: Duration = Duration::from_secs(20);
+pub const SCHEDULE_TICK: Duration = Duration::from_secs(20);
 
 #[derive(Clone, Copy)]
 pub(super) enum CutShort {

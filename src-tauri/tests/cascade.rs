@@ -23,7 +23,7 @@ use guac_lib::domain::signin::{Signin, Surface};
 use guac_lib::llm::openrouter::LlmClient;
 use guac_lib::runtime::events::{Activity, RecordingSink, UiEvent};
 use guac_lib::runtime::guard::GuardLimits;
-use guac_lib::runtime::{prompt, OnDisk, Runtime};
+use guac_lib::runtime::{prompt, OnDisk, Runtime, SCHEDULE_TICK};
 
 use harness::*;
 
@@ -4763,6 +4763,9 @@ async fn a_routine_that_is_switched_off_stays_quiet_and_starts_again_when_asked(
     );
 
     h.runtime.store().set_routine_active(routine.id, true).unwrap();
+    tokio::time::pause();
+    tokio::time::advance(SCHEDULE_TICK).await;
+    tokio::time::resume();
     h.wait_until("it to fire once switched back on", |h| {
         h.channel_texts("Watcher").iter().any(|t| t.contains("checked"))
     })
