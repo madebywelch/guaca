@@ -3643,8 +3643,7 @@ def scenario_figurefix(w: World) -> None:
     row = first_row(w)
     settled(w, 1, "the first task settles")
     kept = said(w, "Financial Analyst")
-    w.check("after a sum, a figure the calculator never returned goes back once by name, and the answer kept is the "
-            "corrected one",
+    w.check("after a sum, a figure the calculator never gave goes back once, named, and the corrected answer is kept",
             len(asked) == 1 and "$107" in asked[0] and "$21,000" not in asked[0] and kept == [CHECKED],
             observed={"sentBack": asked, "kept": kept}, shot=True)
     w.check("For you is headed by the corrected Bottom line", row["headline"] == "buy, on these sums.", observed=row)
@@ -4365,8 +4364,7 @@ SCENARIOS: dict[str, Scenario] = {
                           "the calculator and then states a figure it never worked out, the answer goes back once "
                           "naming it, and the corrected answer is the one kept and the one For you is headed by.",
     (
-        "after a sum, a figure the calculator never returned goes back once by name, and the answer kept is the "
-        "corrected one",
+        "after a sum, a figure the calculator never gave goes back once, named, and the corrected answer is kept",
         "For you is headed by the corrected Bottom line",
         "every model call was one the scenario scripted",
     )),
