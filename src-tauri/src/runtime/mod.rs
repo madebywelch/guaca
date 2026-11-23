@@ -5479,11 +5479,8 @@ impl Runtime {
         let config = self.config();
         tools::Surfaces {
             computer: !config.e2b.api_key.expose().trim().is_empty(),
-            browser: crate::browser::Backend::choose(
-                &config.kernel.api_key,
-                self.inner.local_browser.get(),
-            )
-            .is_some(),
+            browser: !config.kernel.api_key.expose().trim().is_empty()
+                || self.inner.local_browser.get().is_some(),
             errands: true,
         }
     }
