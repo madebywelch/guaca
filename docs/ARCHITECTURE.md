@@ -1329,16 +1329,22 @@ balance worked out in the model's head was off in two runs of three, and every
 plan called a Sunday a Saturday. `calculator` is the fix: a small evaluator in
 `domain/calculator.rs`, not a language. It reads numbers, the four operations,
 powers, brackets, percentages, the functions a loan or a compound interest sum
-needs, names for results within one call, and dates written YYYY-MM-DD, with
-`weekday(...)`, `days(...)` and whole days added or taken away. It has no loop,
+needs, `pmt` and `balance` for a loan's payment and what is still owed, notes
+after `#`, names for results that last for the rest of the turn, and dates
+written YYYY-MM-DD, with `weekday(...)`, `days(...)` and whole days added or
+taken away. A name from a call that failed is not kept. The loan functions and
+the names are there because live runs wrote the balance formula wrong and
+expected a name from one call to be there in the next. It has no loop,
 no network and no file, so it is offered to every agent, errands included,
 with no switch and no migration. The input is bounded in length, lines and
 nesting, a value past 10^15 is an overflow, and a result is shown to twelve
 significant digits, so 0.1 + 0.2 reads 0.3. An error names the line it was on.
 
-The standing prompt tells every agent to use it for every sum, to show the
-figures, and to state a weekday only when it was given one or the calculator
-returned it. *Your group's calendar* writes today's weekday out in full.
+The standing prompt tells every agent to use it for every sum, a what-if's
+included, to show the figures, to put no figure in an answer that it was not
+given or did not get back, and to state a weekday only when it was given one or
+the calculator returned it. *Your group's calendar* writes today's weekday out
+in full.
 
 ## Files are references, and what a model gets depends on what they are
 

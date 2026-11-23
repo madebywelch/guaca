@@ -474,12 +474,15 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                           + - * / and ^ for a power, brackets, and % for a hundredth (6% is \
                           0.06, so add ten percent as `x * (1 + 10%)`). Functions: pow, sqrt, ln, \
                           log (base 10), exp, abs, round(x) or round(x, decimals), floor, ceil, \
-                          min, max. Put several lines in one call, one per line, and name a result \
-                          to use it below: `rate = 6% / 12` then `payment = 35000 * rate / (1 - \
-                          (1 + rate) ^ -60)`. Dates are written YYYY-MM-DD: weekday(2026-12-20) is \
-                          the day of the week, days(2026-11-23, 2026-12-20) counts the days between, \
-                          and 2026-11-23 + 27 is the date 27 days later. Write numbers without \
-                          currency signs or thousands separators."
+                          min, max. For a loan, pmt(rate per period, periods, principal) is the \
+                          payment and balance(rate per period, periods, principal, payments made) \
+                          is what is still owed. Put several lines in one call, and name a result \
+                          to use it later: `rate = 6% / 12`, then `pmt(rate, 60, 35000)`. A name \
+                          keeps its value for the rest of this turn, and # starts a note the \
+                          calculator skips. Dates are written YYYY-MM-DD: weekday(2026-12-20) is \
+                          the day of the week, days(2026-11-23, 2026-12-20) counts the days \
+                          between, and 2026-11-23 + 27 is the date 27 days later. Write numbers \
+                          without currency signs or thousands separators."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",

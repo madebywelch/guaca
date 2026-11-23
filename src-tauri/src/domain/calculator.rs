@@ -117,21 +117,31 @@ pub fn number_words(n: f64) -> String {
     }
 }
 
+pub type Figures = HashMap<String, Value>;
+
 pub fn evaluate(input: &str) -> Result<Vec<Worked>, CalcError> {
+    evaluate_with(input, &mut Figures::new())
+}
+
+pub fn evaluate_with(input: &str, kept: &mut Figures) -> Result<Vec<Worked>, CalcError> {
     let whole = |fault| CalcError { line: 0, said: String::new(), fault };
     let length = input.chars().count();
     if length > MAX_INPUT {
         return Err(whole(Fault::TooLong(length)));
     }
-    let statements: Vec<&str> =
-        input.split(['\n', ';']).map(str::trim).filter(|line| !line.is_empty()).collect();
+    let statements: Vec<&str> = input
+        .lines()
+        .flat_map(|line| line.split('#').next().unwrap_or_default().split(';'))
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
     if statements.is_empty() {
         return Err(whole(Fault::Empty));
     }
     if statements.len() > MAX_LINES {
         return Err(whole(Fault::TooManyLines(statements.len())));
     }
-    let mut names: HashMap<String, Value> = HashMap::new();
+    let mut names = kept.clone();
     let mut out = Vec::with_capacity(statements.len());
     for (at, said) in statements.into_iter().enumerate() {
         let failed = |fault| CalcError { line: at + 1, said: said.to_string(), fault };
@@ -141,20 +151,14 @@ pub fn evaluate(input: &str) -> Result<Vec<Worked>, CalcError> {
         }
         out.push(Worked { said: said.to_string(), name, value });
     }
+    *kept = names;
     Ok(out)
 }
 
 fn statement(said: &str, names: &HashMap<String, Value>) -> Result<(Option<String>, Value), Fault> {
     let tokens = lex(said)?;
     let (name, body) = match tokens.as_slice() {
-        [Token::Name(name), Token::Assign, rest @ ..] => {
-            if FUNCTIONS.contains(&name.as_str()) || CONSTANTS.contains(&name.as_str()) {
-                return Err(Fault::Malformed(format!(
-                    "`{name}` is a built-in name; give the result another name"
-                )));
-            }
-            (Some(name.clone()), rest)
-        }
+        [Token::Name(name), Token::Assign, rest @ ..] => (Some(name.clone()), rest),
         _ => (None, tokens.as_slice()),
     };
     let mut parser = Parser { tokens: body, at: 0, depth: 0, names };
@@ -311,9 +315,8 @@ fn number_or_date(chars: &[char], start: usize) -> Result<(Token, usize), Fault>
 
 const FUNCTIONS: &[&str] = &[
     "pow", "sqrt", "ln", "log", "exp", "abs", "round", "floor", "ceil", "min", "max", "weekday",
-    "days",
+    "days", "pmt", "balance",
 ];
-const CONSTANTS: &[&str] = &["pi", "e"];
 
 struct Parser<'a> {
     tokens: &'a [Token],
@@ -434,13 +437,16 @@ impl Parser<'_> {
                     let arguments = self.arguments()?;
                     return call(&name, &arguments);
                 }
+                if let Some(value) = self.names.get(&name) {
+                    return Ok(*value);
+                }
                 match name.as_str() {
                     "pi" => Ok(Value::Number(std::f64::consts::PI)),
                     "e" => Ok(Value::Number(std::f64::consts::E)),
                     _ if FUNCTIONS.contains(&name.as_str()) => Err(Fault::Malformed(format!(
                         "`{name}` is a function: write `{name}(...)`"
                     ))),
-                    _ => self.names.get(&name).copied().ok_or(Fault::Unknown(name)),
+                    _ => Err(Fault::Unknown(name)),
                 }
             }
             other => {
@@ -542,6 +548,31 @@ fn raise(base: f64, exponent: f64) -> Result<f64, Fault> {
     checked(base.powf(exponent))
 }
 
+fn whole_periods(periods: f64) -> Result<f64, Fault> {
+    let periods = clean(periods);
+    if periods < 1.0 || periods.fract() != 0.0 || periods > 10_000.0 {
+        return Err(Fault::Domain(format!(
+            "a loan runs for a whole number of periods from 1 to 10000, not {}",
+            number_words(periods)
+        )));
+    }
+    Ok(periods)
+}
+
+fn annuity(rate: f64, periods: f64, principal: f64) -> Result<f64, Fault> {
+    if rate <= -1.0 {
+        return Err(Fault::Domain("a rate per period must be above -100%".to_string()));
+    }
+    if rate == 0.0 {
+        return Ok(principal / periods);
+    }
+    let left = 1.0 - (1.0 + rate).powf(-periods);
+    if left == 0.0 {
+        return Err(Fault::DivisionByZero);
+    }
+    checked(principal * rate / left)
+}
+
 fn call(name: &str, arguments: &[Value]) -> Result<Value, Fault> {
     let wants = |count: &str| {
         Fault::Malformed(format!("`{name}` takes {count}, and was given {}", arguments.len()))
@@ -604,6 +635,38 @@ fn call(name: &str, arguments: &[Value]) -> Result<Value, Fault> {
             let pick: fn(f64, f64) -> f64 = if name == "min" { f64::min } else { f64::max };
             all.into_iter().reduce(pick).unwrap_or_default()
         }
+        "pmt" => match numbers()?.as_slice() {
+            [rate, periods, principal] => {
+                let periods = whole_periods(*periods)?;
+                annuity(*rate, periods, *principal)?
+            }
+            _ => return Err(wants("three numbers, pmt(rate per period, periods, principal)")),
+        },
+        "balance" => match numbers()?.as_slice() {
+            [rate, periods, principal, paid] => {
+                let periods = whole_periods(*periods)?;
+                let paid = clean(*paid);
+                if paid < 0.0 || paid.fract() != 0.0 || paid > periods {
+                    return Err(Fault::Domain(format!(
+                        "`balance` needs a whole number of payments made, from 0 to {}, not {}",
+                        number_words(periods),
+                        number_words(paid)
+                    )));
+                }
+                let payment = annuity(*rate, periods, *principal)?;
+                let left = periods - paid;
+                if *rate == 0.0 {
+                    payment * left
+                } else {
+                    payment * (1.0 - (1.0 + rate).powf(-left)) / rate
+                }
+            }
+            _ => {
+                return Err(wants(
+                    "four numbers, balance(rate per period, periods, principal, payments made)",
+                ));
+            }
+        },
         "weekday" => {
             return match arguments {
                 [Value::Date(date)] => Ok(Value::Day(date.weekday())),
@@ -670,9 +733,8 @@ mod tests {
         assert!(malformed("2 3").contains("where an operator"));
         assert!(malformed("pow(2)").contains("two numbers"));
         assert!(malformed("sqrt").contains("is a function"));
-        assert!(malformed("round = 2").contains("built-in"));
         assert!(malformed("1 = 2").contains("only a name"));
-        assert!(malformed("3 # 4").contains("`#`"));
+        assert!(malformed("3 @ 4").contains("`@`"));
         assert!(malformed("12abc").contains("not a number"));
         assert!(malformed("2026-12-20 * 2").contains("cannot go in that sum"));
         assert!(malformed("weekday(2026-12-20) + 1").contains("day of the week"));
@@ -797,6 +859,55 @@ mod tests {
         assert_eq!(shown[6], "round(buy) = 19626");
         assert_eq!(shown[7], "round(owed) = 15267");
         assert_eq!(shown[8], "round(payment, 2) = 676.65");
+    }
+
+    #[test]
+    fn a_loan_payment_and_balance_have_functions_of_their_own() {
+        assert_eq!(one("round(pmt(6% / 12, 60, 35000), 2)"), "676.65");
+        assert_eq!(one("round(balance(6% / 12, 60, 35000, 36), 2)"), "15267.12");
+        assert_eq!(one("balance(6% / 12, 60, 35000, 0)"), "35000");
+        assert_eq!(one("round(balance(6% / 12, 60, 35000, 60), 6)"), "0");
+        assert_eq!(one("pmt(0, 10, 1000) + balance(0, 10, 1000, 4)"), "700");
+        for input in [
+            "pmt(0.5%, 0, 35000)",
+            "pmt(0.5%, 2.5, 35000)",
+            "balance(0.5%, 60, 35000, 61)",
+            "balance(0.5%, 60, 35000, -1)",
+            "pmt(-100%, 60, 35000)",
+        ] {
+            assert!(matches!(fault(input), Fault::Domain(_)), "{input}: {:?}", fault(input));
+        }
+        assert!(matches!(fault("pmt(0.5%, 60)"), Fault::Malformed(_)));
+    }
+
+    #[test]
+    fn a_comment_after_a_hash_is_passed_over() {
+        let worked =
+            evaluate("# the loan\nrate = 6% / 12 # a month\n\n# done; nothing here\nrate * 2")
+                .unwrap();
+        let shown: Vec<String> = worked.iter().map(ToString::to_string).collect();
+        assert_eq!(shown, ["rate = 0.005", "rate * 2 = 0.01"]);
+        assert_eq!(fault("# only a note"), Fault::Empty);
+    }
+
+    #[test]
+    fn a_name_is_kept_for_the_next_call_only_when_its_call_worked() {
+        let mut kept = Figures::new();
+        evaluate_with("owed = 15267.12; worth = 20000", &mut kept).unwrap();
+        let later = evaluate_with("worth - owed", &mut kept).unwrap();
+        assert_eq!(later[0].value.to_string(), "4732.88");
+        let failed = evaluate_with("lost = 1\n1 / 0", &mut kept).unwrap_err();
+        assert_eq!(failed.fault, Fault::DivisionByZero);
+        assert_eq!(
+            evaluate_with("lost", &mut kept).unwrap_err().fault,
+            Fault::Unknown("lost".into())
+        );
+    }
+
+    #[test]
+    fn a_name_of_its_own_may_be_a_function_name_and_the_function_still_works() {
+        assert_eq!(one("balance = 15267.12\nround(balance)"), "15267");
+        assert_eq!(one("round = 2.4; round(round)"), "2");
     }
 
     #[test]

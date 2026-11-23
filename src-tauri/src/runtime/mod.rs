@@ -52,6 +52,7 @@ struct Reading {
     memory: Option<String>,
     tidy_limit: Option<usize>,
     seen: HashSet<String>,
+    figures: crate::domain::calculator::Figures,
 }
 
 fn address_key(url: &str) -> String {
@@ -141,6 +142,7 @@ impl Reading {
             memory: None,
             tidy_limit: None,
             seen: self.seen.clone(),
+            figures: self.figures.clone(),
         }
     }
 }
@@ -232,8 +234,12 @@ fn render_page(raw: &str) -> String {
     out
 }
 
-fn worked_out(expression: &str, arguments: serde_json::Value) -> (String, Part) {
-    match crate::domain::calculator::evaluate(expression) {
+fn worked_out(
+    expression: &str,
+    figures: &mut crate::domain::calculator::Figures,
+    arguments: serde_json::Value,
+) -> (String, Part) {
+    match crate::domain::calculator::evaluate_with(expression, figures) {
         Ok(worked) => {
             let lines: Vec<String> = worked.iter().map(ToString::to_string).collect();
             let summary = crate::domain::cut_to(&lines.join("; "), CALCULATION_SUMMARY).0;
@@ -4140,7 +4146,9 @@ impl Runtime {
                     Part::tool_call(tools::ERRAND, arguments, ToolOutcome::Refused { reason }),
                 )
             }
-            ToolInvocation::Calculate { expression } => worked_out(&expression, arguments),
+            ToolInvocation::Calculate { expression } => {
+                worked_out(&expression, &mut reading.figures, arguments)
+            }
             ToolInvocation::Directory => {
                 let roster = self.roster_excluding(card.id);
                 let payload =
@@ -7946,8 +7954,12 @@ mod tests {
         let sum = ToolInvocation::Calculate { expression: "1 + 1".into() };
         assert_eq!(runtime.not_given(&card, Modalities::text_only(), &sum), None);
 
-        let (said, part) =
-            worked_out("payment = 35000 * 0.5%\nround(payment * 36)", serde_json::json!({}));
+        let mut figures = crate::domain::calculator::Figures::new();
+        let (said, part) = worked_out(
+            "payment = 35000 * 0.5%\nround(payment * 36)",
+            &mut figures,
+            serde_json::json!({}),
+        );
         assert_eq!(said, "payment = 175\nround(payment * 36) = 6300");
         assert!(
             matches!(&part, Part::ToolCall { outcome: ToolOutcome::Ok { summary }, .. }
@@ -7955,8 +7967,12 @@ mod tests {
             "{part:?}"
         );
 
-        let (said, part) = worked_out("a = 2\na / (a - 2)", serde_json::json!({}));
-        assert!(said.starts_with("Error: line 2, `a / (a - 2)`: division by zero."), "{said}");
+        let (said, part) =
+            worked_out("a = 2\na / (a - payment / 87.5)", &mut figures, serde_json::json!({}));
+        assert!(
+            said.starts_with("Error: line 2, `a / (a - payment / 87.5)`: division by zero."),
+            "a name from an earlier call is kept for the turn: {said}"
+        );
         assert!(matches!(part, Part::ToolCall { outcome: ToolOutcome::Failed { .. }, .. }));
     }
 
@@ -8399,6 +8415,7 @@ mod tests {
             memory: None,
             tidy_limit: None,
             seen: HashSet::new(),
+            figures: Default::default(),
         }
     }
 
@@ -8551,6 +8568,7 @@ mod tests {
             memory: None,
             tidy_limit: None,
             seen: HashSet::new(),
+            figures: Default::default(),
         };
         assert!(needs_consent(ASKING, "click", &untainted, &held).is_none());
     }
@@ -8694,6 +8712,7 @@ mod tests {
             memory: None,
             tidy_limit: None,
             seen: HashSet::new(),
+            figures: Default::default(),
         };
         assert!(needs_consent(ASKING, "click", &looked, &held).is_some());
 
@@ -8922,6 +8941,7 @@ mod tests {
             memory: None,
             tidy_limit: None,
             seen: HashSet::new(),
+            figures: Default::default(),
         };
         let told = runtime
             .may_act_on(&card, RunId::new(), "click", &mut reading)
