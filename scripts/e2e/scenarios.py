@@ -2303,6 +2303,71 @@ def scenario_answer(w: World) -> None:
     no_unscripted(w)
 
 
+WRITE_NOTE = "Write the note about the meeting move."
+DRAFTED_NOTE = ("Draft\n\n---\n\nHi everyone,\n\nStarting next week, our weekly meeting moves from Monday to "
+                "Thursday morning at [time].\n\nSee you there!")
+DRAFT_ROW = "Hi everyone, Starting next week, our weekly meeting moves from Monday to Thursday morning at [time]."
+BUY_OR_LEASE = "Should I buy the car or lease it?"
+WORKED_OUT = ("I'll work this out for you...\n\nBuy: it costs $19,626 over three years against $21,000 to lease."
+              "\n\n## The arithmetic\n\n- Loan: 36 payments of $676.65, with $15,267 still owed")
+WORKED_ROW = "Buy: it costs $19,626 over three years against $21,000 to lease."
+PLAN_CLEANUP = "Plan the cleanup day."
+PLANNED = ("Book the park for Saturday the 12th, then recruit 30 volunteers in two weeks.\n\n## First step\n\n"
+           "Call the parks office on Monday.")
+PLANNED_ROW = "Book the park for Saturday the 12th, then recruit 30 volunteers in two weeks."
+FINISHED_ROWS = """(() => {
+  const section = document.getElementById('for-you-finished')?.closest('section');
+  if (!section) return null;
+  return [...section.querySelectorAll('.finished-line')].map((row) => ({
+    who: row.querySelector('.finished-line__who').innerText.trim(),
+    headline: row.title,
+  }));
+})()"""
+
+
+def scenario_headline(w: World) -> None:
+    answers = threading.Event()
+    notes = {("Writer", WRITE_NOTE): DRAFTED_NOTE, ("Analyst", BUY_OR_LEASE): WORKED_OUT,
+             (AGENT, PLAN_CLEANUP): PLANNED}
+
+    def script(c: Call) -> Reply | None:
+        for (speaker, brief), note in notes.items():
+            if c.speaker == speaker and c.last_user.endswith(brief):
+                return held(answers, say(note))
+        return hello(c)
+
+    w.model.script = script
+    w.start()
+    first_run(w)
+    settled(w, 1)
+    ui = w.ui
+    new_agent(w, "Writer", "You write notes for the team.")
+    new_agent(w, "Analyst", "You work out what things cost.")
+    for (speaker, brief) in notes:
+        write(w, speaker, brief)
+        w.wait(f"the message to {speaker} is recorded", lambda brief=brief: w.host.scalar(
+            "SELECT count(*) FROM messages WHERE parts LIKE ?", f"%{brief}%"))
+    ui.click("button", "For you")
+    w.wait("For you opens", lambda: ui.find("dialog", "For you", exact=False))
+    answers.set()
+    settled(w, 4, "the three tasks finish")
+    rows = w.wait("For you lists the three results as new", lambda: (r := ui.evaluate(FINISHED_ROWS))
+                  and len(r) == 3 and r)
+    shown = {row["who"]: row["headline"] for row in rows}
+    expected = {"Writer": DRAFT_ROW, "Analyst": WORKED_ROW, AGENT: PLANNED_ROW}
+    w.check("a result that opens with a label or a promise is listed by the answer after it",
+            shown.get("Writer") == DRAFT_ROW and shown.get("Analyst") == WORKED_ROW,
+            observed=shown, shot=True)
+    w.check("a result with nothing before its answer is listed by its own first line",
+            shown == expected, observed=shown)
+    w.check("the conversation keeps every result word for word",
+            said(w, "Writer") == [DRAFTED_NOTE] and said(w, "Analyst") == [WORKED_OUT]
+            and said(w, AGENT)[-1] == PLANNED,
+            observed={"Writer": said(w, "Writer") == [DRAFTED_NOTE],
+                      "Analyst": said(w, "Analyst") == [WORKED_OUT], AGENT: said(w, AGENT)[-1] == PLANNED})
+    no_unscripted(w)
+
+
 def selected_tab(w: World) -> list[str]:
     return [str((n.get("name") or {}).get("value") or "") for n in w.ui.ax_nodes()
             if (n.get("role") or {}).get("value") == "tab" and any(
@@ -4105,6 +4170,15 @@ SCENARIOS: dict[str, Scenario] = {
         "with a question waiting, Tab from the composer reaches its first answer",
         "Return answers the question, and the agent is told the answer",
         "with nothing waiting, Tab leaves the composer for its own next control",
+        "every model call was one the scenario scripted",
+    )),
+    "headline": Scenario(scenario_headline, "Three agents finish while For you is open: a draft under the label "
+                         "Draft, a verdict after \"I'll work this out for you...\", and a plan with nothing before "
+                         "it. For you lists each by its answer, and every conversation keeps the words as written.",
+    (
+        "a result that opens with a label or a promise is listed by the answer after it",
+        "a result with nothing before its answer is listed by its own first line",
+        "the conversation keeps every result word for word",
         "every model call was one the scenario scripted",
     )),
     "roster": Scenario(scenario_roster, "Eleven agents stay readable and ordered at two window sizes, and the tenth "
