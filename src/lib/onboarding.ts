@@ -15,7 +15,7 @@ export const FIRST_TASKS = [
         role: "Works out what each option costs and comes back with one recommendation.",
       },
     ],
-    brief: `Help me decide whether to buy or lease my next car. Work out what each costs over three years, tell me which you would pick and why, and say what would change the answer. Where you need a figure I have not given, assume a typical one and say so. ${ASK_ONLY_IF_STUCK}`,
+    brief: `Help me decide whether to buy or lease my next car. Work out what each costs me over three years and show the arithmetic. For buying, state the loan still owed at the end of the three years and count it against what the car is worth then. Tell me which you would pick and why, and say what would change the answer. Where you need a figure I have not given, assume a typical one and say so. ${ASK_ONLY_IF_STUCK}`,
     crew: {
       group: [
         {
@@ -40,7 +40,7 @@ export const FIRST_TASKS = [
         role: "Finds the smallest plan that would work, its first step, and its risks.",
       },
     ],
-    brief: `Help me plan a neighborhood cleanup day for about 30 volunteers next month. Give me the smallest plan that would work, its first step, and the risks worth fixing first. ${ASK_ONLY_IF_STUCK}`,
+    brief: `Help me plan a neighborhood cleanup day for about 30 volunteers next month. Give me the smallest plan that would work, its first step, and the risks worth fixing first. Where you need a detail I have not given, such as the place or the date, assume a typical one and say so. ${ASK_ONLY_IF_STUCK}`,
     crew: {
       group: [
         {
@@ -60,7 +60,7 @@ export const FIRST_TASKS = [
     groupName: "Writing",
     description: "Find the words for something you need to say.",
     group: [{ agent: "content-marketer", role: "Writes a warm draft you can send." }],
-    brief: `Help me write a short note telling my team that our weekly meeting moves from Monday to Thursday morning, starting next week. Keep it warm and friendly, and give me one draft I can send. ${ASK_ONLY_IF_STUCK}`,
+    brief: `Help me write a short note telling my team that our weekly meeting moves from Monday to Thursday morning, starting next week. Keep it warm and friendly, and give me one draft I can send. Say nothing I have not told you: for a time, a place, a reason or anything else I did not give, write a placeholder in brackets such as [time]. ${ASK_ONLY_IF_STUCK}`,
     crew: {
       group: [
         {

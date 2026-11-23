@@ -112,6 +112,25 @@ describe("the first task", () => {
     }
   });
 
+  it("asks research for its arithmetic and the loan still owed, so the verdict rests on sums", () => {
+    const brief = FIRST_TASKS.find((task) => task.id === "research")!.brief;
+    expect(brief).toMatch(/show the arithmetic/);
+    expect(brief).toMatch(/loan still owed at the end of the three years/);
+    expect(brief).toMatch(/assume a typical one and say so/);
+  });
+
+  it("has the plan assume a typical detail and say so, so it never answers with questions alone", () => {
+    const brief = FIRST_TASKS.find((task) => task.id === "plan")!.brief;
+    expect(brief).toMatch(/Where you need a detail I have not given.*assume a typical one and say so\./);
+  });
+
+  it("has the draft bracket every fact it was not given instead of inventing one", () => {
+    const brief = FIRST_TASKS.find((task) => task.id === "write")!.brief;
+    expect(brief).toMatch(/Say nothing I have not told you/);
+    expect(brief).toMatch(/a placeholder in brackets such as \[time\]/);
+    expect(brief).not.toMatch(/assume/);
+  });
+
   it("writes each deeper pass so the coordinator asks the first agent and the new colleague at once", () => {
     for (const task of FIRST_TASKS.filter((entry) => entry.brief)) {
       const crew = crewFor(task.id)!;
