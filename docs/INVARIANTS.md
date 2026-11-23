@@ -196,7 +196,9 @@ provider question asked in the one place providers meet, `llm/search.rs` and
 `LlmClient::search`, beside `stream_chat`: the runtime holds a `Backend` and asks
 it whether a search spends a model call, and never which provider it is. A page
 is fetched by the host, so `web.rs` refuses every loopback, private, link-local
-and metadata address, by literal, after DNS and after every redirect, and caps
+and metadata address, every address of the host's own interfaces and of the
+networks they are directly connected to, by literal, after DNS and after every
+redirect, and caps
 the bytes and the seconds. What a turn reads is labeled as data, and once it has
 read anything `read_page` opens only addresses the turn was shown: an address a
 model composes after reading a page is how that page sends the operator's

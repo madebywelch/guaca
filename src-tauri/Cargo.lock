@@ -1578,6 +1578,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "iana-time-zone",
+ "libc",
  "mac-usernotifications",
  "notify-rust",
  "objc2",
