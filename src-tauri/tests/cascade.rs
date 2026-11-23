@@ -4769,6 +4769,7 @@ async fn a_routine_that_is_switched_off_stays_quiet_and_starts_again_when_asked(
 
 #[test]
 fn a_schedule_that_cannot_be_read_parks_until_the_next_tick() {
+    let (set_up, wait_for_set_up) = std::sync::mpsc::channel();
     let (finished, watch) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -4781,6 +4782,7 @@ fn a_schedule_that_cannot_be_read_parks_until_the_next_tick() {
             let h = harness(&stub, &["Watcher"], GuardLimits::default());
             h.runtime.store().conn().unwrap().execute_batch("DROP TABLE routines").unwrap();
 
+            let _ = set_up.send(());
             h.start_scheduler();
 
             tokio::time::sleep(Duration::from_secs(60)).await;
@@ -4788,6 +4790,7 @@ fn a_schedule_that_cannot_be_read_parks_until_the_next_tick() {
         let _ = finished.send(());
     });
 
+    assert!(wait_for_set_up.recv().is_ok(), "the harness failed before the scheduler started");
     assert!(
         watch.recv_timeout(Duration::from_secs(10)).is_ok(),
         "the clock never moved, so the scheduler never parked: a schedule it cannot read has to \
