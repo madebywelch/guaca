@@ -218,7 +218,8 @@ pub fn system_prompt(
          show the figures you used. Every figure in your answer, a difference, a break-even or a \
          what-if included, is one you were given or one `calculator` returned, so work it out \
          before you write it. Never state the weekday of a date \
-         unless it was given to you or `calculator` returned it.\n",
+         unless it was given to you, as the weeks under your group's calendar below are, or \
+         `calculator` returned it.\n",
     );
 
     stable.push_str("\n## What you can reach\n");
@@ -593,7 +594,9 @@ pub fn system_prompt(
 
     volatile.push_str("\n## Your group's calendar\n");
     volatile.push_str(&format!(
-        "Today is {}. `calendar` is your group's, not yours: everyone in it reads this same list, \
+        "Today is {}. These are the weeks from this one on, each line Monday to Sunday, so the \
+         weekday of a date in them is one you were given:\n\n{}\n\
+         `calendar` is your group's, not yours: everyone in it reads this same list, \
          so it is where something the rest of them need to know about goes. Meetings, deadlines, \
          filings, renewals, launches — anything with a date on it that somebody needs in \
          advance. Keep it current as you learn things: when a date moves, `update` that occasion \
@@ -605,7 +608,8 @@ pub fn system_prompt(
          fires and reaches you as a message, and an occasion sits there being true. If you have \
          to prepare for something on this calendar, the occasion goes here and the routine that \
          prepares for it goes there.\n",
-        occasion::day_words(now)
+        occasion::day_words(now),
+        occasion::weeks_words(now)
     ));
 
     if calendar.is_empty() {
@@ -2097,6 +2101,33 @@ mod tests {
             calendar.contains(&format!("Today is {}.", today.format("%A, %-d %B %Y"))),
             "today with its weekday written out: {calendar}"
         );
+        let weeks = crate::domain::occasion::weeks_from(today.date_naive());
+        assert!(calendar.contains(&weeks), "and the weeks ahead day by day: {calendar}");
+    }
+
+    #[test]
+    fn the_weeks_ahead_change_with_the_date_and_so_sit_beside_it_after_the_cached_part() {
+        let prompt = system_prompt(
+            &card("Manager"),
+            "",
+            &[],
+            &[],
+            &[],
+            &[],
+            "",
+            &[],
+            &[],
+            &[],
+            ReplyMode::ToOperator,
+            &[],
+            None,
+            Surfaces::both(),
+            Modalities::seeing(),
+        );
+        let today = crate::domain::local(crate::domain::now_ms()).unwrap();
+        let weeks = crate::domain::occasion::weeks_from(today.date_naive());
+        assert!(!prompt.stable().contains(weeks.lines().next().unwrap()), "{prompt}");
+        assert!(prompt.volatile().contains(&weeks), "{prompt}");
     }
 
     #[test]
@@ -2779,8 +2810,8 @@ mod tests {
             );
             assert!(
                 sums.contains(
-                    "Never state the weekday of a date unless it was given to you or \
-                               `calculator` returned it"
+                    "Never state the weekday of a date unless it was given to you, as the \
+                     weeks under your group's calendar below are, or `calculator` returned it"
                 ),
                 "{sums}"
             );
@@ -3846,6 +3877,7 @@ mod tests {
             ("listed for you further down", "## What you are waiting on", Points::Down),
             ("the accounts above", "## What you can reach", Points::Up),
             ("working notes above", "## Your working notes", Points::Up),
+            ("your group's calendar below", "## Your group's calendar", Points::Down),
         ];
         let outside = ["the history above", "the messages above"];
 

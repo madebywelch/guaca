@@ -321,6 +321,27 @@ fn render_read(page: &crate::web::Page, offset: usize) -> String {
     out
 }
 
+fn answer_faults(answer: &str, messages: &[ChatMessage], calculated: bool) -> Option<String> {
+    use crate::domain::recheck;
+    let wrong = crate::domain::local(crate::domain::now_ms())
+        .map(|now| recheck::wrong_weekdays(answer, now.date_naive()))
+        .unwrap_or_default();
+    let unchecked = if calculated {
+        let known: Vec<f64> = messages
+            .iter()
+            .flat_map(|message| match message {
+                ChatMessage::Assistant { .. } => Vec::new(),
+                ChatMessage::Tool { content, .. } => recheck::numbers_in(content),
+                other => recheck::numbers_in(&said_in(other)),
+            })
+            .collect();
+        recheck::unchecked_figures(answer, &known)
+    } else {
+        Vec::new()
+    };
+    recheck::send_back(&wrong, &unchecked)
+}
+
 fn said_in(message: &ChatMessage) -> String {
     use crate::llm::openrouter::{ContentPart, UserContent};
     match message {
@@ -3095,6 +3116,8 @@ impl Runtime {
         let mut budget_exhausted = false;
         let mut called_off = false;
         let mut nudged = false;
+        let mut rechecked = false;
+        let mut calculated = false;
 
         let offered: Vec<crate::llm::openrouter::ToolSpec> = tools::plugin_specs(&plugins)
             .into_iter()
@@ -3195,6 +3218,27 @@ impl Runtime {
                 let unbacked = (!nudged && !tidying && round + 1 < max_rounds)
                     .then(|| promise::promises_work(&completion.content))
                     .flatten();
+                let faults =
+                    (unbacked.is_none() && !rechecked && !tidying && round + 1 < max_rounds)
+                        .then(|| answer_faults(&collected_text, &messages, calculated))
+                        .flatten();
+                if let Some(correction) = faults {
+                    tracing::info!(
+                        agent = %card.name,
+                        correction,
+                        "answer sent back once before it reached anyone"
+                    );
+                    rechecked = true;
+                    messages.push(ChatMessage::Assistant {
+                        content: (!completion.content.is_empty())
+                            .then(|| completion.content.clone()),
+                        tool_calls: Vec::new(),
+                    });
+                    messages.push(ChatMessage::user(correction));
+                    collected_text.clear();
+                    stream.reopen(&*self.inner.events);
+                    continue;
+                }
                 if let Some(said) = unbacked {
                     tracing::info!(
                         agent = %card.name,
@@ -3234,6 +3278,7 @@ impl Runtime {
                     break;
                 }
                 acted_on = taken_in.len();
+                calculated |= call.name == tools::CALCULATOR;
 
                 let errand = surfaces.errands
                     && matches!(tools::parse(call, &named), Ok(ToolInvocation::Errand { .. }));
