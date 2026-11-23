@@ -351,9 +351,10 @@ describe("Search", () => {
 
     it("does not move the selection up with ArrowUp", async () => {
       await openWithFiles("budget.pdf", "invoice.txt");
+      const first = selectedTitle();
       press("ArrowDown");
       const second = selectedTitle();
-      expect(second).not.toBe(selectedTitleAtStart());
+      expect(second).not.toBe(first);
 
       const event = press("ArrowUp", { isComposing: true });
 
@@ -425,6 +426,26 @@ describe("Search", () => {
       expect(selectedTitle()).toBe(rows[0]);
     });
 
+    it("moves on a key pressed in the same tick the hits are drawn", async () => {
+      search.mockResolvedValue(fileHits("budget.pdf", "invoice.txt"));
+      open();
+      const drawn = new Promise<{ second: unknown; moved: unknown }>((resolve) => {
+        const watch = new MutationObserver(() => {
+          const rows = document.querySelectorAll(".palette__title");
+          if (rows.length < 2) return;
+          watch.disconnect();
+          const second = rows[1]?.textContent;
+          press("ArrowDown");
+          resolve({ second, moved: selectedTitle() });
+        });
+        watch.observe(document.body, { childList: true, subtree: true });
+      });
+
+      const { second, moved } = await waitFor(() => drawn);
+
+      expect(moved).toBe(second);
+    });
+
     it("cycles the scope forward, wrapping Files back to All", () => {
       open();
       expect(activeScope()).toBe("All");
@@ -453,7 +474,3 @@ describe("Search", () => {
     });
   });
 });
-
-function selectedTitleAtStart() {
-  return document.querySelector(".palette__title")?.textContent;
-}
