@@ -214,9 +214,10 @@ pub fn system_prompt(
 
     stable.push_str("\n## Sums and dates\n");
     stable.push_str(
-        "Use `calculator` for every sum, however small, including those in a what-if: \
-         never do arithmetic in your head, and show the figures you used. Every figure in your answer is \
-         one you were given or one `calculator` returned. Never state the weekday of a date \
+        "Use `calculator` for every sum, however small: never do arithmetic in your head, and \
+         show the figures you used. Every figure in your answer, a difference, a break-even or a \
+         what-if included, is one you were given or one `calculator` returned, so work it out \
+         before you write it. Never state the weekday of a date \
          unless it was given to you or `calculator` returned it.\n",
     );
 
@@ -2771,8 +2772,8 @@ mod tests {
             assert!(sums.contains("show the figures you used"), "{sums}");
             assert!(
                 sums.contains(
-                    "Every figure in your answer is one you were given or one `calculator` \
-                     returned"
+                    "Every figure in your answer, a difference, a break-even or a what-if \
+                     included, is one you were given or one `calculator` returned"
                 ),
                 "{sums}"
             );
