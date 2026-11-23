@@ -51,6 +51,7 @@ pub mod tray;
 #[cfg(feature = "server")]
 pub mod updater;
 pub mod updates;
+pub mod web;
 pub mod webhook;
 pub mod workspace;
 

@@ -18,6 +18,7 @@ function card(id: string, name: string, color = "#c7d96b"): AgentCard {
     hasComputer: false,
     hasBrowser: false,
     runsErrands: false,
+    readsWeb: true,
     browserConsent: "open",
     name,
     avatar: "plain",

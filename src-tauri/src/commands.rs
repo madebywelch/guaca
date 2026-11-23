@@ -484,6 +484,12 @@ pub async fn set_agent_errands(state: &AppState, id: AgentId, given: bool) -> Re
     Ok(())
 }
 
+pub async fn set_agent_web(state: &AppState, id: AgentId, given: bool) -> Reply<()> {
+    state.runtime.store().set_reads_web(id, given)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(())
+}
+
 pub async fn take_agent_browser(state: &AppState, id: AgentId) -> Reply<()> {
     let card = agent_card(state, id)?;
     state.runtime.store().set_has_browser(id, false)?;

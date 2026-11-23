@@ -171,11 +171,36 @@ pub fn system_prompt(
         );
     }
 
-    if surfaces.computer || surfaces.browser {
+    if surfaces.web {
+        stable.push_str("\n## Reading the web\n");
+        if surfaces.search {
+            stable.push_str(
+                "`web_search` finds pages: it answers with a title, an address and a line from \
+                 each result. The latest or the current means as of today, the date under \
+                 *Your group's calendar*, so put a year in a query only when the question names \
+                 one. ",
+            );
+        }
+        stable.push_str(
+            "`read_page` reads one page as text, fetched by Guaca on the host, with no browser \
+             and no account: it cannot click, sign in or fill in a form. A result's line is \
+             where to look, not what the page says, so open what you rely on and cite the \
+             address you read it at. Never cite a page you did not open.\n",
+        );
+    }
+
+    if surfaces.computer || surfaces.browser || surfaces.web {
         stable.push_str(
             "\nNever say you have no way to look something up. Say what you did and what came \
              back, rather than presenting a result as something you simply knew.\n",
         );
+        if !surfaces.computer && !surfaces.browser {
+            stable.push_str(
+                "You have no computer and no browser, so you cannot run commands, sign in to a \
+                 site or fill in a form. If a task needs one, say so plainly and say that the \
+                 operator can give you one.\n",
+            );
+        }
     } else {
         stable.push_str("\n## What you can do yourself\n");
         stable.push_str(
@@ -1421,6 +1446,7 @@ mod tests {
             has_browser: true,
             browser_consent: Default::default(),
             runs_errands: false,
+            reads_web: true,
             id: AgentId::new(),
             name: name.into(),
             avatar: "orb".into(),
@@ -2700,12 +2726,45 @@ mod tests {
             ReplyMode::ToOperator,
             &[],
             None,
-            Surfaces { computer: true, browser: false, errands: false },
+            Surfaces { computer: true, ..Surfaces::none() },
             Modalities::seeing(),
         );
         assert!(computer_only.contains("## Your computer"), "{computer_only}");
         assert!(!computer_only.contains("## Your browser"), "{computer_only}");
         assert!(!computer_only.contains("not the browser `browse` uses"), "{computer_only}");
+    }
+
+    #[test]
+    fn a_search_for_the_latest_is_pointed_at_the_day_the_calendar_gives() {
+        let reading = |search: bool| {
+            system_prompt(
+                &card("Researcher"),
+                "",
+                &[],
+                &[],
+                &[],
+                &[],
+                "",
+                &[],
+                &[],
+                &[],
+                ReplyMode::ToOperator,
+                &[],
+                None,
+                Surfaces { web: true, search, ..Surfaces::none() },
+                Modalities::seeing(),
+            )
+        };
+        let searching = reading(true);
+        let web = section(&searching, "## Reading the web");
+        assert!(web.contains("as of today"), "{web}");
+        assert!(web.contains("*Your group's calendar*"), "{web}");
+        assert!(web.contains("put a year in a query only when the question names one"), "{web}");
+        assert!(searching.contains("## Your group's calendar"), "{searching}");
+
+        let reading_only = reading(false);
+        let web = section(&reading_only, "## Reading the web");
+        assert!(!web.contains("as of today"), "{web}");
     }
 
     fn prompt_taking(modalities: Modalities, mode: ReplyMode) -> String {
@@ -2823,7 +2882,7 @@ mod tests {
             ReplyMode::ToOperator,
             &[],
             None,
-            Surfaces { computer: false, browser: true, errands: false },
+            Surfaces { browser: true, ..Surfaces::none() },
             Modalities::seeing(),
         );
         assert!(somewhere.contains("request_permission"), "{somewhere}");

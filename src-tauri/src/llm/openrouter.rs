@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use crate::config::{InferenceConfig, Provider};
 use crate::llm::claude;
 use crate::llm::codex;
+use crate::llm::search::{self, Backend, Searched};
 use crate::llm::sse::SseDecoder;
+use crate::secrets::Secret;
 use crate::subscription::Subscription;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -278,9 +280,13 @@ impl Serialize for WireMessages<'_> {
     }
 }
 
+pub fn is_openrouter(base_url: &str) -> bool {
+    reqwest::Url::parse(base_url)
+        .is_ok_and(|url| url.origin().ascii_serialization() == "https://openrouter.ai")
+}
+
 fn wire<'a>(cfg: &InferenceConfig, request: &'a ChatRequest) -> WireRequest<'a> {
-    let openrouter = reqwest::Url::parse(&cfg.base_url)
-        .is_ok_and(|url| url.origin().ascii_serialization() == "https://openrouter.ai");
+    let openrouter = is_openrouter(&cfg.base_url);
     let owner = request.messages.iter().find_map(|message| match message {
         ChatMessage::System { content } => content.owner(),
         _ => None,
@@ -743,6 +749,74 @@ impl LlmClient {
         self.consume_stream(response, &url, timeout, &mut on_token).await
     }
 
+    pub async fn search(
+        &self,
+        backend: Backend,
+        cfg: &InferenceConfig,
+        key: &Secret,
+        model: &str,
+        query: &str,
+        count: usize,
+    ) -> Result<Searched, LlmError> {
+        match backend {
+            Backend::Chatgpt => {
+                let Some(subscription) = &self.subscription else {
+                    return Err(LlmError::SubscriptionRejected {
+                        message: "this build has no sign-in store".to_string(),
+                    });
+                };
+                codex::search(&self.http, subscription, cfg, model, query, count).await
+            }
+            Backend::Claude => claude::search(cfg, query, count).await,
+            Backend::OpenRouter => self.search_openrouter(cfg, model, query, count).await,
+            Backend::Brave => search::brave(&self.http, search::BRAVE, key, query, count).await,
+            Backend::Tavily => search::tavily(&self.http, search::TAVILY, key, query, count).await,
+        }
+    }
+
+    async fn search_openrouter(
+        &self,
+        cfg: &InferenceConfig,
+        model: &str,
+        query: &str,
+        count: usize,
+    ) -> Result<Searched, LlmError> {
+        let url = cfg.chat_completions_url();
+        let timeout = Duration::from_secs(cfg.request_timeout_secs.clamp(5, 900));
+        let body = web_plugin_request(model, query, count);
+        let key = cfg.api_key.expose().trim();
+        let post = self.http.post(&url);
+        let post = if key.is_empty() { post } else { post.bearer_auth(key) };
+        let response = post
+            .header("HTTP-Referer", &cfg.referer)
+            .header("X-Title", &cfg.title)
+            .timeout(timeout)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|source| {
+                if source.is_timeout() {
+                    LlmError::Timeout { secs: timeout.as_secs() }
+                } else {
+                    LlmError::Transport { url: url.clone(), source }
+                }
+            })?;
+        let status = response.status();
+        let retry_after = response
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok());
+        let text = response
+            .text()
+            .await
+            .map_err(|source| LlmError::Transport { url: url.clone(), source })?;
+        if !status.is_success() {
+            return Err(classify_status(status.as_u16(), &text, model, retry_after));
+        }
+        web_plugin_answer(&text, count)
+    }
+
     async fn consume_stream<F>(
         &self,
         response: reqwest::Response,
@@ -833,6 +907,69 @@ impl LlmClient {
     }
 }
 
+fn web_plugin_request(model: &str, query: &str, count: usize) -> serde_json::Value {
+    serde_json::json!({
+        "model": model,
+        "messages": [
+            { "role": "system", "content": search::SEARCHER },
+            { "role": "user", "content": search::ask(query, count) },
+        ],
+        "plugins": [{ "id": "web", "max_results": count }],
+        "stream": false,
+    })
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PluginAnswer {
+    #[serde(default)]
+    choices: Vec<PluginChoice>,
+    #[serde(default)]
+    usage: Option<Usage>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PluginChoice {
+    #[serde(default)]
+    message: PluginMessage,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct PluginMessage {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    annotations: Vec<Annotation>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct Annotation {
+    #[serde(default)]
+    url_citation: Option<Citation>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct Citation {
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    content: String,
+}
+
+fn web_plugin_answer(text: &str, count: usize) -> Result<Searched, LlmError> {
+    let answer: PluginAnswer = serde_json::from_str(text)
+        .map_err(|err| LlmError::Decode(format!("web search answer: {err}")))?;
+    let message = answer.choices.into_iter().next().map(|c| c.message).unwrap_or_default();
+    let cited = message
+        .annotations
+        .into_iter()
+        .filter_map(|a| a.url_citation)
+        .filter_map(|c| search::hit(&c.title, &c.url, &c.content));
+    let said = search::listed(message.content.as_deref().unwrap_or_default());
+    Ok(Searched { hits: search::kept(said.into_iter().chain(cited), count), usage: answer.usage })
+}
+
 fn truncate(value: &str, max: usize) -> String {
     if value.chars().count() <= max {
         return value.to_string();
@@ -844,6 +981,41 @@ fn truncate(value: &str, max: usize) -> String {
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn openrouter_is_asked_for_its_web_plugin_and_no_tools() {
+        let body = web_plugin_request("openai/gpt-5", "lease or buy", 4);
+        assert_eq!(body["plugins"], serde_json::json!([{ "id": "web", "max_results": 4 }]));
+        assert_eq!(body["stream"], false);
+        assert!(body.get("tools").is_none());
+        assert!(body["messages"][1]["content"].as_str().unwrap().contains("lease or buy"));
+    }
+
+    #[test]
+    fn openrouter_citations_and_the_listed_answer_both_become_results() {
+        let answer = serde_json::json!({
+            "choices": [{ "message": {
+                "content": "- [Lease guide](https://cars.example/lease) What a lease costs.",
+                "annotations": [
+                    { "type": "url_citation", "url_citation": {
+                        "url": "https://cars.example/lease", "title": "Lease guide",
+                        "content": "ignored, the listed line came first" } },
+                    { "type": "url_citation", "url_citation": {
+                        "url": "https://news.example/buy", "title": "Buying",
+                        "content": "Buying keeps the car." } },
+                    { "type": "url_citation", "url_citation": {
+                        "url": "file:///etc/passwd", "title": "no" } }
+                ]
+            }}],
+            "usage": { "prompt_tokens": 12, "completion_tokens": 30, "cost": 0.02 }
+        });
+        let searched = web_plugin_answer(&answer.to_string(), 5).unwrap();
+        let urls: Vec<&str> = searched.hits.iter().map(|h| h.url.as_str()).collect();
+        assert_eq!(urls, ["https://cars.example/lease", "https://news.example/buy"]);
+        assert_eq!(searched.hits[0].snippet, "What a lease costs.");
+        assert_eq!(searched.hits[1].snippet, "Buying keeps the car.");
+        assert_eq!(searched.usage.unwrap().cost, Some(0.02));
+    }
 
     #[test]
     fn a_failure_is_told_without_its_status_code_or_the_provider_text() {

@@ -19,6 +19,7 @@ const api = vi.hoisted(() => ({
   ),
   updateAgent: vi.fn(async () => {}),
   setAgentErrands: vi.fn(async () => {}),
+  setAgentWeb: vi.fn(async () => {}),
   createAgent: vi.fn(async () => ({ id: "new-agent" })),
   rankedModels: vi.fn(async () => []),
 }));
@@ -35,6 +36,9 @@ const settings: Settings = {
   kernelKeyHint: "",
   browserIdleMinutes: 60,
   browserStealth: false,
+  searchKeySet: false,
+  searchKeyHint: "",
+  searchesWith: "",
   baseUrl: "https://openrouter.ai/api/v1",
   defaultModel: "anthropic/endpoint-model",
   provider: "compatible",
@@ -72,6 +76,7 @@ function card(model = "", subscriptionModel = ""): AgentCard {
     hasComputer: false,
     hasBrowser: false,
     runsErrands: false,
+    readsWeb: true,
     browserConsent: "open",
     lifecycle: "active",
     pinned: false,
@@ -315,6 +320,25 @@ it("switches errands on at once, without waiting for Save", async () => {
   fireEvent.click(toggle);
   await waitFor(() => expect(toggle.checked).toBe(true));
   expect(api.setAgentErrands).toHaveBeenCalledWith("agent-1", true);
+});
+
+it("shows web reading on for an agent and switches it off at once", async () => {
+  open(card());
+  const toggle = screen.getByRole("checkbox", { name: /^Web reading/ }) as HTMLInputElement;
+  expect(toggle.checked, "on unless the operator turned it off").toBe(true);
+  fireEvent.click(toggle);
+  await waitFor(() => expect(toggle.checked).toBe(false));
+  expect(api.setAgentWeb).toHaveBeenCalledWith("agent-1", false);
+  expect(api.updateAgent, "a grant is not an edit to the card").not.toHaveBeenCalled();
+});
+
+it("keeps web reading on when switching it off is refused, and says why", async () => {
+  api.setAgentWeb.mockRejectedValueOnce(new Error("The agent is gone."));
+  open(card());
+  const toggle = screen.getByRole("checkbox", { name: /^Web reading/ }) as HTMLInputElement;
+  fireEvent.click(toggle);
+  expect(await screen.findByText("The agent is gone.")).toBeTruthy();
+  expect(toggle.checked).toBe(true);
 });
 
 it("offers no errands switch while the agent is still being created", async () => {
