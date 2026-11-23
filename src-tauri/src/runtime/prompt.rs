@@ -176,7 +176,9 @@ pub fn system_prompt(
         if surfaces.search {
             stable.push_str(
                 "`web_search` finds pages: it answers with a title, an address and a line from \
-                 each result. ",
+                 each result. The latest or the current means as of today, the date under \
+                 *Your group's calendar*, so put a year in a query only when the question names \
+                 one. ",
             );
         }
         stable.push_str(
@@ -2730,6 +2732,39 @@ mod tests {
         assert!(computer_only.contains("## Your computer"), "{computer_only}");
         assert!(!computer_only.contains("## Your browser"), "{computer_only}");
         assert!(!computer_only.contains("not the browser `browse` uses"), "{computer_only}");
+    }
+
+    #[test]
+    fn a_search_for_the_latest_is_pointed_at_the_day_the_calendar_gives() {
+        let reading = |search: bool| {
+            system_prompt(
+                &card("Researcher"),
+                "",
+                &[],
+                &[],
+                &[],
+                &[],
+                "",
+                &[],
+                &[],
+                &[],
+                ReplyMode::ToOperator,
+                &[],
+                None,
+                Surfaces { web: true, search, ..Surfaces::none() },
+                Modalities::seeing(),
+            )
+        };
+        let searching = reading(true);
+        let web = section(&searching, "## Reading the web");
+        assert!(web.contains("as of today"), "{web}");
+        assert!(web.contains("*Your group's calendar*"), "{web}");
+        assert!(web.contains("put a year in a query only when the question names one"), "{web}");
+        assert!(searching.contains("## Your group's calendar"), "{searching}");
+
+        let reading_only = reading(false);
+        let web = section(&reading_only, "## Reading the web");
+        assert!(!web.contains("as of today"), "{web}");
     }
 
     fn prompt_taking(modalities: Modalities, mode: ReplyMode) -> String {
