@@ -112,13 +112,14 @@ describe("the first task", () => {
     }
   });
 
-  it("asks research for its arithmetic and the loan still owed, so the verdict rests on sums", () => {
+  it("gives research the figures its verdict turns on, and asks for the sums and the loan still owed", () => {
     const brief = FIRST_TASKS.find((task) => task.id === "research")!.brief;
+    expect(brief).toMatch(/It costs \$35,000 and should be worth about \$20,000 in three years\./);
+    expect(brief).toMatch(/borrow at 6% over five years with nothing down/);
+    expect(brief).toMatch(/\$500 a month with \$3,000 down/);
     expect(brief).toMatch(/Show the arithmetic/);
-    expect(brief).toMatch(/leaving out what I would pay either way/);
-    expect(brief).toMatch(/same car at the same interest rate/);
-    expect(brief).toMatch(/pick on those numbers/);
     expect(brief).toMatch(/loan still owed at the end of the three years/);
+    expect(brief).toMatch(/pick on those numbers/);
     expect(brief).toMatch(/assume a typical one and say so/);
   });
 
