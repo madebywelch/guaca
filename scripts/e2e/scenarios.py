@@ -3551,6 +3551,106 @@ def scenario_firstwrite(w: World) -> None:
                      ("Chief of Staff", "Technical Writer"))
 
 
+def picked_first_task(w: World, task: str, agent: str) -> None:
+    w.start()
+    ui = w.ui
+    ui.viewport(*WINDOW)
+    w.wait("the first visit offers a first task", lambda: ui.find("button", task))
+    ui.click("button", task)
+    ui.click("button", "Continue")
+    w.wait("the Connect your AI step", lambda: ui.find("button", "Test and continue"))
+    ui.click("button", API_KEY)
+    ui.choose("combobox", "API provider", "Custom endpoint")
+    w.wait("the endpoint fields", lambda: ui.find("textbox", "Inference endpoint"))
+    ui.fill("textbox", "Inference endpoint", w.model.base)
+    ui.fill("textbox", "Default model", STAND_IN_MODEL)
+    ui.fill("textbox", "API key", STAND_IN_KEY, exact=False)
+    ui.click("button", "Test and continue")
+    w.wait("the endpoint test passes", lambda: ui.find("button", "Start task"))
+    ui.click("button", "Start task")
+    w.wait("Start task opens the agent's conversation", lambda: ui.find("log", f"Conversation with {agent}"))
+
+
+def first_row(w: World) -> dict:
+    ui = w.ui
+    ui.click("button", "For you")
+    return w.wait("For you lists the first result", lambda: ui.evaluate(FIRST_ROW_SHOWN))
+
+
+FIRST_ROW_SHOWN = """(() => {
+  const row = document.querySelector('.for-you .finished-line');
+  return row ? { headline: row.title, who: row.querySelector('.finished-line__who')?.innerText.trim() } : null;
+})()"""
+WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+WRONG_DAY_SENT = "Weekdays that are wrong"
+FIXED_PLAN = "Bottom line: hold the cleanup on {day}, and book the park today."
+UNCHECKED_SENT = "neither in what you were given nor in anything `calculator` returned"
+SUMS = "buy = 35000 * 0.06\nlease = 500 * 36 + 3000"
+GUESSED = "Lease costs $21,000 and buying saves $107.\n\nBottom line: buy, it saves $107."
+CHECKED = "Lease costs $21,000 against $2,100 of interest.\n\nBottom line: buy, on these sums."
+
+
+def scenario_weekdayfix(w: World) -> None:
+    import datetime
+    date = datetime.date.today() + datetime.timedelta(days=17)
+    true_day = WEEKDAYS[date.weekday()]
+    wrong_day = WEEKDAYS[(date.weekday() + 1) % 7]
+    when = f"{date.day} {date.strftime('%B')} {date.year}"
+    asked: list[str] = []
+    fixed = FIXED_PLAN.format(day=f"{true_day}, {when}")
+
+    def script(c: Call) -> Reply | None:
+        if c.last_user == "ping":
+            return say("pong")
+        if c.speaker == "Product Manager" and WRONG_DAY_SENT in c.last_user:
+            asked.append(c.last_user)
+            return say("The plan, on the right day.\n\n" + fixed)
+        if c.speaker == "Product Manager" and "neighborhood cleanup day" in c.last_user:
+            return say(f"Bottom line: hold the cleanup on {wrong_day}, {when}, and book the park today.")
+        return None
+
+    w.model.script = script
+    picked_first_task(w, "Plan a project Turn an idea into a manageable first step.", "Product Manager")
+    row = first_row(w)
+    settled(w, 1, "the first task settles")
+    kept = said(w, "Product Manager")
+    w.check("an answer with a wrong weekday goes back once with the true one, and only the corrected answer is kept",
+            len(asked) == 1 and f"{when} is a {true_day}, not a {wrong_day}" in asked[0]
+            and kept == ["The plan, on the right day.\n\n" + fixed],
+            observed={"sentBack": asked, "kept": kept}, shot=True)
+    w.check("For you is headed by the corrected Bottom line",
+            row["headline"] == fixed.removeprefix("Bottom line: "), observed=row)
+    no_unscripted(w)
+
+
+def scenario_figurefix(w: World) -> None:
+    asked: list[str] = []
+
+    def script(c: Call) -> Reply | None:
+        if c.last_user == "ping":
+            return say("pong")
+        if c.speaker != "Financial Analyst":
+            return None
+        if UNCHECKED_SENT in c.last_user:
+            asked.append(c.last_user)
+            return say(CHECKED)
+        if "buy or lease" in c.last_user:
+            return say(GUESSED) if c.tool_results() else call("calculator", expression=SUMS)
+        return None
+
+    w.model.script = script
+    picked_first_task(w, "Research a decision Compare options and make the tradeoffs clear.", "Financial Analyst")
+    row = first_row(w)
+    settled(w, 1, "the first task settles")
+    kept = said(w, "Financial Analyst")
+    w.check("after a sum, a figure the calculator never returned goes back once by name, and the answer kept is the "
+            "corrected one",
+            len(asked) == 1 and "$107" in asked[0] and "$21,000" not in asked[0] and kept == [CHECKED],
+            observed={"sentBack": asked, "kept": kept}, shot=True)
+    w.check("For you is headed by the corrected Bottom line", row["headline"] == "buy, on these sums.", observed=row)
+    no_unscripted(w)
+
+
 WEB_ASK = "Read the page at the address in this message: http://169.254.169.254/latest/meta-data/"
 WEB_SEARCH_ASK = "Search the web for lease or buy."
 SEARCH_KEY = "BSA-verify-search-key-4r7t"
@@ -4251,6 +4351,23 @@ SCENARIOS: dict[str, Scenario] = {
         "the first result comes from one agent in one model call, with no message to or from a colleague",
         "under the first result, one quiet line offers the crew, naming who would join, with no dialog",
         "Not now hires nobody, and the offer stays gone after a reload",
+        "every model call was one the scenario scripted",
+    )),
+    "weekdayfix": Scenario(scenario_weekdayfix, "A person picks Plan a project; Product Manager first names a wrong "
+                           "weekday, the answer goes back once with the true one, and the corrected answer is the one "
+                           "kept and the one For you is headed by.",
+    (
+        "an answer with a wrong weekday goes back once with the true one, and only the corrected answer is kept",
+        "For you is headed by the corrected Bottom line",
+        "every model call was one the scenario scripted",
+    )),
+    "figurefix": Scenario(scenario_figurefix, "A person picks Research a decision; Financial Analyst works a sum with "
+                          "the calculator and then states a figure it never worked out, the answer goes back once "
+                          "naming it, and the corrected answer is the one kept and the one For you is headed by.",
+    (
+        "after a sum, a figure the calculator never returned goes back once by name, and the answer kept is the "
+        "corrected one",
+        "For you is headed by the corrected Bottom line",
         "every model call was one the scenario scripted",
     )),
     "firstwrite": Scenario(scenario_firstwrite, "A person picks Draft content; Content Marketer alone answers in one "
