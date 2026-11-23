@@ -201,6 +201,10 @@ Words that are easy to mix up, and are not interchangeable:
   `read_page` reads one page as text, fetched by the host with no browser and no
   account. It never opens an address on the host's own network, and once a turn
   has read from the web it opens only addresses you were shown.
+- **The calculator** is `calculator`, on for every agent with no switch. It
+  works out sums exactly, several lines at once with named results, and the
+  weekday of a date or the days between two. Use it for every sum, and state a
+  weekday only when you were given it or it returned it.
 
 ## Routines and the calendar
 

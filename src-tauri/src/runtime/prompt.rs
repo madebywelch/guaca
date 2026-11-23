@@ -212,6 +212,13 @@ pub fn system_prompt(
         );
     }
 
+    stable.push_str("\n## Sums and dates\n");
+    stable.push_str(
+        "Use `calculator` for every sum, however small: never do arithmetic in your head, and \
+         show the figures you used. Never state the weekday of a date unless it was given to you \
+         or `calculator` returned it.\n",
+    );
+
     stable.push_str("\n## What you can reach\n");
     if credentials.is_empty() && signins.is_empty() && plugins.is_empty() {
         stable.push_str(
@@ -2732,6 +2739,38 @@ mod tests {
         assert!(computer_only.contains("## Your computer"), "{computer_only}");
         assert!(!computer_only.contains("## Your browser"), "{computer_only}");
         assert!(!computer_only.contains("not the browser `browse` uses"), "{computer_only}");
+    }
+
+    #[test]
+    fn every_agent_is_told_to_do_sums_with_the_calculator_and_never_to_guess_a_weekday() {
+        for surfaces in [Surfaces::none(), Surfaces::both()] {
+            let prompt = system_prompt(
+                &card("Analyst"),
+                "",
+                &[],
+                &[],
+                &[],
+                &[],
+                "",
+                &[],
+                &[],
+                &[],
+                ReplyMode::ToOperator,
+                &[],
+                None,
+                surfaces,
+                Modalities::seeing(),
+            );
+            let sums = section(&prompt, "## Sums and dates");
+            assert!(sums.contains("Use `calculator` for every sum"), "{sums}");
+            assert!(sums.contains("never do arithmetic in your head"), "{sums}");
+            assert!(sums.contains("show the figures you used"), "{sums}");
+            assert!(
+                sums.contains("Never state the weekday of a date unless it was given to you or \
+                               `calculator` returned it"),
+                "{sums}"
+            );
+        }
     }
 
     #[test]

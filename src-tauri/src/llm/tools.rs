@@ -31,6 +31,7 @@ pub const READ_FILE: &str = "read_file";
 pub const ERRAND: &str = "errand";
 pub const WEB_SEARCH: &str = "web_search";
 pub const READ_PAGE: &str = "read_page";
+pub const CALCULATOR: &str = "calculator";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Surfaces {
@@ -464,6 +465,30 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                         "description": "Character offset into the page's text. Omit to start at the beginning."}
                 },
                 "required": ["url"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
+            name: CALCULATOR.to_string(),
+            description: "Work out sums exactly, instead of in your head. Write plain arithmetic: \
+                          + - * / and ^ for a power, brackets, and % for a hundredth (6% is \
+                          0.06, so add ten percent as `x * (1 + 10%)`). Functions: pow, sqrt, ln, \
+                          log (base 10), exp, abs, round(x) or round(x, decimals), floor, ceil, \
+                          min, max. Put several lines in one call, one per line, and name a result \
+                          to use it below: `rate = 6% / 12` then `payment = 35000 * rate / (1 - \
+                          (1 + rate) ^ -60)`. Dates are written YYYY-MM-DD: weekday(2026-12-20) is \
+                          the day of the week, days(2026-11-23, 2026-12-20) counts the days between, \
+                          and 2026-11-23 + 27 is the date 27 days later. Write numbers without \
+                          currency signs or thousands separators."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "expression": {"type": "string", "minLength": 1,
+                        "maxLength": crate::domain::calculator::MAX_INPUT,
+                        "description": "One expression, or several lines of them, where `name = expression` keeps a result for the lines after it."}
+                },
+                "required": ["expression"],
                 "additionalProperties": false
             }),
         },
@@ -1289,6 +1314,7 @@ pub enum ToolInvocation {
     Errand { briefs: Vec<String> },
     WebSearch { query: String, count: usize },
     ReadPage { url: String, offset: usize },
+    Calculate { expression: String },
     Plugin { kind: PluginKind, tool: String, arguments: serde_json::Value },
 }
 
@@ -1480,6 +1506,8 @@ pub enum ToolParseError {
     InvalidSearch,
     #[error("read_page needs a `url` string and an optional nonnegative integer `offset`")]
     InvalidPageRead,
+    #[error("calculator needs an `expression` string")]
+    InvalidCalculation,
 }
 
 impl ToolParseError {
@@ -1493,6 +1521,9 @@ impl ToolParseError {
             ),
             ToolParseError::InvalidPageRead => format!(
                 "Error: {self}. Use {{\"url\": \"https://example.com/page\"}} to read a page."
+            ),
+            ToolParseError::InvalidCalculation => format!(
+                "Error: {self}. Use {{\"expression\": \"500 * 36 + 3000\"}} to work out a sum."
             ),
             ToolParseError::UnknownTool { name } => {
                 format!(
@@ -2479,6 +2510,29 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
             };
             Ok(ToolInvocation::ReadPage { url, offset })
         }
+        CALCULATOR | "calculate" | "calc" | "math" => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: CALCULATOR.to_string(),
+                detail: e.to_string(),
+            })?;
+            let expression = match ["expression", "expressions", "input", "expr"]
+                .iter()
+                .find_map(|key| value.get(*key))
+            {
+                Some(serde_json::Value::String(one)) => one.clone(),
+                Some(serde_json::Value::Array(lines)) => lines
+                    .iter()
+                    .map(|line| line.as_str().map(str::to_string))
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or(ToolParseError::InvalidCalculation)?
+                    .join("\n"),
+                _ => return Err(ToolParseError::InvalidCalculation),
+            };
+            if expression.trim().is_empty() {
+                return Err(ToolParseError::InvalidCalculation);
+            }
+            Ok(ToolInvocation::Calculate { expression })
+        }
         READ_FILE => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
                 name: READ_FILE.to_string(),
@@ -3265,6 +3319,35 @@ mod tests {
     }
 
     #[test]
+    fn the_calculator_is_offered_to_every_agent_whatever_it_was_given() {
+        for surfaces in [Surfaces::none(), Surfaces::both()] {
+            for modalities in [Modalities::seeing(), Modalities::text_only()] {
+                let names: Vec<String> =
+                    specs(surfaces, modalities).into_iter().map(|spec| spec.name).collect();
+                assert!(names.contains(&CALCULATOR.to_string()), "{surfaces:?}: {names:?}");
+            }
+        }
+        let names: Vec<String> =
+            for_errands(specs(Surfaces::both(), Modalities::seeing())).into_iter().map(|s| s.name).collect();
+        assert!(names.contains(&CALCULATOR.to_string()), "an errand can do sums too: {names:?}");
+    }
+
+    #[test]
+    fn a_calculation_needs_an_expression_and_may_come_as_lines() {
+        assert_eq!(
+            parse(&call(CALCULATOR, r#"{"expression":"500 * 36 + 3000"}"#)),
+            Ok(ToolInvocation::Calculate { expression: "500 * 36 + 3000".into() })
+        );
+        assert_eq!(
+            parse(&call(CALCULATOR, r#"{"expressions":["a = 2","a * 3"]}"#)),
+            Ok(ToolInvocation::Calculate { expression: "a = 2\na * 3".into() })
+        );
+        for bad in [r#"{}"#, r#"{"expression":"  "}"#, r#"{"expression":3}"#, r#"{"expressions":["a",1]}"#] {
+            assert_eq!(parse(&call(CALCULATOR, bad)), Err(ToolParseError::InvalidCalculation), "{bad}");
+        }
+    }
+
+    #[test]
     fn a_page_read_needs_an_address_and_may_carry_an_offset() {
         assert_eq!(
             parse(&call(READ_PAGE, r#"{"url":" https://cars.example/a "}"#)),
@@ -3802,9 +3885,9 @@ mod tests {
         let specs = specs(Surfaces::both(), Modalities::seeing());
         assert_eq!(
             specs.len(),
-            25,
+            26,
             "directory, run_command, open_on_desktop, use_screen, browse, web_search, read_page, \
-             errand, schedule, calendar, artifact, skill, notebook, settings, create_agent, \
+             calculator, errand, schedule, calendar, artifact, skill, notebook, settings, create_agent, \
              request_permission, ask_operator, decision, escalate, send_message, read_file, \
              write_document, attach_file, update_memory, note_progress"
         );

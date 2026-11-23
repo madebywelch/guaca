@@ -62,6 +62,19 @@ describe("what one call was", () => {
     expect(callInFlight("web_search", { query: "x" })).toBe("Searching the web");
   });
 
+  it("names the first sum a turn worked out, and says it is working one out while it runs", () => {
+    const [one, several, bare] = steps(
+      call("calculator", { expression: "500 * 36 + 3000" }),
+      call("calculator", { expression: "rate = 6% / 12\npayment = 35000 * rate" }),
+      call("calculator", {}),
+    );
+    expect(one?.title).toBe("Worked out 500 * 36 + 3000");
+    expect(one?.target).toBe("500 * 36 + 3000");
+    expect(several?.title).toBe("Worked out rate = 6% / 12");
+    expect(bare?.title).toBe("Worked out a sum");
+    expect(callInFlight("calculator", { expression: "1 + 1" })).toBe("Working out a sum");
+  });
+
   it("shows a url that will not parse exactly as it was written", () => {
     const [step] = steps(call("browse", { action: "open", url: "cnn.com" }));
     expect(step?.title).toBe("Opened cnn.com");
@@ -323,6 +336,13 @@ describe("folding a turn's work", () => {
       ),
     );
     expect(groups[0]?.label).toBe("2 steps in the browser");
+  });
+
+  it("counts the sums a turn worked out", () => {
+    const groups = foldTrail(
+      steps(call("calculator", { expression: "1 + 1" }), call("calculator", { expression: "2 * 3" })),
+    );
+    expect(groups[0]?.label).toBe("Worked out 2 sums");
   });
 
   it("gathers calls of one kind that a call of another came between", () => {

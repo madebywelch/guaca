@@ -21,6 +21,7 @@ use tokio::sync::{mpsc, Notify};
 use crate::config::{AppConfig, InferenceConfig};
 
 const PAGE_CHARS: usize = 12_000;
+const CALCULATION_SUMMARY: usize = 400;
 const LINKS_SHOWN: usize = 40;
 
 const WEB_OFF: &str = "Refused: reading the web is switched off for you, so nothing was searched \
@@ -229,6 +230,26 @@ fn render_page(raw: &str) -> String {
         out.extend(text.chars().take(4000));
     }
     out
+}
+
+fn worked_out(expression: &str, arguments: serde_json::Value) -> (String, Part) {
+    match crate::domain::calculator::evaluate(expression) {
+        Ok(worked) => {
+            let lines: Vec<String> = worked.iter().map(ToString::to_string).collect();
+            let summary = crate::domain::cut_to(&lines.join("; "), CALCULATION_SUMMARY).0;
+            (
+                lines.join("\n"),
+                Part::tool_call(tools::CALCULATOR, arguments, ToolOutcome::Ok { summary }),
+            )
+        }
+        Err(err) => {
+            let error = err.to_string();
+            (
+                format!("Error: {error}. Nothing was worked out; correct that and call again."),
+                Part::tool_call(tools::CALCULATOR, arguments, ToolOutcome::Failed { error }),
+            )
+        }
+    }
 }
 
 fn render_hits(query: &str, by: &str, hits: &[crate::llm::search::Hit]) -> String {
@@ -4119,6 +4140,7 @@ impl Runtime {
                     Part::tool_call(tools::ERRAND, arguments, ToolOutcome::Refused { reason }),
                 )
             }
+            ToolInvocation::Calculate { expression } => worked_out(&expression, arguments),
             ToolInvocation::Directory => {
                 let roster = self.roster_excluding(card.id);
                 let payload =
@@ -7911,6 +7933,30 @@ mod tests {
             runtime.not_given(&off, Modalities::text_only(), &read).as_deref(),
             Some(WEB_OFF)
         );
+    }
+
+    #[tokio::test]
+    async fn a_sum_is_worked_out_for_an_agent_with_nothing_switched_on() {
+        let (_dir, runtime) = test_runtime();
+        let mut card = crate::domain::agent::tests::card();
+        card.reads_web = false;
+        card.has_computer = false;
+        card.has_browser = false;
+        card.runs_errands = false;
+        let sum = ToolInvocation::Calculate { expression: "1 + 1".into() };
+        assert_eq!(runtime.not_given(&card, Modalities::text_only(), &sum), None);
+
+        let (said, part) = worked_out("payment = 35000 * 0.5%\nround(payment * 36)", serde_json::json!({}));
+        assert_eq!(said, "payment = 175\nround(payment * 36) = 6300");
+        assert!(
+            matches!(&part, Part::ToolCall { outcome: ToolOutcome::Ok { summary }, .. }
+                if summary == "payment = 175; round(payment * 36) = 6300"),
+            "{part:?}"
+        );
+
+        let (said, part) = worked_out("a = 2\na / (a - 2)", serde_json::json!({}));
+        assert!(said.starts_with("Error: line 2, `a / (a - 2)`: division by zero."), "{said}");
+        assert!(matches!(part, Part::ToolCall { outcome: ToolOutcome::Failed { .. }, .. }));
     }
 
     fn assert_plain(text: &str) {

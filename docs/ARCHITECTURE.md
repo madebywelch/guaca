@@ -1317,6 +1317,24 @@ work the same reading a new one gets. The switch is in the agent's editor,
 beside errands, and turning it off is how an operator keeps an agent off the
 web.
 
+## A model does no sum in its head, and states no weekday it was not given
+
+Live first tasks picked the right answer and gave the wrong figures: a loan
+balance worked out in the model's head was off in two runs of three, and every
+plan called a Sunday a Saturday. `calculator` is the fix: a small evaluator in
+`domain/calculator.rs`, not a language. It reads numbers, the four operations,
+powers, brackets, percentages, the functions a loan or a compound interest sum
+needs, names for results within one call, and dates written YYYY-MM-DD, with
+`weekday(...)`, `days(...)` and whole days added or taken away. It has no loop,
+no network and no file, so it is offered to every agent, errands included,
+with no switch and no migration. The input is bounded in length, lines and
+nesting, a value past 10^15 is an overflow, and a result is shown to twelve
+significant digits, so 0.1 + 0.2 reads 0.3. An error names the line it was on.
+
+The standing prompt tells every agent to use it for every sum, to show the
+figures, and to state a weekday only when it was given one or the calculator
+returned it. *Your group's calendar* writes today's weekday out in full.
+
 ## Files are references, and what a model gets depends on what they are
 
 Agents exchange documents, and the operator drops them into a channel. Three
