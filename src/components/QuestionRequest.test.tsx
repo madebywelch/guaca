@@ -25,6 +25,7 @@ const ANALYST: AgentCard = {
   hasComputer: false,
   hasBrowser: false,
   runsErrands: false,
+  readsWeb: true,
   browserConsent: "open",
   name: "Analyst",
   avatar: "avocado",

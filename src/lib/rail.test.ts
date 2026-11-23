@@ -12,6 +12,7 @@ function agent(name: string, over: Partial<AgentCard> = {}): AgentCard {
     hasComputer: false,
     hasBrowser: false,
     runsErrands: false,
+    readsWeb: true,
     browserConsent: "open",
     name,
     avatar: "avocado",

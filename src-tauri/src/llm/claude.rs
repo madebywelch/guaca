@@ -72,7 +72,51 @@ pub fn schema(tools: &[ToolSpec]) -> serde_json::Value {
 }
 
 pub fn argv(schema: &serde_json::Value, system_prompt: &str) -> Vec<String> {
-    [
+    with_tools(schema, system_prompt, &[])
+}
+
+const SEARCH_TOOL: &str = "WebSearch";
+const SEARCH_TURNS: &str = "6";
+
+pub fn search_argv(schema: &serde_json::Value) -> Vec<String> {
+    with_tools(
+        schema,
+        crate::llm::search::SEARCHER,
+        &["--allowedTools", SEARCH_TOOL, "--max-turns", SEARCH_TURNS],
+    )
+}
+
+pub fn search_schema(count: usize) -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["results"],
+        "properties": {
+            "results": {
+                "type": "array",
+                "maxItems": count,
+                "description": "The pages the search returned, most useful first.",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["title", "url", "snippet"],
+                    "properties": {
+                        "title": { "type": "string" },
+                        "url": { "type": "string", "description": "The page's real address." },
+                        "snippet": {
+                            "type": "string",
+                            "description": "One or two sentences of what the page says.",
+                        },
+                    },
+                },
+            },
+        },
+    })
+}
+
+fn with_tools(schema: &serde_json::Value, system_prompt: &str, more: &[&str]) -> Vec<String> {
+    let tools = if more.is_empty() { "" } else { SEARCH_TOOL };
+    let mut args: Vec<String> = [
         "-p",
         "--system-prompt",
         system_prompt,
@@ -85,7 +129,7 @@ pub fn argv(schema: &serde_json::Value, system_prompt: &str) -> Vec<String> {
         "--verbose",
         "--include-partial-messages",
         "--tools",
-        "",
+        tools,
         "--strict-mcp-config",
         "--mcp-config",
         r#"{"mcpServers":{}}"#,
@@ -96,7 +140,9 @@ pub fn argv(schema: &serde_json::Value, system_prompt: &str) -> Vec<String> {
     ]
     .iter()
     .map(|s| s.to_string())
-    .collect()
+    .collect();
+    args.extend(more.iter().map(|s| s.to_string()));
+    args
 }
 
 pub fn conversation(messages: &[ChatMessage]) -> (String, Vec<serde_json::Value>) {
@@ -164,13 +210,13 @@ fn image_block(url: &str) -> Option<serde_json::Value> {
 }
 
 #[derive(Debug, Default, Deserialize)]
-struct ResultFrame {
+struct ResultFrame<T = StructuredOutput> {
     #[serde(default)]
     is_error: bool,
     #[serde(default)]
     subtype: String,
     #[serde(default)]
-    structured_output: Option<StructuredOutput>,
+    structured_output: Option<T>,
     #[serde(default)]
     usage: Option<ProgramUsage>,
     #[serde(default)]
@@ -296,7 +342,49 @@ where
     }
 }
 
-fn failure(frame: &ResultFrame) -> LlmError {
+#[derive(Debug, Default, Deserialize)]
+struct SearchOutput {
+    #[serde(default)]
+    results: Vec<SearchResult>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct SearchResult {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    snippet: String,
+}
+
+fn found(
+    line: &str,
+    count: usize,
+    out: &mut Option<crate::llm::search::Searched>,
+) -> Result<bool, LlmError> {
+    let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+        return Ok(false);
+    };
+    if event.get("type").and_then(serde_json::Value::as_str) != Some("result") {
+        return Ok(false);
+    }
+    let frame: ResultFrame<SearchOutput> = serde_json::from_value(event)
+        .map_err(|err| LlmError::Decode(format!("{PROGRAM} result frame: {err}")))?;
+    if frame.is_error || frame.structured_output.is_none() {
+        return Err(failure(&frame));
+    }
+    let usage = frame.usage.as_ref().map(ProgramUsage::tally);
+    let results = frame.structured_output.unwrap_or_default().results;
+    let hits = crate::llm::search::kept(
+        results.into_iter().filter_map(|r| crate::llm::search::hit(&r.title, &r.url, &r.snippet)),
+        count,
+    );
+    *out = Some(crate::llm::search::Searched { hits, usage });
+    Ok(true)
+}
+
+fn failure<T>(frame: &ResultFrame<T>) -> LlmError {
     let said = frame
         .result
         .as_deref()
@@ -352,6 +440,42 @@ where
 {
     let schema = schema(&request.tools);
     let (system, blocks) = conversation(&request.messages);
+    let mut completion = Completion::default();
+    let mut seam = Seam::default();
+    run(cfg, argv(&schema, &system), blocks, |line| {
+        fold(line, &mut completion, &mut seam, on_token)
+    })
+    .await?;
+    Ok(completion)
+}
+
+pub(super) async fn search(
+    cfg: &InferenceConfig,
+    query: &str,
+    count: usize,
+) -> Result<crate::llm::search::Searched, LlmError> {
+    let asked = vec![serde_json::json!({
+        "type": "text",
+        "text": crate::llm::search::ask(query, count),
+    })];
+    let mut searched = None;
+    run(cfg, search_argv(&search_schema(count)), asked, |line| found(line, count, &mut searched))
+        .await?;
+    searched.ok_or(LlmError::ProgramFailed {
+        program: PROGRAM,
+        message: format!("{PROGRAM} ended without a search result"),
+    })
+}
+
+async fn run<R>(
+    cfg: &InferenceConfig,
+    args: Vec<String>,
+    blocks: Vec<serde_json::Value>,
+    mut read_line: R,
+) -> Result<(), LlmError>
+where
+    R: FnMut(&str) -> Result<bool, LlmError>,
+{
     let timeout = Duration::from_secs(cfg.request_timeout_secs.clamp(5, 900));
 
     let mut command = tokio::process::Command::new(PROGRAM);
@@ -360,7 +484,7 @@ where
     }
 
     let mut child = command
-        .args(argv(&schema, &system))
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -393,8 +517,6 @@ where
     })?;
     let stderr = child.stderr.take();
 
-    let mut completion = Completion::default();
-    let mut seam = Seam::default();
     let mut answered = false;
 
     let read = async {
@@ -402,7 +524,7 @@ where
         while let Some(line) = lines.next_line().await.map_err(|err| {
             LlmError::Decode(format!("could not read what {PROGRAM} wrote: {err}"))
         })? {
-            if fold(&line, &mut completion, &mut seam, on_token)? {
+            if read_line(&line)? {
                 answered = true;
             }
         }
@@ -442,7 +564,7 @@ where
     }
 
     let _ = child.wait().await;
-    Ok(completion)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -752,5 +874,38 @@ mod tests {
             schema["properties"]["calls"]["items"]["oneOf"][0]["properties"]["name"]["const"],
             "send_message"
         );
+    }
+
+    #[test]
+    fn a_search_runs_with_web_search_alone_and_the_operators_setup_still_off() {
+        let argv = search_argv(&search_schema(5));
+        let pair = |flag: &str| {
+            let at = argv.iter().position(|a| a == flag).unwrap_or_else(|| panic!("no {flag}"));
+            argv[at + 1].clone()
+        };
+        assert_eq!(pair("--tools"), "WebSearch");
+        assert_eq!(pair("--allowedTools"), "WebSearch");
+        assert_eq!(pair("--max-turns"), SEARCH_TURNS);
+        assert_eq!(pair("--setting-sources"), "");
+        assert_eq!(pair("--mcp-config"), r#"{"mcpServers":{}}"#);
+        assert!(argv.iter().any(|a| a == "--no-session-persistence"));
+        let schema: serde_json::Value = serde_json::from_str(&pair("--json-schema")).unwrap();
+        assert_eq!(schema["properties"]["results"]["maxItems"], 5);
+    }
+
+    #[test]
+    fn a_search_result_frame_becomes_results_and_a_failed_one_an_error() {
+        let line = r#"{"type":"result","subtype":"success","is_error":false,"structured_output":{"results":[{"title":"Lease","url":"https://cars.example/l","snippet":"Costs less."},{"title":"x","url":"ftp://no","snippet":""}]},"usage":{"input_tokens":5,"output_tokens":7}}"#;
+        let mut out = None;
+        assert!(found(line, 5, &mut out).unwrap());
+        let searched = out.unwrap();
+        assert_eq!(searched.hits.len(), 1);
+        assert_eq!(searched.hits[0].url, "https://cars.example/l");
+        assert_eq!(searched.usage.unwrap().completion_tokens, 7);
+
+        let failed = r#"{"type":"result","subtype":"error_max_turns","is_error":true,"result":"out of turns"}"#;
+        let mut none = None;
+        assert!(found(failed, 5, &mut none).is_err());
+        assert!(!found(r#"{"type":"stream_event"}"#, 5, &mut none).unwrap());
     }
 }

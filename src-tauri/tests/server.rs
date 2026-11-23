@@ -2073,6 +2073,7 @@ async fn no_answer_or_event_carries_a_secret_except_the_webhook_secret_asked_for
         ("apiKey", "sk-inference-key-7k2p"),
         ("e2bApiKey", "e2b-computer-key-9q4w"),
         ("kernelApiKey", "sk-kernel-key-3m8x"),
+        ("searchApiKey", "tvly-search-key-6n3j"),
     ];
     let mut patch = serde_json::Map::new();
     for (field, key) in keys {
