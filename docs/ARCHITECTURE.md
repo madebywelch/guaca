@@ -1342,10 +1342,9 @@ significant digits, so 0.1 + 0.2 reads 0.3. An error names the line it was on.
 
 The standing prompt tells every agent to use it for every sum, to show the
 figures, to put no figure in an answer, a difference, a break-even or a what-if
-included, that it was not given or did not get back, and to state a weekday
-only when it was given one or the calculator returned it. Each result ends by
-saying so again, since that is where the model is when it writes the answer.
-*Your group's calendar* writes today's weekday out in full.
+included, that it was not given or did not get back, and to state a weekday only when it was given one or
+the calculator returned it. *Your group's calendar* writes today's weekday out
+in full.
 
 ## Files are references, and what a model gets depends on what they are
 

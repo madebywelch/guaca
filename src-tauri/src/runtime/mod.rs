@@ -22,9 +22,6 @@ use crate::config::{AppConfig, InferenceConfig};
 
 const PAGE_CHARS: usize = 12_000;
 const CALCULATION_SUMMARY: usize = 400;
-const WORKED_SO_FAR: &str = "These are the figures worked out so far. Any other figure you \
-                             write, such as a difference, a break-even or a what-if, is worked \
-                             out here first.";
 const LINKS_SHOWN: usize = 40;
 
 const WEB_OFF: &str = "Refused: reading the web is switched off for you, so nothing was searched \
@@ -247,7 +244,7 @@ fn worked_out(
             let lines: Vec<String> = worked.iter().map(ToString::to_string).collect();
             let summary = crate::domain::cut_to(&lines.join("; "), CALCULATION_SUMMARY).0;
             (
-                format!("{}\n\n{WORKED_SO_FAR}", lines.join("\n")),
+                lines.join("\n"),
                 Part::tool_call(tools::CALCULATOR, arguments, ToolOutcome::Ok { summary }),
             )
         }
@@ -7963,7 +7960,7 @@ mod tests {
             &mut figures,
             serde_json::json!({}),
         );
-        assert_eq!(said, format!("payment = 175\nround(payment * 36) = 6300\n\n{WORKED_SO_FAR}"));
+        assert_eq!(said, "payment = 175\nround(payment * 36) = 6300");
         assert!(
             matches!(&part, Part::ToolCall { outcome: ToolOutcome::Ok { summary }, .. }
                 if summary == "payment = 175; round(payment * 36) = 6300"),
