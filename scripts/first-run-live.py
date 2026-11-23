@@ -152,9 +152,21 @@ def run(task: str, n: int, key: str, model: str, evidence: Path) -> dict:
             "questions": w.host.scalar("SELECT count(*) FROM decisions"),
             "refused": [a for a in w.egress.attempts if not a.endswith(ALLOWED)],
             "result": "\n\n".join(said(w, agent)),
+            "tools": tool_calls(w),
         }
     finally:
         w.close()
+
+
+def tool_calls(w: World) -> list[dict]:
+    found = []
+    for row in w.host.rows("SELECT parts FROM messages ORDER BY created_at, rowid"):
+        for part in json.loads(row["parts"]):
+            if part.get("type") == "toolCall":
+                outcome = part.get("outcome") or {}
+                found.append({"name": part.get("name"), "arguments": part.get("arguments"),
+                              "outcome": outcome.get("summary") or outcome.get("error") or outcome.get("reason")})
+    return found
 
 
 def report(r: dict) -> str:
@@ -166,7 +178,8 @@ def report(r: dict) -> str:
             f"outcome {r['outcome']}, {r['agentMessages']} agent messages, {r['questions']} questions")
     if r["refused"]:
         head += f", refused egress {r['refused']}"
-    return f"{head}\nFor you: {r['forYou']['headline']}\n\n{r['result']}\n"
+    tools = "".join(f"Tool: {t['name']} {json.dumps(t['arguments'])} -> {t['outcome']}\n" for t in r["tools"])
+    return f"{head}\nFor you: {r['forYou']['headline']}\n{tools}\n{r['result']}\n"
 
 
 def main(argv: list[str]) -> int:

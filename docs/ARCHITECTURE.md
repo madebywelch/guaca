@@ -581,7 +581,12 @@ holds:
   for you..."), of which any whole sentence before that ending is kept. A line
   ending in a comma, such as a greeting, runs on into the next. The last line
   with words is never passed over, so a note that is only a lead-in reads as it
-  did. A line over 160 characters is cut
+  did. A note with a line that starts `Bottom line:` outside a code block is
+  headlined by the words after its last such label instead, or by the line
+  under it when the label stands alone, and the note keeps the line; the first
+  tasks ask for one, written after the working, because a model told to lead
+  with its answer states a verdict before the sums that should decide it.
+  A line over 160 characters is cut
   after its last whole sentence when that keeps at least half of it, and
   otherwise at a Unicode word boundary. The ellipsis marks either cut, so a
   shortened headline never reads as complete. A failure takes the first

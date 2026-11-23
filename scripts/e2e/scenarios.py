@@ -2315,6 +2315,11 @@ PLAN_CLEANUP = "Plan the cleanup day."
 PLANNED = ("Book the park for Saturday the 12th, then recruit 30 volunteers in two weeks.\n\n## First step\n\n"
            "Call the parks office on Monday.")
 PLANNED_ROW = "Book the park for Saturday the 12th, then recruit 30 volunteers in two weeks."
+LOAN_LEFT = "How much is left on the car loan after three years?"
+LOAN_SUM = ("rate = 6% / 12\npayment = 35000 * rate / (1 - (1 + rate) ^ -60)\n"
+            "owed = payment * (1 - (1 + rate) ^ -24) / rate\nround(owed)")
+LOAN_WORKED = "round(owed) = 15267"
+LOAN_ROW = "$15,267 is still owed on the loan after three years."
 FINISHED_ROWS = """(() => {
   const section = document.getElementById('for-you-finished')?.closest('section');
   if (!section) return null;
@@ -2330,10 +2335,20 @@ def scenario_headline(w: World) -> None:
     notes = {("Writer", WRITE_NOTE): DRAFTED_NOTE, ("Analyst", BUY_OR_LEASE): WORKED_OUT,
              (AGENT, PLAN_CLEANUP): PLANNED}
 
+    worked: list[str] = []
+
     def script(c: Call) -> Reply | None:
         for (speaker, brief), note in notes.items():
             if c.speaker == speaker and c.last_user.endswith(brief):
                 return held(answers, say(note))
+        if c.speaker == "Accountant" and c.last_user.endswith(LOAN_LEFT):
+            if "calculator" not in c.tools:
+                return say("No calculator was offered.")
+            if not c.tool_results():
+                return held(answers, call("calculator", expression=LOAN_SUM))
+            worked.append(c.tool_results()[-1])
+            return say("I'll work out the balance first.\n\n## The sums\n\n" + c.tool_results()[-1]
+                       + "\n\nBottom line: " + LOAN_ROW)
         return hello(c)
 
     w.model.script = script
@@ -2343,17 +2358,26 @@ def scenario_headline(w: World) -> None:
     ui = w.ui
     new_agent(w, "Writer", "You write notes for the team.")
     new_agent(w, "Analyst", "You work out what things cost.")
-    for (speaker, brief) in notes:
+    new_agent(w, "Accountant", "You keep the loan figures.")
+    for (speaker, brief) in [*notes, ("Accountant", LOAN_LEFT)]:
         write(w, speaker, brief)
         w.wait(f"the message to {speaker} is recorded", lambda brief=brief: w.host.scalar(
             "SELECT count(*) FROM messages WHERE parts LIKE ?", f"%{brief}%"))
     ui.click("button", "For you")
     w.wait("For you opens", lambda: ui.find("dialog", "For you", exact=False))
     answers.set()
-    settled(w, 4, "the three tasks finish")
-    rows = w.wait("For you lists the three results as new", lambda: (r := ui.evaluate(FINISHED_ROWS))
-                  and len(r) == 3 and r)
+    settled(w, 5, "the four tasks finish")
+    rows = w.wait("For you lists the four results as new", lambda: (r := ui.evaluate(FINISHED_ROWS))
+                  and len(r) == 4 and r)
     shown = {row["who"]: row["headline"] for row in rows}
+    kept = said(w, "Accountant")
+    w.check("an agent works a sum out with the calculator, and its Bottom line is the For you headline",
+            len(worked) == 1 and LOAN_WORKED in worked[0] and shown.get("Accountant") == LOAN_ROW,
+            observed={"calculator": worked, "headline": shown.get("Accountant")}, shot=True)
+    w.check("the conversation keeps the Bottom line in the full result",
+            len(kept) == 1 and kept[0].endswith("Bottom line: " + LOAN_ROW) and LOAN_WORKED in kept[0],
+            observed=kept)
+    shown.pop("Accountant", None)
     expected = {"Writer": DRAFT_ROW, "Analyst": WORKED_ROW, AGENT: PLANNED_ROW}
     w.check("a result that opens with a label or a promise is listed by the answer after it",
             shown.get("Writer") == DRAFT_ROW and shown.get("Analyst") == WORKED_ROW,
@@ -4261,11 +4285,14 @@ SCENARIOS: dict[str, Scenario] = {
         "with nothing waiting, Tab leaves the composer for its own next control",
         "every model call was one the scenario scripted",
     )),
-    "headline": Scenario(scenario_headline, "Three agents finish while For you is open, and For you lists a draft "
+    "headline": Scenario(scenario_headline, "Four agents finish while For you is open, and For you lists a draft "
                          "under the label Draft and a verdict after \"I'll work this out for you...\" by the answer "
-                         "after the lead-in; a plan with nothing before it keeps its own first line, and every "
-                         "conversation keeps the words as written.",
+                         "after the lead-in; a plan with nothing before it keeps its own first line; a balance "
+                         "worked out with the calculator is listed by its Bottom line, and every conversation "
+                         "keeps the words as written.",
     (
+        "an agent works a sum out with the calculator, and its Bottom line is the For you headline",
+        "the conversation keeps the Bottom line in the full result",
         "a result that opens with a label or a promise is listed by the answer after it",
         "a result with nothing before its answer is listed by its own first line",
         "the conversation keeps every result word for word",
