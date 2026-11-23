@@ -15,7 +15,7 @@ export const FIRST_TASKS = [
         role: "Works out what each option costs and comes back with one recommendation.",
       },
     ],
-    brief: `Help me decide whether to buy or lease my next car. Work out what each costs me over three years, leaving out what I would pay either way, such as insurance and fuel. Show the arithmetic, and for buying, state the loan still owed at the end of the three years and count it against what the car is worth then. Tell me which you would pick and why, and say what would change the answer. Where you need a figure I have not given, assume a typical one and say so. ${ASK_ONLY_IF_STUCK}`,
+    brief: `Help me decide whether to buy or lease my next car. For the same car at the same interest rate, work out what each costs me over three years, leaving out what I would pay either way, such as insurance. Show the arithmetic step by step, including how you get the loan still owed at the end of the three years, and count that loan against what the car is worth then. Tell me which you would pick on those numbers and why, and say what would change the answer. Where you need a figure I have not given, assume a typical one and say so. ${ASK_ONLY_IF_STUCK}`,
     crew: {
       group: [
         {

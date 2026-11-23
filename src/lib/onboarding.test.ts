@@ -116,6 +116,8 @@ describe("the first task", () => {
     const brief = FIRST_TASKS.find((task) => task.id === "research")!.brief;
     expect(brief).toMatch(/Show the arithmetic/);
     expect(brief).toMatch(/leaving out what I would pay either way/);
+    expect(brief).toMatch(/same car at the same interest rate/);
+    expect(brief).toMatch(/pick on those numbers/);
     expect(brief).toMatch(/loan still owed at the end of the three years/);
     expect(brief).toMatch(/assume a typical one and say so/);
   });
