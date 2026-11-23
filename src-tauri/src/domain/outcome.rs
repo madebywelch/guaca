@@ -196,7 +196,43 @@ fn sentence_end(line: &str) -> Option<usize> {
 }
 
 pub fn first_line(note: &str) -> Option<String> {
+    let lines = lines(note);
+    let mut worded = lines.iter().enumerate().filter(|(_, line)| !line.words.is_empty()).peekable();
+    while let Some((at, line)) = worded.next() {
+        let Some(&(after, next)) = worded.peek() else {
+            return Some(line.words.clone());
+        };
+        if is_label(&line.words) || (line.title && lines.get(at + 1).is_some_and(|l| l.rule)) {
+            continue;
+        }
+        if let Some(kept) = lead_in(&line.words) {
+            if kept.is_empty() {
+                continue;
+            }
+            return Some(kept.to_string());
+        }
+        if after == at + 1 {
+            if line.words.ends_with(',') {
+                return Some(format!("{} {}", line.words, next.words));
+            }
+            if line.words.ends_with(['，', '、']) {
+                return Some(format!("{}{}", line.words, next.words));
+            }
+        }
+        return Some(line.words.clone());
+    }
+    None
+}
+
+struct Line {
+    words: String,
+    title: bool,
+    rule: bool,
+}
+
+fn lines(note: &str) -> Vec<Line> {
     let mut fenced = false;
+    let mut out = Vec::new();
     for line in note.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
@@ -206,12 +242,44 @@ pub fn first_line(note: &str) -> Option<String> {
         if fenced {
             continue;
         }
+        if is_rule(trimmed) {
+            out.push(Line { words: String::new(), title: false, rule: true });
+            continue;
+        }
         let words = plain(trimmed);
         if !words.is_empty() {
-            return Some(words);
+            out.push(Line { words, title: is_title(trimmed), rule: false });
         }
     }
-    None
+    out
+}
+
+fn is_title(line: &str) -> bool {
+    heading(line).is_some()
+        || ["**", "__"].iter().any(|mark| {
+            line.len() > 2 * mark.len() && line.starts_with(mark) && line.ends_with(mark)
+        })
+}
+
+fn is_label(words: &str) -> bool {
+    words.unicode_words().count() == 1 && words.chars().all(char::is_alphanumeric)
+}
+
+fn lead_in(words: &str) -> Option<&str> {
+    let open = ["...", "…", ":", "："].iter().find_map(|end| words.strip_suffix(end))?;
+    let mut end = 0;
+    let mut chars = open.char_indices().peekable();
+    while let Some((at, c)) = chars.next() {
+        let closes = match c {
+            '.' | '!' | '?' => chars.peek().is_some_and(|(_, next)| next.is_whitespace()),
+            '。' | '！' | '？' => true,
+            _ => false,
+        };
+        if closes {
+            end = at + c.len_utf8();
+        }
+    }
+    Some(&open[..end])
 }
 
 pub fn headline_of(note: &Envelope) -> Option<String> {
@@ -385,6 +453,116 @@ mod tests {
         assert_eq!(
             headline("Sent the digest to 12 people.\n\nDetails below.").as_deref(),
             Some("Sent the digest to 12 people.")
+        );
+    }
+
+    #[test]
+    fn a_label_over_a_draft_is_passed_over_for_the_draft() {
+        let draft =
+            "Hi team,\nStarting next week, our weekly meeting moves from Monday to Thursday \
+                     morning at [time].\n\nSee you there!";
+        let opening = "Hi team, Starting next week, our weekly meeting moves from Monday to \
+                       Thursday morning at [time].";
+        assert_eq!(headline(&format!("Draft\n\n{draft}")).as_deref(), Some(opening));
+        assert_eq!(headline(&format!("**Draft**\n\n{draft}")).as_deref(), Some(opening));
+        assert_eq!(
+            headline(
+                "**Draft team note**\n\n---\n\nHi everyone,\n\nJust a quick heads-up: starting \
+                 next week, our weekly meeting is moving from Monday to Thursday morning at \
+                 [time].\n\nLooking forward to seeing you all then!\n\n[Your sign-off]\n\n---"
+            )
+            .as_deref(),
+            Some(
+                "Hi everyone, Just a quick heads-up: starting next week, our weekly meeting is \
+                 moving from Monday to Thursday morning at [time]."
+            )
+        );
+        assert_eq!(
+            headline(
+                "**Draft note for your team about the meeting change.**\n\n---\n\nHey \
+                 everyone,\n\nWe meet on Thursdays from next week."
+            )
+            .as_deref(),
+            Some("Hey everyone, We meet on Thursdays from next week.")
+        );
+    }
+
+    #[test]
+    fn a_line_that_only_leads_into_what_follows_is_passed_over() {
+        let answer = "Buy: it costs $17,621 over three years against $21,000 to lease.";
+        let rest = format!("{answer}\n\n## Buying with the loan\n\n- Monthly payment: $676.65");
+        assert_eq!(
+            headline(&format!("I'll work this out for you...\n\n{rest}")).as_deref(),
+            Some(answer)
+        );
+        assert_eq!(
+            headline(&format!("I'll work this out for you…\n\n{rest}")).as_deref(),
+            Some(answer)
+        );
+        assert_eq!(
+            headline(
+                "Here's your draft:\n\n---\n\n**Subject: Weekly team meeting moving to Thursday \
+                 mornings**\n\nHi everyone,"
+            )
+            .as_deref(),
+            Some("Subject: Weekly team meeting moving to Thursday mornings")
+        );
+        assert_eq!(
+            headline("## Risks:\n\n1. No waiver signed").as_deref(),
+            Some("No waiver signed")
+        );
+        assert_eq!(
+            headline("結論：\n\nリースより購入が安い。").as_deref(),
+            Some("リースより購入が安い。")
+        );
+    }
+
+    #[test]
+    fn a_sentence_before_a_lead_in_is_kept_without_it() {
+        assert_eq!(
+            headline(
+                "Buy it: you come out $3,379 ahead. Here's the arithmetic:\n\n- Loan: $676.65"
+            )
+            .as_deref(),
+            Some("Buy it: you come out $3,379 ahead.")
+        );
+    }
+
+    #[test]
+    fn a_question_after_its_lead_in_is_the_question() {
+        assert_eq!(
+            headline(
+                "I need to know:\n- What's the neighborhood you have in mind?\n- Which Saturday \
+                 or Sunday works?"
+            )
+            .as_deref(),
+            Some("What's the neighborhood you have in mind?")
+        );
+    }
+
+    #[test]
+    fn an_answer_with_nothing_before_it_reads_as_it_did() {
+        assert_eq!(
+            headline(
+                "Lease, if you replace the car within three years.\n\n**Lease:** $21,000\n\n---\n\n\
+                 ## What would change it\n\nA lower rate."
+            )
+            .as_deref(),
+            Some("Lease, if you replace the car within three years.")
+        );
+        assert_eq!(headline("Done.\n\nSent the digest to 12 people.").as_deref(), Some("Done."));
+        assert_eq!(headline("Draft").as_deref(), Some("Draft"));
+        assert_eq!(
+            headline("Here is the query:\n```sql\nselect 1\n```").as_deref(),
+            Some("Here is the query:")
+        );
+        assert_eq!(
+            headline("毎朝のダイジェストを十二人に送信しました\n\n詳細は下に").as_deref(),
+            Some("毎朝のダイジェストを十二人に送信しました")
+        );
+        assert_eq!(
+            headline("Revenue is up 4%, costs up 6%\n\n## Detail").as_deref(),
+            Some("Revenue is up 4%, costs up 6%")
         );
     }
 
