@@ -38,12 +38,6 @@ class Failed(Exception):
     pass
 
 
-def free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
-
-
 def admitted(browser: Browser) -> bool:
     return bool(browser.find("button", "App settings") or browser.find("region", "Get started with Guaca"))
 
@@ -393,13 +387,16 @@ class Host:
         self.minute_ms = minute_ms
         self.updater = updater
         self.egress = egress
-        self.port = free_port()
-        self.origin = f"http://127.0.0.1:{self.port}"
+        self.port = 0
         self.token = secrets.token_hex(32)
         self.db = self.root / "data/guac.db"
         self.log = evidence / "host.log"
         self.proc: subprocess.Popen | None = None
         self.starts = 0
+
+    @property
+    def origin(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
 
     @property
     def invitation(self) -> str:
@@ -438,6 +435,12 @@ class Host:
         assert self.proc
         if self.proc.poll() is not None:
             raise Failed(f"the Host exited with status {self.proc.returncode}; see host.log")
+        if not self.port:
+            ready = re.search(r"guacad ready addr=127\.0\.0\.1:(\d+)",
+                              self.log_text().split(f"---- start {self.starts} ----")[-1])
+            if not ready:
+                return False
+            self.port = int(ready.group(1))
         with urllib.request.urlopen(f"{self.origin}/health", timeout=1) as answer:
             return answer.status == 200
 
