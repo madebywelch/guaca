@@ -14,7 +14,10 @@ pub const IMAGE: &str = match option_env!("GUACA_BACKEND_IMAGE") {
     None => concat!("ghcr.io/madebywelch/guaca/guacad:", env!("CARGO_PKG_VERSION")),
 };
 
-pub const BROWSER_IMAGE: Option<&str> = option_env!("GUACA_BROWSER_IMAGE");
+pub const BROWSER_IMAGE: &str = match option_env!("GUACA_BROWSER_IMAGE") {
+    Some(image) => image,
+    None => concat!("ghcr.io/madebywelch/guaca/browser:", env!("CARGO_PKG_VERSION")),
+};
 
 pub const BROWSER_PORT: u16 = 9223;
 
@@ -278,6 +281,7 @@ struct Browser {
     busy: Mutex<()>,
     failed_at: parking_lot::Mutex<Option<std::time::Instant>>,
     checked: std::sync::atomic::AtomicBool,
+    download_failed: std::sync::atomic::AtomicBool,
 }
 
 pub fn zone() -> Option<String> {
@@ -748,8 +752,15 @@ impl LocalHost {
             busy: Mutex::new(()),
             failed_at: parking_lot::Mutex::new(None),
             checked: std::sync::atomic::AtomicBool::new(false),
+            download_failed: std::sync::atomic::AtomicBool::new(false),
         });
         self
+    }
+
+    pub fn browser_download_failed(&self) -> bool {
+        self.browser.as_ref().is_some_and(|browser| {
+            browser.download_failed.load(std::sync::atomic::Ordering::SeqCst)
+        })
     }
 
     fn browser_name(&self) -> String {
@@ -864,24 +875,28 @@ impl LocalHost {
         let endpoint = self.recorded().map(|engine| engine.endpoint);
         let existing =
             owned(&self.binary, endpoint.as_deref(), &name, (self.spec.owner, &name)).await?;
-        if let Some(value) = existing {
+        if let Some(value) = &existing {
             if value["Config"]["Image"].as_str() == Some(browser.image.as_str()) {
                 if value["State"]["Running"] != true {
                     self.docker(&["start", &name], 60).await?;
                 }
                 return Ok(());
             }
-            self.docker(&["rm", "--force", &name], 60).await?;
         }
 
         if self.docker(&["image", "inspect", &browser.image], 15).await.is_err() {
             if !fetchable(&browser.image) {
                 return Err(format!("The browser image, {}, is not on this Mac and there is nowhere to download it from.", browser.image));
             }
-            self.docker(&["pull", &browser.image], 900).await.map_err(|error| {
+            if let Err(error) = self.docker(&["pull", &browser.image], 900).await {
                 tracing::warn!(image = %browser.image, %error, "could not download the browser image");
-                "The browser could not be downloaded. Check your connection; Guaca tries again in a minute.".to_string()
-            })?;
+                browser.download_failed.store(true, std::sync::atomic::Ordering::SeqCst);
+                return Err("The browser could not be downloaded. Check your connection; Guaca tries again in a minute.".to_string());
+            }
+        }
+        browser.download_failed.store(false, std::sync::atomic::Ordering::SeqCst);
+        if existing.is_some() {
+            self.docker(&["rm", "--force", &name], 60).await?;
         }
 
         if let Some(parent) = browser.profile.parent() {
@@ -3342,5 +3357,100 @@ pub(crate) mod tests {
         );
         task.abort();
         task2.abort();
+    }
+
+    #[cfg(unix)]
+    async fn holding_an_older_browser(
+        answer: &'static str,
+    ) -> (LocalHost, tempfile::TempDir, tokio::task::JoinHandle<()>, String) {
+        let (host, dir, task) = beside_a_browser(answer).await;
+        let name = host.browser_name();
+        edit(&dir, |state| {
+            state["others"] = json!({ &name: {
+                "Config": {
+                    "Image": "ghcr.io/madebywelch/guaca/browser:older",
+                    "Labels": { "bot.guaca.desktop": &name },
+                },
+                "State": { "Running": true },
+            }});
+        });
+        (host, dir, task, name)
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failed_download_is_said_and_tried_again_after_the_wait() {
+        let (host, dir, task) = beside_a_browser("settingUp").await;
+        assert!(!host.browser_download_failed(), "nothing has failed before anything is tried");
+        edit(&dir, |state| state["failure"] = json!("download"));
+        host.watch_browser().await;
+        assert!(host.browser_download_failed());
+
+        *host.browser.as_ref().unwrap().failed_at.lock() =
+            Some(std::time::Instant::now() - BROWSER_RETRY);
+        let tried = calls(&dir).iter().filter(|call| call[0] == "pull").count();
+        host.watch_browser().await;
+        assert_eq!(
+            calls(&dir).iter().filter(|call| call[0] == "pull").count(),
+            tried + 1,
+            "the download is tried again once the wait is over"
+        );
+        assert!(host.browser_download_failed(), "a second failure still says so");
+
+        edit(&dir, |state| state["failure"] = json!(""));
+        *host.browser.as_ref().unwrap().failed_at.lock() =
+            Some(std::time::Instant::now() - BROWSER_RETRY);
+        host.watch_browser().await;
+        assert!(!host.browser_download_failed(), "a download that worked clears the failure");
+        assert!(state(&dir)["others"][&host.browser_name()].is_object());
+        task.abort();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_newer_app_replaces_the_browser_an_older_one_left_running() {
+        let (host, dir, task, name) = holding_an_older_browser("ready").await;
+        host.watch_browser().await;
+        assert_eq!(
+            state(&dir)["others"][&name]["Config"]["Image"],
+            "ghcr.io/madebywelch/guaca/browser:test",
+            "{:?}",
+            calls(&dir)
+        );
+        let before = calls(&dir).len();
+        host.watch_browser().await;
+        assert!(
+            !calls(&dir)[before..].iter().any(|call| call[0] == "run" || call[0] == "rm"),
+            "once replaced it is left alone"
+        );
+        task.abort();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_older_browser_keeps_serving_while_the_newer_one_cannot_be_downloaded() {
+        let (host, dir, task, name) = holding_an_older_browser("ready").await;
+        edit(&dir, |state| state["failure"] = json!("download"));
+        host.watch_browser().await;
+        assert!(calls(&dir).iter().any(|call| call[0] == "pull"), "{:?}", calls(&dir));
+        assert!(
+            !calls(&dir).iter().any(|call| call[0] == "rm"),
+            "the older browser is not removed before its replacement is here"
+        );
+        assert_eq!(
+            state(&dir)["others"][&name]["Config"]["Image"],
+            "ghcr.io/madebywelch/guaca/browser:older"
+        );
+        task.abort();
+    }
+
+    #[test]
+    fn an_unpinned_app_names_the_browser_of_its_own_release() {
+        if option_env!("GUACA_BROWSER_IMAGE").is_none() {
+            assert_eq!(
+                BROWSER_IMAGE,
+                format!("ghcr.io/madebywelch/guaca/browser:{}", env!("CARGO_PKG_VERSION"))
+            );
+        }
     }
 }

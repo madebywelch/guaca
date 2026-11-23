@@ -94,6 +94,7 @@ export const localHost = {
   update: (origin?: string) => invokeLocal<Remote>("local_host_update", { origin }),
   start: () => invokeLocal<Remote>("local_host_start"),
   progress: () => invokeLocal<HostPhase | null>("local_host_progress"),
+  browserDownloadFailed: () => invokeLocal<boolean>("local_browser_download_failed"),
   resume: () => invokeLocal<Remote>("local_host_resume"),
   choose: (context: string) => invokeLocal<Remote>("local_host_choose", { context }),
   elsewhere: () => invokeLocal<Elsewhere>("local_host_elsewhere"),

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 
 import { useDismiss } from "../lib/dismiss";
+import { localHost } from "../lib/host";
 import { api } from "../lib/ipc";
 import { prefersReducedMotion } from "../lib/motion";
 import { useStore } from "../lib/store";
@@ -35,6 +36,7 @@ export function BrowserScreen({ agent }: Props) {
   const settings = useStore((s) => s.settings);
   const localBrowser = useStore((s) => s.capabilities.localBrowser === true);
   const [setup, setSetup] = useState<LocalBrowser | null>(null);
+  const [downloadFailed, setDownloadFailed] = useState(false);
   const [readState, dispatchRead] = useReducer(browserReadReducer, { status: "loading" });
   const browser = readState.status === "ready" ? readState.browser : null;
   const [full, setFull] = useState(false);
@@ -64,8 +66,11 @@ export function BrowserScreen({ agent }: Props) {
     try {
       if (local) {
         const state = await api.localBrowser();
+        const failed =
+          state === "settingUp" && (await localHost.browserDownloadFailed().catch(() => false));
         if (!current()) return;
         setSetup(state);
+        setDownloadFailed(failed);
         if (state !== "ready") {
           dispatchRead({ type: "found", browser: null });
           setError(null);
@@ -196,7 +201,15 @@ export function BrowserScreen({ agent }: Props) {
         onExpand={() => setExpanded((open) => !open)}
         given={given}
         busy={busy}
-        state={given ? (settingUp ? "setting up" : browser?.state) : undefined}
+        state={
+          given
+            ? settingUp
+              ? downloadFailed
+                ? "retrying"
+                : "setting up"
+              : browser?.state
+            : undefined
+        }
         about={
           local
             ? given
@@ -218,9 +231,11 @@ export function BrowserScreen({ agent }: Props) {
           <div className="screen__frame screen__frame--empty">
             <p className="screen__note" role="status">
               {error ??
-                (settingUp
-                  ? `Setting up the browser on this Mac. The first time downloads it, which takes a minute or two; until it is ready, ${agent.name} is told to try again shortly.`
-                  : `Public web only, and no live view. ${agent.name} reads pages in a browser on this Mac that is signed in to nothing and cannot reach your network. A Kernel key in Settings gives it a hosted browser you can watch and sign in to.`)}
+                (settingUp && downloadFailed
+                  ? `The browser could not be downloaded to this Mac. Guaca tries again on its own every minute; if this keeps happening, check this Mac's internet connection. Until it is ready, ${agent.name} is told to try again shortly.`
+                  : settingUp
+                    ? `Setting up the browser on this Mac. The first time downloads it, which takes a minute or two; until it is ready, ${agent.name} is told to try again shortly.`
+                    : `Public web only, and no live view. ${agent.name} reads pages in a browser on this Mac that is signed in to nothing and cannot reach your network. A Kernel key in Settings gives it a hosted browser you can watch and sign in to.`)}
             </p>
           </div>
         </div>
