@@ -106,6 +106,15 @@ First build, test, and publish the backend from that same source commit:
 4. Record the multi-platform image's immutable digest and export
    `GUACA_BACKEND_IMAGE=ghcr.io/madebywelch/guaca/guacad@sha256:THE_DIGEST` in the
    shell that will build the desktop. Replace `THE_DIGEST` with the real digest.
+5. The `release image` workflow does steps 2 to 4 for both images: it builds
+   `guacad` and the browser beside it (`deploy/browser`) on a native runner per
+   architecture, runs `scripts/browser-isolation.sh` and `scripts/browser-e2e.py`
+   on each architecture's pushed browser, and tags both
+   `ghcr.io/madebywelch/guaca/guacad:<version>` and
+   `ghcr.io/madebywelch/guaca/browser:<version>` only when every architecture
+   passed. Its summary names both digests as `GUACA_BACKEND_IMAGE=...` and
+   `GUACA_BROWSER_IMAGE=...`; export both lines from the same run. A release
+   build refuses a browser not pinned by digest.
 
 Without that variable, the app defaults to
 `ghcr.io/madebywelch/guaca/guacad:<its own version>`, the tag of the package
@@ -116,6 +125,7 @@ only an app bundle; use the command below for the universal release.
 
 ```sh
 : "${GUACA_BACKEND_IMAGE:?Set the published backend image digest first}"
+: "${GUACA_BROWSER_IMAGE:?Set the browser image digest from the same run first}"
 export GUACA_RELEASE=1
 export GUACA_COMMIT="$GUACA_SOURCE"
 pnpm install --frozen-lockfile
