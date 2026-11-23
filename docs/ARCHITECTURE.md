@@ -1305,10 +1305,11 @@ operator's notes out in a query string, because no address that carries them
 was ever shown. An errand inherits what its sender was
 shown and hands back what it found.
 
-**Each agent has a switch.** `reads_web` is on for an agent made after
-migration 81 and off for one that existed before it, because an upgrade that
-starts existing agents fetching pages would be something leaving that nobody
-turned on. The switch is in the agent's editor, beside errands.
+**Each agent has a switch.** `reads_web` is on for every agent, including one
+that existed before migration 81, so an upgrade gives the agents already at
+work the same reading a new one gets. The switch is in the agent's editor,
+beside errands, and turning it off is how an operator keeps an agent off the
+web.
 
 ## Files are references, and what a model gets depends on what they are
 

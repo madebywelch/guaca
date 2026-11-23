@@ -2158,7 +2158,6 @@ ALTER TABLE onboarding_hires DROP COLUMN agent_id;
         81,
         r#"
 ALTER TABLE agents ADD COLUMN reads_web INTEGER NOT NULL DEFAULT 1;
-UPDATE agents SET reads_web = 0;
 "#,
     ),
 ];
@@ -2338,7 +2337,7 @@ mod tests {
         (78, "fc778794fb370b571ac5821e98c871c8172fa9f933bb1bd99ca48b4b6b617b67"),
         (79, "554ec9b4ff4a5bc9998ea33a07febc1abff3b79c452f248276987f15b1105348"),
         (80, "cfb92921daf974ffd88d8415551947ce65b6214fb8d895b9add4c29de403e54b"),
-        (81, "d3cf5b5521906920c01f3c1c2fb8deaed8822c20542d24c1dd23e7c6a6a27b12"),
+        (81, "5f81ca2cec639d751bad5b3560098720f54b3affaa3930930997b9898b1a64a9"),
     ];
 
     fn memory() -> Connection {
@@ -2346,7 +2345,7 @@ mod tests {
     }
 
     #[test]
-    fn web_reading_is_on_for_an_agent_made_after_it_and_off_for_one_made_before() {
+    fn web_reading_is_on_for_an_agent_made_before_it_and_one_made_after() {
         let mut conn = memory();
         for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 81) {
             conn.execute_batch(sql).unwrap();
@@ -2367,7 +2366,7 @@ mod tests {
         let reads = |id: &str| -> bool {
             conn.query_row("SELECT reads_web FROM agents WHERE id=?1", [id], |r| r.get(0)).unwrap()
         };
-        assert!(!reads("before"), "an upgrade must not start an existing agent fetching pages");
+        assert!(reads("before"), "an upgrade turns web reading on for an existing agent too");
         assert!(reads("after"));
     }
 
