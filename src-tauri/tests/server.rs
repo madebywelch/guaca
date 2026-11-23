@@ -974,6 +974,29 @@ async fn two_hosts_cannot_run_the_same_workspace() {
 }
 
 #[tokio::test]
+async fn a_host_takes_its_address_before_it_opens_the_workspace_and_its_viewers() {
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = taken.local_addr().unwrap();
+    let dir = tempfile::tempdir().expect("a temporary workspace");
+    let refused = guac_lib::server::bind(guac_lib::server::Settings {
+        root: dir.path().to_path_buf(),
+        bind: addr,
+        token: TOKEN.into(),
+        web: None,
+        origin: None,
+        updater: None,
+    })
+    .await;
+    match refused {
+        Err(error) => assert!(error.contains(&format!("could not listen on {addr}")), "{error}"),
+        Ok(_) => panic!("a host started on an address something else holds"),
+    }
+    let paths = Paths::under(dir.path());
+    assert!(!paths.data.exists(), "the workspace opened before the address was held");
+    assert!(!paths.db().exists(), "the workspace opened before the address was held");
+}
+
+#[tokio::test]
 async fn a_model_address_belongs_to_the_backend_network() {
     let (addr, _dir) = workspace().await;
     for endpoint in ["http://127.0.0.1:11434/v1", "http://host.docker.internal:1234/v1"] {
