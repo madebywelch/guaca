@@ -100,6 +100,16 @@ elif args[:2] == ["image", "rm"]:
     if args[2] in state.get("in_use", []): fail()
     state["images"] = [image for image in state.get("images", []) if image["id"] != args[2]]
     save()
+elif args[:2] == ["network", "inspect"]:
+    if args[2] not in state.get("networks", []): fail()
+    print(json.dumps([{"Name": args[2]}]))
+elif args[:2] == ["network", "create"]:
+    state.setdefault("networks", []).append(args[-1])
+    save()
+elif args[:2] == ["network", "connect"]:
+    if args[2] not in state.get("networks", []): fail()
+    state["container"]["NetworkSettings"].setdefault("Networks", {})[args[2]] = {}
+    save()
 elif args[0] == "exec":
     print("fixture-token")
 else:

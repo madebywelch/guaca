@@ -1,9 +1,11 @@
 # Browsers
 
 An agent can be given a browser: a Kernel session, which is a hosted Chrome and
-nothing else. `kernel.rs` starts and ends them, `cdp.rs` drives them over the
-DevTools protocol, and the operator watches through Kernel's own live view in an
-iframe.
+nothing else, or, with no Kernel key, a page in a Chromium the Mac app runs in
+its own container beside the local host. `browser.rs` is the seam: it chooses
+between them, and drives either over the DevTools protocol through `cdp.rs`.
+`kernel.rs` starts and ends Kernel's, and the operator watches those through
+Kernel's own live view in an iframe. The local one has no live view.
 
 A *browser* is not a *computer*. `MACHINES.md` is the other one: a Linux
 machine with a shell, a desktop and a screen, worked by looking at pixels and
@@ -13,8 +15,8 @@ aiming a pointer. Both may be configured, either may be, or neither.
 
 The same rule as the machine's, and the reason it is a second column rather
 than one switch over both: a group where one agent reads the web and nobody else
-leaves the workspace is the ordinary shape, not a special case. A Kernel key
-says the workspace can hand a browser out; `agents.has_browser` says who was
+leaves the workspace is the ordinary shape, not a special case. A Kernel key,
+or a browser beside the host, says the workspace can hand a browser out; `agents.has_browser` says who was
 given one. `Surfaces::given_to` is where the two meet.
 
 *A computer is given to one agent, not to the workspace* in `MACHINES.md` has
@@ -313,6 +315,38 @@ moved the last two times was what the provider sends.
 The frame is given `allow="autoplay; clipboard-read; clipboard-write"`. Signing
 in means pasting a password out of a manager, and without it the paste silently
 does nothing, which reads as a password manager that will not fill.
+
+## With no Kernel key, a browser beside the host
+
+A host the Mac app starts is told where its browser is through `GUACA_BROWSER`,
+and only that host reports `localBrowser`: a box has no app beside it to start
+one, and `domain/deployment.rs` refuses with what to do instead. When a Kernel
+key is set, Kernel wins and nothing here runs.
+
+The browser is never in `guacad`'s container, which holds the token, the keys
+and the database. It is `deploy/browser`: Debian's `chromium`, built natively for
+amd64 and arm64, in a container with no volume, no token and no published port,
+on a network that holds only it and the host. Chrome refuses a DevTools request
+addressed by name, so a relay listens on 9223 and the host connects by address.
+The browser's own uid is refused loopback, private, link-local and directly
+connected addresses inside its namespace, on the connect address rather than the
+name, and UDP and IPv6 entirely. A seccomp profile lets Chromium build its own
+sandbox, so it never runs with `--no-sandbox`; a managed policy blocks `file://`
+and downloads. `scripts/browser-isolation.sh` runs it with the flags the app
+uses and checks each of these from the host's side, and `host.rs` has a test
+that the app passes every flag that script proves.
+
+`guacad` has no Docker socket, so it cannot start the browser. It reports
+whether one is wanted (`local_browser`: an agent holds a browser and none
+answers), the app asks every few seconds, and only then pulls the image in the
+background and starts it. A `browse` that arrives first is told the browser is
+being set up and to try again shortly; it never holds the turn. Each agent gets
+a page in a browser context of its own, attached by target, and nothing in it
+outlives the container.
+
+The Chromium version is whatever Debian 13's security archive shipped when the
+image was built, so it is pinned by the image the app names in
+`GUACA_BROWSER_IMAGE`, and updated by building a new one.
 
 ## Stealth is the operator's switch and defaults off
 

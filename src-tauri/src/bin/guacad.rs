@@ -45,6 +45,7 @@ fn main() {
         updater: std::env::var_os("GUACA_UPDATER_SOCKET")
             .filter(|s| !s.is_empty())
             .map(PathBuf::from),
+        browser: std::env::var("GUACA_BROWSER").ok(),
     };
 
     let runtime = tokio::runtime::Builder::new_multi_thread()

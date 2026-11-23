@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::cdp::{CdpError, Dialog, Page};
-use crate::domain::signin::BrowserState;
+use crate::browser::{Ensured, Session};
+use crate::db::store::{ResourceState, Store};
+use crate::domain::agent::Lifecycle;
+use crate::domain::ids::AgentId;
 
 const API_BASE: &str = "https://api.onkernel.com";
 
@@ -22,10 +24,6 @@ const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 const MIN_TIMEOUT_SECONDS: u32 = 10;
 const MAX_TIMEOUT_SECONDS: u32 = 259_200;
 
-const SETTLE_NAVIGATE_MS: u32 = 2500;
-const SETTLE_CLICK_MS: u32 = 1200;
-const SETTLE_SCROLL_MS: u32 = 600;
-
 const TAG: &str = "guac";
 
 const AGENT_TAG: &str = "guac-agent";
@@ -33,24 +31,16 @@ const WORKSPACE_TAG: &str = "guac-workspace";
 
 #[derive(Debug, thiserror::Error)]
 pub enum KernelError {
-    #[error("no Kernel API key is set; add one in app settings to give agents a browser")]
-    NoKey,
-    #[error("this agent has not been given a browser; the operator gives one from its panel")]
-    NotGiven,
     #[error("Kernel request failed: {0}")]
     Transport(String),
     #[error("Kernel rejected the request ({status}): {message}")]
     Api { status: u16, message: String },
     #[error("Kernel replied in a form this build does not understand: {0}")]
     Protocol(String),
-    #[error("Kernel replied in a form this build does not understand: {0}")]
-    Input(String),
     #[error("Guaca could not use its own records: {0}")]
     Local(String),
     #[error("The browser provider did not confirm the action's outcome. It may have happened, so check before doing it again.")]
     OutcomeUnknown,
-    #[error(transparent)]
-    Cdp(#[from] CdpError),
 }
 
 fn uncertain_creation(err: KernelError) -> KernelError {
@@ -160,13 +150,6 @@ fn origin_of(url: &str) -> String {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Session {
-    pub id: String,
-    pub cdp_ws_url: String,
-    pub live_view_url: Option<String>,
-}
-
 #[derive(Debug, Deserialize)]
 struct BrowserRow {
     session_id: String,
@@ -184,6 +167,7 @@ impl From<BrowserRow> for Session {
             id: row.session_id,
             cdp_ws_url: row.cdp_ws_url,
             live_view_url: row.browser_live_view_url.filter(|url| !url.trim().is_empty()),
+            target: None,
         }
     }
 }
@@ -504,6 +488,206 @@ impl KernelClient {
         }
     }
 
+    pub async fn ensure_for(
+        &self,
+        store: &Store,
+        agent: AgentId,
+        idle_seconds: u32,
+        stealth: bool,
+    ) -> Result<Ensured, KernelError> {
+        let held = store
+            .get_agent(agent)
+            .map_err(|err| {
+                KernelError::Local(format!("could not read the agent's browser: {err}"))
+            })?
+            .ok_or_else(|| KernelError::Local("the agent is no longer available".into()))?;
+        let mut replaced = false;
+        if let Some(id) = held.browser_id {
+            if let Some(live) = self.get(&id).await? {
+                return Ok(Ensured { session: live, fresh: false, replaced: false });
+            }
+            replaced = true;
+            store.mark_resource_gone("kernel", &id).map_err(|err| {
+                KernelError::Local(format!("could not record the missing browser: {err}"))
+            })?;
+        }
+
+        let workspace = store.workspace_identity().map_err(|err| {
+            KernelError::Local(format!("could not read workspace identity: {err}"))
+        })?;
+        let name = agent.to_string();
+        let (profile, profile_id, adopted_profile) = match self.create_profile(&name).await? {
+            ProfileCreation::Created { id, name } => {
+                let provider_id = (id != name).then_some(id);
+                (name, provider_id, false)
+            }
+            ProfileCreation::Existing { name } => {
+                let provider_id = match self.profile_id(&name).await {
+                    Ok(id) => id,
+                    Err(err) => {
+                        tracing::warn!(%err, %name, "could not confirm profile identity");
+                        None
+                    }
+                };
+                (name, provider_id, true)
+            }
+        };
+        let recorded = if adopted_profile {
+            store.record_adopted_profile(&profile, profile_id.as_deref())
+        } else {
+            store.record_created_profile(&profile, profile_id.as_deref())
+        };
+        if let Err(err) = recorded {
+            if !adopted_profile {
+                if let Err(cleanup) = self.delete_profile_named(&profile).await {
+                    tracing::error!(%cleanup, provider = "kernel-profile", resource = %profile, "created resource could not be recorded or released");
+                }
+            }
+            return Err(KernelError::Local(format!(
+                "the browser profile could not be recorded ({err})"
+            )));
+        }
+        let (fresh, adopted) = match self
+            .create_for_workspace(&name, &profile, idle_seconds, stealth, &workspace)
+            .await?
+        {
+            BrowserCreation::Created(session) => (session, false),
+            BrowserCreation::Conflict { candidates } => {
+                let candidate = candidates.into_iter().next().ok_or_else(|| {
+                    KernelError::Protocol("the conflicting browser could not be found".into())
+                })?;
+                let session = self.get(&candidate.id).await?.ok_or_else(|| {
+                    KernelError::Protocol("the conflicting browser is no longer available".into())
+                })?;
+                (session, true)
+            }
+        };
+
+        if let Err(err) = store.record_browser(agent, &fresh.id, adopted) {
+            if !adopted {
+                if let Err(cleanup) = self.delete(&fresh.id).await {
+                    tracing::error!(%cleanup, provider = "kernel", resource = %fresh.id, "created resource could not be recorded or released");
+                    return Err(KernelError::Local(format!(
+                        "the browser could not be recorded or released ({err})"
+                    )));
+                }
+            }
+            return Err(KernelError::Local(format!("the browser could not be recorded ({err})")));
+        }
+
+        Ok(Ensured { session: fresh, fresh: true, replaced })
+    }
+
+    pub async fn purge_for(&self, store: &Store, agent: AgentId, browser: Option<&str>) {
+        if let Some(browser) = browser {
+            let ownership = store.workspace_identity().and_then(|workspace| {
+                store.resource_state("kernel", browser).map(|state| (workspace, state))
+            });
+            if let Ok((workspace, Some(ResourceState::Created | ResourceState::Released))) =
+                ownership
+            {
+                match self.list_workspace(&workspace, None).await {
+                    Ok(rows) if rows.iter().any(|row| row == browser) => {
+                        if let Err(err) = store.mark_resource_released("kernel", browser) {
+                            tracing::warn!(%err, %browser, "could not record the browser release");
+                        } else {
+                            match self.delete(browser).await {
+                                Ok(()) => {
+                                    if let Err(err) = store.mark_resource_gone("kernel", browser) {
+                                        tracing::warn!(%err, %browser, "could not record the released browser");
+                                    }
+                                }
+                                Err(err) => {
+                                    tracing::warn!(%err, %browser, "could not destroy the agent's browser")
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        tracing::warn!(%browser, "leaving a browser without a matching ownership tag")
+                    }
+                }
+            } else {
+                tracing::warn!(%browser, "leaving an unowned browser");
+            }
+        }
+        let profile = profile_name(&agent.to_string());
+        let stored_id = store.created_profile_id(&profile).ok().flatten();
+        let current_id = self.profile_id(&profile).await.ok().flatten();
+        if stored_id.is_some() && stored_id == current_id {
+            if let Err(err) = store.mark_resource_released("kernel-profile", &profile) {
+                tracing::warn!(%err, %profile, "could not record the profile release");
+            } else {
+                match self.delete_profile_named(stored_id.as_deref().unwrap_or_default()).await {
+                    Ok(()) => {
+                        if let Err(err) = store.mark_resource_gone("kernel-profile", &profile) {
+                            tracing::warn!(%err, %profile, "could not record the released browser profile");
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!(%err, %agent, "could not destroy the agent's browser profile")
+                    }
+                }
+            }
+        } else {
+            tracing::warn!(%profile, "leaving an unowned browser profile");
+        }
+    }
+
+    pub async fn sweep(&self, store: &Store) -> Result<usize, KernelError> {
+        let known: std::collections::HashSet<String> = store
+            .list_agents()
+            .map_err(|err| KernelError::Local(format!("could not read resource ownership: {err}")))?
+            .into_iter()
+            .filter(|card| card.lifecycle != Lifecycle::Terminated || card.discarded())
+            .filter_map(|card| card.browser_id)
+            .collect();
+
+        let workspace = store.workspace_identity().map_err(|err| {
+            KernelError::Local(format!("could not read workspace identity: {err}"))
+        })?;
+        let ledger = store.resource_snapshot("kernel").map_err(|err| {
+            KernelError::Local(format!("could not read resource ownership: {err}"))
+        })?;
+        let tagged: std::collections::HashSet<_> =
+            self.list_workspace(&workspace, None).await?.into_iter().collect();
+        let inventory = self.list_ours().await?;
+        let present: std::collections::HashSet<_> = inventory.iter().cloned().collect();
+        for (browser, state) in &ledger {
+            if *state != ResourceState::Gone
+                && !present.contains(browser)
+                && matches!(self.get(browser).await, Ok(None))
+            {
+                store.mark_resource_gone("kernel", browser).map_err(|err| {
+                    KernelError::Local(format!("could not record the missing browser: {err}"))
+                })?;
+            }
+        }
+        let mut swept = 0;
+        for browser in inventory {
+            if known.contains(&browser) {
+                continue;
+            }
+            if !tagged.contains(&browser)
+                || !matches!(
+                    ledger.get(&browser),
+                    Some(ResourceState::Created | ResourceState::Released)
+                )
+            {
+                tracing::warn!(%browser, "leaving an unowned browser");
+                continue;
+            }
+            tracing::info!(%browser, "releasing a browser no agent refers to");
+            if self.delete(&browser).await.is_ok() {
+                store.mark_resource_gone("kernel", &browser).map_err(|err| {
+                    KernelError::Local(format!("could not record the released browser: {err}"))
+                })?;
+                swept += 1;
+            }
+        }
+        Ok(swept)
+    }
+
     pub async fn list_ours(&self) -> Result<Vec<String>, KernelError> {
         let rows: Vec<BrowserRow> = self
             .call(self.http.get(format!("{}/browsers", self.base)).query(&[
@@ -514,154 +698,6 @@ impl KernelClient {
             .await?;
         Ok(rows.into_iter().map(|row| row.session_id).collect())
     }
-
-    pub async fn browse(
-        &self,
-        session: &Session,
-        action: &str,
-        args: &Value,
-    ) -> Result<String, KernelError> {
-        let mut page = Page::attach(&session.cdp_ws_url).await?;
-
-        let settle_ms = match action {
-            "open" => {
-                let url = args["url"].as_str().unwrap_or_default().trim().to_string();
-                if url.is_empty() {
-                    return Err(KernelError::Input(
-                        "open needs a `url`. Give the address you want, for example \
-                         `https://example.com`."
-                            .into(),
-                    ));
-                }
-                let url = if url.starts_with("http://") || url.starts_with("https://") {
-                    url
-                } else {
-                    format!("https://{url}")
-                };
-                page.navigate(&url).await?;
-                SETTLE_NAVIGATE_MS
-            }
-
-            "read" => 0,
-
-            "click" => {
-                let target = element(args)?;
-                require(&mut page, target).await?;
-                page.evaluate(&format!(
-                    "window.__guacEls[{target}].scrollIntoView({{block:'center'}})"
-                ))
-                .await?;
-                page.evaluate(&format!("window.__guacEls[{target}].click()")).await?;
-                SETTLE_CLICK_MS
-            }
-
-            "type" => {
-                let target = element(args)?;
-                let text = args["text"].as_str().unwrap_or_default();
-                require(&mut page, target).await?;
-                page.evaluate(&format!(
-                    "(() => {{ const e = window.__guacEls[{target}];
-                       e.scrollIntoView({{block:'center'}}); e.focus();
-                       if (e.select) {{ e.select(); }}
-                       else {{ const r = document.createRange(); r.selectNodeContents(e);
-                               const s = getSelection(); s.removeAllRanges(); s.addRange(r); }}
-                       return 1; }})()"
-                ))
-                .await?;
-                page.insert_text(text).await?;
-                if args["submit"].as_bool().unwrap_or(false) {
-                    page.press_enter().await?;
-                    SETTLE_NAVIGATE_MS
-                } else {
-                    SETTLE_SCROLL_MS
-                }
-            }
-
-            "scroll" => {
-                let amount = args["amount"].as_i64().unwrap_or(3).clamp(1, 20) * 400;
-                let amount =
-                    if args["direction"].as_str() == Some("up") { -amount } else { amount };
-                page.evaluate(&format!("scrollBy(0, {amount})")).await?;
-                SETTLE_SCROLL_MS
-            }
-
-            "back" => {
-                page.evaluate("history.back()").await?;
-                SETTLE_NAVIGATE_MS
-            }
-
-            other => {
-                return Err(KernelError::Input(format!(
-                    "`{other}` is not something a browser does. Use open, read, click, type, \
-                     scroll or back."
-                )))
-            }
-        };
-
-        let (collected, answered) = match settle_and_collect(&mut page, settle_ms).await {
-            Err(CdpError::TargetGone) => {
-                let mut replacement = Page::attach(&session.cdp_ws_url).await?;
-                let collected = settle_and_collect(&mut replacement, settle_ms).await?;
-                let mut answered = page.answered().to_vec();
-                answered.extend_from_slice(replacement.answered());
-                (collected, answered)
-            }
-            other => (other?, page.answered().to_vec()),
-        };
-        let described = collected
-            .as_str()
-            .ok_or_else(|| KernelError::Protocol("the page did not describe itself".into()))?;
-        Ok(note_dialogs(described, &answered))
-    }
-
-    pub async fn signed_in_state(&self, session: &Session) -> Result<BrowserState, KernelError> {
-        let mut page = Page::attach(&session.cdp_ws_url).await?;
-        Ok(BrowserState { cookies: page.cookies().await?, visited: page.visited().await? })
-    }
-}
-
-async fn settle_and_collect(page: &mut Page, settle_ms: u32) -> Result<Value, CdpError> {
-    if settle_ms > 0 {
-        page.settle(settle_ms).await?;
-    }
-    page.evaluate(COLLECT).await
-}
-
-fn note_dialogs(described: &str, answered: &[Dialog]) -> String {
-    if answered.is_empty() {
-        return described.to_string();
-    }
-    let Ok(mut page) = serde_json::from_str::<Value>(described) else {
-        return described.to_string();
-    };
-    page["dialogs"] = json!(answered);
-    page.to_string()
-}
-
-fn element(args: &Value) -> Result<i64, KernelError> {
-    args["id"].as_i64().or_else(|| args["id"].as_str()?.parse().ok()).ok_or_else(|| {
-        KernelError::Input(
-            "that needs an `id`: the number `read` gave the element you mean. Read the page again \
-             if you do not have one."
-                .into(),
-        )
-    })
-}
-
-async fn require(page: &mut Page, index: i64) -> Result<(), KernelError> {
-    let held = page
-        .evaluate(&format!(
-            "Boolean(window.__guacEls && window.__guacEls[{index}] \
-             && document.contains(window.__guacEls[{index}]))"
-        ))
-        .await?;
-    if held.as_bool() == Some(true) {
-        return Ok(());
-    }
-    Err(KernelError::Input(format!(
-        "element {index} is not on the page any more, because the page changed since you read it. \
-         Read it again: the numbers are handed out fresh each time."
-    )))
 }
 
 fn profile_name(agent: &str) -> String {
@@ -679,53 +715,12 @@ fn create_body(agent: &str, profile: &str, idle_seconds: u32, stealth: bool) -> 
     })
 }
 
-const COLLECT: &str = r#"
-(() => {
-  const sel = 'a,button,input,select,textarea,summary,[role=button],[role=link],'
-            + '[role=tab],[role=checkbox],[role=menuitem],[contenteditable=true],[onclick]';
-  const out = [];
-  window.__guacEls = [];
-  for (const el of document.querySelectorAll(sel)) {
-    const r = el.getBoundingClientRect();
-    if (r.width < 2 || r.height < 2) continue;
-    if (r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) continue;
-    const style = getComputedStyle(el);
-    if (style.visibility === 'hidden' || style.display === 'none' || style.opacity === '0') continue;
-
-    const label = (el.innerText || el.value || el.placeholder || el.getAttribute('aria-label')
-                   || el.getAttribute('title') || el.alt || '').trim().replace(/\s+/g, ' ');
-    const id = window.__guacEls.length;
-    window.__guacEls.push(el);
-    out.push({
-      id,
-      tag: el.tagName.toLowerCase(),
-      type: el.getAttribute('type') || '',
-      text: label.slice(0, 80),
-      x: Math.round(r.x + r.width / 2),
-      y: Math.round(r.y + r.height / 2),
-    });
-    if (out.length >= 120) break;
-  }
-  const body = (document.body ? document.body.innerText : '').replace(/\n{3,}/g, '\n\n');
-  return JSON.stringify({
-    url: location.href,
-    title: document.title,
-    scroll: Math.round(scrollY),
-    height: Math.round(document.body ? document.body.scrollHeight : 0),
-    text: body.slice(0, 6000),
-    elements: out,
-  });
-})()
-"#;
-
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    use futures_util::{SinkExt, StreamExt};
     use parking_lot::Mutex;
-    use tokio_tungstenite::tungstenite::Message;
 
     use super::*;
 
@@ -838,6 +833,7 @@ mod tests {
         let refused = Browser::running(Session {
             id: "s".into(),
             cdp_ws_url: "wss://x".into(),
+            target: None,
             live_view_url: Some("https://prod-jfk-1.example.com:8443/browser/live/tok".into()),
         });
         assert_eq!(refused.view, LiveView::Refused("https://prod-jfk-1.example.com:8443".into()));
@@ -846,6 +842,7 @@ mod tests {
         let shown = Browser::running(Session {
             id: "s".into(),
             cdp_ws_url: "wss://x".into(),
+            target: None,
             live_view_url: Some("https://prod-jfk-1.kernel.sh:8443/browser/live/tok".into()),
         });
         assert_eq!(
@@ -1048,22 +1045,6 @@ mod tests {
     }
 
     #[test]
-    fn an_element_number_is_read_from_either_shape_a_model_sends() {
-        assert_eq!(element(&json!({ "id": 4 })).unwrap(), 4);
-        assert_eq!(element(&json!({ "id": "4" })).unwrap(), 4);
-        let refusal = element(&json!({})).unwrap_err().to_string();
-        assert!(refusal.contains("read"), "{refusal}");
-    }
-
-    #[test]
-    fn the_collector_hands_back_the_shape_the_transcript_renders() {
-        for key in ["url", "title", "scroll", "height", "text", "elements"] {
-            assert!(COLLECT.contains(&format!("{key}:")), "the page must report {key}");
-        }
-        assert!(COLLECT.contains("window.__guacEls"), "{COLLECT}");
-    }
-
-    #[test]
     fn a_key_that_is_blank_means_not_configured_rather_than_always_failing() {
         assert!(KernelClient::new(&"".into()).is_none());
         assert!(KernelClient::new(&"   ".into()).is_none());
@@ -1079,225 +1060,5 @@ mod tests {
             browser_live_view_url: Some("  ".into()),
         };
         assert_eq!(Session::from(row).live_view_url, None);
-    }
-
-    const FAKE_PAGE: &str = r#"{"url":"https://example.com/after","title":"After","scroll":0,
-        "height":2000,"text":"arrived","elements":[]}"#;
-
-    struct FakeBrowser {
-        url: String,
-        evaluated: Arc<Mutex<Vec<String>>>,
-        connections: Arc<AtomicUsize>,
-        answers: Arc<Mutex<Vec<bool>>>,
-    }
-
-    impl FakeBrowser {
-        async fn start_losing(lose_first: usize) -> Self {
-            Self::start(lose_first, None).await
-        }
-
-        async fn start_asking(kind: &'static str) -> Self {
-            Self::start(0, Some(kind)).await
-        }
-
-        async fn start(lose_first: usize, asks: Option<&'static str>) -> Self {
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("a port");
-            let address = listener.local_addr().expect("an address");
-            let evaluated: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-            let connections = Arc::new(AtomicUsize::new(0));
-            let answers: Arc<Mutex<Vec<bool>>> = Arc::new(Mutex::new(Vec::new()));
-
-            let (recorded, counted, collected) =
-                (evaluated.clone(), connections.clone(), answers.clone());
-            tokio::spawn(async move {
-                loop {
-                    let Ok((stream, _)) = listener.accept().await else { return };
-                    let lost = counted.fetch_add(1, Ordering::SeqCst) < lose_first;
-                    let recorded = recorded.clone();
-                    let collected = collected.clone();
-                    tokio::spawn(async move {
-                        let mut socket =
-                            tokio_tungstenite::accept_async(stream).await.expect("a handshake");
-                        let mut held: Option<Value> = None;
-                        let mut enabled = false;
-                        while let Some(Ok(frame)) = socket.next().await {
-                            let Message::Text(text) = frame else { continue };
-                            let call: Value = serde_json::from_str(&text).expect("a call");
-                            let id = call["id"].clone();
-                            let expression =
-                                call["params"]["expression"].as_str().unwrap_or_default();
-                            let reply = match call["method"].as_str().unwrap_or_default() {
-                                "Target.getTargets" => json!({"id": id, "result":
-                                    {"targetInfos": [{"type": "page", "targetId": "T"}]}}),
-                                "Target.attachToTarget" => {
-                                    json!({"id": id, "result": {"sessionId": "S"}})
-                                }
-                                "Page.enable" => {
-                                    enabled = true;
-                                    json!({"id": id, "result": {}})
-                                }
-                                "Page.navigate" => match asks.filter(|_| enabled) {
-                                    Some(kind) => {
-                                        let opening = json!({
-                                            "method": "Page.javascriptDialogOpening",
-                                            "sessionId": "S",
-                                            "params": {
-                                                "type": kind,
-                                                "message": "Changes you made may not be saved.",
-                                                "url": "https://example.com/before",
-                                            },
-                                        });
-                                        socket
-                                            .send(Message::text(opening.to_string()))
-                                            .await
-                                            .expect("the event");
-                                        held = Some(id);
-                                        continue;
-                                    }
-                                    None => json!({"id": id, "result": {}}),
-                                },
-                                "Page.handleJavaScriptDialog" => {
-                                    collected
-                                        .lock()
-                                        .push(call["params"]["accept"].as_bool().expect("accept"));
-                                    socket
-                                        .send(Message::text(
-                                            json!({"id": id, "result": {}}).to_string(),
-                                        ))
-                                        .await
-                                        .expect("a reply");
-                                    match held.take() {
-                                        Some(waiting) => json!({"id": waiting, "result": {}}),
-                                        None => continue,
-                                    }
-                                }
-                                "Runtime.evaluate" => {
-                                    recorded.lock().push(expression.to_string());
-                                    let after = expression.contains("setTimeout")
-                                        || expression.contains("location.href");
-                                    if lost && after {
-                                        json!({"id": id, "error":
-                                            {"message": "Inspected target navigated or closed"}})
-                                    } else if expression.contains("location.href") {
-                                        json!({"id": id, "result": {"result": {"value": FAKE_PAGE}}})
-                                    } else if expression.contains("Boolean(") {
-                                        json!({"id": id, "result": {"result": {"value": true}}})
-                                    } else {
-                                        json!({"id": id, "result": {"result": {"value": 1}}})
-                                    }
-                                }
-                                other => panic!("the fake browser was asked for {other}"),
-                            };
-                            socket.send(Message::text(reply.to_string())).await.expect("a reply");
-                        }
-                    });
-                }
-            });
-
-            FakeBrowser { url: format!("ws://{address}"), evaluated, connections, answers }
-        }
-
-        fn session(&self) -> Session {
-            Session { id: "s".into(), cdp_ws_url: self.url.clone(), live_view_url: None }
-        }
-
-        fn connections(&self) -> usize {
-            self.connections.load(Ordering::SeqCst)
-        }
-    }
-
-    #[tokio::test]
-    async fn a_page_that_navigates_underneath_an_action_is_read_again_not_reported_as_broken() {
-        let browser = FakeBrowser::start_losing(1).await;
-        let client = KernelClient::new(&"sk-test".into()).expect("a client");
-
-        let page = client
-            .browse(&browser.session(), "open", &json!({ "url": "https://example.com" }))
-            .await
-            .expect("the page loaded, so the action succeeded");
-
-        assert!(page.contains("https://example.com/after"), "{page}");
-        assert_eq!(browser.connections(), 2);
-    }
-
-    #[tokio::test]
-    async fn a_click_that_loses_the_page_is_never_sent_a_second_time() {
-        let browser = FakeBrowser::start_losing(1).await;
-        let client = KernelClient::new(&"sk-test".into()).expect("a client");
-
-        let page = client
-            .browse(&browser.session(), "click", &json!({ "id": 3 }))
-            .await
-            .expect("the click went through");
-
-        assert!(page.contains("After"), "{page}");
-        let clicks =
-            browser.evaluated.lock().iter().filter(|seen| seen.contains(".click()")).count();
-        assert_eq!(clicks, 1, "the click was sent again after the page moved");
-    }
-
-    #[tokio::test]
-    async fn an_action_on_a_page_that_stays_put_opens_one_connection() {
-        let browser = FakeBrowser::start_losing(0).await;
-        let client = KernelClient::new(&"sk-test".into()).expect("a client");
-
-        client.browse(&browser.session(), "read", &json!({})).await.expect("read the page");
-
-        assert_eq!(browser.connections(), 1, "a working page must not pay for a reconnection");
-    }
-
-    #[tokio::test]
-    async fn a_leave_site_box_is_answered_so_the_action_it_stopped_can_finish() {
-        let browser = FakeBrowser::start_asking("beforeunload").await;
-        let client = KernelClient::new(&"sk-test".into()).expect("a client");
-
-        let page = client
-            .browse(&browser.session(), "open", &json!({ "url": "https://example.com" }))
-            .await
-            .expect("the navigation was released, so the page arrived");
-
-        assert_eq!(*browser.answers.lock(), vec![true], "the agent asked to leave");
-        assert!(page.contains("https://example.com/after"), "{page}");
-        assert!(page.contains("beforeunload"), "{page}");
-        assert!(page.contains("Changes you made may not be saved."), "{page}");
-    }
-
-    #[tokio::test]
-    async fn a_prompt_is_declined_rather_than_answered_with_nothing() {
-        let browser = FakeBrowser::start_asking("prompt").await;
-        let client = KernelClient::new(&"sk-test".into()).expect("a client");
-
-        let page = client
-            .browse(&browser.session(), "open", &json!({ "url": "https://example.com" }))
-            .await
-            .expect("the page still arrives");
-
-        assert_eq!(*browser.answers.lock(), vec![false]);
-        assert!(page.contains("prompt"), "{page}");
-    }
-
-    #[test]
-    fn a_page_with_no_dialog_is_handed_back_exactly_as_the_browser_described_it() {
-        assert_eq!(note_dialogs(FAKE_PAGE, &[]), FAKE_PAGE);
-    }
-
-    #[test]
-    fn a_description_that_will_not_parse_keeps_the_page_and_loses_the_note() {
-        let answered = [Dialog { kind: "alert".into(), message: "hi".into(), accepted: true }];
-        assert_eq!(note_dialogs("<html>garbage", &answered), "<html>garbage");
-    }
-
-    #[tokio::test]
-    async fn a_page_that_will_not_stay_still_says_what_to_do_about_it() {
-        let browser = FakeBrowser::start_losing(usize::MAX).await;
-        let client = KernelClient::new(&"sk-test".into()).expect("a client");
-
-        let err = client
-            .browse(&browser.session(), "open", &json!({ "url": "https://example.com" }))
-            .await
-            .expect_err("nothing could be read");
-
-        assert!(err.to_string().contains("Read the page again"), "{err}");
-        assert_eq!(browser.connections(), 2, "one retry, not a loop");
     }
 }

@@ -32,6 +32,7 @@ RUN mkdir -p src/bin \
  && rm -rf src build.rs target/release/deps/guac* target/release/deps/libguac*
 COPY src-tauri/ ./
 COPY release-protocol.json release-keys.pub main-keys.pub /app/
+COPY deploy/browser/seccomp.json /app/deploy/browser/seccomp.json
 ARG GUACA_COMMIT
 ARG GUACA_RELEASE
 ENV GUACA_COMMIT=$GUACA_COMMIT GUACA_RELEASE=$GUACA_RELEASE

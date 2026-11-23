@@ -33,6 +33,7 @@ async fn workspace_in(
         web: None,
         origin: None,
         updater,
+        browser: None,
     })
     .await
     .expect("the workspace opens");
@@ -965,6 +966,7 @@ async fn two_hosts_cannot_run_the_same_workspace() {
         web: None,
         origin: None,
         updater: None,
+        browser: None,
     })
     .await;
     match second {
@@ -1848,6 +1850,7 @@ async fn a_leftover_legacy_session_file_is_removed_when_the_host_starts() {
             web: None,
             origin: None,
             updater: None,
+            browser: None,
         })
     };
     let _running = open(first.path()).await.expect("the first start opens the workspace");
@@ -2133,4 +2136,33 @@ fn the_secret_rule_names_exactly_the_values_that_reach_the_page_on_purpose() {
     let named: std::collections::BTreeSet<&str> =
         list.split(", ").map(|item| item.trim_start_matches("and ")).collect();
     assert_eq!(named, ON_PURPOSE.into_iter().collect());
+}
+
+#[tokio::test]
+async fn a_host_offers_a_browser_of_its_own_only_when_one_sits_beside_it() {
+    let (addr, _dir) = workspace().await;
+    let (_, caps) = call(addr, "capabilities", json!({})).await;
+    assert_eq!(caps["ok"]["localBrowser"], false, "{caps}");
+    let (_, state) = call(addr, "local_browser", json!({})).await;
+    assert_eq!(state["ok"], "absent", "{state}");
+
+    let dir = tempfile::tempdir().expect("a temporary workspace");
+    let bound = guac_lib::server::bind(guac_lib::server::Settings {
+        root: dir.path().to_path_buf(),
+        bind: "127.0.0.1:0".parse().unwrap(),
+        token: TOKEN.into(),
+        web: None,
+        origin: None,
+        updater: None,
+        browser: Some("guaca-browser-not-started.invalid:9223".into()),
+    })
+    .await
+    .expect("the workspace opens");
+    let beside = bound.addr;
+    tokio::spawn(bound.serve());
+    let (_, caps) = call(beside, "capabilities", json!({})).await;
+    assert_eq!(caps["ok"]["localBrowser"], true, "{caps}");
+    assert_eq!(caps["ok"]["localFiles"], false, "a sidecar changes nothing else: {caps}");
+    let (_, state) = call(beside, "local_browser", json!({})).await;
+    assert_eq!(state["ok"], "idle", "nobody has been given a browser yet: {state}");
 }

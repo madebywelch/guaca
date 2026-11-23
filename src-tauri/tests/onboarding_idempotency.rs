@@ -12,6 +12,7 @@ async fn lost_hire_and_send_replies_return_the_original_receipts() {
         web: None,
         origin: None,
         updater: None,
+        browser: None,
     })
     .await
     .unwrap();
@@ -76,6 +77,7 @@ async fn a_starter_group_is_hired_whole_once_or_not_at_all() {
         web: None,
         origin: None,
         updater: None,
+        browser: None,
     })
     .await
     .unwrap();

@@ -3,6 +3,7 @@ use crate::domain::ids::DecisionId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::browser::LocalState;
 use crate::commands::{
     self, AppState, ArtifactAddress, ClaudeProgram, CommandError, FileRef, GroupReset, RankedModel,
     RoutineDraft, SentMessage, SettingsPatch, Staged,
@@ -366,6 +367,7 @@ surface! {
     usage_summary() -> Vec<GroupUsage>,
     clear_group(group_id: GroupId) -> GroupReset,
     capabilities() -> Capabilities,
+    local_browser() -> LocalState,
     forward_files(origin: String, token: String, paths: Vec<String>) -> Staged,
     report_presence(presence: Option<Presence>) -> (),
     stop_everything() -> usize,

@@ -46,31 +46,12 @@ pub struct Page {
 }
 
 impl Page {
-    pub async fn attach(ws_url: &str) -> Result<Self, CdpError> {
-        let (socket, _) =
-            tokio::time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(ws_url))
-                .await
-                .map_err(|_| CdpError::TimedOut)?
-                .map_err(|e| CdpError::Transport(e.to_string()))?;
-
-        let mut page = Self { socket, next_id: 0, session: String::new(), answered: Vec::new() };
-
-        let targets = page.browser_call("Target.getTargets", json!({})).await?;
-        let target = targets["targetInfos"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .rfind(|info| info["type"] == "page")
-            .and_then(|info| info["targetId"].as_str().map(str::to_string));
+    pub async fn attach_to(ws_url: &str, target: Option<&str>) -> Result<Self, CdpError> {
+        let mut page = Self::connect(ws_url).await?;
 
         let target = match target {
-            Some(target) => target,
-            None => page
-                .browser_call("Target.createTarget", json!({ "url": "about:blank" }))
-                .await?["targetId"]
-                .as_str()
-                .ok_or(CdpError::NoPage)?
-                .to_string(),
+            Some(target) => target.to_string(),
+            None => page.newest_page().await?,
         };
 
         let attached = page
@@ -84,6 +65,69 @@ impl Page {
         page.page_call("Page.enable", json!({})).await?;
 
         Ok(page)
+    }
+
+    async fn connect(ws_url: &str) -> Result<Self, CdpError> {
+        let (socket, _) =
+            tokio::time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(ws_url))
+                .await
+                .map_err(|_| CdpError::TimedOut)?
+                .map_err(|e| CdpError::Transport(e.to_string()))?;
+        Ok(Self { socket, next_id: 0, session: String::new(), answered: Vec::new() })
+    }
+
+    async fn newest_page(&mut self) -> Result<String, CdpError> {
+        let targets = self.browser_call("Target.getTargets", json!({})).await?;
+        let target = targets["targetInfos"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .rfind(|info| info["type"] == "page")
+            .and_then(|info| info["targetId"].as_str().map(str::to_string));
+
+        match target {
+            Some(target) => Ok(target),
+            None => Ok(self
+                .browser_call("Target.createTarget", json!({ "url": "about:blank" }))
+                .await?["targetId"]
+                .as_str()
+                .ok_or(CdpError::NoPage)?
+                .to_string()),
+        }
+    }
+
+    pub async fn open_alone(ws_url: &str) -> Result<String, CdpError> {
+        let mut browser = Self::connect(ws_url).await?;
+        let context = browser.browser_call("Target.createBrowserContext", json!({})).await?;
+        let context = context["browserContextId"]
+            .as_str()
+            .ok_or_else(|| CdpError::Protocol("the browser made no context".into()))?
+            .to_string();
+        let made = browser
+            .browser_call(
+                "Target.createTarget",
+                json!({ "url": "about:blank", "browserContextId": context }),
+            )
+            .await?;
+        made["targetId"].as_str().map(str::to_string).ok_or(CdpError::NoPage)
+    }
+
+    pub async fn close_alone(ws_url: &str, target: &str) -> Result<(), CdpError> {
+        let mut browser = Self::connect(ws_url).await?;
+        let targets = browser.browser_call("Target.getTargets", json!({})).await?;
+        let context = targets["targetInfos"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|info| info["targetId"] == target)
+            .and_then(|info| info["browserContextId"].as_str().map(str::to_string));
+        let Some(context) = context else {
+            return Ok(());
+        };
+        browser
+            .browser_call("Target.disposeBrowserContext", json!({ "browserContextId": context }))
+            .await?;
+        Ok(())
     }
 
     pub fn answered(&self) -> &[Dialog] {
