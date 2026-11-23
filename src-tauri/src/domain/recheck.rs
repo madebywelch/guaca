@@ -50,12 +50,22 @@ pub struct WrongDay {
 
 impl WrongDay {
     pub fn correction(&self) -> String {
+        let back = (1..7)
+            .map(|days| self.date - Duration::days(days))
+            .find(|day| day.weekday() == self.stated)
+            .unwrap_or(self.date);
+        let ahead = (1..7)
+            .map(|days| self.date + Duration::days(days))
+            .find(|day| day.weekday() == self.stated)
+            .unwrap_or(self.date);
+        let stated = day_name(self.stated);
         format!(
-            "\"{}\": {} is a {}, not a {}.",
+            "\"{}\": {} is a {}, not a {stated}. The {stated}s either side of it are {} and {}.",
             self.said,
             self.date.format("%-d %B %Y"),
             day_name(self.date.weekday()),
-            day_name(self.stated)
+            back.format("%-d %B %Y"),
+            ahead.format("%-d %B %Y"),
         )
     }
 }
@@ -454,10 +464,16 @@ pub fn send_back(wrong: &[WrongDay], unchecked: &[String]) -> Option<String> {
         for one in wrong {
             said.push_str(&format!("- {}\n", one.correction()));
         }
-        said.push_str(
+        let first = wrong.iter().map(|one| one.date).min().unwrap_or_default();
+        let last = wrong.iter().map(|one| one.date).max().unwrap_or_default();
+        let weeks = ((last - first).num_days() / 7 + 3).min(super::occasion::WEEKS_AHEAD);
+        said.push_str(&format!(
             "Fix the plan, not only the word: anything you planned around that day, such as a \
-             weekend, a day off or how far away it is, has to follow the true weekday.\n",
-        );
+             weekend, a day off or how far away it is, has to follow the true weekday, and so \
+             does every other weekday you write. The weeks around it, each line Monday to \
+             Sunday:\n{}",
+            super::occasion::weeks_of(first - Duration::days(7), weeks)
+        ));
     }
     if !unchecked.is_empty() {
         said.push_str(&format!(
@@ -508,7 +524,9 @@ mod tests {
         }
         assert_eq!(
             wrong("Hold it on Saturday Dec 6."),
-            vec!["\"Saturday Dec 6\": 6 December 2026 is a Sunday, not a Saturday.".to_string()]
+            vec!["\"Saturday Dec 6\": 6 December 2026 is a Sunday, not a Saturday. The Saturdays \
+                 either side of it are 5 December 2026 and 12 December 2026."
+                .to_string()]
         );
     }
 
@@ -606,6 +624,15 @@ mod tests {
         let wrong = wrong_weekdays("Saturday, 20 December 2026", today());
         let said = send_back(&wrong, &["$18,253".to_string()]).unwrap();
         assert!(said.contains("20 December 2026 is a Sunday, not a Saturday"), "{said}");
+        assert!(
+            said.contains(
+                "The Saturdays either side of it are 19 December 2026 and 26 December 2026."
+            ),
+            "{said}"
+        );
+        assert!(said.contains("- Mon 14 Dec, Tue 15 Dec"), "the week before it: {said}");
+        assert!(said.contains("Sat 19 Dec, Sun 20 Dec 2026"), "its own week: {said}");
+        assert!(said.contains("Sat 26 Dec, Sun 27 Dec 2026"), "the week after: {said}");
         assert!(said.contains("Fix the plan, not only the word"), "{said}");
         assert!(said.contains("$18,253"), "{said}");
         assert!(said.contains("as an assumption"), "{said}");

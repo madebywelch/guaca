@@ -232,9 +232,13 @@ pub fn weeks_words(at: i64) -> String {
 }
 
 pub fn weeks_from(today: NaiveDate) -> String {
-    let monday = today - Duration::days(i64::from(today.weekday().num_days_from_monday()));
+    weeks_of(today, WEEKS_AHEAD)
+}
+
+pub fn weeks_of(first: NaiveDate, count: i64) -> String {
+    let monday = first - Duration::days(i64::from(first.weekday().num_days_from_monday()));
     let mut said = String::new();
-    for week in 0..WEEKS_AHEAD {
+    for week in 0..count {
         let days: Vec<NaiveDate> =
             (0..7).map(|day| monday + Duration::days(week * 7 + day)).collect();
         let line: Vec<String> = days
