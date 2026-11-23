@@ -176,6 +176,7 @@ fn new_card(draft: &CleanDraft, rail_order: i32, fallback: GroupId) -> AgentCard
         has_browser: false,
         browser_consent: Consent::default(),
         runs_errands: false,
+        reads_web: true,
         lifecycle: Lifecycle::Active,
         pinned: false,
         rail_order,
@@ -236,6 +237,7 @@ enum AgentFlag {
     HasComputer,
     HasBrowser,
     RunsErrands,
+    ReadsWeb,
 }
 
 #[derive(Debug, Clone)]
@@ -868,6 +870,10 @@ impl Store {
         self.set_flag(id, AgentFlag::RunsErrands, given)
     }
 
+    pub fn set_reads_web(&self, id: AgentId, given: bool) -> Result<(), StoreError> {
+        self.set_flag(id, AgentFlag::ReadsWeb, given)
+    }
+
     pub fn set_browser_consent(&self, id: AgentId, consent: Consent) -> Result<(), StoreError> {
         let conn = self.conn()?;
         let changed = conn.execute(
@@ -885,6 +891,7 @@ impl Store {
             AgentFlag::HasComputer => "has_computer",
             AgentFlag::HasBrowser => "has_browser",
             AgentFlag::RunsErrands => "runs_errands",
+            AgentFlag::ReadsWeb => "reads_web",
         };
         let conn = self.conn()?;
         let changed = conn.execute(
@@ -3763,7 +3770,7 @@ const READ_BY_AGENT: &str = "channel_id=?1";
 
 const WRITTEN_BY_AGENT: &str = "from_kind='agent' AND from_agent=?1";
 
-const AGENT_COLUMNS: &str = "id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser,browser_consent,discarded_at,reasoning_effort,runs_errands,subscription_model";
+const AGENT_COLUMNS: &str = "id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser,browser_consent,discarded_at,reasoning_effort,runs_errands,subscription_model,reads_web";
 
 fn read_effort(
     row: &Row<'_>,
@@ -3821,6 +3828,7 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
             has_browser: row.get::<_, i64>(19)? != 0,
             browser_consent: Consent::parse(&row.get::<_, String>(20)?),
             runs_errands: row.get::<_, i64>(23)? != 0,
+            reads_web: row.get::<_, i64>(25)? != 0,
             version: row.get(8)?,
             created_at: row.get(9)?,
             updated_at: row.get(10)?,
@@ -4502,7 +4510,7 @@ mod tests {
         let worker = f.store.create_agent(&draft("Worker")).unwrap();
         let mut conn = f.store.conn().unwrap();
         conn.execute_batch(
-            "DROP TABLE onboarding_hire_agents; ALTER TABLE onboarding_hires ADD COLUMN agent_id TEXT; PRAGMA user_version=79;",
+            "ALTER TABLE agents DROP COLUMN reads_web; DROP TABLE onboarding_hire_agents; ALTER TABLE onboarding_hires ADD COLUMN agent_id TEXT; PRAGMA user_version=79;",
         )
         .unwrap();
         conn.execute(
@@ -4800,7 +4808,7 @@ mod tests {
         f.store.discard_agent(discarded.id, 1_000).unwrap();
         f.store.create_connector(&key_for(mine.group_id, "TOKEN", "private-token")).unwrap();
         let mut conn = f.store.conn().unwrap();
-        conn.execute_batch("DROP TABLE onboarding_hire_agents; ALTER TABLE onboarding_hires ADD COLUMN agent_id TEXT; ALTER TABLE agents DROP COLUMN tidied_through; ALTER TABLE agents DROP COLUMN last_tidy_at; ALTER TABLE groups DROP COLUMN tidy_since; ALTER TABLE groups DROP COLUMN tidy_hour; ALTER TABLE usage DROP COLUMN cached; ALTER TABLE pending_runs DROP COLUMN started_at; DROP TABLE permission_grants; ALTER TABLE decisions DROP COLUMN origin_ref; ALTER TABLE decisions DROP COLUMN origin; DROP TABLE outbox; DROP TABLE outcomes; ALTER TABLE decisions DROP COLUMN filed_run; DROP TABLE onboarding_hires; DROP TABLE operator_sends; DROP TRIGGER routine_delete_history; DROP TABLE routine_occurrences; ALTER TABLE plugins DROP COLUMN grant_generation; DROP TABLE pending_sandbox_resume; DROP TABLE resource_ledger; DROP TABLE workspace_identity; DROP TABLE approval_policies; ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
+        conn.execute_batch("ALTER TABLE agents DROP COLUMN reads_web; DROP TABLE onboarding_hire_agents; ALTER TABLE onboarding_hires ADD COLUMN agent_id TEXT; ALTER TABLE agents DROP COLUMN tidied_through; ALTER TABLE agents DROP COLUMN last_tidy_at; ALTER TABLE groups DROP COLUMN tidy_since; ALTER TABLE groups DROP COLUMN tidy_hour; ALTER TABLE usage DROP COLUMN cached; ALTER TABLE pending_runs DROP COLUMN started_at; DROP TABLE permission_grants; ALTER TABLE decisions DROP COLUMN origin_ref; ALTER TABLE decisions DROP COLUMN origin; DROP TABLE outbox; DROP TABLE outcomes; ALTER TABLE decisions DROP COLUMN filed_run; DROP TABLE onboarding_hires; DROP TABLE operator_sends; DROP TRIGGER routine_delete_history; DROP TABLE routine_occurrences; ALTER TABLE plugins DROP COLUMN grant_generation; DROP TABLE pending_sandbox_resume; DROP TABLE resource_ledger; DROP TABLE workspace_identity; DROP TABLE approval_policies; ALTER TABLE groups DROP COLUMN rail_order; DROP TABLE put_down_runs; DROP TABLE put_down; DROP TABLE connector_agents; ALTER TABLE agents DROP COLUMN reasoning_effort; ALTER TABLE groups DROP COLUMN reasoning_effort; ALTER TABLE agents DROP COLUMN runs_errands; DROP TABLE artifact_history; DROP TABLE artifacts; ALTER TABLE agents ADD COLUMN repository_id TEXT; CREATE TABLE repositories (id TEXT PRIMARY KEY, group_id TEXT NOT NULL, harness TEXT NOT NULL DEFAULT 'pi', gate TEXT NOT NULL DEFAULT 'open'); PRAGMA user_version=51;").unwrap();
         migrations::run(&mut conn).unwrap();
         drop(conn);
         assert_eq!(f.store.connector_env(mine.id).unwrap().get("TOKEN").unwrap(), "private-token");

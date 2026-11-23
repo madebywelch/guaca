@@ -177,6 +177,7 @@ function member(id: string, name: string): AgentCard {
     hasComputer: false,
     hasBrowser: false,
     runsErrands: false,
+    readsWeb: true,
     browserConsent: "open",
     lifecycle: "active",
     pinned: false,

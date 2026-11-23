@@ -92,6 +92,7 @@ pub struct AgentCard {
     pub has_browser: bool,
     pub browser_consent: Consent,
     pub runs_errands: bool,
+    pub reads_web: bool,
     pub lifecycle: Lifecycle,
     pub pinned: bool,
     pub rail_order: i32,
@@ -124,6 +125,7 @@ impl std::fmt::Debug for AgentCard {
             .field("has_browser", &self.has_browser)
             .field("browser_consent", &self.browser_consent)
             .field("runs_errands", &self.runs_errands)
+            .field("reads_web", &self.reads_web)
             .field("lifecycle", &self.lifecycle)
             .field("pinned", &self.pinned)
             .field("rail_order", &self.rail_order)
@@ -355,7 +357,7 @@ fn normalize_color(input: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -460,7 +462,7 @@ mod tests {
         assert_eq!(normalize_color("rgb(1,2,3)"), None);
     }
 
-    fn card() -> AgentCard {
+    pub(crate) fn card() -> AgentCard {
         AgentCard {
             id: AgentId::new(),
             group_id: GroupId::new(),
@@ -480,6 +482,7 @@ mod tests {
             has_browser: false,
             browser_consent: Consent::default(),
             runs_errands: false,
+            reads_web: true,
             lifecycle: Lifecycle::Active,
             pinned: false,
             rail_order: 0,

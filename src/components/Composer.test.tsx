@@ -85,6 +85,7 @@ function anAgent(name: string, group = CREW): AgentCard {
     hasComputer: false,
     hasBrowser: false,
     runsErrands: false,
+    readsWeb: true,
     browserConsent: "open",
     version: 1,
   };

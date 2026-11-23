@@ -442,6 +442,7 @@ async fn every_credential_vector_is_the_wording_the_runtime_writes() {
             limits: Default::default(),
             e2b: Default::default(),
             kernel: Default::default(),
+            search: Default::default(),
             webhook: Default::default(),
             quick_actions: vec![],
             widgets: vec![],
