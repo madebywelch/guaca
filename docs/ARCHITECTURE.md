@@ -581,7 +581,12 @@ holds:
   for you..."), of which any whole sentence before that ending is kept. A line
   ending in a comma, such as a greeting, runs on into the next. The last line
   with words is never passed over, so a note that is only a lead-in reads as it
-  did. A line over 160 characters is cut
+  did. A note with a line that starts `Bottom line:` outside a code block is
+  headlined by the words after its last such label instead, or by the line
+  under it when the label stands alone, and the note keeps the line; the first
+  tasks ask for one, written after the working, because a model told to lead
+  with its answer states a verdict before the sums that should decide it.
+  A line over 160 characters is cut
   after its last whole sentence when that keeps at least half of it, and
   otherwise at a Unicode word boundary. The ellipsis marks either cut, so a
   shortened headline never reads as complete. A failure takes the first
@@ -1329,6 +1334,30 @@ that existed before migration 81, so an upgrade gives the agents already at
 work the same reading a new one gets. The switch is in the agent's editor,
 beside errands, and turning it off is how an operator keeps an agent off the
 web.
+
+## A model does no sum in its head, and states no weekday it was not given
+
+Live first tasks picked the right answer and gave the wrong figures: a loan
+balance worked out in the model's head was off in two runs of three, and every
+plan called a Sunday a Saturday. `calculator` is the fix: a small evaluator in
+`domain/calculator.rs`, not a language. It reads numbers, the four operations,
+powers, brackets, percentages, the functions a loan or a compound interest sum
+needs, `pmt` and `balance` for a loan's payment and what is still owed, notes
+after `#`, names for results that last for the rest of the turn, and dates
+written YYYY-MM-DD, with `weekday(...)`, `days(...)` and whole days added or
+taken away. A name from a call that failed is not kept. The loan functions and
+the names are there because live runs wrote the balance formula wrong and
+expected a name from one call to be there in the next. It has no loop,
+no network and no file, so it is offered to every agent, errands included,
+with no switch and no migration. The input is bounded in length, lines and
+nesting, a value past 10^15 is an overflow, and a result is shown to twelve
+significant digits, so 0.1 + 0.2 reads 0.3. An error names the line it was on.
+
+The standing prompt tells every agent to use it for every sum, to show the
+figures, to put no figure in an answer, a difference, a break-even or a what-if
+included, that it was not given or did not get back, and to state a weekday only when it was given one or
+the calculator returned it. *Your group's calendar* writes today's weekday out
+in full.
 
 ## Files are references, and what a model gets depends on what they are
 

@@ -137,6 +137,15 @@ describe("the first task", () => {
     expect(brief).not.toMatch(/assume/);
   });
 
+  it("has every first task end on a Bottom line written after the work, not before it", () => {
+    for (const task of FIRST_TASKS.filter((entry) => entry.brief)) {
+      expect(task.brief, task.id).toMatch(
+        /When the work is done, end with one last line that starts "Bottom line:" and gives the answer in one sentence\. Ask me a question only if you cannot go on without one\.$/,
+      );
+      expect(task.brief.match(/Bottom line:/g), task.id).toHaveLength(1);
+    }
+  });
+
   it("writes each deeper pass so the coordinator asks the first agent and the new colleague at once", () => {
     for (const task of FIRST_TASKS.filter((entry) => entry.brief)) {
       const crew = crewFor(task.id)!;

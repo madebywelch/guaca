@@ -2,6 +2,7 @@ pub mod agent;
 pub mod approval;
 pub mod artifact;
 pub mod attachment;
+pub mod calculator;
 pub mod connector;
 pub mod decision;
 pub mod deployment;

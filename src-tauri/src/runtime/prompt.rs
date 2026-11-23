@@ -212,6 +212,15 @@ pub fn system_prompt(
         );
     }
 
+    stable.push_str("\n## Sums and dates\n");
+    stable.push_str(
+        "Use `calculator` for every sum, however small: never do arithmetic in your head, and \
+         show the figures you used. Every figure in your answer, a difference, a break-even or a \
+         what-if included, is one you were given or one `calculator` returned, so work it out \
+         before you write it. Never state the weekday of a date \
+         unless it was given to you or `calculator` returned it.\n",
+    );
+
     stable.push_str("\n## What you can reach\n");
     if credentials.is_empty() && signins.is_empty() && plugins.is_empty() {
         stable.push_str(
@@ -596,7 +605,7 @@ pub fn system_prompt(
          fires and reaches you as a message, and an occasion sits there being true. If you have \
          to prepare for something on this calendar, the occasion goes here and the routine that \
          prepares for it goes there.\n",
-        occasion::when_words(now, true).replace(", all day", "")
+        occasion::day_words(now)
     ));
 
     if calendar.is_empty() {
@@ -2084,7 +2093,10 @@ mod tests {
         let calendar = section(&prompt, "## Your group's calendar");
         let today = crate::domain::local(crate::domain::now_ms()).unwrap();
 
-        assert!(calendar.contains(&today.format("%a %-d %b %Y").to_string()), "{calendar}");
+        assert!(
+            calendar.contains(&format!("Today is {}.", today.format("%A, %-d %B %Y"))),
+            "today with its weekday written out: {calendar}"
+        );
     }
 
     #[test]
@@ -2732,6 +2744,47 @@ mod tests {
         assert!(computer_only.contains("## Your computer"), "{computer_only}");
         assert!(!computer_only.contains("## Your browser"), "{computer_only}");
         assert!(!computer_only.contains("not the browser `browse` uses"), "{computer_only}");
+    }
+
+    #[test]
+    fn every_agent_is_told_to_do_sums_with_the_calculator_and_never_to_guess_a_weekday() {
+        for surfaces in [Surfaces::none(), Surfaces::both()] {
+            let prompt = system_prompt(
+                &card("Analyst"),
+                "",
+                &[],
+                &[],
+                &[],
+                &[],
+                "",
+                &[],
+                &[],
+                &[],
+                ReplyMode::ToOperator,
+                &[],
+                None,
+                surfaces,
+                Modalities::seeing(),
+            );
+            let sums = section(&prompt, "## Sums and dates");
+            assert!(sums.contains("Use `calculator` for every sum"), "{sums}");
+            assert!(sums.contains("never do arithmetic in your head"), "{sums}");
+            assert!(sums.contains("show the figures you used"), "{sums}");
+            assert!(
+                sums.contains(
+                    "Every figure in your answer, a difference, a break-even or a what-if \
+                     included, is one you were given or one `calculator` returned"
+                ),
+                "{sums}"
+            );
+            assert!(
+                sums.contains(
+                    "Never state the weekday of a date unless it was given to you or \
+                               `calculator` returned it"
+                ),
+                "{sums}"
+            );
+        }
     }
 
     #[test]

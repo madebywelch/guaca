@@ -21,6 +21,7 @@ use tokio::sync::{mpsc, Notify};
 use crate::config::{AppConfig, InferenceConfig};
 
 const PAGE_CHARS: usize = 12_000;
+const CALCULATION_SUMMARY: usize = 400;
 const LINKS_SHOWN: usize = 40;
 
 const WEB_OFF: &str = "Refused: reading the web is switched off for you, so nothing was searched \
@@ -51,6 +52,7 @@ struct Reading {
     memory: Option<String>,
     tidy_limit: Option<usize>,
     seen: HashSet<String>,
+    figures: crate::domain::calculator::Figures,
 }
 
 fn address_key(url: &str) -> String {
@@ -140,6 +142,7 @@ impl Reading {
             memory: None,
             tidy_limit: None,
             seen: self.seen.clone(),
+            figures: self.figures.clone(),
         }
     }
 }
@@ -229,6 +232,30 @@ fn render_page(raw: &str) -> String {
         out.extend(text.chars().take(4000));
     }
     out
+}
+
+fn worked_out(
+    expression: &str,
+    figures: &mut crate::domain::calculator::Figures,
+    arguments: serde_json::Value,
+) -> (String, Part) {
+    match crate::domain::calculator::evaluate_with(expression, figures) {
+        Ok(worked) => {
+            let lines: Vec<String> = worked.iter().map(ToString::to_string).collect();
+            let summary = crate::domain::cut_to(&lines.join("; "), CALCULATION_SUMMARY).0;
+            (
+                lines.join("\n"),
+                Part::tool_call(tools::CALCULATOR, arguments, ToolOutcome::Ok { summary }),
+            )
+        }
+        Err(err) => {
+            let error = err.to_string();
+            (
+                format!("Error: {error}. Nothing was worked out; correct that and call again."),
+                Part::tool_call(tools::CALCULATOR, arguments, ToolOutcome::Failed { error }),
+            )
+        }
+    }
 }
 
 fn render_hits(query: &str, by: &str, hits: &[crate::llm::search::Hit]) -> String {
@@ -4119,6 +4146,9 @@ impl Runtime {
                     Part::tool_call(tools::ERRAND, arguments, ToolOutcome::Refused { reason }),
                 )
             }
+            ToolInvocation::Calculate { expression } => {
+                worked_out(&expression, &mut reading.figures, arguments)
+            }
             ToolInvocation::Directory => {
                 let roster = self.roster_excluding(card.id);
                 let payload =
@@ -7913,6 +7943,39 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_sum_is_worked_out_for_an_agent_with_nothing_switched_on() {
+        let (_dir, runtime) = test_runtime();
+        let mut card = crate::domain::agent::tests::card();
+        card.reads_web = false;
+        card.has_computer = false;
+        card.has_browser = false;
+        card.runs_errands = false;
+        let sum = ToolInvocation::Calculate { expression: "1 + 1".into() };
+        assert_eq!(runtime.not_given(&card, Modalities::text_only(), &sum), None);
+
+        let mut figures = crate::domain::calculator::Figures::new();
+        let (said, part) = worked_out(
+            "payment = 35000 * 0.5%\nround(payment * 36)",
+            &mut figures,
+            serde_json::json!({}),
+        );
+        assert_eq!(said, "payment = 175\nround(payment * 36) = 6300");
+        assert!(
+            matches!(&part, Part::ToolCall { outcome: ToolOutcome::Ok { summary }, .. }
+                if summary == "payment = 175; round(payment * 36) = 6300"),
+            "{part:?}"
+        );
+
+        let (said, part) =
+            worked_out("a = 2\na / (a - payment / 87.5)", &mut figures, serde_json::json!({}));
+        assert!(
+            said.starts_with("Error: line 2, `a / (a - payment / 87.5)`: division by zero."),
+            "a name from an earlier call is kept for the turn: {said}"
+        );
+        assert!(matches!(part, Part::ToolCall { outcome: ToolOutcome::Failed { .. }, .. }));
+    }
+
     fn assert_plain(text: &str) {
         assert!(!text.contains("  "), "a run of spaces: {text:?}");
         assert!(!text.contains('\u{2014}'), "an em dash: {text:?}");
@@ -8352,6 +8415,7 @@ mod tests {
             memory: None,
             tidy_limit: None,
             seen: HashSet::new(),
+            figures: Default::default(),
         }
     }
 
@@ -8504,6 +8568,7 @@ mod tests {
             memory: None,
             tidy_limit: None,
             seen: HashSet::new(),
+            figures: Default::default(),
         };
         assert!(needs_consent(ASKING, "click", &untainted, &held).is_none());
     }
@@ -8647,6 +8712,7 @@ mod tests {
             memory: None,
             tidy_limit: None,
             seen: HashSet::new(),
+            figures: Default::default(),
         };
         assert!(needs_consent(ASKING, "click", &looked, &held).is_some());
 
@@ -8875,6 +8941,7 @@ mod tests {
             memory: None,
             tidy_limit: None,
             seen: HashSet::new(),
+            figures: Default::default(),
         };
         let told = runtime
             .may_act_on(&card, RunId::new(), "click", &mut reading)

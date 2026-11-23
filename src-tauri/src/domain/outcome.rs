@@ -195,8 +195,13 @@ fn sentence_end(line: &str) -> Option<usize> {
     last
 }
 
+pub const BOTTOM_LINE: &str = "Bottom line";
+
 pub fn first_line(note: &str) -> Option<String> {
     let lines = lines(note);
+    if let Some(answer) = bottom_line(&lines) {
+        return Some(answer);
+    }
     let mut worded = lines.iter().enumerate().filter(|(_, line)| !line.words.is_empty()).peekable();
     while let Some((at, line)) = worded.next() {
         let Some(&(after, next)) = worded.peek() else {
@@ -222,6 +227,21 @@ pub fn first_line(note: &str) -> Option<String> {
         return Some(line.words.clone());
     }
     None
+}
+
+fn bottom_line(lines: &[Line]) -> Option<String> {
+    lines.iter().enumerate().rev().find_map(|(at, line)| {
+        let words = line.words.get(..BOTTOM_LINE.len())?;
+        if !words.eq_ignore_ascii_case(BOTTOM_LINE) {
+            return None;
+        }
+        let rest = line.words[BOTTOM_LINE.len()..].trim_start();
+        let answer = rest.strip_prefix(':').or_else(|| rest.strip_prefix('：'))?.trim();
+        if !answer.is_empty() {
+            return Some(answer.to_string());
+        }
+        lines.get(at + 1).filter(|next| !next.words.is_empty()).map(|next| next.words.clone())
+    })
 }
 
 struct Line {
@@ -629,6 +649,59 @@ mod tests {
             .as_deref(),
             Some("Updated pending_runs and closed the ticket in two one pass, 2 * 3 times")
         );
+    }
+
+    const WORKED: &str = "I'll work through both options.\n\n## Buying\n\n- Payment: $676.65 a \
+                          month\n- Still owed after 36 months: $15,267\n\n## Leasing\n\n$3,000 + \
+                          36 x $500 = $21,000";
+
+    #[test]
+    fn a_bottom_line_is_the_headline_without_its_label() {
+        let note = format!("{WORKED}\n\nBottom line: Buy, at $19,626 against $21,000 to lease.");
+        assert_eq!(headline(&note).as_deref(), Some("Buy, at $19,626 against $21,000 to lease."));
+        let bold = format!("{WORKED}\n\n**Bottom line:** Buy, at $19,626.");
+        assert_eq!(headline(&bold).as_deref(), Some("Buy, at $19,626."));
+        let outside = format!("{WORKED}\n\n**Bottom line**: Buy.");
+        assert_eq!(headline(&outside).as_deref(), Some("Buy."));
+        let below = format!("{WORKED}\n\n**Bottom line:**\nBuy, at $19,626.");
+        assert_eq!(headline(&below).as_deref(), Some("Buy, at $19,626."));
+    }
+
+    #[test]
+    fn a_result_with_no_bottom_line_is_read_as_before() {
+        assert_eq!(headline(WORKED).as_deref(), Some("I'll work through both options."));
+        let mentioned = "The bottom line is that buying wins.\n\nBottom lines: none.";
+        assert_eq!(headline(mentioned).as_deref(), Some("The bottom line is that buying wins."));
+    }
+
+    #[test]
+    fn of_two_bottom_lines_the_last_is_the_headline() {
+        let note = "Bottom line: Lease, on a first look.\n\nThen the balance.\n\nBottom line: Buy.";
+        assert_eq!(headline(note).as_deref(), Some("Buy."));
+    }
+
+    #[test]
+    fn a_bottom_line_with_nothing_after_its_label_is_passed_over() {
+        let note = "Buy: it costs $19,626 against $21,000.\n\nBottom line:";
+        assert_eq!(headline(note).as_deref(), Some("Buy: it costs $19,626 against $21,000."));
+        let blank = "Buy: it costs $19,626 against $21,000.\n\nBottom line:   \n\n---";
+        assert_eq!(headline(blank).as_deref(), Some("Buy: it costs $19,626 against $21,000."));
+    }
+
+    #[test]
+    fn a_bottom_line_inside_a_code_block_is_not_the_headline() {
+        let note = "Buy: it costs $19,626.\n\n```\nBottom line: print(answer)\n```";
+        assert_eq!(headline(note).as_deref(), Some("Buy: it costs $19,626."));
+        let both = "Buy.\n\nBottom line: Buy the car.\n\n~~~\nBottom line: not this\n~~~";
+        assert_eq!(headline(both).as_deref(), Some("Buy the car."));
+    }
+
+    #[test]
+    fn a_long_bottom_line_is_cut_like_any_headline() {
+        let long = format!("Bottom line: {}", "buy the car and keep it ".repeat(12));
+        let shown = headline(&long).unwrap();
+        assert!(shown.ends_with(ELLIPSIS) && shown.starts_with("buy the car"), "{shown}");
+        assert!(shown.chars().count() <= HEADLINE_MAX, "{shown}");
     }
 
     #[test]
