@@ -1290,7 +1290,20 @@ its own client: no proxy, a resolver that drops every address `forbidden` names
 (loopback, private, link-local, carrier-grade NAT, multicast, documentation and
 reserved ranges, IPv4 mapped and embedded in IPv6, and so 169.254.169.254 and
 `fd00:ec2::254`), a redirect policy that checks every hop's scheme and literal
-address before following it, at most five hops, 2 MiB and twenty seconds. A
+address before following it, at most five hops, 2 MiB and twenty seconds. The
+same check also refuses every address on one of the host's own interfaces and
+every address in a network one of them is directly connected to, gateway
+included, in IPv4 and IPv6 and inside an IPv4-mapped, NAT64 or 6to4 address. A
+fixed range cannot say that: a VPS or a hosted workspace has a public address
+on its interface, and the server and its neighbors are not private. The
+interfaces are read with `getifaddrs` at every check, which takes microseconds,
+because they change while the host runs; if they cannot be read, every address
+is refused. An interface that claims a prefix wider than /16 in IPv4 or /48 in
+IPv6 refuses only that much around its own address, so a misconfigured /0
+cannot make the web unreadable, and a home network is private already. Public
+IPv6 stays readable, because a host on an IPv6-only network has no other way
+out. A name that resolves to several addresses keeps only those that pass and
+is refused when none do. A
 literal is checked before anything is sent, and a name is checked after it
 resolves and only the addresses that passed are connected to, so a name that
 answers inward the second time is still refused. No proxy is used even where one
