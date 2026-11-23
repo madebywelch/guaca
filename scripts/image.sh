@@ -93,6 +93,13 @@ step "Stopping"
 docker stop "${NAME}" >/dev/null
 docker logs "${NAME}" >/dev/null 2>&1 && fail "the container did not stop"
 
+step "Building the browser sidecar"
+BROWSER_IMAGE="${BROWSER_IMAGE:-guaca-browser:${COMMIT}}"
+docker build --build-arg "GUACA_VERSION=$(node -p 'require("./package.json").version')" --build-arg "GUACA_COMMIT=${COMMIT}" -t "${BROWSER_IMAGE}" deploy/browser
+
+step "The browser sidecar reaches the public web and nothing else"
+BROWSER_IMAGE="${BROWSER_IMAGE}" STANDIN_IMAGE="${IMAGE}" ./scripts/browser-isolation.sh
+
 step "Image ${IMAGE} answers"
 if [ -n "${KEEP:-}" ]; then
   docker run -d --init --name "${NAME}" -v "${VOLUME}:/var/lib/guaca" -p 127.0.0.1:8787:8787 "${IMAGE}" >/dev/null
