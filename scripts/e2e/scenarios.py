@@ -3378,6 +3378,8 @@ def scenario_firstgroup(w: World) -> None:
            lambda: ui.evaluate("!!document.querySelector('[role=log] [data-found] .msg--result')"))
     w.check("the roster and For you can return from a colleague thread to the current agent",
             bool(ui.find("log", f"Conversation with {LEAD}")))
+    w.wait("the opened result's highlight fades, so the log stops centering on it",
+           lambda: ui.evaluate("!document.querySelector('[role=log] [data-found]')"))
     folded = ui.evaluate(BRIEF_HEIGHT)
     ui.click("button", "Show all")
     w.wait("the brief opens", lambda: ui.find("button", "Show less"))

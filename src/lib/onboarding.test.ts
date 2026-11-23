@@ -112,6 +112,31 @@ describe("the first task", () => {
     }
   });
 
+  it("gives research the figures its verdict turns on, and asks for the sums and the loan still owed", () => {
+    const brief = FIRST_TASKS.find((task) => task.id === "research")!.brief;
+    expect(brief).toMatch(/It costs \$35,000 and should be worth about \$20,000 in three years\./);
+    expect(brief).toMatch(/borrow at 6% over five years with nothing down/);
+    expect(brief).toMatch(/\$500 a month with \$3,000 down/);
+    expect(brief).toMatch(/Show the arithmetic/);
+    expect(brief).toMatch(/loan still owed at the end of the three years/);
+    expect(brief).toMatch(/pick on those numbers/);
+    expect(brief).toMatch(/assume a typical one and say so/);
+  });
+
+  it("has the plan assume a typical detail and say so, so it never answers with questions alone", () => {
+    const brief = FIRST_TASKS.find((task) => task.id === "plan")!.brief;
+    expect(brief).toMatch(
+      /Where you need a detail I have not given.*assume a typical one and say so\./,
+    );
+  });
+
+  it("has the draft bracket every fact it was not given instead of inventing one", () => {
+    const brief = FIRST_TASKS.find((task) => task.id === "write")!.brief;
+    expect(brief).toMatch(/Say nothing I have not told you/);
+    expect(brief).toMatch(/a placeholder in brackets such as \[time\]/);
+    expect(brief).not.toMatch(/assume/);
+  });
+
   it("writes each deeper pass so the coordinator asks the first agent and the new colleague at once", () => {
     for (const task of FIRST_TASKS.filter((entry) => entry.brief)) {
       const crew = crewFor(task.id)!;
