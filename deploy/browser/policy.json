@@ -1,0 +1,11 @@
+{
+  "URLBlocklist": ["file://*", "chrome://*", "devtools://*", "view-source:*"],
+  "URLAllowlist": ["chrome://sandbox"],
+  "DownloadRestrictions": 3,
+  "WebRtcIPHandling": "disable_non_proxied_udp",
+  "PasswordManagerEnabled": false,
+  "BrowserSignin": 0,
+  "SyncDisabled": true,
+  "MetricsReportingEnabled": false,
+  "BackgroundModeEnabled": false
+}

@@ -469,22 +469,6 @@ fn uncertain_computer_action(err: crate::e2b::E2bError) -> crate::e2b::E2bError 
     }
 }
 
-fn browser_failure(err: crate::kernel::KernelError) -> String {
-    use crate::kernel::KernelError;
-    match err {
-        KernelError::Transport(_) | KernelError::Api { status: 429 | 500..=599, .. } => {
-            "The browser provider is temporarily unavailable. Try again later.".to_string()
-        }
-        KernelError::Api { status: 401 | 403, .. } => {
-            "The browser provider refused access. Ask the operator to check its credentials and access.".to_string()
-        }
-        KernelError::Api { .. } | KernelError::Protocol(_) | KernelError::Cdp(_) => {
-            "The browser provider could not confirm the resource's state. Ask the operator to check it.".to_string()
-        }
-        other => other.to_string(),
-    }
-}
-
 fn computer_replacement_notice(replaced: bool) -> &'static str {
     if replaced {
         "The provider confirmed your previous computer was gone, so a new one was created.\n"
@@ -645,6 +629,7 @@ struct Inner {
     resource_locks: Mutex<HashMap<AgentId, Arc<tokio::sync::Mutex<()>>>>,
     resource_sweep: tokio::sync::RwLock<()>,
     plugin_endpoints: std::sync::OnceLock<HashMap<String, String>>,
+    local_browser: std::sync::OnceLock<crate::browser::Local>,
     account: std::sync::OnceLock<Arc<crate::account::Account>>,
     modalities: modality::Registry,
     live_actors: Arc<AtomicUsize>,
@@ -756,6 +741,7 @@ impl Runtime {
                 resource_locks: Mutex::new(HashMap::new()),
                 resource_sweep: tokio::sync::RwLock::new(()),
                 plugin_endpoints: std::sync::OnceLock::new(),
+                local_browser: std::sync::OnceLock::new(),
                 account: std::sync::OnceLock::new(),
                 modalities: modality::Registry::new(),
                 live_actors: Arc::new(AtomicUsize::new(0)),
@@ -1027,15 +1013,17 @@ impl Runtime {
         }
 
         if let Some(browser) = card.browser_id.as_ref() {
-            match crate::kernel::KernelClient::new(&self.config().kernel.api_key) {
-                Some(client) => {
-                    if let Err(err) = client.delete(browser).await {
+            match self.browsers() {
+                Some(browsers) => {
+                    if let Err(err) = browsers.close(browser).await {
                         tracing::warn!(%err, %browser, "could not close a discarded agent's browser");
                     } else {
                         let _ = self.inner.store.set_agent_browser(id, None);
                     }
                 }
-                None => tracing::warn!(%browser, "no key to close a discarded agent's browser"),
+                None => {
+                    tracing::warn!(%browser, "no browser to close a discarded agent's browser in")
+                }
             }
         }
 
@@ -1106,79 +1094,8 @@ impl Runtime {
                 tracing::warn!(%sandbox, "leaving an unowned sandbox");
             }
         }
-        if let Some(client) = crate::kernel::KernelClient::new(&self.config().kernel.api_key) {
-            if let Some(browser) = card.browser_id.as_ref() {
-                let ownership = self.inner.store.workspace_identity().and_then(|workspace| {
-                    self.inner
-                        .store
-                        .resource_state("kernel", browser)
-                        .map(|state| (workspace, state))
-                });
-                if let Ok((
-                    workspace,
-                    Some(
-                        crate::db::store::ResourceState::Created
-                        | crate::db::store::ResourceState::Released,
-                    ),
-                )) = ownership
-                {
-                    match client.list_workspace(&workspace, None).await {
-                        Ok(rows) if rows.contains(browser) => {
-                            if let Err(err) =
-                                self.inner.store.mark_resource_released("kernel", browser)
-                            {
-                                tracing::warn!(%err, %browser, "could not record the browser release");
-                            } else {
-                                match client.delete(browser).await {
-                                    Ok(()) => {
-                                        if let Err(err) =
-                                            self.inner.store.mark_resource_gone("kernel", browser)
-                                        {
-                                            tracing::warn!(%err, %browser, "could not record the released browser");
-                                        }
-                                    }
-                                    Err(err) => {
-                                        tracing::warn!(%err, %browser, "could not destroy the agent's browser")
-                                    }
-                                }
-                            }
-                        }
-                        _ => {
-                            tracing::warn!(%browser, "leaving a browser without a matching ownership tag")
-                        }
-                    }
-                } else {
-                    tracing::warn!(%browser, "leaving an unowned browser");
-                }
-            }
-            let profile = format!("guac-{id}");
-            let stored_id = self.inner.store.created_profile_id(&profile).ok().flatten();
-            let current_id = client.profile_id(&profile).await.ok().flatten();
-            if stored_id.is_some() && stored_id == current_id {
-                if let Err(err) =
-                    self.inner.store.mark_resource_released("kernel-profile", &profile)
-                {
-                    tracing::warn!(%err, %profile, "could not record the profile release");
-                } else {
-                    match client
-                        .delete_profile_named(stored_id.as_deref().unwrap_or_default())
-                        .await
-                    {
-                        Ok(()) => {
-                            if let Err(err) =
-                                self.inner.store.mark_resource_gone("kernel-profile", &profile)
-                            {
-                                tracing::warn!(%err, %profile, "could not record the released browser profile");
-                            }
-                        }
-                        Err(err) => {
-                            tracing::warn!(%err, agent = %id, "could not destroy the agent's browser profile")
-                        }
-                    }
-                }
-            } else {
-                tracing::warn!(%profile, "leaving an unowned browser profile");
-            }
+        if let Some(browsers) = self.browsers() {
+            browsers.purge(&self.inner.store, id, card.browser_id.as_deref()).await;
         }
 
         self.inner.store.set_lifecycle(id, Lifecycle::Terminated)?;
@@ -4339,10 +4256,10 @@ impl Runtime {
 
                 let mut replaced = false;
                 let outcome = match self.ensure_browser_with_replacement(card).await {
-                    Ok((client, session, was_replaced)) => {
+                    Ok((_, session, was_replaced)) => {
                         replaced = was_replaced;
-                        client.browse(&session, &action, &args).await.map_err(|err| {
-                        if matches!(err, crate::kernel::KernelError::Input(_)) {
+                        crate::browser::browse(&session, &action, &args).await.map_err(|err| {
+                        if matches!(err, crate::browser::BrowserError::Input(_)) {
                             err.to_string()
                         } else if action == "read" {
                             "The browser could not read the page. Try again later.".to_string()
@@ -4351,7 +4268,7 @@ impl Runtime {
                         }
                     })
                     }
-                    Err(err) => Err(browser_failure(err)),
+                    Err(err) => Err(err.for_agent()),
                 };
                 let (rendered, outcome) = match outcome {
                     Ok(page) => {
@@ -5562,7 +5479,8 @@ impl Runtime {
         let config = self.config();
         tools::Surfaces {
             computer: !config.e2b.api_key.expose().trim().is_empty(),
-            browser: !config.kernel.api_key.expose().trim().is_empty(),
+            browser: !config.kernel.api_key.expose().trim().is_empty()
+                || self.inner.local_browser.get().is_some(),
             errands: true,
         }
     }
@@ -5578,116 +5496,64 @@ impl Runtime {
     pub async fn ensure_browser(
         &self,
         card: &AgentCard,
-    ) -> Result<(crate::kernel::KernelClient, crate::kernel::Session), crate::kernel::KernelError>
+    ) -> Result<(crate::browser::Backend, crate::browser::Session), crate::browser::BrowserError>
     {
         self.ensure_browser_with_replacement(card)
             .await
-            .map(|(client, session, _)| (client, session))
+            .map(|(browsers, session, _)| (browsers, session))
     }
 
     async fn ensure_browser_with_replacement(
         &self,
         card: &AgentCard,
     ) -> Result<
-        (crate::kernel::KernelClient, crate::kernel::Session, bool),
-        crate::kernel::KernelError,
+        (crate::browser::Backend, crate::browser::Session, bool),
+        crate::browser::BrowserError,
     > {
-        use crate::kernel::{BrowserCreation, KernelClient, KernelError, ProfileCreation};
+        use crate::browser::BrowserError;
 
         if !card.has_browser {
-            return Err(KernelError::NotGiven);
+            return Err(BrowserError::NotGiven);
         }
+        let browsers = self.browsers().ok_or(BrowserError::Unavailable)?;
         let _sweep_guard = self.inner.resource_sweep.read().await;
         let lock = self.resource_lock(card.id);
         let _guard = lock.lock().await;
         let config = self.config();
-        let client = KernelClient::new(&config.kernel.api_key).ok_or(KernelError::NoKey)?;
         let idle = config.kernel.idle_minutes.max(1) * 60;
-
-        let held = self
-            .inner
-            .store
-            .get_agent(card.id)
-            .map_err(|err| {
-                KernelError::Local(format!("could not read the agent's browser: {err}"))
-            })?
-            .ok_or_else(|| KernelError::Local("the agent is no longer available".into()))?;
-        let mut replaced = false;
-        if let Some(id) = held.browser_id {
-            if let Some(live) = client.get(&id).await? {
-                return Ok((client, live, false));
-            }
-            replaced = true;
-            self.inner.store.mark_resource_gone("kernel", &id).map_err(|err| {
-                KernelError::Local(format!("could not record the missing browser: {err}"))
-            })?;
+        let ensured =
+            browsers.ensure(&self.inner.store, card.id, idle, config.kernel.stealth).await?;
+        if ensured.fresh {
+            self.inner.events.emit(UiEvent::AgentsChanged);
         }
+        Ok((browsers, ensured.session, ensured.replaced))
+    }
 
-        let workspace = self.inner.store.workspace_identity().map_err(|err| {
-            KernelError::Local(format!("could not read workspace identity: {err}"))
-        })?;
-        let agent = card.id.to_string();
-        let (profile, profile_id, adopted_profile) = match client.create_profile(&agent).await? {
-            ProfileCreation::Created { id, name } => {
-                let provider_id = (id != name).then_some(id);
-                (name, provider_id, false)
-            }
-            ProfileCreation::Existing { name } => {
-                let provider_id = match client.profile_id(&name).await {
-                    Ok(id) => id,
-                    Err(err) => {
-                        tracing::warn!(%err, %name, "could not confirm profile identity");
-                        None
-                    }
-                };
-                (name, provider_id, true)
-            }
-        };
-        let recorded = if adopted_profile {
-            self.inner.store.record_adopted_profile(&profile, profile_id.as_deref())
-        } else {
-            self.inner.store.record_created_profile(&profile, profile_id.as_deref())
-        };
-        if let Err(err) = recorded {
-            if !adopted_profile {
-                if let Err(cleanup) = client.delete_profile_named(&profile).await {
-                    tracing::error!(%cleanup, provider = "kernel-profile", resource = %profile, "created resource could not be recorded or released");
-                }
-            }
-            return Err(KernelError::Local(format!(
-                "the browser profile could not be recorded ({err})"
-            )));
-        }
-        let (fresh, adopted) = match client
-            .create_for_workspace(&agent, &profile, idle, config.kernel.stealth, &workspace)
-            .await?
-        {
-            BrowserCreation::Created(session) => (session, false),
-            BrowserCreation::Conflict { candidates } => {
-                let candidate = candidates.into_iter().next().ok_or_else(|| {
-                    KernelError::Protocol("the conflicting browser could not be found".into())
-                })?;
-                let session = client.get(&candidate.id).await?.ok_or_else(|| {
-                    KernelError::Protocol("the conflicting browser is no longer available".into())
-                })?;
-                (session, true)
-            }
-        };
+    pub fn browsers(&self) -> Option<crate::browser::Backend> {
+        crate::browser::Backend::choose(
+            &self.config().kernel.api_key,
+            self.inner.local_browser.get(),
+        )
+    }
 
-        if let Err(err) = self.inner.store.record_browser(card.id, &fresh.id, adopted) {
-            if !adopted {
-                if let Err(cleanup) = client.delete(&fresh.id).await {
-                    tracing::error!(%cleanup, provider = "kernel", resource = %fresh.id, "created resource could not be recorded or released");
-                    return Err(KernelError::Local(format!(
-                        "the browser could not be recorded or released ({err})"
-                    )));
-                }
-            }
-            return Err(KernelError::Local(format!("the browser could not be recorded ({err})")));
-        }
+    pub fn set_local_browser(&self, local: crate::browser::Local) {
+        let _ = self.inner.local_browser.set(local);
+    }
 
-        self.inner.events.emit(UiEvent::AgentsChanged);
-        Ok((client, fresh, replaced))
+    pub fn local_browser(&self) -> Option<&crate::browser::Local> {
+        self.inner.local_browser.get()
+    }
+
+    pub async fn local_browser_state(&self) -> crate::browser::LocalState {
+        let wanted = self.inner.store.list_agents().is_ok_and(|agents| {
+            agents.iter().any(|card| card.has_browser && card.lifecycle != Lifecycle::Terminated)
+        });
+        crate::browser::local_state(
+            &self.config().kernel.api_key,
+            self.inner.local_browser.get(),
+            wanted,
+        )
+        .await
     }
 
     fn count_tokens(
@@ -5791,77 +5657,12 @@ impl Runtime {
         Ok(swept)
     }
 
-    pub async fn sweep_browsers(&self) -> Result<usize, crate::kernel::KernelError> {
+    pub async fn sweep_browsers(&self) -> Result<usize, crate::browser::BrowserError> {
         let _sweep_guard = self.inner.resource_sweep.write().await;
-        let config = self.config();
-        let Some(client) = crate::kernel::KernelClient::new(&config.kernel.api_key) else {
-            return Ok(0);
-        };
-
-        let known: std::collections::HashSet<String> = self
-            .inner
-            .store
-            .list_agents()
-            .map_err(|err| {
-                crate::kernel::KernelError::Local(format!(
-                    "could not read resource ownership: {err}"
-                ))
-            })?
-            .into_iter()
-            .filter(|card| card.lifecycle != Lifecycle::Terminated || card.discarded())
-            .filter_map(|card| card.browser_id)
-            .collect();
-
-        let workspace = self.inner.store.workspace_identity().map_err(|err| {
-            crate::kernel::KernelError::Local(format!("could not read workspace identity: {err}"))
-        })?;
-        let ledger = self.inner.store.resource_snapshot("kernel").map_err(|err| {
-            crate::kernel::KernelError::Local(format!("could not read resource ownership: {err}"))
-        })?;
-        let tagged: std::collections::HashSet<_> =
-            client.list_workspace(&workspace, None).await?.into_iter().collect();
-        let inventory = client.list_ours().await?;
-        let present: std::collections::HashSet<_> = inventory.iter().cloned().collect();
-        for (browser, state) in &ledger {
-            if *state != crate::db::store::ResourceState::Gone
-                && !present.contains(browser)
-                && matches!(client.get(browser).await, Ok(None))
-            {
-                self.inner.store.mark_resource_gone("kernel", browser).map_err(|err| {
-                    crate::kernel::KernelError::Local(format!(
-                        "could not record the missing browser: {err}"
-                    ))
-                })?;
-            }
+        match self.browsers() {
+            Some(browsers) => browsers.sweep(&self.inner.store).await,
+            None => Ok(0),
         }
-        let mut swept = 0;
-        for browser in inventory {
-            if known.contains(&browser) {
-                continue;
-            }
-            if !tagged.contains(&browser)
-                || !matches!(
-                    ledger.get(&browser),
-                    Some(
-                        crate::db::store::ResourceState::Created
-                            | crate::db::store::ResourceState::Released
-                    )
-                )
-            {
-                tracing::warn!(%browser, "leaving an unowned browser");
-                continue;
-            }
-            tracing::info!(%browser, "releasing a browser no agent refers to");
-            if client.delete(&browser).await.is_ok() {
-                self.inner.store.mark_resource_gone("kernel", &browser).map_err(|err| {
-                    crate::kernel::KernelError::Local(format!(
-                        "could not record the released browser: {err}"
-                    ))
-                })?;
-                swept += 1;
-            }
-        }
-        Ok(swept)
     }
 
     fn keep_schedule(
@@ -7207,10 +7008,9 @@ impl Runtime {
 
     async fn browser_signin_state(&self, card: &AgentCard) -> Option<BrowserState> {
         let id = card.browser_id.clone()?;
-        let client = crate::kernel::KernelClient::new(&self.config().kernel.api_key)?;
-        let session = client.get(&id).await.ok().flatten()?;
+        let session = self.browsers()?.get(&id).await.ok().flatten()?;
 
-        match client.signed_in_state(&session).await {
+        match crate::browser::signed_in_state(&session).await {
             Ok(state) => Some(state),
             Err(err) => {
                 tracing::debug!(agent = %card.name, %err, "could not read the browser's sessions");

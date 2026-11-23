@@ -432,6 +432,26 @@ describe("concurrent settings edits", () => {
     expect(legend?.getAttribute("title")).toContain("shown in the corner of its conversation.");
   });
 
+  it("says where an agent's browser comes from when no Kernel key is set", () => {
+    open();
+    pane("Machines");
+    expect(screen.getByText("Without a key, no agent has a browser.")).toBeTruthy();
+    act(() =>
+      useStore.setState((s) => ({ capabilities: { ...s.capabilities, localBrowser: true } })),
+    );
+    try {
+      expect(
+        screen.getByText(
+          "Without a key, an agent you give a browser uses one on this Mac: public web only, no sign-ins and no live view.",
+        ),
+      ).toBeTruthy();
+    } finally {
+      act(() =>
+        useStore.setState((s) => ({ capabilities: { ...s.capabilities, localBrowser: false } })),
+      );
+    }
+  });
+
   it("discards all staged edits and does not restore them on reopen", () => {
     const view = open();
     expect(screen.queryByRole("button", { name: "Discard changes" })).toBeNull();

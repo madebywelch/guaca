@@ -4,7 +4,7 @@ import { useDismiss } from "../lib/dismiss";
 import { api } from "../lib/ipc";
 import { prefersReducedMotion } from "../lib/motion";
 import { useStore } from "../lib/store";
-import { type AgentCard, type Browser, errorMessage } from "../lib/types";
+import { type AgentCard, type Browser, errorMessage, type LocalBrowser } from "../lib/types";
 import { Grant } from "./Grant";
 
 interface Props {
@@ -28,8 +28,13 @@ export function browserReadReducer(state: BrowserRead, action: BrowserReadAction
   }
 }
 
+const SETTING_UP_EVERY_MS = 5000;
+const RUNNING_EVERY_MS = 20000;
+
 export function BrowserScreen({ agent }: Props) {
   const settings = useStore((s) => s.settings);
+  const localBrowser = useStore((s) => s.capabilities.localBrowser === true);
+  const [setup, setSetup] = useState<LocalBrowser | null>(null);
   const [readState, dispatchRead] = useReducer(browserReadReducer, { status: "loading" });
   const browser = readState.status === "ready" ? readState.browser : null;
   const [full, setFull] = useState(false);
@@ -45,8 +50,11 @@ export function BrowserScreen({ agent }: Props) {
   const stage = useRef<HTMLDivElement>(null);
   const cameFrom = useRef<DOMRect | null>(null);
 
-  const configured = settings?.kernelKeySet === true;
+  const hosted = settings?.kernelKeySet === true;
+  const local = !hosted && localBrowser;
+  const configured = hosted || local;
   const given = agent.hasBrowser;
+  const settingUp = local && setup === "settingUp";
 
   const look = useCallback(async () => {
     const asked = agent.id;
@@ -54,6 +62,16 @@ export function BrowserScreen({ agent }: Props) {
     const read = ++reads.current;
     const current = () => visit.current === currentVisit && reads.current === read;
     try {
+      if (local) {
+        const state = await api.localBrowser();
+        if (!current()) return;
+        setSetup(state);
+        if (state !== "ready") {
+          dispatchRead({ type: "found", browser: null });
+          setError(null);
+          return;
+        }
+      }
       const found = await api.agentBrowser(asked);
       if (!current()) return;
       dispatchRead({ type: "found", browser: found });
@@ -63,7 +81,7 @@ export function BrowserScreen({ agent }: Props) {
       dispatchRead({ type: "failed" });
       setError(errorMessage(caught));
     }
-  }, [agent.id]);
+  }, [agent.id, local]);
 
   useEffect(() => {
     visit.current += 1;
@@ -82,9 +100,12 @@ export function BrowserScreen({ agent }: Props) {
 
   useEffect(() => {
     if (!configured || !given) return;
-    const timer = setInterval(() => void look(), 20000);
+    const timer = setInterval(
+      () => void look(),
+      settingUp ? SETTING_UP_EVERY_MS : RUNNING_EVERY_MS,
+    );
     return () => clearInterval(timer);
-  }, [configured, given, look]);
+  }, [configured, given, look, settingUp]);
 
   const grabKeyboard = useCallback(() => frame.current?.focus(), []);
 
@@ -175,11 +196,15 @@ export function BrowserScreen({ agent }: Props) {
         onExpand={() => setExpanded((open) => !open)}
         given={given}
         busy={busy}
-        state={given ? browser?.state : undefined}
+        state={given ? (settingUp ? "setting up" : browser?.state) : undefined}
         about={
-          given
-            ? "Take it back. An open browser closes, and its sign-ins are saved."
-            : `Lets ${agent.name} open and read web pages in a hosted browser.`
+          local
+            ? given
+              ? "Take it back. Its page closes; nothing in it was kept."
+              : `Lets ${agent.name} open and read public web pages in a browser on this Mac.`
+            : given
+              ? "Take it back. An open browser closes, and its sign-ins are saved."
+              : `Lets ${agent.name} open and read web pages in a hosted browser.`
         }
         onChange={(next) =>
           void decide(() =>
@@ -188,7 +213,20 @@ export function BrowserScreen({ agent }: Props) {
         }
       />
 
-      {given && readState.status === "ready" && (live || expanded || full) && (
+      {given && local && readState.status === "ready" && (
+        <div className="screen">
+          <div className="screen__frame screen__frame--empty">
+            <p className="screen__note" role="status">
+              {error ??
+                (settingUp
+                  ? `Setting up the browser on this Mac. The first time downloads it, which takes a minute or two; until it is ready, ${agent.name} is told to try again shortly.`
+                  : `Public web only, and no live view. ${agent.name} reads pages in a browser on this Mac that is signed in to nothing and cannot reach your network. A Kernel key in Settings gives it a hosted browser you can watch and sign in to.`)}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {given && !local && readState.status === "ready" && (live || expanded || full) && (
         <div className="screen" data-full={full ? "true" : undefined}>
           <div className="screen__stage" ref={stage} {...asDialog}>
             {full && (

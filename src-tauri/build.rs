@@ -2,6 +2,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=GUACA_RELEASE");
     println!("cargo:rerun-if-env-changed=GUACA_COMMIT");
     println!("cargo:rerun-if-env-changed=GUACA_BACKEND_IMAGE");
+    println!("cargo:rerun-if-env-changed=GUACA_BROWSER_IMAGE");
     if std::env::var("GUACA_RELEASE").as_deref() == Ok("1") {
         let commit = std::env::var("GUACA_COMMIT").unwrap_or_default();
         assert!(

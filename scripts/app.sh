@@ -18,6 +18,14 @@ if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   export GUACA_BACKEND_IMAGE="guacad:dev-${ID:0:12}"
   docker tag "$ID" "$GUACA_BACKEND_IMAGE"
   printf '==> Host image %s\n' "$GUACA_BACKEND_IMAGE"
+  docker build \
+    --build-arg "GUACA_VERSION=$(node -p 'require("./package.json").version')" \
+    --build-arg "GUACA_COMMIT=$COMMIT" \
+    --iidfile "$IID" deploy/browser
+  ID="$(sed 's/^sha256://' "$IID")"
+  export GUACA_BROWSER_IMAGE="guaca-browser:dev-${ID:0:12}"
+  docker tag "$ID" "$GUACA_BROWSER_IMAGE"
+  printf '==> Browser image %s\n' "$GUACA_BROWSER_IMAGE"
 else
   printf '==> Docker is not ready: "On this Mac" is unavailable in this run. "Remote host" works.\n' >&2
 fi

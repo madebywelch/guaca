@@ -26,6 +26,7 @@ const EVERYTHING: Capabilities = {
   claudeProvider: true,
   localFiles: true,
   borrowedSignins: true,
+  localBrowser: false,
 };
 
 import { UNSEEN_LIMIT } from "./outcomes";
