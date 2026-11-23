@@ -121,7 +121,9 @@ describe("the first task", () => {
 
   it("has the plan assume a typical detail and say so, so it never answers with questions alone", () => {
     const brief = FIRST_TASKS.find((task) => task.id === "plan")!.brief;
-    expect(brief).toMatch(/Where you need a detail I have not given.*assume a typical one and say so\./);
+    expect(brief).toMatch(
+      /Where you need a detail I have not given.*assume a typical one and say so\./,
+    );
   });
 
   it("has the draft bracket every fact it was not given instead of inventing one", () => {
