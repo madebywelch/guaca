@@ -1,4 +1,4 @@
-use chrono::{Duration, NaiveDate, NaiveTime};
+use chrono::{Datelike, Duration, NaiveDate, NaiveTime};
 use serde::{Deserialize, Serialize};
 
 use super::cut_to;
@@ -225,6 +225,37 @@ pub fn day_words(at: i64) -> String {
     )
 }
 
+pub const WEEKS_AHEAD: i64 = 8;
+
+pub fn weeks_words(at: i64) -> String {
+    local(at).map_or_else(String::new, |when| weeks_from(when.date_naive()))
+}
+
+pub fn weeks_from(today: NaiveDate) -> String {
+    weeks_of(today, WEEKS_AHEAD)
+}
+
+pub fn weeks_of(first: NaiveDate, count: i64) -> String {
+    let monday = first - Duration::days(i64::from(first.weekday().num_days_from_monday()));
+    let mut said = String::new();
+    for week in 0..count {
+        let days: Vec<NaiveDate> =
+            (0..7).map(|day| monday + Duration::days(week * 7 + day)).collect();
+        let line: Vec<String> = days
+            .iter()
+            .enumerate()
+            .map(|(at, day)| {
+                let closes = days.get(at + 1).is_none_or(|next| next.year() != day.year());
+                day.format(if closes { "%a %-d %b %Y" } else { "%a %-d %b" }).to_string()
+            })
+            .collect();
+        said.push_str("- ");
+        said.push_str(&line.join(", "));
+        said.push('\n');
+    }
+    said
+}
+
 pub fn how_far(at: i64, now: i64) -> String {
     let today = day_of(now);
     let that_day = day_of(at);
@@ -293,6 +324,64 @@ mod tests {
         assert_eq!(day_words(at((2026, 12, 20), (0, 30))), "Sunday, 20 December 2026");
         assert_eq!(day_words(at((2026, 11, 23), (23, 30))), "Monday, 23 November 2026");
         assert_eq!(day_words(at((2028, 2, 29), (12, 0))), "Tuesday, 29 February 2028");
+    }
+
+    fn day(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    #[test]
+    fn the_weeks_ahead_start_on_this_weeks_monday_and_name_every_day() {
+        let weeks = weeks_from(day(2026, 11, 25));
+        let lines: Vec<&str> = weeks.lines().collect();
+        assert_eq!(lines.len(), WEEKS_AHEAD as usize);
+        assert_eq!(
+            lines[0],
+            "- Mon 23 Nov, Tue 24 Nov, Wed 25 Nov, Thu 26 Nov, Fri 27 Nov, Sat 28 Nov, Sun 29 Nov 2026"
+        );
+        assert_eq!(
+            lines[1],
+            "- Mon 30 Nov, Tue 1 Dec, Wed 2 Dec, Thu 3 Dec, Fri 4 Dec, Sat 5 Dec, Sun 6 Dec 2026"
+        );
+        assert!(lines[3].ends_with("Sun 20 Dec 2026"), "{weeks}");
+        assert_eq!(
+            lines[5],
+            "- Mon 28 Dec, Tue 29 Dec, Wed 30 Dec, Thu 31 Dec 2026, Fri 1 Jan, Sat 2 Jan, Sun 3 Jan 2027"
+        );
+        assert_eq!(weeks_from(day(2026, 11, 23)), weeks_from(day(2026, 11, 29)));
+        assert_eq!(weeks_words(at((2026, 11, 29), (23, 30))), weeks_from(day(2026, 11, 29)));
+        assert_eq!(weeks_words(at((2026, 11, 30), (0, 30))), weeks_from(day(2026, 12, 6)));
+        assert!(weeks.chars().count() < 800, "{}", weeks.chars().count());
+    }
+
+    #[test]
+    fn every_day_in_the_weeks_ahead_has_its_true_weekday() {
+        for today in [day(2026, 11, 23), day(2027, 12, 30), day(2028, 2, 10), day(2028, 2, 29)] {
+            let weeks = weeks_from(today);
+            let mut seen = 0;
+            let mut year = None;
+            for line in weeks.lines().rev() {
+                for said in
+                    line.trim_start_matches("- ").split(", ").collect::<Vec<_>>().into_iter().rev()
+                {
+                    let words: Vec<&str> = said.split(' ').collect();
+                    if let Some(stated) = words.get(3) {
+                        year = Some(stated.parse::<i32>().unwrap());
+                    }
+                    let date = NaiveDate::parse_from_str(
+                        &format!("{} {} {}", words[1], words[2], year.unwrap()),
+                        "%d %b %Y",
+                    )
+                    .unwrap();
+                    assert_eq!(date.format("%a").to_string(), words[0], "{said} in {weeks}");
+                    seen += 1;
+                }
+            }
+            assert_eq!(seen, 7 * WEEKS_AHEAD);
+            assert!(weeks.contains(&today.format("%a %-d %b").to_string()), "{weeks}");
+        }
+        assert!(weeks_from(day(2028, 2, 10)).contains("Tue 29 Feb, Wed 1 Mar"));
+        assert!(!weeks_from(day(2027, 2, 10)).contains("29 Feb"));
     }
 
     #[test]

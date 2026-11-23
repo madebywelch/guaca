@@ -1496,6 +1496,110 @@ async fn a_turn_that_promises_again_is_not_argued_with() {
     );
 }
 
+fn day_ahead(days: i64) -> (String, String) {
+    use chrono::Datelike;
+    let date = chrono::Local::now().date_naive() + chrono::Duration::days(days);
+    let wrong = date.weekday().succ();
+    (
+        format!("{}, {}", guac_lib::domain::calculator::day_name(wrong), date.format("%-d %B %Y")),
+        format!("{} is a {}", date.format("%-d %B %Y"), date.format("%A")),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_answer_with_a_wrong_weekday_goes_back_once_and_the_corrected_one_is_kept() {
+    let (wrong, correction) = day_ahead(10);
+    let first = format!("Hold the cleanup on {wrong}.");
+    let stub = serve(move |body| {
+        if anyone_said(body, "Weekdays that are wrong") {
+            Script::Say("Hold the cleanup on the Saturday before; the date moves with it.".into())
+        } else {
+            Script::Say(first.clone())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "plan the cleanup").unwrap();
+    h.settle(run).await;
+
+    assert_eq!(
+        h.channel_texts("Manager").pop().unwrap(),
+        "Hold the cleanup on the Saturday before; the date moves with it.",
+        "only the corrected answer is kept"
+    );
+    assert!(
+        stub.transcript.lock().iter().any(|body| anyone_said(body, &correction)),
+        "the send-back names the true weekday: {correction}"
+    );
+    assert_eq!(calls_by_agent(&stub).get("Manager"), Some(&2));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_answer_is_sent_back_at_most_once_and_the_second_is_delivered_as_it_is() {
+    let (wrong, _) = day_ahead(12);
+    let said = format!("Hold the cleanup on {wrong}.");
+    let again = said.clone();
+    let stub = serve(move |_| Script::Say(again.clone())).await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "plan the cleanup").unwrap();
+    h.settle(run).await;
+
+    assert_eq!(calls_by_agent(&stub).get("Manager"), Some(&2), "one send-back per turn");
+    assert_eq!(h.channel_texts("Manager").pop().unwrap(), said);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_figure_the_calculator_never_returned_goes_back_once_and_only_after_a_sum() {
+    let stub = serve(|body| {
+        if anyone_said(body, "neither in what you were given") {
+            Script::Say(
+                "Buying costs $19,626, and at a sale of $17,000 leasing is $1,626 cheaper.".into(),
+            )
+        } else if has_tool_result(body) {
+            Script::Say("Buying costs $19,626, and at $17,000 buying saves $107.".into())
+        } else {
+            Script::Plugin {
+                name: "calculator".into(),
+                arguments: serde_json::json!({"expression": "buy = 19626.12\nbuy - 21000"}),
+            }
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h
+        .runtime
+        .send_from_human(h.id("Manager"), "buy or lease? Say what a $17,000 sale does.")
+        .unwrap();
+    h.settle(run).await;
+
+    let sent_back: Vec<bool> = stub
+        .transcript
+        .lock()
+        .iter()
+        .map(|body| anyone_said(body, "neither in what you were given"))
+        .collect();
+    assert_eq!(sent_back, vec![false, false, true], "one send-back, after the sum");
+    assert!(stub
+        .transcript
+        .lock()
+        .iter()
+        .any(|body| anyone_said(body, "returned this turn: $107.")));
+    assert_eq!(
+        h.channel_texts("Manager").pop().unwrap(),
+        "Buying costs $19,626, and at a sale of $17,000 leasing is $1,626 cheaper."
+    );
+
+    let plain = serve(|_| Script::Say("A lease near $480 a month is typical.".into())).await;
+    let h = harness(&plain, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "what does a lease cost?").unwrap();
+    h.settle(run).await;
+    assert_eq!(
+        calls_by_agent(&plain).get("Manager"),
+        Some(&1),
+        "no sum this turn, no figure check"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_turn_that_says_what_it_found_is_left_alone() {
     let stub =

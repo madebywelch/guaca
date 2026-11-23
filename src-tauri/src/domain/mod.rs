@@ -19,6 +19,7 @@ pub mod plugin;
 pub mod policy;
 pub mod promise;
 pub mod quick;
+pub mod recheck;
 pub mod routine;
 pub mod search;
 pub mod signin;

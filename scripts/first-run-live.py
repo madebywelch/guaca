@@ -153,6 +153,8 @@ def run(task: str, n: int, key: str, model: str, evidence: Path) -> dict:
             "refused": [a for a in w.egress.attempts if not a.endswith(ALLOWED)],
             "result": "\n\n".join(said(w, agent)),
             "tools": tool_calls(w),
+            "sentBack": [line.split("correction=", 1)[-1] for line in w.host.log_text().splitlines()
+                         if "answer sent back once" in line],
         }
     finally:
         w.close()
@@ -178,6 +180,8 @@ def report(r: dict) -> str:
             f"outcome {r['outcome']}, {r['agentMessages']} agent messages, {r['questions']} questions")
     if r["refused"]:
         head += f", refused egress {r['refused']}"
+    head += f", sent back {len(r['sentBack'])}"
+    head += "".join(f"\nSent back: {why}" for why in r["sentBack"])
     tools = "".join(f"Tool: {t['name']} {json.dumps(t['arguments'])} -> {t['outcome']}\n" for t in r["tools"])
     return f"{head}\nFor you: {r['forYou']['headline']}\n{tools}\n{r['result']}\n"
 

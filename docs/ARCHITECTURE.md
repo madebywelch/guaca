@@ -1357,7 +1357,28 @@ The standing prompt tells every agent to use it for every sum, to show the
 figures, to put no figure in an answer, a difference, a break-even or a what-if
 included, that it was not given or did not get back, and to state a weekday only when it was given one or
 the calculator returned it. *Your group's calendar* writes today's weekday out
-in full.
+in full, and under it the eight weeks from this one on, a line a week naming
+each day from Monday to Sunday (`occasion::weeks_words`). It sits in the
+volatile half beside the date, which already changes once a day, so it costs
+the cache nothing the date line did not, and about 830 characters.
+
+Wording ran out before the faults did: with all of that said, live plans still
+named a Sunday a Saturday, and what-ifs were still worked out in the model's
+head. So a finished answer is checked in code before anyone sees it
+(`domain/recheck.rs`, called where a turn would end). A weekday written beside a
+date it can read, "Saturday, 20 December 2026", "Sat Dec 20" or "Saturday the
+20th of December", outside code, is checked against the calendar; a date with
+no year is the next one, or this year's if it was within the last month. On a
+turn that called `calculator`, every money figure and percentage in the answer
+has to be a number in the prompt, a message or a tool result of this turn,
+allowing for how it was rounded and written. If either check finds something,
+the answer goes back to the model once, saying what is wrong and asking for
+the whole answer again: a wrong weekday comes back with the true one, the
+nearest dates that are the weekday it wanted, and the weeks around it; the rejected text is dropped from what is streamed and
+kept, and the second answer is delivered as it is, so a turn cannot loop. The
+text is never rewritten for the model. A turn that did no sum is not held to
+the figure check, because an answer with no arithmetic in it, a plan or a
+draft, would be sent back for every price it mentions.
 
 ## Files are references, and what a model gets depends on what they are
 
