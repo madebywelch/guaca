@@ -1269,7 +1269,11 @@ export function SettingsPage({ request, onSection, notices }: Props) {
                   busy={busy}
                   placeholder="sk_… (optional)"
                 >
-                  {settings?.kernelKeySet ? undefined : "Without a key, no agent has a browser."}
+                  {settings?.kernelKeySet
+                    ? undefined
+                    : capabilities.localBrowser
+                      ? "Without a key, an agent you give a browser uses one on this Mac: public web only, no sign-ins and no live view."
+                      : "Without a key, no agent has a browser."}
                 </ApiKeyField>
 
                 <label className="field">

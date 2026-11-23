@@ -1,6 +1,6 @@
 import { act, render as baseRender, fireEvent, screen, waitFor } from "@testing-library/react";
 import { useEffect, useState } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { bindingFor } from "../lib/keybinds";
 import { useStore } from "../lib/store";
@@ -13,11 +13,13 @@ const stopAgentBrowser = vi.fn<(id: string) => Promise<void>>();
 const giveAgentBrowser = vi.fn<(id: string) => Promise<unknown>>();
 const takeAgentBrowser = vi.fn<(id: string) => Promise<unknown>>();
 const setAgentBrowserConsent = vi.fn<(id: string, consent: string) => Promise<unknown>>();
+const localBrowser = vi.fn<() => Promise<string>>();
 
 vi.mock("../lib/ipc", async (original) => ({
   ...(await original<typeof import("../lib/ipc")>()),
   api: {
     agentBrowser: (id: string) => agentBrowser(id),
+    localBrowser: () => localBrowser(),
     giveAgentBrowser: (id: string) => giveAgentBrowser(id),
     takeAgentBrowser: (id: string) => takeAgentBrowser(id),
     setAgentBrowserConsent: (id: string, consent: string) => setAgentBrowserConsent(id, consent),
@@ -554,5 +556,67 @@ describe("BrowserScreen", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Close it and save/ }));
     await waitFor(() => expect(stopAgentBrowser).toHaveBeenCalledWith("a"));
+  });
+});
+
+describe("BrowserScreen with a browser on this Mac and no Kernel key", () => {
+  const besideTheHost = (localBrowser: boolean) =>
+    useStore.setState((s) => ({ capabilities: { ...s.capabilities, localBrowser } }));
+
+  beforeEach(() => {
+    agentBrowser.mockReset();
+    localBrowser.mockReset();
+    configure(false);
+    besideTheHost(true);
+  });
+
+  afterEach(() => besideTheHost(false));
+
+  it("says the browser is being set up and asks for no browser until it is ready", async () => {
+    localBrowser.mockResolvedValue("settingUp");
+    render(<BrowserScreen agent={card("a", "Scout")} />);
+    expect(await screen.findByText(/Setting up the browser on this Mac/)).toBeTruthy();
+    expect(screen.getByText(/Scout is told to try again shortly/)).toBeTruthy();
+    expect(screen.getByText("setting up")).toBeTruthy();
+    expect(agentBrowser).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Open" })).toBeNull();
+  });
+
+  it("says what the browser on this Mac cannot do once it is ready", async () => {
+    localBrowser.mockResolvedValue("ready");
+    agentBrowser.mockResolvedValue({
+      sessionId: "page-0",
+      state: "running",
+      liveViewUrl: null,
+      unwatchable: null,
+    });
+    render(<BrowserScreen agent={card("a", "Scout")} />);
+    expect(await screen.findByText(/Public web only, and no live view/)).toBeTruthy();
+    expect(await screen.findByText("running")).toBeTruthy();
+    expect(screen.queryByTitle(/Open Scout's browser/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open" })).toBeNull();
+  });
+
+  it("offers it to an agent that has none, as a browser on this Mac", async () => {
+    render(<BrowserScreen agent={card("a", "Scout", false)} />);
+    expect(screen.getByRole("switch", { name: "Browser" }).getAttribute("title")).toContain(
+      "browser on this Mac",
+    );
+    expect(localBrowser).not.toHaveBeenCalled();
+  });
+
+  it("leaves a workspace with a Kernel key exactly as it was", async () => {
+    configure(true);
+    agentBrowser.mockResolvedValue(HAS_ONE);
+    render(<BrowserScreen agent={card("a", "Scout")} />);
+    await waitFor(() => expect(agentBrowser).toHaveBeenCalled());
+    expect(localBrowser).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Public web only/)).toBeNull();
+  });
+
+  it("says nothing on a host with neither a key nor a browser of its own", () => {
+    besideTheHost(false);
+    const { container } = render(<BrowserScreen agent={card("a", "Scout")} />);
+    expect(container.innerHTML).toBe("");
   });
 });
