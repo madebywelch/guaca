@@ -928,3 +928,89 @@ it("opens on what was entered before the host was up and says why the held key f
     "OpenRouter did not accept that key. Check that you pasted all of it, or create a new key there, then test again.",
   );
 });
+
+describe("a person with no key yet", () => {
+  function provider(value: string) {
+    fireEvent.change(screen.getByLabelText("API provider"), { target: { value } });
+  }
+
+  it("links to the selected provider's own key page, opened in the browser, with a few steps", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch");
+    await draw();
+    const link = screen.getByRole("link", { name: "Get a key" }) as HTMLAnchorElement;
+    expect(link.href).toBe("https://openrouter.ai/settings/keys");
+    const steps = link.closest(".onboarding-keyhelp")!.querySelectorAll("li");
+    expect(steps.length).toBeGreaterThan(0);
+    expect(steps.length).toBeLessThanOrEqual(3);
+    fireEvent.click(link);
+    expect(mocks.openExternal).toHaveBeenCalledExactlyOnceWith(
+      "https://openrouter.ai/settings/keys",
+    );
+
+    provider("openai");
+    expect((screen.getByRole("link", { name: "Get a key" }) as HTMLAnchorElement).href).toBe(
+      "https://platform.openai.com/api-keys",
+    );
+
+    provider("custom");
+    expect(screen.queryByRole("link", { name: "Get a key" })).toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(mocks.testConnection).not.toHaveBeenCalled();
+  });
+
+  it("offers no key link once a key is saved for that provider", async () => {
+    useStore.setState({ settings: stored({ apiKeySet: true }) });
+    await draw();
+    expect(screen.queryByRole("link", { name: "Get a key" })).toBeNull();
+  });
+
+  it("gives the address when the browser cannot open it", async () => {
+    mocks.openExternal.mockRejectedValue(new Error("no browser"));
+    await draw();
+    fireEvent.click(screen.getByRole("link", { name: "Get a key" }));
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "The browser could not open. Go to https://openrouter.ai/settings/keys in your browser.",
+    );
+  });
+
+  it("shows the key link while the host is still starting, asking the host nothing", async () => {
+    useStore.setState({ settings: null });
+    render(<OnboardingProvider waiting onConnected={vi.fn()} onBack={vi.fn()} onDraft={vi.fn()} />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("link", { name: "Get a key" }));
+    expect(mocks.openExternal).toHaveBeenCalledWith("https://openrouter.ai/settings/keys");
+    for (const call of [mocks.claudeProgram, mocks.subscriptionStatus, mocks.testConnection])
+      expect(call).not.toHaveBeenCalled();
+  });
+});
+
+describe("someone who already pays for a plan", () => {
+  it("sees the plan sign-ins first, and that a plan needs no key", async () => {
+    await draw();
+    const cards = screen
+      .getAllByRole("button")
+      .filter((button) => button.classList.contains("onboarding-choice"))
+      .map((button) => button.querySelector("strong")!.textContent);
+    expect(cards).toEqual(["ChatGPT subscription", "Claude subscription", "API key"]);
+    expect(
+      screen.getByText(
+        "If you already pay for ChatGPT or Claude, sign in with that plan and skip the key.",
+      ),
+    ).toBeTruthy();
+    for (const plan of [/^ChatGPT subscription/, /^Claude subscription/])
+      expect(screen.getByRole("button", { name: plan }).textContent).toContain(
+        "No API key needed.",
+      );
+  });
+
+  it("says, while the host starts, that a plan sign-in waits for it and a key can go in now", async () => {
+    useStore.setState({ settings: null });
+    render(<OnboardingProvider waiting onConnected={vi.fn()} onBack={vi.fn()} onDraft={vi.fn()} />);
+    await act(async () => {});
+    expect(
+      screen.getByText(
+        "If you already pay for ChatGPT or Claude, sign in with that plan and skip the key. Sign-in runs on your host, so it starts once your host is ready; a key can go in now.",
+      ),
+    ).toBeTruthy();
+  });
+});

@@ -39,7 +39,7 @@ import { bindingFor } from "./lib/keybinds";
 import { PLACE_LABELS } from "./lib/menu";
 import { FEED_COALESCE_MS, presenceOf, presenceReporter, samePresence } from "./lib/menubar";
 import { catchUp, deliver, land } from "./lib/notify";
-import { heldStart, readFirstTask } from "./lib/onboarding";
+import { heldStart, holdStart, readFirstTask } from "./lib/onboarding";
 import { inferenceOf, providerFor } from "./lib/providers";
 import { numbered, stepped } from "./lib/rail";
 import { useRuntime } from "./lib/runtime";
@@ -88,6 +88,7 @@ export default function App() {
     return !!(task.agentId || task.key || heldStart()?.queued);
   });
   const [checkingFirstTask, setCheckingFirstTask] = useState(false);
+  const [unusedKey, setUnusedKey] = useState(false);
   const selected = useStore((s) => s.selected);
   const settings = useStore((s) => s.settings);
   const banner = useStore((s) => s.banner);
@@ -410,6 +411,14 @@ export default function App() {
         !groups[0]!.apiKeySet &&
         Object.values(groups[0]!.inference).every((value) => value === null)));
   const welcoming = firstRun && !checkingFirstTask;
+
+  useEffect(() => {
+    if (!ready || settings === null || firstRun) return;
+    const held = heldStart();
+    if (!held) return;
+    holdStart(null);
+    if (held.provider?.apiKey.trim()) setUnusedKey(true);
+  }, [ready, settings, firstRun]);
   const showRoster = ready && !firstRun && !settingsPage && agents.length > 0;
   const runningResolved = useStore((state) => state.runningKnown || state.runningUnavailable);
   const runningReadFailed = useStore((state) => state.runningReadFailed);
@@ -479,6 +488,18 @@ export default function App() {
           <span>Add an API key before your agents can reply.</span>
           <button type="button" className="btn" onClick={() => openSettings("provider")}>
             {overlay === "settings" ? "Go to Provider" : "Open settings"}
+          </button>
+        </div>
+      )}
+
+      {unusedKey && (
+        <div className="banner" role="status">
+          <span>
+            This host already had a workspace, so the API key you typed while it started was not
+            used. Guaca did not save it anywhere and has cleared it from this window.
+          </span>
+          <button type="button" className="btn" onClick={() => setUnusedKey(false)}>
+            Dismiss
           </button>
         </div>
       )}

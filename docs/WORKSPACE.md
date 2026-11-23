@@ -2009,6 +2009,13 @@ up the provider step asks for the sign-in and the queued task starts right
 after it. The pickup of a sign-in this Mac already has is offered only once
 there is a host to ask.
 
+A held key is used only by a first run. When the host that answers already has
+a workspace and nothing was queued, the steps do not open there, so the key
+would otherwise sit in the window's memory with nothing left to send it.
+`App` drops what is held as soon as it knows the first run is not happening,
+never sends the key to that host, whose settings are its own, and says in a
+banner that the key was not used and not saved.
+
 The brief stays on this device, scoped to the host, while the operator connects
 AI or reloads the window. No credential is part of that draft. Connecting a
 provider does not create an agent or send a message: only Start task does both.
@@ -2058,6 +2065,17 @@ most likely to already have it. A host without the Claude program is a sentence
 on that card rather than a card that is not there: `claude_program` is asked when
 the step mounts, and the card says either that the program is missing and how to
 install it, or that this deployment does not offer it.
+
+The plans come first and say so: a line under the heading tells someone who
+already pays for ChatGPT or Claude to sign in with that plan and skip the key,
+and before the host is up it adds that the sign-in starts once the host is
+ready while a key can go in now. Getting a key was the slowest part of a first
+run, minutes spent outside the app with nothing pointing the way, so under the
+key field a preset that names its key page (`keyPage` in `lib/providers.ts`)
+has a Get a key link and at most three steps. The link opens that page in the
+system browser and the app fetches nothing itself. Only OpenRouter and OpenAI
+name one, because those are the two the card offers and the two whose pages
+were checked; a custom endpoint has none, and a saved key hides it.
 
 Start task names the group it hires into for the task, before hiring: Research,
 Planning or Writing, and My group for a task in the person's own words. The
