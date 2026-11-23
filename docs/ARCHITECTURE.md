@@ -1360,7 +1360,7 @@ the calculator returned it. *Your group's calendar* writes today's weekday out
 in full, and under it the eight weeks from this one on, a line a week naming
 each day from Monday to Sunday (`occasion::weeks_words`). It sits in the
 volatile half beside the date, which already changes once a day, so it costs
-the cache nothing the date line did not, and about 700 characters.
+the cache nothing the date line did not, and about 830 characters.
 
 Wording ran out before the faults did: with all of that said, live plans still
 named a Sunday a Saturday, and what-ifs were still worked out in the model's
@@ -1373,7 +1373,8 @@ turn that called `calculator`, every money figure and percentage in the answer
 has to be a number in the prompt, a message or a tool result of this turn,
 allowing for how it was rounded and written. If either check finds something,
 the answer goes back to the model once, saying what is wrong and asking for
-the whole answer again; the rejected text is dropped from what is streamed and
+the whole answer again: a wrong weekday comes back with the true one, the
+nearest dates that are the weekday it wanted, and the weeks around it; the rejected text is dropped from what is streamed and
 kept, and the second answer is delivered as it is, so a turn cannot loop. The
 text is never rewritten for the model. A turn that did no sum is not held to
 the figure check, because an answer with no arithmetic in it, a plan or a
