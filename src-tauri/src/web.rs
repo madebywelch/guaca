@@ -35,8 +35,9 @@ pub enum FetchError {
     #[error("`{0}` is not a web address: only http:// and https:// addresses can be read")]
     NotWeb(String),
     #[error(
-        "{host} is on this host's own network (loopback, private, link-local or a cloud \
-         metadata address), and pages there are never read"
+        "{host} is on this host's own network (loopback, private, link-local, a cloud \
+         metadata address, one of this host's own addresses or a network it is directly \
+         connected to), and pages there are never read"
     )]
     Private { host: String },
     #[error("{host} could not be reached: the name did not resolve or the site did not answer")]
@@ -94,6 +95,118 @@ fn forbidden_v6(ip: Ipv6Addr) -> bool {
         || (segments[0] == 0x2002 && forbidden_v4(embedded(segments[1], segments[2])))
 }
 
+pub const WIDEST_V4: u8 = 16;
+pub const WIDEST_V6: u8 = 48;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Network {
+    pub address: IpAddr,
+    pub prefix: u8,
+}
+
+impl Network {
+    fn holds(&self, ip: IpAddr) -> bool {
+        let (ours, theirs, width, widest) = match (self.address, ip) {
+            (IpAddr::V4(ours), IpAddr::V4(theirs)) => {
+                (u128::from(u32::from(ours)), u128::from(u32::from(theirs)), 32u8, WIDEST_V4)
+            }
+            (IpAddr::V6(ours), IpAddr::V6(theirs)) => {
+                (u128::from(ours), u128::from(theirs), 128, WIDEST_V6)
+            }
+            _ => return false,
+        };
+        let prefix = self.prefix.clamp(widest, width);
+        (ours ^ theirs) >> (width - prefix) == 0
+    }
+}
+
+fn embedded_v4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
+    let segments = ip.segments();
+    let embedded = |high: u16, low: u16| Ipv4Addr::from((u32::from(high) << 16) | u32::from(low));
+    if let Some(v4) = ip.to_ipv4_mapped() {
+        return Some(v4);
+    }
+    if segments[..6] == [0, 0, 0, 0, 0, 0] || segments[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
+        return Some(embedded(segments[6], segments[7]));
+    }
+    (segments[0] == 0x2002).then(|| embedded(segments[1], segments[2]))
+}
+
+pub fn beside(ip: IpAddr, networks: &[Network]) -> bool {
+    let also = match ip {
+        IpAddr::V6(v6) => embedded_v4(v6).map(IpAddr::V4),
+        IpAddr::V4(_) => None,
+    };
+    networks.iter().any(|network| network.holds(ip) || also.is_some_and(|v4| network.holds(v4)))
+}
+
+pub fn permitted_beside(ip: IpAddr, networks: &[Network]) -> bool {
+    !forbidden(ip) && !beside(ip, networks)
+}
+
+#[cfg(unix)]
+unsafe fn socket_ip(socket: *const libc::sockaddr) -> Option<IpAddr> {
+    if socket.is_null() {
+        return None;
+    }
+    match i32::from((*socket).sa_family) {
+        libc::AF_INET => {
+            let v4 = std::ptr::read_unaligned(socket.cast::<libc::sockaddr_in>());
+            Some(IpAddr::V4(Ipv4Addr::from(u32::from_be(v4.sin_addr.s_addr))))
+        }
+        libc::AF_INET6 => {
+            let v6 = std::ptr::read_unaligned(socket.cast::<libc::sockaddr_in6>());
+            Some(IpAddr::V6(Ipv6Addr::from(v6.sin6_addr.s6_addr)))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(unix)]
+unsafe fn mask_bits(mask: *const libc::sockaddr, address: IpAddr) -> u8 {
+    let (offset, width) = match address {
+        IpAddr::V4(_) => (std::mem::offset_of!(libc::sockaddr_in, sin_addr), 4),
+        IpAddr::V6(_) => (std::mem::offset_of!(libc::sockaddr_in6, sin6_addr), 16),
+    };
+    if mask.is_null() {
+        return width * 8;
+    }
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+    let present = usize::from((*mask).sa_len);
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "freebsd")))]
+    let present = offset + usize::from(width);
+    let bytes = mask.cast::<u8>();
+    (0..usize::from(width))
+        .map(|at| if offset + at < present { *bytes.add(offset + at) } else { 0 })
+        .map(u8::count_ones)
+        .sum::<u32>() as u8
+}
+
+#[cfg(unix)]
+pub fn interfaces() -> Option<Vec<Network>> {
+    let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
+    if unsafe { libc::getifaddrs(&mut head) } != 0 {
+        return None;
+    }
+    let mut found = Vec::new();
+    let mut at = head;
+    while !at.is_null() {
+        let entry = unsafe { &*at };
+        if let Some(address) = unsafe { socket_ip(entry.ifa_addr) } {
+            let prefix = unsafe { mask_bits(entry.ifa_netmask, address) };
+            found.push(Network { address, prefix });
+        }
+        at = entry.ifa_next;
+    }
+    unsafe { libc::freeifaddrs(head) };
+    Some(found)
+}
+
+#[cfg(not(unix))]
+pub fn interfaces() -> Option<Vec<Network>> {
+    None
+}
+
 pub fn vet(url: &reqwest::Url, allowed: fn(IpAddr) -> bool) -> Result<(), FetchError> {
     if !matches!(url.scheme(), "http" | "https") {
         return Err(FetchError::NotWeb(url.to_string()));
@@ -112,7 +225,7 @@ pub fn vet(url: &reqwest::Url, allowed: fn(IpAddr) -> bool) -> Result<(), FetchE
 }
 
 fn permitted(ip: IpAddr) -> bool {
-    !forbidden(ip)
+    interfaces().is_some_and(|networks| permitted_beside(ip, &networks))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -693,6 +806,119 @@ mod tests {
         assert!(refused.downcast_ref::<Inward>().is_some(), "{refused}");
     }
 
+    const HOSTED: [Network; 2] = [
+        Network { address: IpAddr::V4(Ipv4Addr::new(85, 10, 20, 30)), prefix: 24 },
+        Network {
+            address: IpAddr::V6(Ipv6Addr::new(0x2a01, 0x4f8, 0x10, 0x20, 0, 0, 0, 0x30)),
+            prefix: 64,
+        },
+    ];
+
+    fn hosted(ip: IpAddr) -> bool {
+        permitted_beside(ip, &HOSTED)
+    }
+
+    #[test]
+    fn the_hosts_own_addresses_its_neighbors_and_its_gateway_are_refused() {
+        for address in [
+            "85.10.20.30",
+            "85.10.20.77",
+            "85.10.20.1",
+            "85.10.20.255",
+            "2a01:4f8:10:20::30",
+            "2a01:4f8:10:20::99",
+            "2a01:4f8:10:20::1",
+            "2a01:4f8:10:20:ffff:ffff:ffff:ffff",
+        ] {
+            let ip: IpAddr = address.parse().unwrap();
+            assert!(!forbidden(ip), "{address} is outside the fixed ranges");
+            assert!(!hosted(ip), "{address} should be refused");
+        }
+    }
+
+    #[test]
+    fn an_address_off_the_hosts_networks_is_still_read() {
+        for address in
+            ["1.1.1.1", "85.10.21.30", "85.10.19.255", "2606:4700::1111", "2a01:4f8:10:21::30"]
+        {
+            let ip: IpAddr = address.parse().unwrap();
+            assert!(hosted(ip), "{address} should be readable");
+        }
+    }
+
+    #[test]
+    fn an_ipv4_address_of_the_host_is_refused_inside_ipv6() {
+        for address in
+            ["::ffff:85.10.20.30", "::ffff:550a:1401", "64:ff9b::550a:141e", "2002:550a:1401::1"]
+        {
+            let ip: IpAddr = address.parse().unwrap();
+            assert!(!hosted(ip), "{address} should be refused");
+        }
+        for address in [
+            "http://85.10.20.30/",
+            "http://[::ffff:85.10.20.30]/",
+            "http://85.10.20.1:8080/admin",
+            "http://1426723870/",
+            "http://[2a01:4f8:10:20::30]/",
+        ] {
+            let url = reqwest::Url::parse(address).unwrap();
+            assert!(matches!(vet(&url, hosted), Err(FetchError::Private { .. })), "{address}");
+        }
+    }
+
+    #[test]
+    fn a_very_wide_prefix_refuses_only_the_neighborhood_of_the_hosts_address() {
+        let wide = [
+            Network { address: IpAddr::V4(Ipv4Addr::new(85, 10, 20, 30)), prefix: 0 },
+            Network {
+                address: IpAddr::V6(Ipv6Addr::new(0x2a01, 0x4f8, 0x10, 0x20, 0, 0, 0, 0x30)),
+                prefix: 8,
+            },
+        ];
+        for address in
+            ["85.10.20.30", "85.10.20.1", "85.10.99.1", "2a01:4f8:10:20::30", "2a01:4f8:10:99::1"]
+        {
+            let ip: IpAddr = address.parse().unwrap();
+            assert!(!permitted_beside(ip, &wide), "{address} should be refused");
+        }
+        for address in
+            ["85.11.0.1", "1.1.1.1", "93.184.216.34", "2a01:4f8:11::1", "2606:4700::1111"]
+        {
+            let ip: IpAddr = address.parse().unwrap();
+            assert!(permitted_beside(ip, &wide), "{address} should be readable");
+        }
+    }
+
+    const LOOPBACK_AS_OWN: [Network; 2] = [
+        Network { address: IpAddr::V4(Ipv4Addr::LOCALHOST), prefix: 8 },
+        Network { address: IpAddr::V6(Ipv6Addr::LOCALHOST), prefix: 128 },
+    ];
+
+    fn loopback_as_own(ip: IpAddr) -> bool {
+        !beside(ip, &LOOPBACK_AS_OWN)
+    }
+
+    #[tokio::test]
+    async fn a_name_that_resolves_to_the_hosts_own_address_is_refused_at_resolution() {
+        use reqwest::dns::Resolve;
+        let resolver = Resolver { allowed: loopback_as_own };
+        let name: reqwest::dns::Name = "localhost".parse().unwrap();
+        let refused = resolver.resolve(name).await.err().expect("localhost must not resolve");
+        assert!(refused.downcast_ref::<Inward>().is_some(), "{refused}");
+    }
+
+    #[test]
+    fn this_machines_own_addresses_are_refused() {
+        let networks = interfaces().expect("this machine's interfaces could not be read");
+        assert!(
+            networks.contains(&Network { address: IpAddr::V4(Ipv4Addr::LOCALHOST), prefix: 8 }),
+            "{networks:?}"
+        );
+        for network in networks {
+            assert!(!permitted(network.address), "{network:?} should be refused");
+        }
+    }
+
     struct Site {
         address: SocketAddr,
         hits: Arc<AtomicUsize>,
@@ -751,6 +977,43 @@ mod tests {
             assert!(matches!(refused, Err(FetchError::Private { .. })), "{address}: {refused:?}");
         }
         assert_eq!(site.hits.load(Ordering::SeqCst), 0, "a refused address was still contacted");
+    }
+
+    #[tokio::test]
+    async fn the_hosts_own_address_is_never_connected_to() {
+        let site = serve(|_, _| reply("200 OK", "Content-Type: text/html\r\n", "secret")).await;
+        let port = site.address.port();
+        let refusing = Fetcher::guarded(loopback_as_own, Limits::default()).unwrap();
+        for address in [format!("http://127.0.0.1:{port}/"), format!("http://localhost:{port}/")] {
+            let refused = refusing.fetch(&address).await;
+            assert!(matches!(refused, Err(FetchError::Private { .. })), "{address}: {refused:?}");
+        }
+        assert_eq!(site.hits.load(Ordering::SeqCst), 0, "a refused address was still contacted");
+        let open = Fetcher::guarded(|ip| ip.is_loopback(), Limits::default()).unwrap();
+        assert!(open.fetch(&format!("http://127.0.0.1:{port}/")).await.is_ok());
+        assert_eq!(site.hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_redirect_to_the_hosts_own_address_is_refused_before_it_is_followed() {
+        let site = serve(|path, _| match path {
+            "/own" => reply("302 Found", "Location: http://85.10.20.30/\r\n", ""),
+            "/gateway" => reply("302 Found", "Location: http://85.10.20.1:8080/\r\n", ""),
+            "/mapped" => reply("301 Moved", "Location: http://[::ffff:85.10.20.30]/\r\n", ""),
+            "/v6" => reply("301 Moved", "Location: http://[2a01:4f8:10:20::1]/\r\n", ""),
+            _ => reply("200 OK", "Content-Type: text/plain\r\n", "fine"),
+        })
+        .await;
+        let fetcher = Fetcher::guarded(
+            |ip| ip == IpAddr::V4(Ipv4Addr::LOCALHOST) || hosted(ip),
+            Limits::default(),
+        )
+        .unwrap();
+        for path in ["own", "gateway", "mapped", "v6"] {
+            let refused = fetcher.fetch(&format!("http://{}/{path}", site.address)).await;
+            assert!(matches!(refused, Err(FetchError::Private { .. })), "{path}: {refused:?}");
+        }
+        assert!(fetcher.fetch(&format!("http://{}/page", site.address)).await.is_ok());
     }
 
     #[tokio::test]
