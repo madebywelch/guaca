@@ -4172,9 +4172,10 @@ SCENARIOS: dict[str, Scenario] = {
         "with nothing waiting, Tab leaves the composer for its own next control",
         "every model call was one the scenario scripted",
     )),
-    "headline": Scenario(scenario_headline, "Three agents finish while For you is open: a draft under the label "
-                         "Draft, a verdict after \"I'll work this out for you...\", and a plan with nothing before "
-                         "it. For you lists each by its answer, and every conversation keeps the words as written.",
+    "headline": Scenario(scenario_headline, "Three agents finish while For you is open, and For you lists a draft "
+                         "under the label Draft and a verdict after \"I'll work this out for you...\" by the answer "
+                         "after the lead-in; a plan with nothing before it keeps its own first line, and every "
+                         "conversation keeps the words as written.",
     (
         "a result that opens with a label or a promise is listed by the answer after it",
         "a result with nothing before its answer is listed by its own first line",
