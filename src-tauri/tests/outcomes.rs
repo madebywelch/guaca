@@ -217,9 +217,7 @@ async fn a_message_taken_into_another_turn_has_no_outcome_of_its_own() {
     let (open, count) = (gate.clone(), calls.clone());
     let stub = serve(move |_| match count.fetch_add(1, Ordering::SeqCst) {
         0 => {
-            while !open.load(Ordering::SeqCst) {
-                std::thread::sleep(Duration::from_millis(5));
-            }
+            hold_until_open(&open, "a_message_taken_into_another_turn_has_no_outcome_of_its_own");
             Script::Progress("Looking up the vendor.".into())
         }
         _ => Script::Say("The vendor opens at 9, and their number is 555-0100.".into()),
