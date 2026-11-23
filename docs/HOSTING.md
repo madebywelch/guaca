@@ -47,7 +47,9 @@ makes to someone who runs it themselves.
   `read_page` is fetched by the host itself, straight from the site at that
   address: the site sees the host's address and a request for that page, and
   nothing else of the workspace. That fetch never reaches the host's own
-  network or a cloud metadata address, and each agent's **Web reading** switch
+  network, its own public address or anything else on the networks it is
+  directly connected to, or a cloud metadata address, and each agent's **Web
+  reading** switch
   turns both off. There is no telemetry.
 
 [`src-tauri/tests/unreachable.rs`](../src-tauri/tests/unreachable.rs) holds the
