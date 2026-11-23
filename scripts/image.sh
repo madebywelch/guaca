@@ -100,6 +100,9 @@ docker build --build-arg "GUACA_VERSION=$(node -p 'require("./package.json").ver
 step "The browser sidecar reaches the public web and nothing else"
 BROWSER_IMAGE="${BROWSER_IMAGE}" STANDIN_IMAGE="${IMAGE}" ./scripts/browser-isolation.sh
 
+step "An agent with no Kernel key reads a public page through it"
+GUACAD_IMAGE="${IMAGE}" BROWSER_IMAGE="${BROWSER_IMAGE}" python3 scripts/browser-e2e.py
+
 step "Image ${IMAGE} answers"
 if [ -n "${KEEP:-}" ]; then
   docker run -d --init --name "${NAME}" -v "${VOLUME}:/var/lib/guaca" -p 127.0.0.1:8787:8787 "${IMAGE}" >/dev/null
