@@ -99,7 +99,7 @@ operator's own machine (the window, the menu bar, notifications, the local
 host's container, reading a dropped file) and never runs an agent: agent logic
 written there is in the wrong half. `boot.rs` opens the workspace, `ipc.rs`
 writes the command surface once, and `domain/deployment.rs` is the only place
-what a host can do is decided: four capabilities, refused in the command before
+what a host can do is decided: five capabilities, refused in the command before
 anything is spent and drawn on the row before the field is filled in. A managed box and an operator's own box are the same variant, and a
 third would mean something below that line had started caring who paid.
 `docs/HOSTING.md`.
@@ -183,7 +183,8 @@ that way: `docs/MACHINES.md`.
 
 **A computer and a browser are two places, not two views of one.** A computer is
 an E2B machine with a screen, worked by looking and pointing (`use_screen`). A
-browser is a hosted Chrome, worked by asking the page (`browse`). Different
+browser is a Chrome, hosted by Kernel or run beside the host, worked by asking
+the page (`browse`). Different
 providers, unrelated cookie jars, separate sign-ins, either configurable without
 the other. Anything that describes one to a model has to disclaim the other, or
 the model takes a screenshot to see what `browse` did.
