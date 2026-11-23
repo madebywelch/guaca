@@ -6482,9 +6482,10 @@ async fn absorbed_routine_resumes_with_its_consuming_turn_and_records() {
         }
         match seen.fetch_add(1, Ordering::SeqCst) {
             0 => {
-                while !gate.load(Ordering::SeqCst) {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
+                hold_until_open(
+                    &gate,
+                    "absorbed_routine_resumes_with_its_consuming_turn_and_records",
+                );
                 Script::Progress("Original work.".into())
             }
             1 => Script::Progress("Routine work happened once.".into()),
@@ -6677,9 +6678,7 @@ async fn gated_researcher(
         }
         match calls.fetch_add(1, Ordering::SeqCst) {
             0 => {
-                while !gate.load(Ordering::SeqCst) {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
+                hold_until_open(&gate, "gated_researcher");
                 Script::Progress("Looking up the vendor.".into())
             }
             _ => Script::Hang,
@@ -8342,10 +8341,10 @@ async fn stopping_a_turn_hands_back_a_message_it_took_in_and_never_acted_on() {
         let (gate, calls) = (gate.clone(), calls.clone());
         serve(move |_| match calls.fetch_add(1, Ordering::SeqCst) {
             0 => {
-                let deadline = Instant::now() + Duration::from_secs(20);
-                while !gate.load(Ordering::SeqCst) && Instant::now() < deadline {
-                    std::thread::yield_now();
-                }
+                hold_until_open(
+                    &gate,
+                    "stopping_a_turn_hands_back_a_message_it_took_in_and_never_acted_on",
+                );
                 Script::Progress("Looking up the vendor.".into())
             }
             1 => Script::Hang,
@@ -8379,10 +8378,10 @@ async fn stopping_a_turn_tells_a_message_it_acted_on_at_once_and_settles_it() {
         let (gate, calls) = (gate.clone(), calls.clone());
         serve(move |_| match calls.fetch_add(1, Ordering::SeqCst) {
             0 => {
-                let deadline = Instant::now() + Duration::from_secs(20);
-                while !gate.load(Ordering::SeqCst) && Instant::now() < deadline {
-                    std::thread::yield_now();
-                }
+                hold_until_open(
+                    &gate,
+                    "stopping_a_turn_tells_a_message_it_acted_on_at_once_and_settles_it",
+                );
                 Script::Progress("Looking up the vendor.".into())
             }
             1 => Script::Progress("Looking up the number.".into()),
@@ -8531,10 +8530,7 @@ async fn a_message_handed_on_beside_the_turn_that_acted_on_it_never_runs_without
         let (gate, calls) = (gate.clone(), calls.clone());
         serve(move |_| match calls.fetch_add(1, Ordering::SeqCst) {
             0 => {
-                let deadline = Instant::now() + Duration::from_secs(20);
-                while !gate.load(Ordering::SeqCst) && Instant::now() < deadline {
-                    std::thread::yield_now();
-                }
+                hold_until_open(&gate, "a_message_handed_on_beside_the_turn_that_acted_on_it_never_runs_without_that_record");
                 Script::Progress("Looking up the vendor.".into())
             }
             1 => Script::Progress("Looking up the number.".into()),
@@ -8576,10 +8572,7 @@ async fn a_message_handed_on_beside_the_turn_that_acted_on_it_is_carried_on_in_t
         let (gate, calls) = (gate.clone(), calls.clone());
         serve(move |_| match calls.fetch_add(1, Ordering::SeqCst) {
             0 => {
-                let deadline = Instant::now() + Duration::from_secs(20);
-                while !gate.load(Ordering::SeqCst) && Instant::now() < deadline {
-                    std::thread::yield_now();
-                }
+                hold_until_open(&gate, "a_message_handed_on_beside_the_turn_that_acted_on_it_is_carried_on_in_that_turn");
                 Script::Progress("Looking up the vendor.".into())
             }
             1 => Script::Progress("Looking up the number.".into()),
@@ -8688,10 +8681,7 @@ async fn a_message_whose_start_cannot_be_recorded_is_delivered_after_two_crashes
 async fn acted_on_then(gate: Arc<std::sync::atomic::AtomicBool>, calls: Arc<AtomicUsize>) -> Stub {
     serve(move |_| match calls.fetch_add(1, Ordering::SeqCst) {
         0 => {
-            let deadline = Instant::now() + Duration::from_secs(20);
-            while !gate.load(Ordering::SeqCst) && Instant::now() < deadline {
-                std::thread::yield_now();
-            }
+            hold_until_open(&gate, "acted_on_then");
             Script::Progress("Looking up the vendor.".into())
         }
         1 => Script::Progress("Looking up the number.".into()),
@@ -8742,10 +8732,10 @@ async fn a_failed_model_call_hands_back_a_message_the_turn_never_acted_on() {
         let (gate, calls) = (gate.clone(), calls.clone());
         serve(move |body| {
             if calls.fetch_add(1, Ordering::SeqCst) == 0 {
-                let deadline = Instant::now() + Duration::from_secs(20);
-                while !gate.load(Ordering::SeqCst) && Instant::now() < deadline {
-                    std::thread::yield_now();
-                }
+                hold_until_open(
+                    &gate,
+                    "a_failed_model_call_hands_back_a_message_the_turn_never_acted_on",
+                );
                 return Script::Progress("Looking up the vendor.".into());
             }
             if has_tool_result(body) {
