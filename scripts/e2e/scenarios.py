@@ -4070,7 +4070,246 @@ CREW_OFFER = """(() => {
 })()"""
 
 
+PHONES = ((360, 800), (390, 844), (430, 932))
+SURFACES = ("light", "dark")
+LONG_NAME = "Researcher for International Market Operations"
+NAME_FLOOR = 96
+TABS_FLOOR = 44
+SCROLL_ROUNDING = 2
+CHECK_TOTALS = "Check the totals."
+MEASURE_FIX = "Can the measure fix go out today?"
+MEASURE_QUESTION = "Review the measure fix now, or wait for Monday's build?"
+ORDINARY_DAY = utc_ms(2026, 6, 17, 12)
+
+PHONE_FACTS = """(() => {
+  const shown = (el) => el.checkVisibility({ opacityProperty: true, visibilityProperty: true })
+    && el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0;
+  const text = (el) => el.textContent.replace(/\\s+/g, ' ').trim();
+  const rect = (el) => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom }; };
+  const foot = document.querySelector('.roster__foot');
+  const items = [...foot.querySelectorAll('button, .roster__day, .roster__greeting')].filter(shown).map((el) => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const r = el.matches('button') ? el.getBoundingClientRect() : range.getBoundingClientRect();
+    return { name: text(el), left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+  });
+  const title = document.querySelector('.pane__title');
+  const tabs = document.querySelector('.agent-tabs__list');
+  const strip = document.querySelector('.roster__scroll');
+  const cards = [...strip.querySelectorAll('.roster__agent')];
+  const stripAt = strip.scrollLeft;
+  strip.scrollLeft = 0;
+  const first = cards[0].getBoundingClientRect().left;
+  strip.scrollLeft = strip.scrollWidth;
+  const last = cards.at(-1).getBoundingClientRect().right;
+  strip.scrollLeft = stripAt;
+  const tabsAt = tabs.scrollLeft;
+  tabs.scrollLeft = tabs.scrollWidth;
+  const lastTab = tabs.lastElementChild.getBoundingClientRect().right;
+  tabs.scrollLeft = tabsAt;
+  const header = document.querySelector('.pane__header');
+  return {
+    width: innerWidth,
+    foot: { ...rect(foot), spill: foot.scrollWidth - foot.clientWidth, items },
+    name: { text: title.textContent, shown: title.clientWidth, whole: title.scrollWidth, ...rect(title) },
+    header: { ...rect(header), spill: header.scrollWidth - header.clientWidth },
+    tabs: { ...rect(tabs), lastEnd: lastTab },
+    more: rect(document.querySelector('.pane__more')),
+    strip: { ...rect(strip), first, last },
+    chip: rect(document.querySelector('.roster__questions')),
+    picker: [...document.querySelectorAll('.roster__compact option')].map((o) => o.textContent).filter((t) => /\\((Ctrl|\u2318|\u2303)/.test(t)),
+  };
+})()"""
+
+SCREEN_FACTS = """(() => {
+  const shown = (el) => el.checkVisibility({ opacityProperty: true, visibilityProperty: true })
+    && el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().height > 0;
+  const named = (el) => (typeof el.className === 'string' && el.className.split(' ')[0]) || el.tagName.toLowerCase();
+  const held = (el) => {
+    for (let up = el.parentElement; up && up !== document.body; up = up.parentElement) {
+      if (/hidden|auto|scroll|clip/.test(getComputedStyle(up).overflowX)) {
+        const r = up.getBoundingClientRect();
+        if (r.left >= -0.5 && r.right <= innerWidth + 0.5) return true;
+      }
+    }
+    return false;
+  };
+  const off = [...document.body.querySelectorAll('*')].filter((el) => {
+    if (el.closest('svg, [hidden]') || !shown(el)) return false;
+    const r = el.getBoundingClientRect();
+    return (r.right > innerWidth + 0.5 || r.left < -0.5) && !held(el);
+  }).map(named);
+  const hints = [...document.querySelectorAll('kbd, .desk__key, .toast__key')].filter(shown).map((el) => el.textContent.trim());
+  return { page: document.documentElement.scrollWidth, width: innerWidth, off: [...new Set(off)], hints };
+})()"""
+
+PHONE_CLAIMS = ("foot", "name", "hints", "strip", "fit")
+
+
+def phone_faults(facts: dict, ordinary: bool) -> dict[str, list[str]]:
+    foot, name, header, tabs = facts["foot"], facts["name"], facts["header"], facts["tabs"]
+    items = foot["items"]
+    row = [f"{a['name']!r} is drawn over {b['name']!r}" for index, a in enumerate(items) for b in items[index + 1:]
+           if min(a["right"], b["right"]) - max(a["left"], b["left"]) > 1
+           and min(a["bottom"], b["bottom"]) - max(a["top"], b["top"]) > 1]
+    row += [f"{item['name']!r} is drawn off the edge" for item in items
+            if item["left"] < foot["left"] - 0.5 or item["right"] > min(foot["right"], facts["width"]) + 0.5]
+    row += [f"the foot scrolls by {foot['spill']:g}px"] if foot["spill"] > 1 else []
+    cut = name["whole"] > name["shown"] + 1
+    called = []
+    if ordinary and cut:
+        called.append(f"{name['text']!r} is cut to {name['shown']}px of {name['whole']}px")
+    if not ordinary and name["shown"] < NAME_FLOOR:
+        called.append(f"{name['text']!r} is cut to {name['shown']}px, under {NAME_FLOOR}px")
+    if name["left"] < header["left"] - 0.5 or name["right"] > header["right"] + 0.5 or header["spill"] > 1:
+        called.append("the header is wider than the screen")
+    if tabs["right"] - tabs["left"] < TABS_FLOOR:
+        called.append(f"the tabs have {tabs['right'] - tabs['left']:g}px to scroll in")
+    if tabs["lastEnd"] > tabs["right"] + SCROLL_ROUNDING or tabs["right"] > facts["more"]["left"] + 0.5:
+        called.append("the last tab cannot be scrolled clear of the edge")
+    strip, chip = facts["strip"], facts["chip"]
+    reach = []
+    if chip["right"] > strip["left"] + 0.5:
+        reach.append("the questions chip covers the strip")
+    if strip["first"] < strip["left"] - 0.5 or strip["last"] > strip["right"] + 0.5:
+        reach.append("an agent cannot be scrolled fully into view")
+    return {"foot": row, "name": called, "strip": reach}
+
+
+def phone_screen(w: World, seen: dict[str, list[str]], cell: str, what: str) -> None:
+    facts = w.ui.evaluate(SCREEN_FACTS)
+    seen["hints"] += [f"{cell}, {what}: {hint!r}" for hint in facts["hints"]]
+    if facts["page"] > facts["width"] or facts["off"]:
+        seen["fit"].append(f"{cell}, {what}: {facts['off'] or 'the page'} is wider than {facts['width']}px")
+
+
+def pointer_settles(w: World, touch: bool) -> None:
+    ui = w.ui
+    w.wait(f"the page reports {'a touch screen' if touch else 'a mouse'}",
+           lambda: ui.evaluate(f"matchMedia('(hover: none) and (pointer: coarse)').matches === {str(touch).lower()}"))
+    ui.evaluate("new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))",
+                await_promise=True)
+
+
+def phone_cell(w: World, seen: dict[str, list[str]], surface: str, size: tuple[int, int], name: str,
+               waiting: int) -> None:
+    ui = w.ui
+    ui.phone(*size)
+    cell = f"{surface} {size[0]}x{size[1]}, {name!r}, {waiting} waiting"
+    w.wait(f"the page is {size[0]} wide", lambda: ui.evaluate(f"innerWidth === {size[0]}") and ui.evaluate(look.SETTLED))
+    pointer_settles(w, True)
+    open_agent(w, AGENT)
+    open_agent(w, name)
+    w.wait(f"the header names {name}", lambda: ui.evaluate("document.querySelector('.pane__title')?.textContent") == name)
+    w.wait("the phone layout settles", lambda: ui.evaluate(look.SETTLED))
+    facts = ui.evaluate(PHONE_FACTS)
+    for key, found in phone_faults(facts, name == "Dara").items():
+        if found and not seen[key]:
+            w.capture(f"{key} fault, {cell}")
+        seen[key] += [f"{cell}: {one}" for one in found]
+    seen["hints"] += [f"{cell}, the agent picker: {option!r}" for option in facts["picker"]]
+    phone_screen(w, seen, cell, "the conversation")
+    if (waiting, name, size[0]) == (1, "Dara", 390):
+        w.capture(f"the conversation, {cell}")
+    if waiting != 1 or name != "Dara":
+        return
+    ui.click("button", "Now")
+    w.wait("the Now tab opens", lambda: ui.evaluate("!!document.querySelector('.agent-panel')"))
+    phone_screen(w, seen, cell, "the Now tab")
+    ui.click("button", "Conversation")
+    w.wait("the conversation returns", lambda: ui.find("log", f"Conversation with {name}"))
+    ui.click("button", "For you, 1 question")
+    w.wait("For you opens", lambda: ui.evaluate("!!document.querySelector('.for-you')"))
+    w.wait("For you has finished moving", lambda: ui.evaluate(look.SETTLED))
+    phone_screen(w, seen, cell, "For you")
+    ui.key("Escape")
+    w.wait("For you closes", lambda: not ui.evaluate("!!document.querySelector('.for-you')"))
+    ui.click("button", "Agents")
+    w.wait("the Groups sheet opens", lambda: ui.find("dialog", "Groups and agents"))
+    w.wait("the Groups sheet has finished moving", lambda: ui.evaluate(look.SETTLED))
+    phone_screen(w, seen, cell, "the Groups sheet")
+    ui.click("button", "Command menu")
+    w.wait("the command menu opens", lambda: ui.find("dialog", "Command menu"))
+    w.wait("the command menu has finished moving", lambda: ui.evaluate(look.SETTLED))
+    phone_screen(w, seen, cell, "the command menu")
+    ui.key("Escape")
+    w.wait("the command menu closes", lambda: not ui.find("dialog", "Command menu"))
+    dismiss(w)
+
+
+def asks(w: World, name: str, waiting: int) -> None:
+    w.host.call("send_message", agentId=agent_id(w, name), text=MEASURE_FIX)
+    w.wait(f"{name} has a question", lambda: roster_status(w, name) == "Has a question")
+    w.wait(f"{waiting} waiting", lambda: w.ui.find("button", f"{waiting} question{'s' if waiting > 1 else ''} waiting"))
+
+
+def scenario_phone(w: World) -> None:
+
+    def script(c: Call) -> Reply | None:
+        if c.last_user.endswith(MEASURE_FIX):
+            return call("ask_operator", question=MEASURE_QUESTION, options=["Review now", "Wait for Monday"])
+        if c.last_user.endswith(CHECK_TOTALS):
+            return say("The totals match.")
+        return hello(c)
+
+    w.model.script = script
+    w.start()
+    first_run(w)
+    settled(w, 1)
+    ui = w.ui
+    ui.clock(ORDINARY_DAY)
+    for name in ("Pip", "Dara", LONG_NAME):
+        new_agent(w, name, "Wait to be asked.")
+    open_agent(w, AGENT)
+    w.host.call("send_message", agentId=agent_id(w, "Pip"), text=CHECK_TOTALS)
+    w.wait("Pip has a result", lambda: roster_status(w, "Pip") == "Has a result")
+
+    seen: dict[str, list[str]] = {key: [] for key in PHONE_CLAIMS}
+    for waiting in (0, 1, 3):
+        if waiting == 1:
+            asks(w, "Dara", 1)
+        if waiting == 3:
+            asks(w, LONG_NAME, 2)
+            asks(w, AGENT, 3)
+        for surface in SURFACES:
+            look_surface(w, surface)
+            for name in ("Dara", LONG_NAME):
+                for size in PHONES:
+                    phone_cell(w, seen, surface, size, name, waiting)
+
+    ui.desktop(390, 844)
+    w.wait("a narrow window with a mouse is laid out as one column", lambda: ui.evaluate("innerWidth === 390")
+           and ui.evaluate(look.SETTLED))
+    pointer_settles(w, False)
+    mouse = ui.evaluate("[...document.querySelectorAll('.roster__agent kbd')].filter(k => k.checkVisibility()).length")
+
+    w.check("the foot row's items sit apart and inside the screen at every phone width, surface and question count",
+            not seen["foot"], observed=len(seen["foot"]), detail=seen["foot"][:6] or None, stop=False)
+    w.check("an agent's name is shown whole, or shortened no further than a readable width, with its tabs still reachable",
+            not seen["name"], observed=len(seen["name"]), detail=seen["name"][:6] or None, stop=False)
+    w.check("no keyboard hint is drawn under touch emulation, and a narrow window with a mouse still draws them",
+            not seen["hints"] and mouse > 0, observed={"touch": len(seen["hints"]), "mouse": mouse},
+            detail=seen["hints"][:6] or None, stop=False)
+    w.check("the questions chip never covers the agent strip, and every agent scrolls fully into view",
+            not seen["strip"], observed=len(seen["strip"]), detail=seen["strip"][:6] or None, stop=False)
+    w.check("the conversation, the Now tab, For you, the Groups sheet and the command menu fit every phone width",
+            not seen["fit"], observed=len(seen["fit"]), detail=seen["fit"][:6] or None, stop=False)
+    no_unscripted(w)
+
+
 SCENARIOS: dict[str, Scenario] = {
+    "phone": Scenario(scenario_phone, "On a 360, 390 and 430 pixel phone, in paper and ink, with a short and a long "
+                      "agent name and none, one and several questions waiting, the foot row's items never overlap, "
+                      "the agent's name stays readable, no keyboard hint is drawn and the strip stays reachable; "
+                      "the same checks fail on any cell that overlaps, cuts the name to a letter or shows a key.",
+    (
+        "the foot row's items sit apart and inside the screen at every phone width, surface and question count",
+        "an agent's name is shown whole, or shortened no further than a readable width, with its tabs still reachable",
+        "no keyboard hint is drawn under touch emulation, and a narrow window with a mouse still draws them",
+        "the questions chip never covers the agent strip, and every agent scrolls fully into view",
+        "the conversation, the Now tab, For you, the Groups sheet and the command menu fit every phone width",
+        "every model call was one the scenario scripted",
+    )),
     "room": Scenario(scenario_room, "The conversation keeps two fifths of the window while a group works and while a "
                      "question waits on the map, under a one-row header with no status bar; launch focuses the "
                      "waiting question where it sits, without the Questions tray, and Escape then 1 answers it.",
