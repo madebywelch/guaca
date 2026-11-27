@@ -15,6 +15,11 @@ fn main() {
             let digest =
                 image.strip_prefix("ghcr.io/madebywelch/guaca/guacad@sha256:").unwrap_or_default();
             assert!(digest.len() == 64 && digest.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)), "Published desktop releases require GUACA_BACKEND_IMAGE pinned to the published digest");
+            let browser = std::env::var("GUACA_BROWSER_IMAGE").unwrap_or_default();
+            let digest = browser
+                .strip_prefix("ghcr.io/madebywelch/guaca/browser@sha256:")
+                .unwrap_or_default();
+            assert!(digest.len() == 64 && digest.bytes().all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)), "Published desktop releases require GUACA_BROWSER_IMAGE pinned to the digest the same release run published");
         }
     }
     if std::env::var_os("CARGO_FEATURE_DESKTOP").is_some() {

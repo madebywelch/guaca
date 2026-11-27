@@ -10,6 +10,10 @@ async fn local_host_status(state: tauri::State<'_, LocalHost>) -> Result<Status,
     Ok(state.status().await)
 }
 #[tauri::command]
+fn local_browser_download_failed(state: tauri::State<'_, LocalHost>) -> bool {
+    state.browser_download_failed()
+}
+#[tauri::command]
 fn local_host_progress(state: tauri::State<'_, LocalHost>) -> Option<Phase> {
     state.progress()
 }
@@ -203,7 +207,10 @@ pub fn run() {
                 LocalHost::new(&app.config().identifier, crate::host::IMAGE)
                     .with_journal(data.join("host-update.json"))
                     .with_engine_record(data.join("host-engine.json"))
-                    .with_browser(crate::host::BROWSER_IMAGE, data.join("browser-seccomp.json")),
+                    .with_browser(
+                        Some(crate::host::BROWSER_IMAGE),
+                        data.join("browser-seccomp.json"),
+                    ),
             );
             let watching = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -234,6 +241,7 @@ pub fn run() {
             local_host_status,
             local_host_start,
             local_host_progress,
+            local_browser_download_failed,
             local_host_resume,
             local_host_choose,
             local_host_elsewhere,

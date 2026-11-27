@@ -346,7 +346,12 @@ outlives the container.
 
 The Chromium version is whatever Debian 13's security archive shipped when the
 image was built, so it is pinned by the image the app names in
-`GUACA_BROWSER_IMAGE`, and updated by building a new one.
+`GUACA_BROWSER_IMAGE`, and updated by building a new one. A release names it by
+the digest its own `release image` run built and checked on both
+architectures; an unpinned build names `ghcr.io/madebywelch/guaca/browser` at
+its own version. A newer app replaces a browser an older one left running the
+first time it looks, and keeps the old one serving until the new image has
+downloaded. A download that fails is retried every minute, and the pane says so.
 
 ## Stealth is the operator's switch and defaults off
 

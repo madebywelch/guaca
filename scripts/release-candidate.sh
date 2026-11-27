@@ -14,6 +14,10 @@ else
     *@sha256:*) ;;
     *) echo 'A distributable candidate needs GUACA_BACKEND_IMAGE pinned by digest.' >&2; exit 1 ;;
   esac
+  case "${GUACA_BROWSER_IMAGE:-}" in
+    ghcr.io/madebywelch/guaca/browser@sha256:*) ;;
+    *) echo 'A distributable candidate needs GUACA_BROWSER_IMAGE pinned by digest, from the same release run as GUACA_BACKEND_IMAGE.' >&2; exit 1 ;;
+  esac
 fi
 export GUACA_COMMIT="$COMMIT"
 pnpm tauri build --bundles app

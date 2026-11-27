@@ -14,6 +14,12 @@ const giveAgentBrowser = vi.fn<(id: string) => Promise<unknown>>();
 const takeAgentBrowser = vi.fn<(id: string) => Promise<unknown>>();
 const setAgentBrowserConsent = vi.fn<(id: string, consent: string) => Promise<unknown>>();
 const localBrowser = vi.fn<() => Promise<string>>();
+const browserDownloadFailed = vi.fn<() => Promise<boolean>>();
+
+vi.mock("../lib/host", async (original) => ({
+  ...(await original<typeof import("../lib/host")>()),
+  localHost: { browserDownloadFailed: () => browserDownloadFailed() },
+}));
 
 vi.mock("../lib/ipc", async (original) => ({
   ...(await original<typeof import("../lib/ipc")>()),
@@ -570,6 +576,8 @@ describe("BrowserScreen with a browser on this Mac and no Kernel key", () => {
   beforeEach(() => {
     agentBrowser.mockReset();
     localBrowser.mockReset();
+    browserDownloadFailed.mockReset();
+    browserDownloadFailed.mockResolvedValue(false);
     configure(false);
     besideTheHost(true);
   });
@@ -584,6 +592,35 @@ describe("BrowserScreen with a browser on this Mac and no Kernel key", () => {
     expect(screen.getByText("setting up")).toBeTruthy();
     expect(agentBrowser).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "Open" })).toBeNull();
+  });
+
+  it("says a failed download failed, that it is being tried again, and keeps asking", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      localBrowser.mockResolvedValue("settingUp");
+      browserDownloadFailed.mockResolvedValue(true);
+      render(<BrowserScreen agent={card("a", "Scout")} />);
+      expect(await screen.findByText(/could not be downloaded to this Mac/)).toBeTruthy();
+      expect(screen.getByText(/tries again on its own every minute/)).toBeTruthy();
+      expect(screen.getByText("retrying")).toBeTruthy();
+      expect(screen.queryByText(/Setting up the browser/)).toBeNull();
+
+      browserDownloadFailed.mockResolvedValue(false);
+      localBrowser.mockResolvedValue("ready");
+      agentBrowser.mockResolvedValue({
+        sessionId: "page-0",
+        state: "running",
+        liveViewUrl: null,
+        unwatchable: null,
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+      expect(await screen.findByText(/Public web only, and no live view/)).toBeTruthy();
+      expect(screen.queryByText(/could not be downloaded/)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("says what the browser on this Mac cannot do once it is ready", async () => {

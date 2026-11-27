@@ -108,23 +108,48 @@ test("mutable tags use the release pool, while a recovered architecture can repl
 test("release publication refuses to tag an image if a sibling artifact expired", (t) => {
   const directory = mkdtempSync(join(tmpdir(), "guaca-release-digests-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const amd = join(directory, "digests", "release-digests-amd64");
-  const arm = join(directory, "digests", "release-digests-arm64");
-  mkdirSync(amd, { recursive: true });
-  writeFileSync(join(amd, "a".repeat(64)), "");
-  const script = release.match(/name: Publish the multi-platform image\n[\s\S]*?run: \|\n((?: {10}.*\n)+)/)?.[1];
+  const browser = "ghcr.io/madebywelch/guaca/browser";
+  const kept = (arch, name, hex) => {
+    const where = join(directory, "digests", `release-digests-${arch}`, name);
+    mkdirSync(where, { recursive: true });
+    writeFileSync(join(where, hex.repeat(64)), "");
+  };
+  kept("amd64", "guacad", "a");
+  kept("amd64", "browser", "d");
+  const script = release.match(/name: Publish the multi-platform images\n[\s\S]*?run: \|\n((?: {10}.*\n)+)/)?.[1];
+  assert.ok(script);
   const run = () => spawnSync("bash", ["-e", "-c", 'docker() { printf "%s\\n" "$@"; }\n' + script], {
     encoding: "utf8",
-    env: { RUNNER_TEMP: directory, IMAGE: image, VERSION: "1.2.3", GITHUB_RUN_NUMBER: "42" },
+    env: { RUNNER_TEMP: directory, IMAGE: image, BROWSER: browser, VERSION: "1.2.3", GITHUB_RUN_NUMBER: "42" },
   });
   assert.equal(run().status, 1);
   assert.equal(run().stdout, "");
-  mkdirSync(arm);
-  writeFileSync(join(arm, "b".repeat(64)), "");
+  kept("arm64", "guacad", "b");
+  assert.equal(run().status, 1, "a host image is not tagged while its browser is missing");
+  assert.equal(run().stdout, "");
+  kept("arm64", "browser", "e");
   const result = run();
   assert.equal(result.status, 0);
-  assert.ok(result.stdout.includes(`${image}@sha256:${"a".repeat(64)}\n`));
-  assert.ok(result.stdout.includes(`${image}@sha256:${"b".repeat(64)}\n`));
+  for (const named of [`${image}@sha256:${"a".repeat(64)}`, `${image}@sha256:${"b".repeat(64)}`]) {
+    assert.ok(result.stdout.includes(`${named}\n`));
+  }
+  for (const named of [`${browser}@sha256:${"d".repeat(64)}`, `${browser}@sha256:${"e".repeat(64)}`]) {
+    assert.ok(result.stdout.includes(`${named}\n`));
+  }
+  assert.ok(result.stdout.includes(`${image}:1.2.3\n`) && result.stdout.includes(`${browser}:1.2.3\n`));
+});
+
+test("a release tags no image until both architectures have checked their browser natively", () => {
+  const build = release.slice(release.indexOf("\n  build:"), release.indexOf("\n  publish:"));
+  const at = (step) => build.indexOf(`- name: ${step}`);
+  assert.match(build, /runner: aws-linux-arm-2cpu-4gb/);
+  assert.match(build, /run: \.\/scripts\/browser-isolation\.sh/);
+  assert.match(build, /run: python3 scripts\/browser-e2e\.py/);
+  assert.ok(at("The browser reaches the public web and nothing else") > at("Build and push the browser"));
+  assert.ok(at("Keep the digests") > at("The browser reaches the public web and nothing else"));
+  assert.ok(at("Keep the digests") > at("An agent with no Kernel key reads a public page through it"));
+  assert.doesNotMatch(build, /continue-on-error/);
+  assert.match(build, /BROWSER_IMAGE: \$\{\{ env\.BROWSER \}\}@\$\{\{ steps\.browser\.outputs\.digest \}\}/);
 });
 
 test("release publication cannot move a version tag backward", (t) => {
