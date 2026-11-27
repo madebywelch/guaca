@@ -109,7 +109,8 @@ A scenario is a function in `scripts/e2e/scenarios.py` taking a `World`
   sentence and records the call as unscripted, which fails the run.
 - `w.ui`: the page (`scripts/e2e/browser.py`). `find(role, name)`, `click`,
   `fill` (select all, then type), `choose` (a select, by keyboard), `key`,
-  `value`, `names(role)`, `text()`, `snapshot()`, and `scrollbars(classic)`, which
+  `value`, `names(role)`, `text()`, `snapshot()`, `phone(width, height)`, which turns touch
+  emulation on so the touch media queries match, `desktop(width, height)`, which turns it off, and `scrollbars(classic)`, which
   draws bars that take room beside the content, the way a Mac with a mouse
   does, instead of the default that takes none; reload the page after it so
   every region lays out under the new bars. Elements are found in Chromium's

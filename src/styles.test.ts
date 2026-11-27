@@ -607,6 +607,48 @@ describe("the agent's tabs", () => {
   });
 });
 
+describe("the phone's foot, header and keys", () => {
+  const rule = (selector: string) =>
+    Object.fromEntries(
+      declarations()
+        .filter((d) => d.selector === selector)
+        .map((d) => [d.property, d.value]),
+    );
+
+  it("keeps the foot's status bar at the width of what is in it, so the row scrolls rather than draw one item over the next", () => {
+    const bar = rule("@media (max-width: 40rem) .roster__foot .statusbar");
+    expect(bar.flex).toBe("none");
+  });
+
+  it("keeps an agent's name at its width up to a share of the header, so the tabs scroll and the name is not cut to a letter", () => {
+    const name = rule(
+      '@media (max-width: 48rem), (hover: none) and (pointer: coarse) .app[data-page="agent"] .pane__identity',
+    );
+    expect(name.flex).toBe("none");
+    expect(name["max-width"]).toBe("var(--pane-name-share)");
+  });
+
+  it("fades the tab list's far edge over a spacer of the same length, so a cut label reads as more to scroll to", () => {
+    const touch = "@media (max-width: 48rem), (hover: none) and (pointer: coarse)";
+    expect(rule(`${touch} .agent-tabs__list`)["mask-image"]).toBe(
+      "linear-gradient(to right, #000 calc(100% - var(--space-7)), transparent)",
+    );
+    expect(rule(`${touch} .agent-tabs__list::after`).width).toBe("var(--space-7)");
+  });
+
+  it.each([".rail__key", ".palette__key", ".desk__key", ".toast__key"])(
+    "hides %s on a touch screen and nowhere else",
+    (hint) => {
+      const hiding = declarations()
+        .filter((d) => d.property === "display" && d.value === "none")
+        .filter((d) => d.selector.split(", ").some((one) => one.endsWith(hint)));
+      expect(
+        hiding.map((d) => d.selector.startsWith("@media (hover: none) and (pointer: coarse) ")),
+      ).toEqual([true]);
+    },
+  );
+});
+
 function declarations(): { selector: string; property: string; value: string; rule: number }[] {
   const body = `${css.slice(css.indexOf("\n* {"))}\n${componentCss}`.replace(
     /\/\*[\s\S]*?\*\//g,

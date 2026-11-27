@@ -3068,12 +3068,25 @@ are exactly as worth stopping.
 ## The roster fits beside a narrow conversation
 
 At phone widths the roster sits above the conversation and scrolls sideways
-so the composer keeps its width. Names and statuses wrap, shortcuts sit under
-them, and the question count stays in reach. Opening an agent brings its row
-into view without moving the conversation.
+so the composer keeps its width. Names and statuses wrap, and the question count
+stays in reach beside the strip, never over it: it is a fixed neighbor of the
+scroller, so every agent can be swiped fully into view. Shortcuts sit under the
+names only where there is a keyboard. A touch screen, the same
+`(hover: none) and (pointer: coarse)` the touch block keys on, draws no key hint
+anywhere: not in the strip, the Groups sheet or the command menu, while a narrow
+window with a mouse still does. Opening an agent brings its row into view
+without moving the conversation.
 When the keyboard leaves little height, a picker shows the same names,
 statuses, and keys without pushing the composer offscreen. The shortest
 viewports hide the footer and composer hints while the keyboard is up.
+
+The foot of the strip keeps the width of what is in it and scrolls sideways
+rather than shrink, because a row that shrinks below its children draws the host
+label into whatever follows. Below 27rem the date leaves it, since the three
+places and the host fill the row at 360 and 390 wide. In the agent's header the
+name keeps its width up to `--pane-name-share` of the header, and the tab list
+is what scrolls, so a name of ordinary length is never cut to a letter.
+`scripts/verify.py phone` holds all of it at 360, 390 and 430 wide.
 
 Groups are chosen by name on a phone: the Groups sheet draws a labeled select
 above the list, and a touch scrolling the agent list never starts a reorder.

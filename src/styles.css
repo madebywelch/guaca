@@ -132,6 +132,7 @@
   --measure-turn: 42rem;
   --settings-nav-w: calc(11rem + var(--scrollbar-size));
   --tabs-meta-share: 40%;
+  --pane-name-share: 55%;
   --page: var(--sunken);
 
   --ease: cubic-bezier(0.18, 0.9, 0.22, 1);
@@ -8966,6 +8967,7 @@ button.artifacts__version[aria-pressed="true"] {
   }
 
   .roster__foot .statusbar {
+    flex: none;
     flex-direction: row;
     align-items: center;
   }
@@ -8973,6 +8975,11 @@ button.artifacts__version[aria-pressed="true"] {
   .roster__foot .statusbar > *,
   .roster__day {
     flex: none;
+  }
+
+  .roster__foot .statusbar__host,
+  .roster__foot .statusbar__place {
+    padding-inline: var(--space-2);
   }
 
   .roster__questions {
@@ -9539,6 +9546,21 @@ button.artifacts__version[aria-pressed="true"] {
 }
 
 @media (max-width: 48rem), (hover: none) and (pointer: coarse) {
+  .app[data-page="agent"] .pane__identity {
+    flex: none;
+    max-width: var(--pane-name-share);
+  }
+
+  .agent-tabs__list {
+    mask-image: linear-gradient(to right, #000 calc(100% - var(--space-7)), transparent);
+  }
+
+  .agent-tabs__list::after {
+    content: "";
+    flex: none;
+    width: var(--space-7);
+  }
+
   .pane__more {
     display: inline-flex;
   }
@@ -9986,6 +10008,21 @@ button.artifacts__version[aria-pressed="true"] {
 
 @media (max-width: 40rem) {
   .roster__scene {
+    display: none;
+  }
+}
+
+@media (max-width: 27rem) {
+  .roster__day {
+    display: none;
+  }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .rail__key,
+  .palette__key,
+  .desk__key,
+  .toast__key {
     display: none;
   }
 }
