@@ -56,6 +56,7 @@ interface UpdateState {
   release: ReleaseStatus | null;
   docker: DockerStatus | null;
   manager: Manager | null;
+  space: boolean;
   managerAt: number;
   adoptManager: (manager: Manager) => void;
   error: string;
@@ -82,6 +83,7 @@ export function HostMonitor({ children }: { children: ReactNode }) {
     value: null,
     at: 0,
   });
+  const [space, setSpace] = useState(false);
   const [error, setError] = useState("");
   const [checking, setChecking] = useState(true);
   const [admitted, setAdmitted] = useState(false);
@@ -143,13 +145,16 @@ export function HostMonitor({ children }: { children: ReactNode }) {
             )
               return null;
             if (!response.ok) throw new Error("The host's updater did not answer.");
-            return parseManager(await response.json());
+            const said: unknown = await response.json();
+            const space = (said as { space?: unknown } | null)?.space === true;
+            return { manager: parseManager(said), space };
           }),
         ]);
         if (!mounted.current) return;
         const [updates, updater] = results;
         if (updater.status === "fulfilled") {
-          const value = updater.value;
+          const value = updater.value?.manager ?? null;
+          setSpace(updater.value?.space ?? false);
           setManager((seen) => (asked >= seen.at ? { value, at: asked } : seen));
         }
         if (updates.status === "fulfilled") setRelease(updates.value);
@@ -197,6 +202,7 @@ export function HostMonitor({ children }: { children: ReactNode }) {
         release,
         docker,
         manager: manager.value,
+        space,
         managerAt: manager.at,
         adoptManager: (value) => setManager({ value, at: Date.now() }),
         error,
@@ -254,6 +260,7 @@ export function HostUpdateNotice({ onReview }: { onReview: () => void }) {
     release: state.release,
     localUpdate:
       isManaged() && state.docker?.updateAvailable ? (state.docker.targetImage ?? "") : null,
+    updatedForYou: state.space,
   });
   const key = `${workspaceOrigin()}:${notice?.key}`;
   let saved = dismissed;
@@ -465,6 +472,7 @@ export function HostUpdatePanel() {
       latest.apiGeneration >= protocol.minimum &&
       latest.apiGeneration <= protocol.maximum);
   const boxed = !managed && !!manager;
+  const updatedForYou = state.space && !managed && !boxed;
   const onMain = latest?.channel === "main";
   const target =
     latest && (onMain ? `main at ${shortBuild(latest.commit)}` : `Guaca ${latest.version}`);
@@ -583,15 +591,17 @@ export function HostUpdatePanel() {
                     ? "This app runs an older Guaca than its host."
                     : drift === "otherBuild"
                       ? "This app and its host are different builds of the same version."
-                      : newer
-                        ? "A newer host release is available."
-                        : release?.error
-                          ? "Could not check for updates."
-                          : !health.release
-                            ? "This is an unverified or development build."
-                            : !release?.latest
-                              ? "Release status has not been checked."
-                              : "No newer stable host release was found."}
+                      : updatedForYou
+                        ? "This host is a Guaca space, and it is updated for you."
+                        : newer
+                          ? "A newer host release is available."
+                          : release?.error
+                            ? "Could not check for updates."
+                            : !health.release
+                              ? "This is an unverified or development build."
+                              : !release?.latest
+                                ? "Release status has not been checked."
+                                : "No newer stable host release was found."}
       </p>
       {health && (
         <dl className="host-update-facts">
@@ -792,7 +802,7 @@ export function HostUpdatePanel() {
             {checking && !updating ? "Checking…" : "Check for updates"}
           </button>
         )}
-        {!boxed && (
+        {!boxed && !updatedForYou && (
           <button
             className="btn btn--compact"
             type="button"
@@ -802,7 +812,7 @@ export function HostUpdatePanel() {
           </button>
         )}
       </div>
-      {instructions && !boxed && (
+      {instructions && !boxed && !updatedForYou && (
         <div className="field">
           <p>
             Update on the machine running this host. Stop it and back up the complete workspace,

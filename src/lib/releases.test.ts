@@ -133,6 +133,15 @@ describe("a desktop and its host, updated separately", () => {
     );
     expect(ahead?.key).not.toBe(behind?.key);
   });
+  it("brings a space no host news, since nothing here can install it, and still names the app's", () => {
+    expect(facts({ desktop: false, release: status, updatedForYou: true })).toBeNull();
+    expect(facts({ release: status, updatedForYou: true })?.text).toBe(
+      "Guaca 0.2.0 is available for this app.",
+    );
+    expect(facts({ desktop: false, release: status })?.text).toBe(
+      "Host update available: Guaca 0.2.0.",
+    );
+  });
   it("names both when a release is newer than each of them", () => {
     expect(facts({ release: status })?.text).toBe(
       "Guaca 0.2.0 is available for this app and its host.",

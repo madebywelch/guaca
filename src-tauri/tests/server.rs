@@ -34,6 +34,7 @@ async fn workspace_in(
         origin: None,
         updater,
         browser: None,
+        space: false,
     })
     .await
     .expect("the workspace opens");
@@ -967,6 +968,7 @@ async fn two_hosts_cannot_run_the_same_workspace() {
         origin: None,
         updater: None,
         browser: None,
+        space: false,
     })
     .await;
     match second {
@@ -988,6 +990,7 @@ async fn a_host_takes_its_address_before_it_opens_the_workspace_and_its_viewers(
         origin: None,
         updater: None,
         browser: None,
+        space: false,
     })
     .await;
     match refused {
@@ -1216,6 +1219,117 @@ async fn a_host_without_an_updater_says_so_and_refuses_to_update() {
     assert_eq!(refused.status(), 404);
     let body: Value = refused.json().await.unwrap();
     assert!(body["err"]["message"].as_str().unwrap().contains("update instructions"), "{body}");
+}
+
+#[derive(Clone, Default)]
+struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn captured_log() -> &'static Captured {
+    static LOG: std::sync::OnceLock<Captured> = std::sync::OnceLock::new();
+    LOG.get_or_init(|| {
+        let captured = Captured::default();
+        let sink = captured.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_ansi(false)
+            .with_writer(move || sink.clone())
+            .finish();
+        tracing::subscriber::set_global_default(subscriber)
+            .expect("nothing else in this binary sets a subscriber");
+        captured
+    })
+}
+
+async fn start_with(space: bool, token: &str) {
+    captured_log();
+    let dir = tempfile::tempdir().unwrap();
+    let bound = guac_lib::server::bind(guac_lib::server::Settings {
+        root: dir.path().to_path_buf(),
+        bind: "127.0.0.1:0".parse().unwrap(),
+        token: token.to_string(),
+        web: Some(dir.path().join("web")),
+        origin: Some("https://space-test.fly.dev".into()),
+        updater: None,
+        browser: None,
+        space,
+    })
+    .await
+    .expect("the workspace opens");
+    drop(bound);
+}
+
+#[tokio::test]
+async fn a_space_never_writes_its_token_to_the_log_a_box_prints_it_in() {
+    let boxed = format!("box-token-{}", uuid::Uuid::new_v4().simple());
+    let spaced = format!("space-token-{}", uuid::Uuid::new_v4().simple());
+    start_with(false, &boxed).await;
+    start_with(true, &spaced).await;
+    let log = String::from_utf8_lossy(&captured_log().0.lock().unwrap()).into_owned();
+    assert!(log.contains(&boxed), "a box prints its invitation, which is how the log is read here");
+    assert!(!log.contains(&spaced), "a space's log is kept by its provider: {log}");
+    assert!(
+        log.contains("never written to a log") && log.contains("https://space-test.fly.dev"),
+        "the space said where to open it instead: {log}"
+    );
+}
+
+#[tokio::test]
+async fn a_space_says_it_is_updated_for_you_and_never_offers_an_install() {
+    let dir = tempfile::tempdir().unwrap();
+    let bound = guac_lib::server::bind(guac_lib::server::Settings {
+        root: dir.path().to_path_buf(),
+        bind: "127.0.0.1:0".parse().unwrap(),
+        token: TOKEN.to_string(),
+        web: None,
+        origin: Some("https://space-test.fly.dev".into()),
+        updater: None,
+        browser: None,
+        space: true,
+    })
+    .await
+    .expect("the space opens");
+    let addr = bound.addr;
+    tokio::spawn(bound.serve());
+    let http = reqwest::Client::new();
+    let anonymous = http.get(format!("http://{addr}/v1/host")).send().await.unwrap();
+    assert_eq!(anonymous.status(), 401, "being a space is the operator's business too");
+    let status: Value = http
+        .get(format!("http://{addr}/v1/host"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(status, json!({ "managed": false, "space": true }));
+    let refused = http
+        .post(format!("http://{addr}/v1/host/update"))
+        .bearer_auth(TOKEN)
+        .json(&json!({ "version": "9.9.9" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 404);
+    let body: Value = refused.json().await.unwrap();
+    let said = body["err"]["message"].as_str().unwrap();
+    assert!(said.contains("updated for you"), "{body}");
+    assert!(!said.contains("instructions"), "a space has no instructions to follow: {body}");
+    let (_, capabilities) = call(addr, "capabilities", json!({})).await;
+    assert_eq!(
+        capabilities["ok"]["localBrowser"], false,
+        "a space has no Docker to start a browser beside it, so it never offers one"
+    );
 }
 
 #[cfg(unix)]
@@ -1875,6 +1989,7 @@ async fn a_leftover_legacy_session_file_is_removed_when_the_host_starts() {
             origin: None,
             updater: None,
             browser: None,
+            space: false,
         })
     };
     let _running = open(first.path()).await.expect("the first start opens the workspace");
@@ -2180,6 +2295,7 @@ async fn a_host_offers_a_browser_of_its_own_only_when_one_sits_beside_it() {
         origin: None,
         updater: None,
         browser: Some("guaca-browser-not-started.invalid:9223".into()),
+        space: false,
     })
     .await
     .expect("the workspace opens");

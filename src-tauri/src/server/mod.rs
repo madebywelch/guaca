@@ -44,6 +44,7 @@ pub struct Settings {
     pub origin: Option<String>,
     pub updater: Option<PathBuf>,
     pub browser: Option<String>,
+    pub space: bool,
 }
 
 #[derive(Clone)]
@@ -53,6 +54,7 @@ struct Serving {
     sink: Arc<live::SocketSink>,
     updates: Arc<crate::updates::Checker>,
     updater: Option<Arc<std::path::Path>>,
+    space: bool,
     revocations: Arc<parking_lot::Mutex<PathBuf>>,
     revoked: broadcast::Sender<String>,
 }
@@ -137,6 +139,7 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
         sink,
         updates: Arc::new(crate::updates::Checker::default()),
         updater: settings.updater.map(Arc::from),
+        space: settings.space,
         revocations: Arc::new(parking_lot::Mutex::new(
             settings.root.join("session-revocations.json"),
         )),
@@ -182,7 +185,12 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
     );
 
     tracing::info!(%addr, agents = booted.started, "guacad ready");
-    if settings.web.is_some() {
+    if settings.space {
+        tracing::info!(
+            origin = settings.origin.as_deref().unwrap_or("the address this space was given"),
+            "open the invitation printed when this space was created; it is never written to a log"
+        );
+    } else if settings.web.is_some() {
         tracing::info!(
             url = %invitation(addr, &token),
             "open this in a browser, or the same path on the address a tunnel gives this box"
@@ -270,7 +278,7 @@ async fn host_status(State(serving): State<Serving>, headers: HeaderMap) -> Resp
         return *response;
     }
     let Some(socket) = serving.updater.clone() else {
-        return Json(json!({ "managed": false })).into_response();
+        return Json(unmanaged(serving.space)).into_response();
     };
     relay(&socket, crate::updater::Request::Status).await
 }
@@ -293,12 +301,14 @@ async fn host_update(
         return *response;
     }
     let Some(socket) = serving.updater.clone() else {
+        let message = if serving.space {
+            "This host is a Guaca space, and it is updated for you. There is nothing to install here."
+        } else {
+            "This host has no updater. Update it on the machine it runs on, using the update instructions."
+        };
         return (
             StatusCode::NOT_FOUND,
-            Json(json!({ "err": {
-                "kind": "unmanaged",
-                "message": "This host has no updater. Update it on the machine it runs on, using the update instructions.",
-            }})),
+            Json(json!({ "err": { "kind": "unmanaged", "message": message }})),
         )
             .into_response();
     };
@@ -311,6 +321,14 @@ async fn host_update(
         },
     )
     .await
+}
+
+fn unmanaged(space: bool) -> Value {
+    if space {
+        json!({ "managed": false, "space": true })
+    } else {
+        json!({ "managed": false })
+    }
 }
 
 async fn relay(socket: &std::path::Path, request: crate::updater::Request) -> Response {
