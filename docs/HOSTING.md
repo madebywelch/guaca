@@ -883,8 +883,10 @@ fast-forwards the current branch when possible; `--no-pull` uses the checkout
 as it stands. It preserves the original workspace. When Docker is ready, it
 embeds the host image for that commit in the app: the main channel's digest
 when the commit is published, which any Docker can download, or else a local
-build tagged `guacad:<commit>`, which only exists on the Mac that built it. It
-does not start a backend during installation. Without Docker, installation
+build tagged `guacad:<commit>`, which only exists on the Mac that built it. The
+built-in browser is embedded the same way: the digest in `GUACA_BROWSER_IMAGE`
+when one is exported, or else a local build of `deploy/browser` tagged
+`guaca-browser:<commit>`. It does not start a backend during installation. Without Docker, installation
 still produces a client for remote hosts.
 
 On first launch choose **On this Mac** or **Remote host**. Local setup detects
