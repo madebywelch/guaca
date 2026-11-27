@@ -72,6 +72,7 @@ function agent(id: string, name: string): AgentCard {
     hasComputer: false,
     hasBrowser: false,
     runsErrands: false,
+    readsWeb: true,
     browserConsent: "open",
     version: 1,
   };

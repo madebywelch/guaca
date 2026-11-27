@@ -2315,6 +2315,11 @@ PLAN_CLEANUP = "Plan the cleanup day."
 PLANNED = ("Book the park for Saturday the 12th, then recruit 30 volunteers in two weeks.\n\n## First step\n\n"
            "Call the parks office on Monday.")
 PLANNED_ROW = "Book the park for Saturday the 12th, then recruit 30 volunteers in two weeks."
+LOAN_LEFT = "How much is left on the car loan after three years?"
+LOAN_SUM = ("rate = 6% / 12\npayment = 35000 * rate / (1 - (1 + rate) ^ -60)\n"
+            "owed = payment * (1 - (1 + rate) ^ -24) / rate\nround(owed)")
+LOAN_WORKED = "round(owed) = 15267"
+LOAN_ROW = "$15,267 is still owed on the loan after three years."
 FINISHED_ROWS = """(() => {
   const section = document.getElementById('for-you-finished')?.closest('section');
   if (!section) return null;
@@ -2330,10 +2335,20 @@ def scenario_headline(w: World) -> None:
     notes = {("Writer", WRITE_NOTE): DRAFTED_NOTE, ("Analyst", BUY_OR_LEASE): WORKED_OUT,
              (AGENT, PLAN_CLEANUP): PLANNED}
 
+    worked: list[str] = []
+
     def script(c: Call) -> Reply | None:
         for (speaker, brief), note in notes.items():
             if c.speaker == speaker and c.last_user.endswith(brief):
                 return held(answers, say(note))
+        if c.speaker == "Accountant" and c.last_user.endswith(LOAN_LEFT):
+            if "calculator" not in c.tools:
+                return say("No calculator was offered.")
+            if not c.tool_results():
+                return held(answers, call("calculator", expression=LOAN_SUM))
+            worked.append(c.tool_results()[-1])
+            return say("I'll work out the balance first.\n\n## The sums\n\n" + c.tool_results()[-1]
+                       + "\n\nBottom line: " + LOAN_ROW)
         return hello(c)
 
     w.model.script = script
@@ -2343,17 +2358,26 @@ def scenario_headline(w: World) -> None:
     ui = w.ui
     new_agent(w, "Writer", "You write notes for the team.")
     new_agent(w, "Analyst", "You work out what things cost.")
-    for (speaker, brief) in notes:
+    new_agent(w, "Accountant", "You keep the loan figures.")
+    for (speaker, brief) in [*notes, ("Accountant", LOAN_LEFT)]:
         write(w, speaker, brief)
         w.wait(f"the message to {speaker} is recorded", lambda brief=brief: w.host.scalar(
             "SELECT count(*) FROM messages WHERE parts LIKE ?", f"%{brief}%"))
     ui.click("button", "For you")
     w.wait("For you opens", lambda: ui.find("dialog", "For you", exact=False))
     answers.set()
-    settled(w, 4, "the three tasks finish")
-    rows = w.wait("For you lists the three results as new", lambda: (r := ui.evaluate(FINISHED_ROWS))
-                  and len(r) == 3 and r)
+    settled(w, 5, "the four tasks finish")
+    rows = w.wait("For you lists the four results as new", lambda: (r := ui.evaluate(FINISHED_ROWS))
+                  and len(r) == 4 and r)
     shown = {row["who"]: row["headline"] for row in rows}
+    kept = said(w, "Accountant")
+    w.check("an agent works a sum out with the calculator, and its Bottom line is the For you headline",
+            len(worked) == 1 and LOAN_WORKED in worked[0] and shown.get("Accountant") == LOAN_ROW,
+            observed={"calculator": worked, "headline": shown.get("Accountant")}, shot=True)
+    w.check("the conversation keeps the Bottom line in the full result",
+            len(kept) == 1 and kept[0].endswith("Bottom line: " + LOAN_ROW) and LOAN_WORKED in kept[0],
+            observed=kept)
+    shown.pop("Accountant", None)
     expected = {"Writer": DRAFT_ROW, "Analyst": WORKED_ROW, AGENT: PLANNED_ROW}
     w.check("a result that opens with a label or a promise is listed by the answer after it",
             shown.get("Writer") == DRAFT_ROW and shown.get("Analyst") == WORKED_ROW,
@@ -3527,6 +3551,194 @@ def scenario_firstwrite(w: World) -> None:
                      ("Chief of Staff", "Technical Writer"))
 
 
+def picked_first_task(w: World, task: str, agent: str) -> None:
+    w.start()
+    ui = w.ui
+    ui.viewport(*WINDOW)
+    w.wait("the first visit offers a first task", lambda: ui.find("button", task))
+    ui.click("button", task)
+    ui.click("button", "Continue")
+    w.wait("the Connect your AI step", lambda: ui.find("button", "Test and continue"))
+    ui.click("button", API_KEY)
+    ui.choose("combobox", "API provider", "Custom endpoint")
+    w.wait("the endpoint fields", lambda: ui.find("textbox", "Inference endpoint"))
+    ui.fill("textbox", "Inference endpoint", w.model.base)
+    ui.fill("textbox", "Default model", STAND_IN_MODEL)
+    ui.fill("textbox", "API key", STAND_IN_KEY, exact=False)
+    ui.click("button", "Test and continue")
+    w.wait("the endpoint test passes", lambda: ui.find("button", "Start task"))
+    ui.click("button", "Start task")
+    w.wait("Start task opens the agent's conversation", lambda: ui.find("log", f"Conversation with {agent}"))
+
+
+def first_row(w: World) -> dict:
+    ui = w.ui
+    ui.click("button", "For you")
+    return w.wait("For you lists the first result", lambda: ui.evaluate(FIRST_ROW_SHOWN))
+
+
+FIRST_ROW_SHOWN = """(() => {
+  const row = document.querySelector('.for-you .finished-line');
+  return row ? { headline: row.title, who: row.querySelector('.finished-line__who')?.innerText.trim() } : null;
+})()"""
+WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+WRONG_DAY_SENT = "Weekdays that are wrong"
+FIXED_PLAN = "Bottom line: hold the cleanup on {day}, and book the park today."
+UNCHECKED_SENT = "neither in what you were given nor in anything `calculator` returned"
+SUMS = "buy = 35000 * 0.06\nlease = 500 * 36 + 3000"
+GUESSED = "Lease costs $21,000 and buying saves $107.\n\nBottom line: buy, it saves $107."
+CHECKED = "Lease costs $21,000 against $2,100 of interest.\n\nBottom line: buy, on these sums."
+
+
+def scenario_weekdayfix(w: World) -> None:
+    import datetime
+    date = datetime.date.today() + datetime.timedelta(days=17)
+    true_day = WEEKDAYS[date.weekday()]
+    wrong_day = WEEKDAYS[(date.weekday() + 1) % 7]
+    when = f"{date.day} {date.strftime('%B')} {date.year}"
+    asked: list[str] = []
+    fixed = FIXED_PLAN.format(day=f"{true_day}, {when}")
+
+    def script(c: Call) -> Reply | None:
+        if c.last_user == "ping":
+            return say("pong")
+        if c.speaker == "Product Manager" and WRONG_DAY_SENT in c.last_user:
+            asked.append(c.last_user)
+            return say("The plan, on the right day.\n\n" + fixed)
+        if c.speaker == "Product Manager" and "neighborhood cleanup day" in c.last_user:
+            return say(f"Bottom line: hold the cleanup on {wrong_day}, {when}, and book the park today.")
+        return None
+
+    w.model.script = script
+    picked_first_task(w, "Plan a project Turn an idea into a manageable first step.", "Product Manager")
+    row = first_row(w)
+    settled(w, 1, "the first task settles")
+    kept = said(w, "Product Manager")
+    w.check("an answer with a wrong weekday goes back once with the true one, and only the corrected answer is kept",
+            len(asked) == 1 and f"{when} is a {true_day}, not a {wrong_day}" in asked[0]
+            and kept == ["The plan, on the right day.\n\n" + fixed],
+            observed={"sentBack": asked, "kept": kept}, shot=True)
+    w.check("For you is headed by the corrected Bottom line",
+            row["headline"] == fixed.removeprefix("Bottom line: "), observed=row)
+    no_unscripted(w)
+
+
+def scenario_figurefix(w: World) -> None:
+    asked: list[str] = []
+
+    def script(c: Call) -> Reply | None:
+        if c.last_user == "ping":
+            return say("pong")
+        if c.speaker != "Financial Analyst":
+            return None
+        if UNCHECKED_SENT in c.last_user:
+            asked.append(c.last_user)
+            return say(CHECKED)
+        if "buy or lease" in c.last_user:
+            return say(GUESSED) if c.tool_results() else call("calculator", expression=SUMS)
+        return None
+
+    w.model.script = script
+    picked_first_task(w, "Research a decision Compare options and make the tradeoffs clear.", "Financial Analyst")
+    row = first_row(w)
+    settled(w, 1, "the first task settles")
+    kept = said(w, "Financial Analyst")
+    w.check("after a sum, a figure the calculator never gave goes back once, named, and the corrected answer is kept",
+            len(asked) == 1 and "$107" in asked[0] and "$21,000" not in asked[0] and kept == [CHECKED],
+            observed={"sentBack": asked, "kept": kept}, shot=True)
+    w.check("For you is headed by the corrected Bottom line", row["headline"] == "buy, on these sums.", observed=row)
+    no_unscripted(w)
+
+
+WEB_ASK = "Read the page at the address in this message: http://169.254.169.254/latest/meta-data/"
+WEB_SEARCH_ASK = "Search the web for lease or buy."
+SEARCH_KEY = "BSA-verify-search-key-4r7t"
+INWARD_REFUSED = "on this host's own network"
+NO_SEARCH_SAID = "This endpoint cannot search the web for agents."
+
+
+def scenario_web(w: World) -> None:
+    turns: list[Call] = []
+
+    def web_tools() -> list[list[str]]:
+        return [[name for name in c.tools if name in ("web_search", "read_page")] for c in turns]
+
+    def script(c: Call) -> Reply | None:
+        if c.last_user == "ping":
+            return say("pong")
+        if c.speaker != AGENT:
+            return None
+        turns.append(c)
+        if c.last_user.endswith("Say hello."):
+            return say(HELLO)
+        if c.last_user.endswith(WEB_ASK):
+            if not c.tool_results():
+                return call("read_page", url="http://169.254.169.254/latest/meta-data/")
+            return say("That address is refused: " + c.tool_results()[-1][:200])
+        if c.last_user.endswith(WEB_SEARCH_ASK):
+            if not c.tool_results():
+                return call("web_search", query="lease or buy")
+            return say("The search came back: " + c.tool_results()[-1][:200])
+        if c.last_user.endswith("Are you still reading the web?"):
+            return say("No.")
+        return None
+
+    w.model.script = script
+    w.secrets.append(SEARCH_KEY)
+    w.start()
+    first_run(w)
+    settled(w, 1)
+    offered = web_tools()
+    w.check("with only a local endpoint connected, an agent is offered read_page and not a search nothing can run",
+            offered and offered[-1] == ["read_page"], observed=offered)
+
+    write(w, AGENT, WEB_ASK)
+    settled(w, 2, "the page read settles")
+    refused = [c.tool_results()[-1] for c in turns if c.last_user.endswith(WEB_ASK) and c.tool_results()]
+    reached = [a for a in w.egress.attempts if "169.254" in a]
+    w.check("a page at a cloud metadata address is refused on the host, and nothing was sent anywhere",
+            refused and INWARD_REFUSED in refused[-1] and refused[-1].startswith("Error:") and not reached,
+            observed={"refused": bool(refused) and INWARD_REFUSED in refused[-1], "egress": reached},
+            detail=refused[-1][:400] if refused else None)
+
+    ui = w.ui
+    ui.press(ui.one("button", "App settings"))
+    w.wait("Settings opens", lambda: ui.find("region", "Settings"))
+    ui.click("tab", "Provider")
+    w.wait("the Provider pane is shown", lambda: ui.find("heading", "Provider"))
+    w.check("Settings says this endpoint cannot search, and where a key would send a query",
+            NO_SEARCH_SAID in ui.text() and bool(ui.find("textbox", "Web search key")),
+            observed={"said": NO_SEARCH_SAID in ui.text(), "field": bool(ui.find("textbox", "Web search key"))},
+            shot=True)
+    ui.fill("textbox", "Web search key", SEARCH_KEY)
+    ui.click("button", "Save")
+    w.wait("the key is saved", lambda: "using the key here" in ui.text())
+    w.check("with a Brave Search key saved, Settings names Brave Search as where a query goes, and shows only its end",
+            "Agents search with Brave Search" in ui.text() and SEARCH_KEY not in ui.text()
+            and "...4r7t" in ui.text(),
+            observed={"brave": "Agents search with Brave Search" in ui.text(), "hint": "...4r7t" in ui.text()},
+            shot=True)
+    ui.key("Escape")
+    w.wait("Settings closes", lambda: not ui.find("region", "Settings"))
+
+    write(w, AGENT, WEB_SEARCH_ASK)
+    settled(w, 3, "the search settles")
+    offered = web_tools()
+    searched = [a for a in w.egress.attempts if "api.search.brave.com" in a]
+    elsewhere = [a for a in w.egress.attempts if "brave" not in a and "search" in a]
+    w.check("once a key is set the agent is offered web_search, and the query goes to Brave Search and nowhere else",
+            offered[-1] == ["web_search", "read_page"] and searched and not elsewhere,
+            observed={"offered": offered[-1], "egress": w.egress.attempts})
+
+    agent = agent_id(w, AGENT)
+    w.host.call("set_agent_web", id=agent, given=False)
+    write(w, AGENT, "Are you still reading the web?")
+    settled(w, 4, "the last turn settles")
+    w.check("an agent switched off the web is offered neither web tool",
+            web_tools()[-1] == [], observed=web_tools()[-1])
+    no_unscripted(w)
+
+
 LONE_RESULT = """(() => {
   const result = [...document.querySelectorAll('.msg--result')].at(-1);
   return {
@@ -4140,6 +4352,22 @@ SCENARIOS: dict[str, Scenario] = {
         "Not now hires nobody, and the offer stays gone after a reload",
         "every model call was one the scenario scripted",
     )),
+    "weekdayfix": Scenario(scenario_weekdayfix, "A person picks Plan a project; Product Manager first names a wrong "
+                           "weekday, the answer goes back once with the true one, and the corrected answer is the one "
+                           "kept and the one For you is headed by.",
+    (
+        "an answer with a wrong weekday goes back once with the true one, and only the corrected answer is kept",
+        "For you is headed by the corrected Bottom line",
+        "every model call was one the scenario scripted",
+    )),
+    "figurefix": Scenario(scenario_figurefix, "A person picks Research a decision; Financial Analyst works a sum with "
+                          "the calculator and then states a figure it never worked out, the answer goes back once "
+                          "naming it, and the corrected answer is the one kept and the one For you is headed by.",
+    (
+        "after a sum, a figure the calculator never gave goes back once, named, and the corrected answer is kept",
+        "For you is headed by the corrected Bottom line",
+        "every model call was one the scenario scripted",
+    )),
     "firstwrite": Scenario(scenario_firstwrite, "A person picks Draft content; Content Marketer alone answers in one "
                            "model call with no message to a colleague, a quiet line under the result offers the crew, "
                            "and Not now hires nobody and stays gone after a reload.",
@@ -4172,11 +4400,14 @@ SCENARIOS: dict[str, Scenario] = {
         "with nothing waiting, Tab leaves the composer for its own next control",
         "every model call was one the scenario scripted",
     )),
-    "headline": Scenario(scenario_headline, "Three agents finish while For you is open, and For you lists a draft "
+    "headline": Scenario(scenario_headline, "Four agents finish while For you is open, and For you lists a draft "
                          "under the label Draft and a verdict after \"I'll work this out for you...\" by the answer "
-                         "after the lead-in; a plan with nothing before it keeps its own first line, and every "
-                         "conversation keeps the words as written.",
+                         "after the lead-in; a plan with nothing before it keeps its own first line; a balance "
+                         "worked out with the calculator is listed by its Bottom line, and every conversation "
+                         "keeps the words as written.",
     (
+        "an agent works a sum out with the calculator, and its Bottom line is the For you headline",
+        "the conversation keeps the Bottom line in the full result",
         "a result that opens with a label or a promise is listed by the answer after it",
         "a result with nothing before its answer is listed by its own first line",
         "the conversation keeps every result word for word",
@@ -4208,6 +4439,20 @@ SCENARIOS: dict[str, Scenario] = {
         "Home and End reach the first and the last section",
         "Tab goes from the section list into the open panel",
         "the section list is one Tab stop",
+        "every model call was one the scenario scripted",
+    )),
+    "web": Scenario(scenario_web, "With only a local endpoint connected an agent reads a page without a browser "
+                    "and is not offered a search nothing can run; a page on the host's own network is refused "
+                    "with nothing sent; Settings says where a query would go, and once a Brave Search key is saved "
+                    "the agent searches and the query goes to Brave Search alone; switched off, an agent gets "
+                    "neither tool.",
+    (
+        "with only a local endpoint connected, an agent is offered read_page and not a search nothing can run",
+        "a page at a cloud metadata address is refused on the host, and nothing was sent anywhere",
+        "Settings says this endpoint cannot search, and where a key would send a query",
+        "with a Brave Search key saved, Settings names Brave Search as where a query goes, and shows only its end",
+        "once a key is set the agent is offered web_search, and the query goes to Brave Search and nowhere else",
+        "an agent switched off the web is offered neither web tool",
         "every model call was one the scenario scripted",
     )),
     "settings": Scenario(scenario_settings, "A person opens Settings from the gear as a page in the window, with the "

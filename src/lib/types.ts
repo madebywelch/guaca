@@ -448,6 +448,7 @@ export interface AgentCard {
   hasBrowser: boolean;
   browserConsent: BrowserConsent;
   runsErrands: boolean;
+  readsWeb: boolean;
   name: string;
   avatar: string;
   color: string;
@@ -533,6 +534,9 @@ export interface Settings {
   kernelKeyHint: string;
   browserIdleMinutes: number;
   browserStealth: boolean;
+  searchKeySet: boolean;
+  searchKeyHint: string;
+  searchesWith: string;
   provider: Provider;
   baseUrl: string;
   defaultModel: string;
@@ -618,6 +622,7 @@ export interface SettingsPatch {
   kernelApiKey?: string;
   browserIdleMinutes?: number;
   browserStealth?: boolean;
+  searchApiKey?: string;
   provider?: Provider;
   baseUrl?: string;
   apiKey?: string;

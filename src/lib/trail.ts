@@ -281,6 +281,28 @@ function describe(tool: string, args: Args): Described {
       };
     }
 
+    case "web_search": {
+      const query = text(args, "query");
+      return {
+        title: query ? `Searched the web for ${clip(query, 40)}` : "Searched the web",
+        target: query,
+      };
+    }
+
+    case "calculator": {
+      const sum = text(args, "expression")?.split(/[\n;]/)[0]?.trim();
+      return {
+        title: sum ? `Worked out ${clip(sum, 40)}` : "Worked out a sum",
+        target: text(args, "expression"),
+      };
+    }
+
+    case "read_page": {
+      const url = text(args, "url");
+      if (!url) return { title: "Read a web page", target: null };
+      return { title: `Read ${place(url)}`, target: url, where: place(url) };
+    }
+
     case "browse": {
       const action = text(args, "action");
       const id = whole(args, "id");
@@ -438,6 +460,14 @@ export function callInFlight(name: string, raw: unknown): string {
         ? `Opening ${place(url)}`
         : "Working the browser";
     }
+    case "web_search":
+      return "Searching the web";
+    case "calculator":
+      return "Working out a sum";
+    case "read_page": {
+      const url = text(args, "url");
+      return url ? `Reading ${place(url)}` : "Reading a web page";
+    }
     case "use_screen":
       return "Working its screen";
     case "open_on_desktop":
@@ -500,6 +530,12 @@ function manyLabel(group: TrailGroup): string {
       const only = places.size === 1 ? [...places][0] : null;
       return only ? `${count} steps on ${only}` : `${count} steps in the browser`;
     }
+    case "web_search":
+      return `Searched the web ${count} times`;
+    case "read_page":
+      return `Read ${count} web pages`;
+    case "calculator":
+      return `Worked out ${count} sums`;
     case "use_screen":
       return `${count} actions on its screen`;
     case "open_on_desktop":

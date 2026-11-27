@@ -152,6 +152,8 @@ export const api = {
   setAgentErrands: (id: AgentId, given: boolean) =>
     invoke<void>("set_agent_errands", { id, given }),
 
+  setAgentWeb: (id: AgentId, given: boolean) => invoke<void>("set_agent_web", { id, given }),
+
   startAgentBrowser: (id: AgentId) => invoke<Browser>("start_agent_browser", { id }),
 
   stopAgentBrowser: (id: AgentId) => invoke<void>("stop_agent_browser", { id }),

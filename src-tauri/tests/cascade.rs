@@ -23,7 +23,7 @@ use guac_lib::domain::signin::{Signin, Surface};
 use guac_lib::llm::openrouter::LlmClient;
 use guac_lib::runtime::events::{Activity, RecordingSink, UiEvent};
 use guac_lib::runtime::guard::GuardLimits;
-use guac_lib::runtime::{prompt, OnDisk, Runtime};
+use guac_lib::runtime::{prompt, OnDisk, Runtime, SCHEDULE_TICK};
 
 use harness::*;
 
@@ -1493,6 +1493,110 @@ async fn a_turn_that_promises_again_is_not_argued_with() {
         calls_by_agent(&stub).get("Manager"),
         Some(&2),
         "one nudge per turn, however many times the model promises"
+    );
+}
+
+fn day_ahead(days: i64) -> (String, String) {
+    use chrono::Datelike;
+    let date = chrono::Local::now().date_naive() + chrono::Duration::days(days);
+    let wrong = date.weekday().succ();
+    (
+        format!("{}, {}", guac_lib::domain::calculator::day_name(wrong), date.format("%-d %B %Y")),
+        format!("{} is a {}", date.format("%-d %B %Y"), date.format("%A")),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_answer_with_a_wrong_weekday_goes_back_once_and_the_corrected_one_is_kept() {
+    let (wrong, correction) = day_ahead(10);
+    let first = format!("Hold the cleanup on {wrong}.");
+    let stub = serve(move |body| {
+        if anyone_said(body, "Weekdays that are wrong") {
+            Script::Say("Hold the cleanup on the Saturday before; the date moves with it.".into())
+        } else {
+            Script::Say(first.clone())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "plan the cleanup").unwrap();
+    h.settle(run).await;
+
+    assert_eq!(
+        h.channel_texts("Manager").pop().unwrap(),
+        "Hold the cleanup on the Saturday before; the date moves with it.",
+        "only the corrected answer is kept"
+    );
+    assert!(
+        stub.transcript.lock().iter().any(|body| anyone_said(body, &correction)),
+        "the send-back names the true weekday: {correction}"
+    );
+    assert_eq!(calls_by_agent(&stub).get("Manager"), Some(&2));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_answer_is_sent_back_at_most_once_and_the_second_is_delivered_as_it_is() {
+    let (wrong, _) = day_ahead(12);
+    let said = format!("Hold the cleanup on {wrong}.");
+    let again = said.clone();
+    let stub = serve(move |_| Script::Say(again.clone())).await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "plan the cleanup").unwrap();
+    h.settle(run).await;
+
+    assert_eq!(calls_by_agent(&stub).get("Manager"), Some(&2), "one send-back per turn");
+    assert_eq!(h.channel_texts("Manager").pop().unwrap(), said);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_figure_the_calculator_never_returned_goes_back_once_and_only_after_a_sum() {
+    let stub = serve(|body| {
+        if anyone_said(body, "neither in what you were given") {
+            Script::Say(
+                "Buying costs $19,626, and at a sale of $17,000 leasing is $1,626 cheaper.".into(),
+            )
+        } else if has_tool_result(body) {
+            Script::Say("Buying costs $19,626, and at $17,000 buying saves $107.".into())
+        } else {
+            Script::Plugin {
+                name: "calculator".into(),
+                arguments: serde_json::json!({"expression": "buy = 19626.12\nbuy - 21000"}),
+            }
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h
+        .runtime
+        .send_from_human(h.id("Manager"), "buy or lease? Say what a $17,000 sale does.")
+        .unwrap();
+    h.settle(run).await;
+
+    let sent_back: Vec<bool> = stub
+        .transcript
+        .lock()
+        .iter()
+        .map(|body| anyone_said(body, "neither in what you were given"))
+        .collect();
+    assert_eq!(sent_back, vec![false, false, true], "one send-back, after the sum");
+    assert!(stub
+        .transcript
+        .lock()
+        .iter()
+        .any(|body| anyone_said(body, "returned this turn: $107.")));
+    assert_eq!(
+        h.channel_texts("Manager").pop().unwrap(),
+        "Buying costs $19,626, and at a sale of $17,000 leasing is $1,626 cheaper."
+    );
+
+    let plain = serve(|_| Script::Say("A lease near $480 a month is typical.".into())).await;
+    let h = harness(&plain, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "what does a lease cost?").unwrap();
+    h.settle(run).await;
+    assert_eq!(
+        calls_by_agent(&plain).get("Manager"),
+        Some(&1),
+        "no sum this turn, no figure check"
     );
 }
 
@@ -3231,6 +3335,7 @@ async fn a_group_can_pin_a_model_without_touching_the_other_group() {
         limits: GuardLimits::default(),
         e2b: Default::default(),
         kernel: Default::default(),
+        search: Default::default(),
         webhook: Default::default(),
         quick_actions: Vec::new(),
         widgets: Vec::new(),
@@ -3323,6 +3428,7 @@ async fn a_group_runs_on_its_own_budget_and_leaves_the_next_group_alone() {
         limits: GuardLimits { max_steps_per_run: 6, ..GuardLimits::default() },
         e2b: Default::default(),
         kernel: Default::default(),
+        search: Default::default(),
         webhook: Default::default(),
         quick_actions: Vec::new(),
         widgets: Vec::new(),
@@ -4761,6 +4867,9 @@ async fn a_routine_that_is_switched_off_stays_quiet_and_starts_again_when_asked(
     );
 
     h.runtime.store().set_routine_active(routine.id, true).unwrap();
+    tokio::time::pause();
+    tokio::time::advance(SCHEDULE_TICK).await;
+    tokio::time::resume();
     h.wait_until("it to fire once switched back on", |h| {
         h.channel_texts("Watcher").iter().any(|t| t.contains("checked"))
     })
@@ -4769,6 +4878,7 @@ async fn a_routine_that_is_switched_off_stays_quiet_and_starts_again_when_asked(
 
 #[test]
 fn a_schedule_that_cannot_be_read_parks_until_the_next_tick() {
+    let (set_up, wait_for_set_up) = std::sync::mpsc::channel();
     let (finished, watch) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -4781,6 +4891,7 @@ fn a_schedule_that_cannot_be_read_parks_until_the_next_tick() {
             let h = harness(&stub, &["Watcher"], GuardLimits::default());
             h.runtime.store().conn().unwrap().execute_batch("DROP TABLE routines").unwrap();
 
+            let _ = set_up.send(());
             h.start_scheduler();
 
             tokio::time::sleep(Duration::from_secs(60)).await;
@@ -4788,6 +4899,7 @@ fn a_schedule_that_cannot_be_read_parks_until_the_next_tick() {
         let _ = finished.send(());
     });
 
+    assert!(wait_for_set_up.recv().is_ok(), "the harness failed before the scheduler started");
     assert!(
         watch.recv_timeout(Duration::from_secs(10)).is_ok(),
         "the clock never moved, so the scheduler never parked: a schedule it cannot read has to \
@@ -6477,9 +6589,10 @@ async fn absorbed_routine_resumes_with_its_consuming_turn_and_records() {
         }
         match seen.fetch_add(1, Ordering::SeqCst) {
             0 => {
-                while !gate.load(Ordering::SeqCst) {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
+                hold_until_open(
+                    &gate,
+                    "absorbed_routine_resumes_with_its_consuming_turn_and_records",
+                );
                 Script::Progress("Original work.".into())
             }
             1 => Script::Progress("Routine work happened once.".into()),
@@ -6672,9 +6785,7 @@ async fn gated_researcher(
         }
         match calls.fetch_add(1, Ordering::SeqCst) {
             0 => {
-                while !gate.load(Ordering::SeqCst) {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
+                hold_until_open(&gate, "gated_researcher");
                 Script::Progress("Looking up the vendor.".into())
             }
             _ => Script::Hang,
@@ -8337,10 +8448,10 @@ async fn stopping_a_turn_hands_back_a_message_it_took_in_and_never_acted_on() {
         let (gate, calls) = (gate.clone(), calls.clone());
         serve(move |_| match calls.fetch_add(1, Ordering::SeqCst) {
             0 => {
-                let deadline = Instant::now() + Duration::from_secs(20);
-                while !gate.load(Ordering::SeqCst) && Instant::now() < deadline {
-                    std::thread::yield_now();
-                }
+                hold_until_open(
+                    &gate,
+                    "stopping_a_turn_hands_back_a_message_it_took_in_and_never_acted_on",
+                );
                 Script::Progress("Looking up the vendor.".into())
             }
             1 => Script::Hang,
@@ -8374,10 +8485,10 @@ async fn stopping_a_turn_tells_a_message_it_acted_on_at_once_and_settles_it() {
         let (gate, calls) = (gate.clone(), calls.clone());
         serve(move |_| match calls.fetch_add(1, Ordering::SeqCst) {
             0 => {
-                let deadline = Instant::now() + Duration::from_secs(20);
-                while !gate.load(Ordering::SeqCst) && Instant::now() < deadline {
-                    std::thread::yield_now();
-                }
+                hold_until_open(
+                    &gate,
+                    "stopping_a_turn_tells_a_message_it_acted_on_at_once_and_settles_it",
+                );
                 Script::Progress("Looking up the vendor.".into())
             }
             1 => Script::Progress("Looking up the number.".into()),
@@ -8526,10 +8637,7 @@ async fn a_message_handed_on_beside_the_turn_that_acted_on_it_never_runs_without
         let (gate, calls) = (gate.clone(), calls.clone());
         serve(move |_| match calls.fetch_add(1, Ordering::SeqCst) {
             0 => {
-                let deadline = Instant::now() + Duration::from_secs(20);
-                while !gate.load(Ordering::SeqCst) && Instant::now() < deadline {
-                    std::thread::yield_now();
-                }
+                hold_until_open(&gate, "a_message_handed_on_beside_the_turn_that_acted_on_it_never_runs_without_that_record");
                 Script::Progress("Looking up the vendor.".into())
             }
             1 => Script::Progress("Looking up the number.".into()),
@@ -8571,10 +8679,7 @@ async fn a_message_handed_on_beside_the_turn_that_acted_on_it_is_carried_on_in_t
         let (gate, calls) = (gate.clone(), calls.clone());
         serve(move |_| match calls.fetch_add(1, Ordering::SeqCst) {
             0 => {
-                let deadline = Instant::now() + Duration::from_secs(20);
-                while !gate.load(Ordering::SeqCst) && Instant::now() < deadline {
-                    std::thread::yield_now();
-                }
+                hold_until_open(&gate, "a_message_handed_on_beside_the_turn_that_acted_on_it_is_carried_on_in_that_turn");
                 Script::Progress("Looking up the vendor.".into())
             }
             1 => Script::Progress("Looking up the number.".into()),
@@ -8683,10 +8788,7 @@ async fn a_message_whose_start_cannot_be_recorded_is_delivered_after_two_crashes
 async fn acted_on_then(gate: Arc<std::sync::atomic::AtomicBool>, calls: Arc<AtomicUsize>) -> Stub {
     serve(move |_| match calls.fetch_add(1, Ordering::SeqCst) {
         0 => {
-            let deadline = Instant::now() + Duration::from_secs(20);
-            while !gate.load(Ordering::SeqCst) && Instant::now() < deadline {
-                std::thread::yield_now();
-            }
+            hold_until_open(&gate, "acted_on_then");
             Script::Progress("Looking up the vendor.".into())
         }
         1 => Script::Progress("Looking up the number.".into()),
@@ -8737,10 +8839,10 @@ async fn a_failed_model_call_hands_back_a_message_the_turn_never_acted_on() {
         let (gate, calls) = (gate.clone(), calls.clone());
         serve(move |body| {
             if calls.fetch_add(1, Ordering::SeqCst) == 0 {
-                let deadline = Instant::now() + Duration::from_secs(20);
-                while !gate.load(Ordering::SeqCst) && Instant::now() < deadline {
-                    std::thread::yield_now();
-                }
+                hold_until_open(
+                    &gate,
+                    "a_failed_model_call_hands_back_a_message_the_turn_never_acted_on",
+                );
                 return Script::Progress("Looking up the vendor.".into());
             }
             if has_tool_result(body) {

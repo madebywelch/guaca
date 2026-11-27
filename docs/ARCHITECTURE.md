@@ -581,7 +581,12 @@ holds:
   for you..."), of which any whole sentence before that ending is kept. A line
   ending in a comma, such as a greeting, runs on into the next. The last line
   with words is never passed over, so a note that is only a lead-in reads as it
-  did. A line over 160 characters is cut
+  did. A note with a line that starts `Bottom line:` outside a code block is
+  headlined by the words after its last such label instead, or by the line
+  under it when the label stands alone, and the note keeps the line; the first
+  tasks ask for one, written after the working, because a model told to lead
+  with its answer states a verdict before the sums that should decide it.
+  A line over 160 characters is cut
   after its last whole sentence when that keeps at least half of it, and
   otherwise at a Unicode word boundary. The ellipsis marks either cut, so a
   shortened headline never reads as complete. A failure takes the first
@@ -1250,6 +1255,130 @@ tested on its own. Two of its tests exist only to fail a careless version:
 `https://gmail.com@evil.com/` must resolve to `evil.com`. A gate that matched
 either would hand an attacker's page the operator's account while looking like
 it had thought about it.
+
+## Reading the web needs no account, and a page fetch never looks inward
+
+A first task that asks what current sources say is a task nobody could do on a
+fresh install: reading the web took a Kernel browser, an E2B computer or a
+connector, each with a key of its own. `web_search` and `read_page` close that
+with what is already there.
+
+**A search goes to a party the operator already chose.** `Backend::for_turn`
+decides from the turn's own `InferenceConfig`, so a group that pays its own way
+searches its own way:
+
+| Provider | Search | What leaves |
+|---|---|---|
+| ChatGPT plan | the Responses API's hosted `web_search` tool, `store: false` | the query, to OpenAI |
+| Claude plan | one `claude -p` run with `--tools WebSearch` and nothing else, at most six of its own turns, answering in a results schema | the query, to Anthropic |
+| OpenRouter | the chat call's `web` plugin, billed per search on the operator's account | the query, to OpenRouter |
+| Any other endpoint, with a key in Settings | Brave Search, or Tavily for a `tvly-` key | the query, to that service |
+| Any other endpoint, with no key | none; `web_search` is not offered | nothing |
+
+A key in Settings wins over OpenRouter's plugin, because pasting it is the
+operator choosing. It never moves a subscription off its own search. Brave is
+there because it keeps an index of its own rather than reselling one, and says
+it does not profile; Tavily because it is the one most agent frameworks already
+take a key for. A scrape of a public search page with no key was the third
+option and was left out: it breaks whenever the page changes or the engine
+decides a host is a bot, and it would send queries to a party nobody chose.
+Settings says under the key field which of these is in use, in a sentence
+written by `Backend::disclosed`, so the page never decides it.
+
+The three model-backed searches are model calls, so each reserves one from the
+conversation's budget and its tokens are counted; a Brave or Tavily search is
+not and does neither. The runtime learns which from `spends_a_model_call` and
+never matches on the backend.
+
+**A page is fetched by the host, so the fetch is the guard.** `web::Fetcher` is
+its own client: no proxy, a resolver that drops every address `forbidden` names
+(loopback, private, link-local, carrier-grade NAT, multicast, documentation and
+reserved ranges, IPv4 mapped and embedded in IPv6, and so 169.254.169.254 and
+`fd00:ec2::254`), a redirect policy that checks every hop's scheme and literal
+address before following it, at most five hops, 2 MiB and twenty seconds. The
+same check also refuses every address on one of the host's own interfaces and
+every address in a network one of them is directly connected to, gateway
+included, in IPv4 and IPv6 and inside an IPv4-mapped, NAT64 or 6to4 address. A
+fixed range cannot say that: a VPS or a hosted workspace has a public address
+on its interface, and the server and its neighbors are not private. The
+interfaces are read with `getifaddrs` at every check, which takes microseconds,
+because they change while the host runs; if they cannot be read, every address
+is refused. An interface that claims a prefix wider than /16 in IPv4 or /48 in
+IPv6 refuses only that much around its own address, so a misconfigured /0
+cannot make the web unreadable, and a home network is private already. Public
+IPv6 stays readable, because a host on an IPv6-only network has no other way
+out. A name that resolves to several addresses keeps only those that pass and
+is refused when none do. A
+literal is checked before anything is sent, and a name is checked after it
+resolves and only the addresses that passed are connected to, so a name that
+answers inward the second time is still refused. No proxy is used even where one
+is set, because a proxy resolves the name itself and the guard would be checking
+an address nobody connects to. HTML is reduced to its title, its words and its
+links; a PDF or an image is refused by its type.
+
+**What it read is data, and it changes what the turn may open.** Search results
+and pages arrive under `WEB_LABEL` and mark the turn as having read something,
+exactly as a `browse` page does, so `needs_consent` treats a later browser press
+the same way. And `Reading::may_open` adds the rule that is particular to a
+fetch: before a turn has read anything it may open any address, and after, only
+one it was shown: in its prompt or a message it was sent, in a search result or
+among a page's links, compared without the fragment. What the model wrote
+itself, and a tool's echo of it, does not count, or the model could show itself
+any address it liked. An injected page cannot get its reader to send the
+operator's notes out in a query string, because no address that carries them
+was ever shown. An errand inherits what its sender was
+shown and hands back what it found.
+
+**Each agent has a switch.** `reads_web` is on for every agent, including one
+that existed before migration 81, so an upgrade gives the agents already at
+work the same reading a new one gets. The switch is in the agent's editor,
+beside errands, and turning it off is how an operator keeps an agent off the
+web.
+
+## A model does no sum in its head, and states no weekday it was not given
+
+Live first tasks picked the right answer and gave the wrong figures: a loan
+balance worked out in the model's head was off in two runs of three, and every
+plan called a Sunday a Saturday. `calculator` is the fix: a small evaluator in
+`domain/calculator.rs`, not a language. It reads numbers, the four operations,
+powers, brackets, percentages, the functions a loan or a compound interest sum
+needs, `pmt` and `balance` for a loan's payment and what is still owed, notes
+after `#`, names for results that last for the rest of the turn, and dates
+written YYYY-MM-DD, with `weekday(...)`, `days(...)` and whole days added or
+taken away. A name from a call that failed is not kept. The loan functions and
+the names are there because live runs wrote the balance formula wrong and
+expected a name from one call to be there in the next. It has no loop,
+no network and no file, so it is offered to every agent, errands included,
+with no switch and no migration. The input is bounded in length, lines and
+nesting, a value past 10^15 is an overflow, and a result is shown to twelve
+significant digits, so 0.1 + 0.2 reads 0.3. An error names the line it was on.
+
+The standing prompt tells every agent to use it for every sum, to show the
+figures, to put no figure in an answer, a difference, a break-even or a what-if
+included, that it was not given or did not get back, and to state a weekday only when it was given one or
+the calculator returned it. *Your group's calendar* writes today's weekday out
+in full, and under it the eight weeks from this one on, a line a week naming
+each day from Monday to Sunday (`occasion::weeks_words`). It sits in the
+volatile half beside the date, which already changes once a day, so it costs
+the cache nothing the date line did not, and about 830 characters.
+
+Wording ran out before the faults did: with all of that said, live plans still
+named a Sunday a Saturday, and what-ifs were still worked out in the model's
+head. So a finished answer is checked in code before anyone sees it
+(`domain/recheck.rs`, called where a turn would end). A weekday written beside a
+date it can read, "Saturday, 20 December 2026", "Sat Dec 20" or "Saturday the
+20th of December", outside code, is checked against the calendar; a date with
+no year is the next one, or this year's if it was within the last month. On a
+turn that called `calculator`, every money figure and percentage in the answer
+has to be a number in the prompt, a message or a tool result of this turn,
+allowing for how it was rounded and written. If either check finds something,
+the answer goes back to the model once, saying what is wrong and asking for
+the whole answer again: a wrong weekday comes back with the true one, the
+nearest dates that are the weekday it wanted, and the weeks around it; the rejected text is dropped from what is streamed and
+kept, and the second answer is delivered as it is, so a turn cannot loop. The
+text is never rewritten for the model. A turn that did no sum is not held to
+the figure check, because an answer with no arithmetic in it, a plan or a
+draft, would be sent back for every price it mentions.
 
 ## Files are references, and what a model gets depends on what they are
 

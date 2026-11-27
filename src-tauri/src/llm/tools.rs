@@ -29,12 +29,17 @@ pub const ATTACH_FILE: &str = "attach_file";
 pub const WRITE_DOCUMENT: &str = "write_document";
 pub const READ_FILE: &str = "read_file";
 pub const ERRAND: &str = "errand";
+pub const WEB_SEARCH: &str = "web_search";
+pub const READ_PAGE: &str = "read_page";
+pub const CALCULATOR: &str = "calculator";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Surfaces {
     pub computer: bool,
     pub browser: bool,
     pub errands: bool,
+    pub web: bool,
+    pub search: bool,
 }
 
 pub fn surface_of(name: &str) -> Option<crate::domain::signin::Surface> {
@@ -48,11 +53,11 @@ pub fn surface_of(name: &str) -> Option<crate::domain::signin::Surface> {
 
 impl Surfaces {
     pub fn both() -> Self {
-        Surfaces { computer: true, browser: true, errands: true }
+        Surfaces { computer: true, browser: true, errands: true, web: true, search: true }
     }
 
     pub fn none() -> Self {
-        Surfaces { computer: false, browser: false, errands: false }
+        Surfaces { computer: false, browser: false, errands: false, web: false, search: false }
     }
 
     pub fn given_to(self, card: &crate::domain::agent::AgentCard) -> Self {
@@ -60,6 +65,8 @@ impl Surfaces {
             computer: self.computer && card.has_computer,
             browser: self.browser && card.has_browser,
             errands: self.errands && card.runs_errands,
+            web: self.web && card.reads_web,
+            search: self.search && self.web && card.reads_web,
         }
     }
 
@@ -121,6 +128,8 @@ fn offered(name: &str, surfaces: Surfaces, modalities: Modalities) -> bool {
         BROWSE => surfaces.browser,
         REQUEST_PERMISSION => surfaces.computer || surfaces.browser,
         ERRAND => surfaces.errands,
+        READ_PAGE => surfaces.web,
+        WEB_SEARCH => surfaces.web && surfaces.search,
         _ => true,
     }
 }
@@ -132,6 +141,8 @@ fn needs(name: &str) -> Option<&'static str> {
         BROWSE => Some("a browser"),
         REQUEST_PERMISSION => Some("a computer or a browser"),
         ERRAND => Some("errands switched on"),
+        READ_PAGE => Some("web reading switched on"),
+        WEB_SEARCH => Some("web reading switched on, and a provider that searches or a search key"),
         _ => None,
     }
 }
@@ -411,6 +422,76 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                     "amount": { "type": "integer", "description": "For `scroll`: screenfuls." }
                 },
                 "required": ["action"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
+            name: WEB_SEARCH.to_string(),
+            description: "Search the web and get back a title, an address and a line or two from \
+                          each result. It tells you where to look, not what is true: open the \
+                          pages that matter with `read_page` before you rely on them, and cite the \
+                          address you read. The query goes to the search service the operator set \
+                          up, so never put a secret or a private detail in it."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "minLength": 1,
+                        "description": "What to search for, as you would type it into a search box."},
+                    "count": {"type": "integer", "minimum": 1, "maximum": crate::llm::search::MOST_HITS,
+                        "description": "How many results. Omit for five."}
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
+            name: READ_PAGE.to_string(),
+            description: "Read a web page as text: its title, its words and the links on it, \
+                          fetched by this host. It is not a browser: it cannot click, sign in, \
+                          fill a form or run the page's scripts, and it is not the browser on any \
+                          computer you have. Give it an http:// or https:// address. Once this \
+                          turn has read anything from the web, it opens only addresses you were \
+                          shown in a message, a search result or a page you read, exactly as \
+                          written. A long page comes in parts: pass the `offset` it gives you to \
+                          read on."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "minLength": 1,
+                        "description": "The page's full address, starting http:// or https://."},
+                    "offset": {"type": "integer", "minimum": 0,
+                        "description": "Character offset into the page's text. Omit to start at the beginning."}
+                },
+                "required": ["url"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
+            name: CALCULATOR.to_string(),
+            description: "Work out sums exactly, instead of in your head. Write plain arithmetic: \
+                          + - * / and ^ for a power, brackets, and % for a hundredth (6% is \
+                          0.06, so add ten percent as `x * (1 + 10%)`). Functions: pow, sqrt, ln, \
+                          log (base 10), exp, abs, round(x) or round(x, decimals), floor, ceil, \
+                          min, max. For a loan, pmt(rate per period, periods, principal) is the \
+                          payment and balance(rate per period, periods, principal, payments made) \
+                          is what is still owed. Put several lines in one call, and name a result \
+                          to use it later: `rate = 6% / 12`, then `pmt(rate, 60, 35000)`. A name \
+                          keeps its value for the rest of this turn, and # starts a note the \
+                          calculator skips. Dates are written YYYY-MM-DD: weekday(2026-12-20) is \
+                          the day of the week, days(2026-11-23, 2026-12-20) counts the days \
+                          between, and 2026-11-23 + 27 is the date 27 days later. Write numbers \
+                          without currency signs or thousands separators."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "expression": {"type": "string", "minLength": 1,
+                        "maxLength": crate::domain::calculator::MAX_INPUT,
+                        "description": "One expression, or several lines of them, where `name = expression` keeps a result for the lines after it."}
+                },
+                "required": ["expression"],
                 "additionalProperties": false
             }),
         },
@@ -1234,6 +1315,9 @@ pub enum ToolInvocation {
     Notebook { action: NotebookAction },
     CreateAgent { draft: NewAgent },
     Errand { briefs: Vec<String> },
+    WebSearch { query: String, count: usize },
+    ReadPage { url: String, offset: usize },
+    Calculate { expression: String },
     Plugin { kind: PluginKind, tool: String, arguments: serde_json::Value },
 }
 
@@ -1421,6 +1505,12 @@ pub enum ToolParseError {
     IncompleteScreenAction { action: String, needs: String },
     #[error("create_agent needs {needs}")]
     IncompleteAgent { needs: String },
+    #[error("web_search needs a non-empty `query` string and an optional `count` from 1 to 10")]
+    InvalidSearch,
+    #[error("read_page needs a `url` string and an optional nonnegative integer `offset`")]
+    InvalidPageRead,
+    #[error("calculator needs an `expression` string")]
+    InvalidCalculation,
 }
 
 impl ToolParseError {
@@ -1428,6 +1518,15 @@ impl ToolParseError {
         match self {
             ToolParseError::InvalidFileRead => format!(
                 "Error: {self}. Use {{\"name\": \"brief.md\"}} to start reading a saved attachment."
+            ),
+            ToolParseError::InvalidSearch => format!(
+                "Error: {self}. Use {{\"query\": \"car lease versus buy 2026\"}} to search."
+            ),
+            ToolParseError::InvalidPageRead => format!(
+                "Error: {self}. Use {{\"url\": \"https://example.com/page\"}} to read a page."
+            ),
+            ToolParseError::InvalidCalculation => format!(
+                "Error: {self}. Use {{\"expression\": \"500 * 36 + 3000\"}} to work out a sum."
             ),
             ToolParseError::UnknownTool { name } => {
                 format!(
@@ -2377,6 +2476,66 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
 
             Ok(ToolInvocation::SendMessage { to, text, intent, files })
         }
+        WEB_SEARCH => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: WEB_SEARCH.to_string(),
+                detail: e.to_string(),
+            })?;
+            let query = first_string(&value, &["query", "q", "search"])
+                .map(|query| query.trim().to_string())
+                .filter(|query| !query.is_empty())
+                .ok_or(ToolParseError::InvalidSearch)?;
+            let count = match value.get("count") {
+                None | Some(serde_json::Value::Null) => crate::llm::search::DEFAULT_HITS,
+                Some(value) => value
+                    .as_u64()
+                    .and_then(|n| usize::try_from(n).ok())
+                    .filter(|n| (1..=crate::llm::search::MOST_HITS).contains(n))
+                    .ok_or(ToolParseError::InvalidSearch)?,
+            };
+            Ok(ToolInvocation::WebSearch { query, count })
+        }
+        READ_PAGE => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: READ_PAGE.to_string(),
+                detail: e.to_string(),
+            })?;
+            let url = first_string(&value, &["url", "address", "link"])
+                .map(|url| url.trim().to_string())
+                .filter(|url| !url.is_empty())
+                .ok_or(ToolParseError::InvalidPageRead)?;
+            let offset = match value.get("offset") {
+                None | Some(serde_json::Value::Null) => 0,
+                Some(value) => value
+                    .as_u64()
+                    .and_then(|n| usize::try_from(n).ok())
+                    .ok_or(ToolParseError::InvalidPageRead)?,
+            };
+            Ok(ToolInvocation::ReadPage { url, offset })
+        }
+        CALCULATOR | "calculate" | "calc" | "math" => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: CALCULATOR.to_string(),
+                detail: e.to_string(),
+            })?;
+            let expression = match ["expression", "expressions", "input", "expr"]
+                .iter()
+                .find_map(|key| value.get(*key))
+            {
+                Some(serde_json::Value::String(one)) => one.clone(),
+                Some(serde_json::Value::Array(lines)) => lines
+                    .iter()
+                    .map(|line| line.as_str().map(str::to_string))
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or(ToolParseError::InvalidCalculation)?
+                    .join("\n"),
+                _ => return Err(ToolParseError::InvalidCalculation),
+            };
+            if expression.trim().is_empty() {
+                return Err(ToolParseError::InvalidCalculation);
+            }
+            Ok(ToolInvocation::Calculate { expression })
+        }
         READ_FILE => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
                 name: READ_FILE.to_string(),
@@ -3101,6 +3260,120 @@ mod tests {
     }
 
     #[test]
+    fn reading_the_web_is_offered_only_where_it_was_given_and_searching_only_where_it_can_run() {
+        let names = |surfaces: Surfaces| -> Vec<String> {
+            specs(surfaces, Modalities::seeing()).into_iter().map(|spec| spec.name).collect()
+        };
+        let neither = names(Surfaces::none());
+        assert!(!neither.contains(&READ_PAGE.to_string()));
+        assert!(!neither.contains(&WEB_SEARCH.to_string()));
+
+        let reading = names(Surfaces { web: true, ..Surfaces::none() });
+        assert!(reading.contains(&READ_PAGE.to_string()));
+        assert!(
+            !reading.contains(&WEB_SEARCH.to_string()),
+            "a search nothing can run is not offered: {reading:?}"
+        );
+        assert!(
+            !reading.contains(&REQUEST_PERMISSION.to_string()),
+            "reading a page acts on nothing a grant could cover"
+        );
+
+        let searching = names(Surfaces { web: true, search: true, ..Surfaces::none() });
+        assert!(searching.contains(&WEB_SEARCH.to_string()));
+        let withheld = names(Surfaces { search: true, ..Surfaces::none() });
+        assert!(!withheld.contains(&WEB_SEARCH.to_string()), "search without web reading");
+    }
+
+    #[test]
+    fn an_agent_switched_off_the_web_gets_neither_web_tool() {
+        let mut card = crate::domain::agent::tests::card();
+        card.reads_web = false;
+        let given = Surfaces::both().given_to(&card);
+        assert!(!given.web && !given.search);
+        card.reads_web = true;
+        let given = Surfaces::both().given_to(&card);
+        assert!(given.web && given.search);
+        let unsearchable = Surfaces { search: false, ..Surfaces::both() }.given_to(&card);
+        assert!(unsearchable.web && !unsearchable.search);
+    }
+
+    #[test]
+    fn a_web_search_is_read_with_a_bounded_count() {
+        assert_eq!(
+            parse(&call(WEB_SEARCH, r#"{"query":"  lease or buy  "}"#)),
+            Ok(ToolInvocation::WebSearch {
+                query: "lease or buy".into(),
+                count: crate::llm::search::DEFAULT_HITS
+            })
+        );
+        assert_eq!(
+            parse(&call(WEB_SEARCH, r#"{"q":"x","count":10}"#)),
+            Ok(ToolInvocation::WebSearch { query: "x".into(), count: 10 })
+        );
+        for bad in [
+            r#"{}"#,
+            r#"{"query":"  "}"#,
+            r#"{"query":"x","count":0}"#,
+            r#"{"query":"x","count":11}"#,
+        ] {
+            assert_eq!(parse(&call(WEB_SEARCH, bad)), Err(ToolParseError::InvalidSearch), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_calculator_is_offered_to_every_agent_whatever_it_was_given() {
+        for surfaces in [Surfaces::none(), Surfaces::both()] {
+            for modalities in [Modalities::seeing(), Modalities::text_only()] {
+                let names: Vec<String> =
+                    specs(surfaces, modalities).into_iter().map(|spec| spec.name).collect();
+                assert!(names.contains(&CALCULATOR.to_string()), "{surfaces:?}: {names:?}");
+            }
+        }
+        let names: Vec<String> = for_errands(specs(Surfaces::both(), Modalities::seeing()))
+            .into_iter()
+            .map(|s| s.name)
+            .collect();
+        assert!(names.contains(&CALCULATOR.to_string()), "an errand can do sums too: {names:?}");
+    }
+
+    #[test]
+    fn a_calculation_needs_an_expression_and_may_come_as_lines() {
+        assert_eq!(
+            parse(&call(CALCULATOR, r#"{"expression":"500 * 36 + 3000"}"#)),
+            Ok(ToolInvocation::Calculate { expression: "500 * 36 + 3000".into() })
+        );
+        assert_eq!(
+            parse(&call(CALCULATOR, r#"{"expressions":["a = 2","a * 3"]}"#)),
+            Ok(ToolInvocation::Calculate { expression: "a = 2\na * 3".into() })
+        );
+        for bad in
+            [r#"{}"#, r#"{"expression":"  "}"#, r#"{"expression":3}"#, r#"{"expressions":["a",1]}"#]
+        {
+            assert_eq!(
+                parse(&call(CALCULATOR, bad)),
+                Err(ToolParseError::InvalidCalculation),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_page_read_needs_an_address_and_may_carry_an_offset() {
+        assert_eq!(
+            parse(&call(READ_PAGE, r#"{"url":" https://cars.example/a "}"#)),
+            Ok(ToolInvocation::ReadPage { url: "https://cars.example/a".into(), offset: 0 })
+        );
+        assert_eq!(
+            parse(&call(READ_PAGE, r#"{"url":"https://a.example","offset":12000}"#)),
+            Ok(ToolInvocation::ReadPage { url: "https://a.example".into(), offset: 12000 })
+        );
+        for bad in [r#"{}"#, r#"{"url":""}"#, r#"{"url":"https://a.example","offset":-1}"#] {
+            assert_eq!(parse(&call(READ_PAGE, bad)), Err(ToolParseError::InvalidPageRead), "{bad}");
+        }
+    }
+
+    #[test]
     fn a_screen_is_not_offered_to_a_model_that_cannot_be_shown_one() {
         let blind: Vec<String> = specs(Surfaces::both(), Modalities::text_only())
             .into_iter()
@@ -3623,11 +3896,11 @@ mod tests {
         let specs = specs(Surfaces::both(), Modalities::seeing());
         assert_eq!(
             specs.len(),
-            23,
-            "directory, run_command, open_on_desktop, use_screen, browse, errand, schedule, \
-             calendar, artifact, skill, notebook, settings, create_agent, request_permission, \
-             ask_operator, decision, escalate, send_message, read_file, write_document, \
-             attach_file, update_memory, note_progress"
+            26,
+            "directory, run_command, open_on_desktop, use_screen, browse, web_search, read_page, \
+             calculator, errand, schedule, calendar, artifact, skill, notebook, settings, create_agent, \
+             request_permission, ask_operator, decision, escalate, send_message, read_file, \
+             write_document, attach_file, update_memory, note_progress"
         );
         for spec in &specs {
             assert_eq!(

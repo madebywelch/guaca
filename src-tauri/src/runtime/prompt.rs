@@ -171,11 +171,36 @@ pub fn system_prompt(
         );
     }
 
-    if surfaces.computer || surfaces.browser {
+    if surfaces.web {
+        stable.push_str("\n## Reading the web\n");
+        if surfaces.search {
+            stable.push_str(
+                "`web_search` finds pages: it answers with a title, an address and a line from \
+                 each result. The latest or the current means as of today, the date under \
+                 *Your group's calendar*, so put a year in a query only when the question names \
+                 one. ",
+            );
+        }
+        stable.push_str(
+            "`read_page` reads one page as text, fetched by Guaca on the host, with no browser \
+             and no account: it cannot click, sign in or fill in a form. A result's line is \
+             where to look, not what the page says, so open what you rely on and cite the \
+             address you read it at. Never cite a page you did not open.\n",
+        );
+    }
+
+    if surfaces.computer || surfaces.browser || surfaces.web {
         stable.push_str(
             "\nNever say you have no way to look something up. Say what you did and what came \
              back, rather than presenting a result as something you simply knew.\n",
         );
+        if !surfaces.computer && !surfaces.browser {
+            stable.push_str(
+                "You have no computer and no browser, so you cannot run commands, sign in to a \
+                 site or fill in a form. If a task needs one, say so plainly and say that the \
+                 operator can give you one.\n",
+            );
+        }
     } else {
         stable.push_str("\n## What you can do yourself\n");
         stable.push_str(
@@ -186,6 +211,16 @@ pub fn system_prompt(
              reporting a failure.\n",
         );
     }
+
+    stable.push_str("\n## Sums and dates\n");
+    stable.push_str(
+        "Use `calculator` for every sum, however small: never do arithmetic in your head, and \
+         show the figures you used. Every figure in your answer, a difference, a break-even or a \
+         what-if included, is one you were given or one `calculator` returned, so work it out \
+         before you write it. Never state the weekday of a date \
+         unless it was given to you, as the weeks under your group's calendar below are, or \
+         `calculator` returned it.\n",
+    );
 
     stable.push_str("\n## What you can reach\n");
     if credentials.is_empty() && signins.is_empty() && plugins.is_empty() {
@@ -559,7 +594,9 @@ pub fn system_prompt(
 
     volatile.push_str("\n## Your group's calendar\n");
     volatile.push_str(&format!(
-        "Today is {}. `calendar` is your group's, not yours: everyone in it reads this same list, \
+        "Today is {}. These are the weeks from this one on, each line Monday to Sunday, so the \
+         weekday of a date in them is one you were given:\n\n{}\n\
+         `calendar` is your group's, not yours: everyone in it reads this same list, \
          so it is where something the rest of them need to know about goes. Meetings, deadlines, \
          filings, renewals, launches — anything with a date on it that somebody needs in \
          advance. Keep it current as you learn things: when a date moves, `update` that occasion \
@@ -571,7 +608,8 @@ pub fn system_prompt(
          fires and reaches you as a message, and an occasion sits there being true. If you have \
          to prepare for something on this calendar, the occasion goes here and the routine that \
          prepares for it goes there.\n",
-        occasion::when_words(now, true).replace(", all day", "")
+        occasion::day_words(now),
+        occasion::weeks_words(now)
     ));
 
     if calendar.is_empty() {
@@ -1421,6 +1459,7 @@ mod tests {
             has_browser: true,
             browser_consent: Default::default(),
             runs_errands: false,
+            reads_web: true,
             id: AgentId::new(),
             name: name.into(),
             avatar: "orb".into(),
@@ -2058,7 +2097,37 @@ mod tests {
         let calendar = section(&prompt, "## Your group's calendar");
         let today = crate::domain::local(crate::domain::now_ms()).unwrap();
 
-        assert!(calendar.contains(&today.format("%a %-d %b %Y").to_string()), "{calendar}");
+        assert!(
+            calendar.contains(&format!("Today is {}.", today.format("%A, %-d %B %Y"))),
+            "today with its weekday written out: {calendar}"
+        );
+        let weeks = crate::domain::occasion::weeks_from(today.date_naive());
+        assert!(calendar.contains(&weeks), "and the weeks ahead day by day: {calendar}");
+    }
+
+    #[test]
+    fn the_weeks_ahead_change_with_the_date_and_so_sit_beside_it_after_the_cached_part() {
+        let prompt = system_prompt(
+            &card("Manager"),
+            "",
+            &[],
+            &[],
+            &[],
+            &[],
+            "",
+            &[],
+            &[],
+            &[],
+            ReplyMode::ToOperator,
+            &[],
+            None,
+            Surfaces::both(),
+            Modalities::seeing(),
+        );
+        let today = crate::domain::local(crate::domain::now_ms()).unwrap();
+        let weeks = crate::domain::occasion::weeks_from(today.date_naive());
+        assert!(!prompt.stable().contains(weeks.lines().next().unwrap()), "{prompt}");
+        assert!(prompt.volatile().contains(&weeks), "{prompt}");
     }
 
     #[test]
@@ -2700,12 +2769,86 @@ mod tests {
             ReplyMode::ToOperator,
             &[],
             None,
-            Surfaces { computer: true, browser: false, errands: false },
+            Surfaces { computer: true, ..Surfaces::none() },
             Modalities::seeing(),
         );
         assert!(computer_only.contains("## Your computer"), "{computer_only}");
         assert!(!computer_only.contains("## Your browser"), "{computer_only}");
         assert!(!computer_only.contains("not the browser `browse` uses"), "{computer_only}");
+    }
+
+    #[test]
+    fn every_agent_is_told_to_do_sums_with_the_calculator_and_never_to_guess_a_weekday() {
+        for surfaces in [Surfaces::none(), Surfaces::both()] {
+            let prompt = system_prompt(
+                &card("Analyst"),
+                "",
+                &[],
+                &[],
+                &[],
+                &[],
+                "",
+                &[],
+                &[],
+                &[],
+                ReplyMode::ToOperator,
+                &[],
+                None,
+                surfaces,
+                Modalities::seeing(),
+            );
+            let sums = section(&prompt, "## Sums and dates");
+            assert!(sums.contains("Use `calculator` for every sum"), "{sums}");
+            assert!(sums.contains("never do arithmetic in your head"), "{sums}");
+            assert!(sums.contains("show the figures you used"), "{sums}");
+            assert!(
+                sums.contains(
+                    "Every figure in your answer, a difference, a break-even or a what-if \
+                     included, is one you were given or one `calculator` returned"
+                ),
+                "{sums}"
+            );
+            assert!(
+                sums.contains(
+                    "Never state the weekday of a date unless it was given to you, as the \
+                     weeks under your group's calendar below are, or `calculator` returned it"
+                ),
+                "{sums}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_search_for_the_latest_is_pointed_at_the_day_the_calendar_gives() {
+        let reading = |search: bool| {
+            system_prompt(
+                &card("Researcher"),
+                "",
+                &[],
+                &[],
+                &[],
+                &[],
+                "",
+                &[],
+                &[],
+                &[],
+                ReplyMode::ToOperator,
+                &[],
+                None,
+                Surfaces { web: true, search, ..Surfaces::none() },
+                Modalities::seeing(),
+            )
+        };
+        let searching = reading(true);
+        let web = section(&searching, "## Reading the web");
+        assert!(web.contains("as of today"), "{web}");
+        assert!(web.contains("*Your group's calendar*"), "{web}");
+        assert!(web.contains("put a year in a query only when the question names one"), "{web}");
+        assert!(searching.contains("## Your group's calendar"), "{searching}");
+
+        let reading_only = reading(false);
+        let web = section(&reading_only, "## Reading the web");
+        assert!(!web.contains("as of today"), "{web}");
     }
 
     fn prompt_taking(modalities: Modalities, mode: ReplyMode) -> String {
@@ -2823,7 +2966,7 @@ mod tests {
             ReplyMode::ToOperator,
             &[],
             None,
-            Surfaces { computer: false, browser: true, errands: false },
+            Surfaces { browser: true, ..Surfaces::none() },
             Modalities::seeing(),
         );
         assert!(somewhere.contains("request_permission"), "{somewhere}");
@@ -3734,6 +3877,7 @@ mod tests {
             ("listed for you further down", "## What you are waiting on", Points::Down),
             ("the accounts above", "## What you can reach", Points::Up),
             ("working notes above", "## Your working notes", Points::Up),
+            ("your group's calendar below", "## Your group's calendar", Points::Down),
         ];
         let outside = ["the history above", "the messages above"];
 

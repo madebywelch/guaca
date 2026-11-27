@@ -15,6 +15,7 @@ function agent(name: string, discardedAt: number | null): AgentCard {
     hasComputer: false,
     hasBrowser: false,
     runsErrands: false,
+    readsWeb: true,
     browserConsent: "open",
     name,
     avatar: "avocado",

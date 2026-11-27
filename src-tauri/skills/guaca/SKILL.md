@@ -80,7 +80,7 @@ The operator edits them in **Settings**:
   host updates.
 - **Provider**: who answers turns: an API endpoint with a key, a ChatGPT
   sign-in, or the Claude program on the host. The default model, the reasoning
-  effort, and how long to wait for a model call.
+  effort, the web search key, and how long to wait for a model call.
 - **Limits**: the five bounds every conversation runs inside. Defaults for
   groups that do not set their own.
 - **Permissions**: the operator-only rule editor.
@@ -193,6 +193,19 @@ Words that are easy to mix up, and are not interchangeable:
   not agents: nobody can message one, and nothing of one lasts past your turn.
   They are off unless the operator switched them on for you in your editor, and
   when they are, `errand` is in your tool list.
+- **Web reading** is two tools, on for an agent unless the operator switched
+  it off in its editor. `web_search` returns titles, addresses and a line from
+  each result, through the provider that answers your turns when it can search
+  (a ChatGPT plan, the claude program, OpenRouter) or through the Brave Search
+  or Tavily key in **Settings**; with neither, it is not in your tool list.
+  `read_page` reads one page as text, fetched by the host with no browser and no
+  account. It never opens an address on the host's own network, and once a turn
+  has read from the web it opens only addresses you were shown.
+- **The calculator** is `calculator`, on for every agent with no switch. It
+  works out sums exactly, several lines at once with named results that last
+  for the turn, a loan's payment and balance, and the weekday of a date or the
+  days between two. Use it for every sum, and state a
+  weekday only when you were given it or it returned it.
 
 ## Routines and the calendar
 

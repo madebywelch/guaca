@@ -31,6 +31,7 @@ function card(id: string, name: string): AgentCard {
     hasComputer: false,
     hasBrowser: false,
     runsErrands: false,
+    readsWeb: true,
     browserConsent: "open",
     name,
     avatar: "plain",

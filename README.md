@@ -57,8 +57,11 @@ your agents to other services. Choose from the included connectors or add your
 own. You control which agents can use each connector and its tools.
 
 Agents communicate with you and each other, delegate work, and keep their own
-memory and working notes. They can also have a browser through **Kernel** or a
-computer through **E2B**, configured with the respective vendor's API key.
+memory and working notes. Out of the box they can search the web and read a
+page as text, through the provider you connected or a Brave Search or Tavily key
+for a local model, and work out sums and dates with a built-in calculator. They
+can also have a browser through **Kernel** or a computer through **E2B**,
+configured with the respective vendor's API key.
 
 ## Build from a checkout
 

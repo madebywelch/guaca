@@ -167,6 +167,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub kernel: KernelConfig,
     #[serde(default)]
+    pub search: SearchConfig,
+    #[serde(default)]
     pub webhook: WebhookConfig,
     #[serde(default)]
     pub quick_actions: Vec<crate::domain::quick::QuickAction>,
@@ -265,6 +267,18 @@ impl std::fmt::Debug for KernelConfig {
     }
 }
 
+#[derive(Clone, PartialEq, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SearchConfig {
+    pub api_key: Secret,
+}
+
+impl std::fmt::Debug for SearchConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SearchConfig").field("api_key_set", &!self.api_key.is_empty()).finish()
+    }
+}
+
 pub fn default_browser_idle_minutes() -> u32 {
     60
 }
@@ -314,6 +328,12 @@ pub struct RedactedConfig {
     pub kernel_key_hint: String,
     pub browser_idle_minutes: u32,
     pub browser_stealth: bool,
+    #[serde(default)]
+    pub search_key_set: bool,
+    #[serde(default)]
+    pub search_key_hint: String,
+    #[serde(default)]
+    pub searches_with: String,
     pub provider: Provider,
     pub base_url: String,
     pub default_model: String,
@@ -358,6 +378,13 @@ impl AppConfig {
             kernel_key_hint: hint_for(self.kernel.api_key.expose()),
             browser_idle_minutes: self.kernel.idle_minutes,
             browser_stealth: self.kernel.stealth,
+            search_key_set: !self.search.api_key.expose().trim().is_empty(),
+            search_key_hint: hint_for(self.search.api_key.expose()),
+            searches_with: crate::llm::search::Backend::for_turn(
+                &self.inference,
+                &self.search.api_key,
+            )
+            .map_or_else(|| crate::llm::search::NO_BACKEND.to_string(), |b| b.disclosed()),
             provider: self.inference.provider,
             base_url: self.inference.base_url.clone(),
             default_model: self.inference.default_model.clone(),
@@ -484,6 +511,7 @@ pub struct SettingsPatch {
     pub kernel_api_key: Option<crate::secrets::Secret>,
     pub browser_idle_minutes: Option<u32>,
     pub browser_stealth: Option<bool>,
+    pub search_api_key: Option<crate::secrets::Secret>,
     pub attention: Option<AttentionPatch>,
     pub delivery: Option<DeliveryPatch>,
 }
@@ -531,6 +559,9 @@ impl AppConfig {
         }
         if let Some(stealth) = patch.browser_stealth {
             self.kernel.stealth = stealth;
+        }
+        if let Some(key) = patch.search_api_key {
+            self.search.api_key = key.expose().trim().into();
         }
         if let Some(attention) = patch.attention {
             let now = &mut self.attention;
@@ -613,8 +644,15 @@ pub const AGENT_WRITABLE: &[&str] = &[
     "browserStealth",
 ];
 
-pub const OPERATOR_ONLY: &[&str] =
-    &["provider", "baseUrl", "apiKey", "e2bApiKey", "kernelApiKey", "permissionRules"];
+pub const OPERATOR_ONLY: &[&str] = &[
+    "provider",
+    "baseUrl",
+    "apiKey",
+    "e2bApiKey",
+    "kernelApiKey",
+    "searchApiKey",
+    "permissionRules",
+];
 
 pub const LIMIT_LABELS: &[(&str, &str)] = &[
     ("maxStepsPerRun", "Model calls per conversation"),
@@ -796,6 +834,8 @@ struct OnDisk<'a> {
     limits: GuardLimits,
     e2b: E2bOnDisk<'a>,
     kernel: KernelOnDisk<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    search: Option<SearchOnDisk<'a>>,
     webhook: WebhookOnDisk<'a>,
     quick_actions: &'a [crate::domain::quick::QuickAction],
     widgets: &'a [crate::domain::widget::Widget],
@@ -834,6 +874,12 @@ struct KernelOnDisk<'a> {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct SearchOnDisk<'a> {
+    api_key: &'a str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct WebhookOnDisk<'a> {
     secret: &'a str,
 }
@@ -857,6 +903,7 @@ impl<'a> OnDisk<'a> {
             limits,
             e2b,
             kernel,
+            search,
             webhook,
             quick_actions,
             widgets,
@@ -876,6 +923,7 @@ impl<'a> OnDisk<'a> {
         } = inference;
         let E2bConfig { api_key: e2b_key, idle_minutes: computer_idle } = e2b;
         let KernelConfig { api_key: kernel_key, idle_minutes: browser_idle, stealth } = kernel;
+        let SearchConfig { api_key: search_key } = search;
         let WebhookConfig { secret } = webhook;
         let DeliveryConfig { url, token, format, content, link_base } = delivery;
         OnDisk {
@@ -899,6 +947,7 @@ impl<'a> OnDisk<'a> {
                 idle_minutes: *browser_idle,
                 stealth: *stealth,
             },
+            search: (!search_key.is_empty()).then(|| SearchOnDisk { api_key: search_key.expose() }),
             webhook: WebhookOnDisk { secret: secret.expose() },
             quick_actions,
             widgets,
@@ -1077,11 +1126,35 @@ mod tests {
     }
 
     #[test]
+    fn a_search_key_is_kept_on_disk_and_only_its_hint_reaches_the_page() {
+        let dir = std::env::temp_dir().join(format!("guaca-search-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("settings.json");
+        let mut config = AppConfig::default();
+        config
+            .apply(
+                serde_json::from_value(serde_json::json!({ "searchApiKey": " tvly-key-9z7q " }))
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(config.search.api_key.expose(), "tvly-key-9z7q");
+        save(&path, &config).unwrap();
+        assert_eq!(load(&path).unwrap().search.api_key.expose(), "tvly-key-9z7q");
+
+        let page = serde_json::to_string(&config.redacted()).unwrap();
+        assert!(!page.contains("key-9z7q"), "{page}");
+        let redacted = config.redacted();
+        assert!(redacted.search_key_set);
+        assert_eq!(redacted.search_key_hint, "...9z7q");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn a_config_that_holds_a_key_cannot_be_serialized() {
         crate::secrets::assert_lacks!(serde::Serialize, AppConfig);
         crate::secrets::assert_lacks!(serde::Serialize, InferenceConfig);
         crate::secrets::assert_lacks!(serde::Serialize, E2bConfig);
         crate::secrets::assert_lacks!(serde::Serialize, KernelConfig);
+        crate::secrets::assert_lacks!(serde::Serialize, SearchConfig);
         crate::secrets::assert_lacks!(serde::Serialize, WebhookConfig);
         crate::secrets::assert_lacks!(serde::Serialize, DeliveryConfig);
     }
@@ -1262,6 +1335,7 @@ mod tests {
         config.inference.api_key = "sk-inference-hunter2".into();
         config.e2b.api_key = "e2b-hunter2".into();
         config.kernel.api_key = "kernel-hunter2".into();
+        config.search.api_key = "search-hunter2".into();
         config.webhook.secret = "webhook-hunter2".into();
         config.delivery.token = "push-hunter2".into();
         let printed = format!("{config:?}");
