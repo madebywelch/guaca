@@ -330,6 +330,8 @@ results:
 
 No GitHub Action or GitHub-hosted Apple credential is required for a local build.
 Sign and notarize on the Mac, then upload the finished files in the browser.
+A release is four files, all made before the draft is: the disk image, its
+checksum, `guaca-release.json` and `guaca-release.json.sig`.
 
 Create a checksum file after stapling, beside the DMG:
 
@@ -342,6 +344,16 @@ Create a checksum file after stapling, beside the DMG:
 )
 ```
 
+Then make the manifest and its signature beside them, from the same clean
+checkout after recording the image digest. What the generator checks, and the
+key it signs with, are under
+[Release checks in browser and desktop](#release-checks-in-browser-and-desktop):
+
+```sh
+GUACA_BACKEND_IMAGE=ghcr.io/madebywelch/guaca/guacad@sha256:THE_DIGEST \
+  node scripts/release-manifest.mjs "$GUACA_OUT/guaca-release.json"
+```
+
 1. Open the repository's **Releases** page and edit the intended draft, or
    choose **Draft a new release**.
 2. Select a version tag pointing to the exact commit used for both builds.
@@ -349,11 +361,28 @@ Create a checksum file after stapling, beside the DMG:
    Keep the release tag and the versions in `package.json`,
    `src-tauri/Cargo.toml`, and `src-tauri/tauri.conf.json` consistent; update
    the lockfile's package version when changing the Cargo version.
-3. Attach the final `.dmg` and `.dmg.sha256` in the release assets box.
+3. Attach all four files in the release assets box: the final `.dmg`,
+   `.dmg.sha256`, `guaca-release.json` and `guaca-release.json.sig`.
 4. In the notes, record the source commit, backend image digest, macOS
    architectures, Docker/remote-host requirements, and any migration steps.
 5. Save the draft while testing. Publish after the download and first-run
-   checks pass, then download the public asset and check its checksum.
+   checks pass and the release check below passes, then download the public
+   asset and check its checksum.
+
+The release check, run just before publishing, from the worktree at the tag's
+commit so that `release-keys.pub` is the one the release ships:
+
+```sh
+node scripts/release-manifest.mjs --check "$GUACA_TAG"
+```
+
+It reads the release, draft or published, from GitHub and exits nonzero, naming
+each fault, unless the release has the disk image, its checksum,
+`guaca-release.json` and `guaca-release.json.sig`; the checksum file names that
+disk image; and the manifest verifies against `release-keys.pub` with its
+signature and names this version. It prints the backend image the manifest pins,
+which must equal the digest recorded for the release. Do not publish while it
+reports a fault.
 
 ## Create or refresh a draft with the CLI
 
@@ -374,6 +403,7 @@ notarization IDs. Create the release with an exact source commit:
 
 ```sh
 gh release create "$GUACA_TAG" "$GUACA_DMG" "$GUACA_DMG.sha256" \
+  "$GUACA_OUT/guaca-release.json" "$GUACA_OUT/guaca-release.json.sig" \
   --repo "$GUACA_REPO" --draft --target "$GUACA_SOURCE" \
   --title "Guaca v$GUACA_VERSION" --notes-file "$GUACA_NOTES"
 ```
@@ -385,14 +415,15 @@ made while the build was running. Replace only the intended assets:
 
 ```sh
 gh release upload "$GUACA_TAG" "$GUACA_DMG" "$GUACA_DMG.sha256" \
+  "$GUACA_OUT/guaca-release.json" "$GUACA_OUT/guaca-release.json.sig" \
   --repo "$GUACA_REPO" --clobber
 gh release edit "$GUACA_TAG" --repo "$GUACA_REPO" --draft \
   --target "$GUACA_SOURCE" --title "Guaca v$GUACA_VERSION" \
   --notes-file "$GUACA_NOTES"
 ```
 
-`--clobber` deletes the old asset before uploading the new one. If either upload
-fails, restore or retry the intended files and verify the full pair before
+`--clobber` deletes the old asset before uploading the new one. If an upload
+fails, restore or retry the intended files and verify all four before
 reporting success. After any write, use `gh release view` again and verify the
 expected draft state, source SHA, notes, filenames, sizes, and uploaded asset
 SHA-256 digests. Download and hash the assets if GitHub does not return digests.
@@ -401,10 +432,11 @@ Keep the final stapled DMG, checksum, manifest pair, notes, source SHA, backend
 digest, build logs, and both notarization receipts in `$GUACA_OUT`,
 `~/guaca-releases/v<version>-<short sha>/`. It is outside the build worktree,
 so removing the worktree leaves them in place.
-Only the DMG and checksum belong in release assets. Report the absolute local
-artifact directory and release URL to the operator.
+Only the DMG, checksum and manifest pair belong in release assets. Report the
+absolute local artifact directory and release URL to the operator.
 
-Publish only within the operator's authorized scope. After publication, verify
+Publish only within the operator's authorized scope, and only after the release
+check above passes on the draft. After publication, verify
 the public download and checksum and that the remote tag resolves to the built
 commit. Future fixes use a new version; do not silently overwrite a live build.
 
@@ -412,10 +444,11 @@ Rebasing the source does not update a DMG already on disk. A binary built
 from an older source is an older release even if its filename carries the
 same version. Rebuild and notarize again to ship the current application.
 
-Upload only the verified disk image and its SHA-256 checksum as release assets,
-and identify the source commit in the release. Inspect `git remote -v` first and
-publish through the repository's origin. Publish the corresponding source from
-an exact source tag alongside the binaries.
+Upload only the verified disk image, its SHA-256 checksum and the signed
+manifest pair as release assets, and identify the source commit in the release.
+Inspect `git remote -v` first and publish through the repository's origin.
+Publish the corresponding source from an exact source tag alongside the
+binaries.
 Do not advertise a download before the asset exists and its Gatekeeper checks pass.
 
 Local signing keeps credentials off CI entirely. If release signing later moves
@@ -436,13 +469,9 @@ and [GitHub Container Registry](https://docs.github.com/en/packages/working-with
 ## Release checks in browser and desktop
 
 Every published stable release also carries `guaca-release.json` and its
-signature, `guaca-release.json.sig`. Generate both from the same clean checkout
-after recording the image digest:
-
-```sh
-GUACA_BACKEND_IMAGE=ghcr.io/madebywelch/guaca/guacad@sha256:THE_DIGEST \
-  node scripts/release-manifest.mjs "$GUACA_OUT/guaca-release.json"
-```
+signature, `guaca-release.json.sig`. Both are made with the command in
+[Upload manually to GitHub Releases](#upload-manually-to-github-releases), from
+the same clean checkout after recording the image digest.
 
 The generator verifies the frontend, Cargo and desktop versions agree and
 refuses prereleases, mutable image tags, or an invalid API range. It signs the
