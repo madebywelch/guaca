@@ -7,6 +7,7 @@ import { newestByAgent } from "../lib/outcomes";
 import { numbered } from "../lib/rail";
 import { useStore } from "../lib/store";
 import { useNow } from "../lib/time";
+import { useTouchScreen } from "../lib/touch";
 import type { AgentId } from "../lib/types";
 import { SeasonGreeting, SeasonScene } from "./Seasonal";
 
@@ -20,6 +21,7 @@ export function ConversationRoster({
   foot: ReactNode;
 }) {
   const now = useNow(30_000);
+  const touch = useTouchScreen();
   const agents = useStore((s) => s.agents);
   const groups = useStore((s) => s.groups);
   const selected = useStore((s) => s.selected);
@@ -49,7 +51,8 @@ export function ConversationRoster({
               : agent.lifecycle === "paused"
                 ? "Paused"
                 : "Idle";
-    const key = index < 9 ? formatCombo({ key: String(index + 1), mod: true }) : undefined;
+    const key =
+      index < 9 && !touch ? formatCombo({ key: String(index + 1), mod: true }) : undefined;
     return { agent, index, status, key };
   });
   const sections = groups.map((group) => ({

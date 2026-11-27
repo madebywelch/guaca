@@ -342,6 +342,16 @@ class Browser:
         self.send("Emulation.setDeviceMetricsOverride",
                   {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": False})
 
+    def phone(self, width: int, height: int) -> None:
+        self.send("Emulation.setDeviceMetricsOverride",
+                  {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": True})
+        self.send("Emulation.setTouchEmulationEnabled", {"enabled": True, "maxTouchPoints": 1})
+
+    def desktop(self, width: int, height: int) -> None:
+        self.send("Emulation.setTouchEmulationEnabled", {"enabled": False})
+        self.send("Emulation.setDeviceMetricsOverride",
+                  {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": False})
+
     def clock(self, at_ms: int) -> None:
         setting = f"{CLOCK}\nglobalThis.__verifyClock({at_ms});"
         if getattr(self, "_clock", None):

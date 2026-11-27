@@ -135,3 +135,21 @@ and *Every length is named* in `docs/INVARIANTS.md` is the rule they all sit und
   sets `scrollbar-width` or `scrollbar-color`, and the pseudo-elements are the
   only way to give the thumb a hover and a drag state. The standard pair is set
   only where `selector(::-webkit-scrollbar)` is unsupported.
+- **A row of `flex: none` children is itself `flex: none`.** The phone's foot holds
+  the status bar, and the status bar holds the places and the host label, none of
+  which shrink. The status bar was an ordinary flex item, so when the date made
+  the row too wide it shrank to its smallest size while its children kept theirs,
+  and "This host" was drawn into "Nov 27". Nothing overflowed the foot, so no
+  overflow check saw it. The status bar keeps its width and the foot scrolls;
+  the `phone` scenario compares the boxes themselves.
+- **The agent's name keeps its width, and the tab list is what gives.** Name and
+  tabs both shrank in proportion to the width they asked for, so a four-letter
+  name still lost a third and came out as `D…` while six tabs took the room.
+  The name is `flex: none` up to `--pane-name-share` of the header, and only a
+  longer one takes an ellipsis. The tab list scrolls, which is why its last label
+  is cut at the edge until it is swiped.
+- **A key hint is hidden by the touch query alone, never by the width.** A narrow
+  window with a mouse has a keyboard, so the hint stays there. The rule is
+  `(hover: none) and (pointer: coarse)`, the same pair the touch block uses. The
+  roster's picker spells its key into an `<option>`, which no rule can hide, so
+  `useTouchScreen` leaves it out of the text instead.
