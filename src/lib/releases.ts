@@ -85,6 +85,7 @@ export interface UpdateFacts {
   health: Health | null;
   release: ReleaseStatus | null;
   localUpdate: string | null;
+  updatedForYou?: boolean;
 }
 export interface UpdateNotice {
   key: string;
@@ -116,12 +117,13 @@ export function updateNotice(facts: UpdateFacts): UpdateNotice | null {
         text: `This app and its host are different builds of Guaca ${health.version}, so features one has may be missing from the other. Run both from the same build.`,
       };
   }
-  if (available(health, release) && release?.latest?.channel === "main")
+  const hostNews = available(health, release) && !facts.updatedForYou;
+  if (hostNews && release?.latest?.channel === "main")
     return {
       key: `host:main:${release.latest.commit}`,
       text: `Host update available: main at ${shortBuild(release.latest.commit)}.`,
     };
-  if (available(health, release))
+  if (hostNews)
     return {
       key: `host:${latest}`,
       text: appBehindRelease

@@ -80,7 +80,8 @@ def split_frames(buffer: bytes) -> tuple[list[bytes], bytes]:
 
 class Browser:
 
-    def __init__(self, profile: Path, binary: str | None = None, proxy: str | None = None) -> None:
+    def __init__(self, profile: Path, binary: str | None = None, proxy: str | None = None,
+                 flags: list[str] | None = None) -> None:
         binary = binary or find_chromium()
         if not binary:
             raise BrowserError("no Chromium found; install one or set GUACA_VERIFY_CHROMIUM")
@@ -118,6 +119,7 @@ class Browser:
         ]
         if proxy:
             args.insert(1, f"--proxy-server={proxy}")
+        args[1:1] = flags or []
         if os.geteuid() == 0:
             args.insert(1, "--no-sandbox")
         self.log = profile.parent / "chromium.log"

@@ -681,6 +681,25 @@ describe("a box that updates itself", () => {
   });
 });
 
+describe("a Guaca space", () => {
+  it("says it is updated for you, and offers no update, no instructions and no host notice", async () => {
+    platform.desktop = false;
+    box = { managed: false, space: true };
+    mount();
+    await screen.findByText("This host is a Guaca space, and it is updated for you.");
+    expect(screen.queryByRole("button", { name: "Back up and update host" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "View update instructions" })).toBeNull();
+    expect(screen.queryByText(/Host update available/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Review update" })).toBeNull();
+  });
+  it("still tells a desktop when the app itself is behind", async () => {
+    box = { managed: false, space: true };
+    mount();
+    await screen.findByText("This host is a Guaca space, and it is updated for you.");
+    expect(screen.getByText("Guaca 0.2.0 is available for this app.")).toBeTruthy();
+  });
+});
+
 describe("a box that follows main", () => {
   const tip = "d".repeat(40);
   const image = `ghcr.io/madebywelch/guaca/guacad@sha256:${"e".repeat(64)}`;

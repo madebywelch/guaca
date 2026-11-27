@@ -41,6 +41,7 @@ run_scripts() {
   node --test scripts/install-image.test.mjs
   bash scripts/install-host.test.sh
   bash deploy/box/install.test.sh
+  python3 deploy/space/space.test.py
   python3 scripts/check-docker-deps.py
 
   step "Probe evidence (no app or screen)"

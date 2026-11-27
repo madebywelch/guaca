@@ -25,6 +25,22 @@ fn main() {
         }
     };
 
+    let space = match space(std::env::var("GUACA_SPACE").ok().as_deref()) {
+        Ok(space) => space,
+        Err(err) => {
+            tracing::error!("{err}");
+            std::process::exit(2);
+        }
+    };
+
+    if space && std::env::var("GUACA_TOKEN").map_or(true, |t| t.trim().is_empty()) {
+        tracing::error!(
+            "GUACA_SPACE is set but GUACA_TOKEN is not. A space is given its token when it is \
+             created, so it never prints one; set GUACA_TOKEN, or leave GUACA_SPACE out"
+        );
+        std::process::exit(2);
+    }
+
     let token = match token_for(&root) {
         Ok(token) => token,
         Err(err) => {
@@ -46,6 +62,7 @@ fn main() {
             .filter(|s| !s.is_empty())
             .map(PathBuf::from),
         browser: std::env::var("GUACA_BROWSER").ok(),
+        space,
     };
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -57,6 +74,16 @@ fn main() {
     if let Err(err) = runtime.block_on(guac_lib::server::serve(settings)) {
         tracing::error!(%err, "guacad stopped");
         std::process::exit(1);
+    }
+}
+
+fn space(value: Option<&str>) -> Result<bool, String> {
+    match value.map(str::trim).unwrap_or_default() {
+        "" | "0" => Ok(false),
+        "1" => Ok(true),
+        other => Err(format!(
+            "GUACA_SPACE is {other:?}. Set it to 1 on a Guaca space, or leave it out everywhere else"
+        )),
     }
 }
 
@@ -105,4 +132,22 @@ fn write_private(path: &std::path::Path, contents: &str) -> Result<(), String> {
     file.sync_all().map_err(|err| format!("{}: {err}", temp.display()))?;
     drop(file);
     std::fs::rename(&temp, path).map_err(|err| format!("{}: {err}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::space;
+
+    #[test]
+    fn a_host_is_a_space_only_when_it_is_told_so_plainly() {
+        assert_eq!(space(None), Ok(false));
+        assert_eq!(space(Some("")), Ok(false));
+        assert_eq!(space(Some("0")), Ok(false));
+        assert_eq!(space(Some("1")), Ok(true));
+        assert_eq!(space(Some(" 1\n")), Ok(true));
+        for unreadable in ["yes", "true", "2", "space"] {
+            let said = space(Some(unreadable)).unwrap_err();
+            assert!(said.contains("Set it to 1"), "{said}");
+        }
+    }
 }

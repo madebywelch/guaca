@@ -1141,3 +1141,119 @@ refuses to downgrade a host with a newer labeled release. The latest update's
 backup is kept and every earlier one removed; on a box the updater also removes
 host images other than the running one and the one before it, which is what
 that backup restores with.
+
+## A Guaca space on Fly
+
+A space is one Fly Machine (a small virtual machine on Fly.io) running the
+published `guacad` image, pinned by digest, with one 10 GB volume at
+`/var/lib/guaca`. It is a Fly app of its own, created on a private network
+of its own: Fly's private network otherwise spans the whole organization,
+and one space must never reach another. Nothing is shared between spaces.
+It stays on with nobody at a window, and answers at `https://<name>.fly.dev`
+in a browser, on a phone, and in the Mac app as a remote host.
+
+`deploy/space/space.sh` makes and keeps one, through the Fly Machines API:
+
+```sh
+export FLY_API_TOKEN=...          # fly tokens create org
+deploy/space/space.sh create my-space --dry-run    # every call, and none made
+deploy/space/space.sh create my-space              # prints the invitation on the terminal
+deploy/space/space.sh status my-space
+deploy/space/space.sh update my-space              # newest main; --release 0.5.1 for a release
+deploy/space/space.sh destroy my-space --confirm my-space
+```
+
+`create` checks the signature of the build it installs with the key the
+updater uses (`main-keys.pub`, or `release-keys.pub` with `--release`),
+saves a generated token as a Fly secret, not in the machine's config, and
+can be run again: it makes no second machine or volume and never replaces
+the token. The invitation is the space's password and is shown on the
+terminal only; with no terminal it is not shown, and `invite` shows it later.
+`GUACA_SPACE=1` on the machine is the one setting that makes a host a space.
+It keeps the token out of the log, which on Fly is kept by Fly, and the Host
+panel says the space is updated for you instead of offering an update or
+instructions that cannot work there. A space without `GUACA_TOKEN` refuses to
+start rather than print one.
+
+The machine starts as root only to give the volume to `guaca`, then runs
+`guacad` as `guaca` through `setpriv`: a fresh Fly volume may be owned by root,
+and the image runs as an unprivileged user.
+
+**Updates.** There is no Docker socket on Fly, so `guaca-updater` cannot run
+there. `update` stops the machine (the host puts its work down), snapshots the
+volume, replaces the image by digest and waits for `/health` to report the new
+build. If it does not, the workspace the new build left is kept, the snapshot
+is restored into a new volume, and the previous image runs on that copy: an
+older build never runs on a volume a newer one may have migrated, which
+`guacad` itself also refuses. An update to an older version than the running
+one is refused before anything stops.
+
+**What a space does not have yet.** No built-in browser: the browser sidecar
+needs Docker beside the host, so a space reports no `localBrowser`, the
+Browser panel is not offered without a Kernel key, and an agent that tries
+`browse` is told plainly it has none, at once. A Kernel key in Settings gives
+it a hosted browser, and an E2B key a computer, as on any box. A browser of its
+own would be a second Machine running `deploy/browser` in the same app, so on
+the same private network, named in `GUACA_BROWSER`; its isolation is proven
+with Docker's seccomp profile and network rules today, and has not been
+rebuilt for a Fly Machine. Account sign-in at a `fly.dev` address is refused by
+guaca.bot until that callback is registered (*What is not built*, above).
+
+### Measured, and the size chosen
+
+Measured on 2026-11-27 with Docker 29.7 on a 4 vCPU, 8 GB amd64 Linux host,
+for the newest main build (`7ec6763`, digest `ab7179ef…`) and release 0.5.1
+(digest `1701f4ea…`); the two agree within noise.
+
+| | main `7ec6763` | 0.5.1 |
+|---|---|---|
+| Compressed image, amd64 and arm64 | 212 and 211 MiB | 212 and 211 MiB |
+| Unpacked file system | 545 MiB | 544 MiB |
+| Start to a passing `/health`, fresh volume, three runs | 0.35 to 0.76 s | 0.43 to 1.03 s |
+| `guacad` resident memory, idle | 11.8 MiB | 11.6 MiB |
+| Five agents hired, idle | 12.8 MiB | 12.5 MiB |
+| After one turn each for five agents, scripted model | 16.2 MiB | 16.1 MiB |
+| One `claude -p` with no sign-in, container peak | 139 MiB | 139 MiB |
+| Installing and starting one `npx` connector, container peak | 251 MiB | not run |
+
+A turn against a real model was not measured: the OpenRouter key this was
+measured with had expired. The daemon's own memory hardly moves with a turn,
+since a turn is network I/O; what grows is the programs it starts, the
+`claude` program and connectors run with `npx`, which are a few hundred MiB
+each while they run. So a space is `shared-cpu-1x` with 1 GB and 512 MB of
+swap, not the 2 GB first guessed: the daemon fits in 256 MB, but one `claude`
+turn and two connectors would not fit in 512 MB.
+
+At Fly's prices on 2026-11-27 (`iad`, 30 days always on), that is $6.70 for
+the machine and $1.50 for the volume (10 GB at $0.15), $8.20 a month. Shared
+IPv4 and IPv6 are free, snapshots are free up to 10 GB stored, and outbound
+data is $0.02 a GB.
+
+### Proving a space without Fly
+
+`deploy/space/space.test.py`, in `ci.sh scripts`, runs the script against a
+stand-in for the Machines API: every `--dry-run`, an idempotent `create`, the
+masked token, the refusal when a token reaches several organizations, a Fly
+error said plainly, an update that is undone, and `destroy`.
+
+`deploy/space/prove.py` runs an image in Docker configured exactly as
+`create` configures the Machine, read from its `--dry-run`: the same
+environment, entry point and user, memory and swap, volume path and port, a
+volume that starts owned by root, and no Docker socket, behind a TLS proxy
+for `space-proof.fly.dev`. It checks `/health`, a wrong token, the invitation
+in headless Chromium with a Secure cookie and a live event socket, the Mac
+app's calls and event socket from `tauri://localhost`, a first task finished
+under For you, a log with no token, the Host panel, the missing
+browser, and the work still there after the container is replaced. It needs
+Docker and Chromium, spends nothing, and is not in CI: the images job would
+need the AppArmor setting the end-to-end job sets for Chromium, and a change
+to the workflows waits for the owner.
+
+```sh
+IMAGE=guacad:$(git rev-parse --short=7 HEAD) deploy/space/prove.py
+```
+
+What only Fly can show: that its proxy, certificate and health check behave
+as the proof's stand-ins do, that `processes[].user` and `exec` run as
+documented, that the app's own network keeps other apps out, and the
+snapshot, restore and swap calls.
