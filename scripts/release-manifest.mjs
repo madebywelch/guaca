@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { createPublicKey, sign, verify } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export function manifest(version, commit, image, protocol, channel = "release") {
@@ -47,6 +47,29 @@ export function trusted(bytes, said, keys) {
     });
 }
 
+export function releaseFaults(tag, names, read, keys) {
+  const faults = [];
+  const has = (name) => {
+    if (!names.includes(name)) faults.push(`The release has no ${name}.`);
+    return names.includes(name);
+  };
+  const disks = names.filter((name) => name.endsWith(".dmg"));
+  if (disks.length !== 1) faults.push(`The release has ${disks.length} disk images and needs exactly one.`);
+  else if (has(`${disks[0]}.sha256`)) {
+    const named = read(`${disks[0]}.sha256`).toString().trim().split("\n").map((line) => /^[a-f0-9]{64} [ *](.+)$/.exec(line)?.[1]);
+    if (named.length !== 1 || named[0] !== disks[0]) faults.push(`The checksum file does not name ${disks[0]}, and only it.`);
+  }
+  const hasManifest = has("guaca-release.json"), hasSignature = has("guaca-release.json.sig");
+  if (hasManifest && hasSignature) {
+    const bytes = read("guaca-release.json");
+    if (!trusted(bytes, read("guaca-release.json.sig").toString(), keys)) faults.push("The signature does not verify against release-keys.pub.");
+    const version = tag.replace(/^v/, "");
+    const said = (() => { try { return JSON.parse(bytes)?.version; } catch { return undefined; } })();
+    if (said !== version) faults.push(`The manifest names ${said ?? "no version"}, not ${version}.`);
+  }
+  return faults;
+}
+
 export function readMainEnvelope(raw, keys) {
   const { manifest, signature } = JSON.parse(raw);
   if (typeof manifest !== "string" || typeof signature !== "string") throw new Error("The main feed envelope is invalid.");
@@ -57,7 +80,25 @@ export function readMainEnvelope(raw, keys) {
   return value;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+const running = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (running && process.argv[2] === "--check") {
+  const [tag, listing, directory] = process.argv.slice(3);
+  if (!tag) throw new Error("Usage: node scripts/release-manifest.mjs --check TAG [listing.json directory]");
+  const gh = (...args) => execFileSync("gh", [...args, "--repo", "madebywelch/guaca"], { encoding: "utf8" });
+  const names = JSON.parse(listing ? readFileSync(listing, "utf8") : gh("release", "view", tag, "--json", "assets")).assets.map((asset) => asset.name);
+  const dir = directory ?? mkdtempSync(join(tmpdir(), "guaca-release-check."));
+  try {
+    const small = names.filter((name) => !name.endsWith(".dmg"));
+    if (!directory && small.length) gh("release", "download", tag, "--dir", dir, ...small.flatMap((name) => ["--pattern", name]));
+    const faults = releaseFaults(tag, names, (name) => readFileSync(join(dir, name)), read("release-keys.pub"));
+    for (const fault of faults) console.error(fault);
+    if (faults.length) process.exitCode = 1;
+    else console.log(`${tag} has the disk image, its checksum, guaca-release.json and its signature; the manifest verifies and names ${tag.replace(/^v/, "")}.\nBackend image: ${JSON.parse(readFileSync(join(dir, "guaca-release.json"))).image}`);
+  } finally {
+    if (!directory) rmSync(dir, { recursive: true, force: true });
+  }
+} else if (running) {
   const args = process.argv.slice(2);
   const main = args[0] === "--channel" && args[1] === "main";
   const out = main ? args[2] : args[0];
