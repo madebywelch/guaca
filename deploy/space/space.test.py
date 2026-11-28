@@ -33,6 +33,7 @@ class Fly:
     def __init__(self) -> None:
         self.orgs = ["personal"]
         self.apps: dict[str, dict] = {}
+        self.foreign: set[str] = set()
         self.calls: list[dict] = []
         self.refuse: dict[tuple[str, str], tuple[int, str]] = {}
         self.ids = 0
@@ -95,8 +96,10 @@ class Fly:
         if path == "/v1/apps" and method == "GET":
             org = query.get("org_slug", [""])[0]
             return 200, {"apps": [{"name": n, "network": a["network"]} for n, a in self.apps.items() if a["org"] == org]}
+        if len(parts) > 2 and parts[1] == "apps" and parts[2] in self.foreign:
+            return 403, {"error": "unauthorized"}
         if path == "/v1/apps" and method == "POST":
-            if body["name"] in self.apps:
+            if body["name"] in self.apps or body["name"] in self.foreign:
                 return 422, {"error": "Name has already been taken"}
             self.apps[body["name"]] = {"org": body["org_slug"], "network": body.get("network", ""), "ips": [],
                                        "secrets": {}, "secret_writes": 0, "volumes": {}, "machines": {}}
@@ -164,6 +167,8 @@ class Fly:
                 machine["state"] = "stopped"
                 return 200, {"ok": True}
             if action == "start":
+                if machine["state"] == "replacing":
+                    return 412, {"error": "machine is replacing"}
                 machine["state"] = "started"
                 return 200, {"ok": True}
             if action == "wait":
@@ -178,10 +183,14 @@ class Fly:
                 if body.get("current_version") not in (None, machine["version"]):
                     return 412, {"error": "machine version changed"}
                 machine["config"] = body["config"]
-                machine["state"] = "started"
+                if machine["state"] == "stopped":
+                    machine["state"] = "replacing"
                 machine["version"] = "v" + str(int(machine["version"][1:]) + 1)
                 return 200, self.machine(app, rest[1])
-            return 200, self.machine(app, rest[1])
+            answer = self.machine(app, rest[1])
+            if machine["state"] == "replacing":
+                machine["state"] = "stopped"
+            return 200, answer
         return 404, {"error": f"no route {method} {path}"}
 
     def volume(self, app: dict, vid: str) -> dict:
@@ -255,14 +264,14 @@ class Run:
         return subprocess.run(["bash", str(SCRIPT), *args], env=self.env(name, **over), capture_output=True,
                               text=True, timeout=120, stdin=subprocess.DEVNULL, start_new_session=True)
 
-    def on_terminal(self, *args: str, name: str = "test-space") -> tuple[int, str, str]:
+    def on_terminal(self, *args: str, name: str = "test-space", **over: str) -> tuple[int, str, str]:
         leader, follower = os.openpty()
 
         def own_terminal() -> None:
             os.setsid()
             fcntl.ioctl(follower, termios.TIOCSCTTY, 0)
 
-        proc = subprocess.Popen(["bash", str(SCRIPT), *args], env=self.env(name), stdin=subprocess.DEVNULL,
+        proc = subprocess.Popen(["bash", str(SCRIPT), *args], env=self.env(name, **over), stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                 preexec_fn=own_terminal, pass_fds=(follower,))
         os.close(follower)
@@ -337,6 +346,10 @@ def dry_runs(run: Run) -> None:
                   GUACA_MAIN_FEED=unsigned.as_uri())
     check("a build that is not signed with Guaca's key is refused",
           refused.returncode != 0 and "not signed" in refused.stderr, refused.stderr)
+    first = run("--dry-run", "--region", "cdg", "create", "dry-space", name="dry-space", FLY_API_TOKEN="",
+                FLY_API_HOSTNAME=closed)
+    check("options may come before the command", first.returncode == 0 and '"region": "cdg"' in first.stdout,
+          first.stdout[-300:] + first.stderr)
     tagged = run("update", "dry-space", "ghcr.io/madebywelch/guaca/guacad:latest", "--dry-run", name="dry-space",
                  FLY_API_TOKEN="")
     check("an image named by tag is refused", tagged.returncode != 0 and "digest" in tagged.stderr, tagged.stderr)
@@ -401,12 +414,36 @@ def against_fly(run: Run) -> None:
           and "own token admits a call" in out, out)
     check("status prints no token", token not in out + status.stderr)
 
+    login = run.scratch / "flyctl-login"
+    login.mkdir()
+    (login / "fly").write_text(f"#!/bin/sh\n[ \"$*\" = 'auth token' ] && echo {FLY_TOKEN}\n")
+    (login / "fly").chmod(0o755)
+    path = f"{login}:{os.environ['PATH']}"
+    code, said, screen = run.on_terminal("invite", "test-space", FLY_API_TOKEN="", PATH=path)
+    check("without FLY_API_TOKEN, invite uses the flyctl login on this machine", code == 0
+          and f"/space/test-space/#token={token}" in screen and token not in said, (code, said[-200:]))
+    (login / "fly").write_text("#!/bin/sh\necho 'Error: no access token available' >&2; exit 1\n")
+    out = run("invite", "test-space", FLY_API_TOKEN="", PATH=path)
+    check("a flyctl that is not logged in is said plainly", out.returncode != 0
+          and "fly auth login" in out.stderr, out.stderr)
+
     fly.refuse[("POST", "/v1/apps/other-space/volumes")] = (422, "insufficient capacity in iad")
     refused = run("create", "other-space")
     check("a Fly error is said in plain words, with Fly's reason",
           refused.returncode != 0 and "insufficient capacity in iad" in refused.stderr
           and "Fly refused to make the space's volume" in refused.stderr, refused.stderr)
     fly.refuse.clear()
+
+    fly.foreign.add("their-space")
+    fly.calls.clear()
+    theirs = run("create", "their-space")
+    check("a name another organization owns, which Fly answers 403, is said to be taken, not a token fault",
+          theirs.returncode != 0 and "taken on Fly by another organization" in theirs.stderr
+          and not fly.app_calls("POST", "/v1/apps"), theirs.stderr)
+    status = run("status", "their-space")
+    check("status of a name Fly refuses to show says Fly refused, and goes no further",
+          status.returncode != 0 and "HTTP 403" in status.stderr and not fly.app_calls("GET", "/their-space/machines"),
+          status.stdout + status.stderr)
 
     taken = run("create", "test-space", FLY_ORG="work")
     check("an app of the same name in another organization is refused",
@@ -428,6 +465,12 @@ def against_fly(run: Run) -> None:
     same = run("update", "test-space")
     check("updating to what runs already changes nothing", same.returncode == 0 and "Nothing to do" in same.stdout,
           same.stdout + same.stderr)
+
+    before = len(snapshots)
+    forced = run("update", "test-space", "--force")
+    check("update --force snapshots and swaps the image it already runs", forced.returncode == 0
+          and len(snapshots) == before + 1 and machine["config"]["image"] == NEWER
+          and "now runs" in forced.stdout, forced.stdout + forced.stderr)
 
     run.feed, _ = signed_feed(run.scratch, GOOD, "0.5.1", "1111111")
     older = run("update", "test-space")
