@@ -31,6 +31,8 @@ Options:
   --tz ZONE          the zone routines and reminders keep, by its IANA name.
                      Default America/New_York.
   --confirm NAME     destroy only: the space's name again.
+  --force            update only: snapshot, swap and check even when the space
+                     already runs that image.
 
 The invitation, https://<name>.fly.dev/#token=..., is the space's password.
 It is shown on this terminal and nowhere else: not in a file, not in Fly's
@@ -39,7 +41,8 @@ logs. With no terminal, create says so and invite shows it later.
 Settings, read from the environment:
 
   FLY_API_TOKEN      a Fly token for the organization, from
-                     `fly tokens create org`. Not needed with --dry-run.
+                     `fly tokens create org`. Left out, the token of the
+                     flyctl login on this machine. Not needed with --dry-run.
   FLY_ORG            the organization's slug. Left out, the one organization
                      the token reaches; a token that reaches several stops
                      here and asks for this.
@@ -90,13 +93,20 @@ fail() {
 
 say() { printf '%s\n' "$*"; }
 
-COMMAND="${1:-}"
+COMMAND=""
+value=0
+for arg in "$@"; do
+  if [ "$value" = 1 ]; then value=0; continue; fi
+  case "$arg" in
+    -h | --help | help) usage; exit 0 ;;
+    --release | --region | --tz | --confirm) value=1 ;;
+    -*) ;;
+    *) COMMAND="$arg"; break ;;
+  esac
+done
 case "$COMMAND" in
-  -h | --help | help | "")
-    usage
-    exit 0
-    ;;
-  create | invite | status | update | destroy) shift ;;
+  "") usage; exit 0 ;;
+  create | invite | status | update | destroy) ;;
   *) fail "There is no command '$COMMAND'. The commands are create, invite, status, update and destroy; --help says what each does." ;;
 esac
 
@@ -107,9 +117,12 @@ REGION=iad
 TZONE=America/New_York
 CONFIRM=""
 DRY=0
+FORCE=0
+SEEN_COMMAND=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY=1 ;;
+    --force) FORCE=1 ;;
     --release) RELEASE="${2:?--release needs a version, such as 0.5.1 or latest}"; shift ;;
     --region) REGION="${2:?--region needs a Fly region code, such as iad}"; shift ;;
     --tz) TZONE="${2:?--tz needs a zone, such as America/New_York}"; shift ;;
@@ -117,7 +130,8 @@ while [ $# -gt 0 ]; do
     -h | --help) usage; exit 0 ;;
     -*) fail "There is no option '$1'. --help lists them." ;;
     *)
-      if [ -z "$NAME" ]; then NAME="$1"
+      if [ "$SEEN_COMMAND" = 0 ]; then SEEN_COMMAND=1
+      elif [ -z "$NAME" ]; then NAME="$1"
       elif { [ "$COMMAND" = update ] || [ "$COMMAND" = create ]; } && [ -z "$IMAGE" ]; then IMAGE="$1"
       else fail "'$1' is one word too many. --help shows what $COMMAND takes."
       fi
@@ -140,6 +154,8 @@ if [ "$COMMAND" != create ] && [ "$COMMAND" != update ] && [ -n "$RELEASE" ]; th
   fail "--release is for create and update."
 fi
 
+[ "$FORCE" = 0 ] || [ "$COMMAND" = update ] || fail "--force is for update."
+
 if [ "$COMMAND" = destroy ] && [ "$CONFIRM" != "$NAME" ]; then
   fail "Destroying $NAME deletes its machine, its volume, every snapshot and the workspace in it, for good. Run it again with --confirm $NAME to go ahead."
 fi
@@ -161,8 +177,15 @@ trap 'rm -rf "$SCRATCH"' EXIT
 AUTH=""
 if [ "$DRY" = 0 ]; then
   token="${FLY_API_TOKEN:-}"
+  if [ -z "$token" ]; then
+    flyctl="$(type -P flyctl || type -P fly || true)"
+    if [ -n "$flyctl" ]; then
+      token="$("$flyctl" auth token 2>/dev/null)" ||
+        fail "FLY_API_TOKEN is not set, and flyctl is not logged in. Run 'fly auth login', or export a token from 'fly tokens create org', then run this again."
+    fi
+  fi
   token="$(printf '%s' "$token" | tr -d '\r\n')"
-  [ -n "$token" ] || fail "FLY_API_TOKEN is not set. Make one with 'fly tokens create org' and export it, or add --dry-run to see what this would do."
+  [ -n "$token" ] || fail "FLY_API_TOKEN is not set. Make one with 'fly tokens create org' and export it, or log in with 'fly auth login', or add --dry-run to see what this would do."
   case "$token" in
     FlyV1\ *) AUTH="Authorization: $token" ;;
     *) AUTH="Authorization: Bearer $token" ;;
@@ -370,6 +393,18 @@ started() {
   return 1
 }
 
+launch() {
+  local id="$1" deadline=$((SECONDS + STARTED_WITHIN))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    call GET "/v1/apps/$APP/machines/$id"
+    case "$(printf '%s' "$BODY" | jq -r '.state // empty' 2>/dev/null)" in
+      started) return 0 ;;
+      stopped) call POST "/v1/apps/$APP/machines/$id/start" ;;
+    esac
+    sleep 2
+  done
+}
+
 stopped() {
   local id="$1" deadline=$((SECONDS + STARTED_WITHIN))
   while [ "$SECONDS" -lt "$deadline" ]; do
@@ -420,6 +455,10 @@ app_exists() {
   case "$STATUS" in
     2??) return 0 ;;
     404) return 1 ;;
+    403)
+      [ "${1:-}" != owned ] || fail "The name $APP is taken on Fly by another organization, so this space cannot have it. Pick another name."
+      flyerror "look up $APP"
+      ;;
     *) flyerror "look up $APP" ;;
   esac
 }
@@ -453,7 +492,7 @@ cmd_create() {
   fi
 
   slug="$(org)"
-  if app_exists; then
+  if app_exists owned; then
     local owner
     owner="$(printf '%s' "$BODY" | jq -r '.organization.slug // empty')"
     [ -z "$owner" ] || [ "$owner" = "$slug" ] ||
@@ -625,6 +664,7 @@ cmd_update() {
     dry POST "/v1/apps/$APP/volumes/<the volume's id>/snapshots"
     dry GET "/v1/apps/$APP/volumes/<the volume's id>/snapshots"
     dry POST "/v1/apps/$APP/machines/<the machine's id>" "$(jq -n --argjson c "$(machine_config "$IMAGE" "<the volume's id>")" '{config: $c, current_version: "<the machine version read above>"}')"
+    dry POST "/v1/apps/$APP/machines/<the machine's id>/start"
     dry GET "/v1/apps/$APP/machines/<the machine's id>/wait?state=started&timeout=60"
     say "GET $ORIGIN/health, until it reports the new build"
     say ""
@@ -647,8 +687,8 @@ cmd_update() {
   config="$(printf '%s' "$MACHINE_JSON" | jq -c '.config')"
   volume="$(printf '%s' "$config" | jq -r '.mounts[0].volume // empty')"
   [ -n "$volume" ] || fail "The machine $MACHINE mounts no volume, so there is no workspace to keep safe. Nothing was changed."
-  if [ "${current##*@}" = "${IMAGE##*@}" ]; then
-    say "$NAME already runs $TARGET_NAME ($IMAGE). Nothing to do."
+  if [ "${current##*@}" = "${IMAGE##*@}" ] && [ "$FORCE" = 0 ]; then
+    say "$NAME already runs $TARGET_NAME ($IMAGE). Nothing to do; --force snapshots and swaps it anyway."
     return
   fi
 
@@ -707,6 +747,7 @@ cmd_update() {
       fail "Fly refused to replace the image (HTTP $refused), so the old image was started again on the untouched volume. Snapshot $snapshot is kept."
       ;;
   esac
+  launch "$MACHINE"
   say "Replaced the image with $TARGET_NAME; waiting for it to answer."
   if started "$MACHINE" && healthy "$TARGET_COMMIT"; then
     say "$NAME now runs $TARGET_NAME and answers its health check. The snapshot $snapshot is what a restore would go back to."

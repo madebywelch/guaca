@@ -1155,9 +1155,10 @@ in a browser, on a phone, and in the Mac app as a remote host.
 `deploy/space/space.sh` makes and keeps one, through the Fly Machines API:
 
 ```sh
-export FLY_API_TOKEN=...          # fly tokens create org
+export FLY_API_TOKEN=...          # fly tokens create org; left out, the flyctl login is used
 deploy/space/space.sh create my-space --dry-run    # every call, and none made
 deploy/space/space.sh create my-space              # prints the invitation on the terminal
+deploy/space/space.sh invite my-space              # the invitation again, on this terminal only
 deploy/space/space.sh status my-space
 deploy/space/space.sh update my-space              # newest main; --release 0.5.1 for a release
 deploy/space/space.sh destroy my-space --confirm my-space
@@ -1169,6 +1170,8 @@ saves a generated token as a Fly secret, not in the machine's config, and
 can be run again: it makes no second machine or volume and never replaces
 the token. The invitation is the space's password and is shown on the
 terminal only; with no terminal it is not shown, and `invite` shows it later.
+A Fly app name is global, so a name another organization owns is refused as
+taken.
 `GUACA_SPACE=1` on the machine is the one setting that makes a host a space.
 It keeps the token out of the log, which on Fly is kept by Fly, and the Host
 panel says the space is updated for you instead of offering an update or
@@ -1181,8 +1184,10 @@ and the image runs as an unprivileged user.
 
 **Updates.** There is no Docker socket on Fly, so `guaca-updater` cannot run
 there. `update` stops the machine (the host puts its work down), snapshots the
-volume, replaces the image by digest and waits for `/health` to report the new
-build. If it does not, the workspace the new build left is kept, the snapshot
+volume, replaces the image by digest, starts the machine again (Fly leaves a
+stopped machine stopped when its config changes) and waits for `/health` to
+report the new build. `--force` does all of that for the image already running.
+If the new build does not answer, the workspace the new build left is kept, the snapshot
 is restored into a new volume, and the previous image runs on that copy: an
 older build never runs on a volume a newer one may have migrated, which
 `guacad` itself also refuses. An update to an older version than the running
@@ -1224,6 +1229,10 @@ each while they run. So a space is `shared-cpu-1x` with 1 GB and 512 MB of
 swap, not the 2 GB first guessed: the daemon fits in 256 MB, but one `claude`
 turn and two connectors would not fit in 512 MB.
 
+On Fly on 2026-11-28, a space idle in `iad` with an empty workspace used 148 to
+156 MiB of the 965 MiB Fly's metrics report, the kernel and Fly's init
+included, with `guacad` at 11 MiB resident: the measured size holds.
+
 At Fly's prices on 2026-11-27 (`iad`, 30 days always on), that is $6.70 for
 the machine and $1.50 for the volume (10 GB at $0.15), $8.20 a month. Shared
 IPv4 and IPv6 are free, snapshots are free up to 10 GB stored, and outbound
@@ -1253,7 +1262,11 @@ to the workflows waits for the owner.
 IMAGE=guacad:$(git rev-parse --short=7 HEAD) deploy/space/prove.py
 ```
 
-What only Fly can show: that its proxy, certificate and health check behave
-as the proof's stand-ins do, that `processes[].user` and `exec` run as
-documented, that the app's own network keeps other apps out, and the
-snapshot, restore and swap calls.
+What only Fly can show, `prove.py --live <name>` checks on a running space:
+the certificate, `/health` through Fly's proxy and Fly's own check, `guacad`
+running as `guaca`, a wrong token refused and the space's own admitted, the
+event socket over wss, the volume mounted and owned by `guaca`, data kept
+through a restart and an `update --force`, no token in Fly's logs, and no reach
+to or from another app in the organization, tried with a throwaway app it
+destroys at once. It needs the token `space.sh` uses, and leaves the workspace
+as it found it.
