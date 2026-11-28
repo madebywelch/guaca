@@ -138,6 +138,15 @@ run_rust() {
   run_daemon
 }
 
+run_space() {
+  step "The daemon image, built the way scripts/image.sh builds it"
+  export IMAGE="${IMAGE:-guacad:space-proof}"
+  ./scripts/image.sh build
+
+  step "The image run as a Fly space, in Docker: every check in deploy/space/prove.py"
+  python3 deploy/space/prove.py
+}
+
 case "${1:-all}" in
   grants) run_grants ;;
   assets) run_assets ;;
@@ -149,6 +158,7 @@ case "${1:-all}" in
   connector) run_connector ;;
   formal) run_formal ;;
   e2e) run_e2e ;;
+  space) run_space ;;
   all)
     run_grants
     run_assets
@@ -160,7 +170,7 @@ case "${1:-all}" in
     run_formal
     ;;
   *)
-    echo "usage: $0 [all|grants|assets|scripts|web|rust|desktop|daemon|connector|formal|e2e]" >&2
+    echo "usage: $0 [all|grants|assets|scripts|web|rust|desktop|daemon|connector|formal|e2e|space]" >&2
     exit 2
     ;;
 esac
