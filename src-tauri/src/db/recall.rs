@@ -26,6 +26,15 @@ pub(super) const FILE: &str = "INSERT OR IGNORE INTO recall_cards
     )
     WHERE trim(said) <> '' OR headline <> ''";
 
+const SEARCH: &str = "SELECT c.run_id, c.agent_id, c.message_id, c.said, c.headline, c.said_at,
+            snippet(recall_index, 0, '', '', ?4, ?5)
+       FROM recall_index
+       JOIN recall_cards c ON c.id = recall_index.rowid
+      WHERE recall_index MATCH ?1 AND c.group_id = ?2
+        AND c.agent_id IN (SELECT id FROM agents WHERE lifecycle <> 'terminated')
+      ORDER BY rank, c.said_at DESC
+      LIMIT ?3";
+
 pub(super) fn file(tx: &Connection, run: RunId) -> Result<bool, StoreError> {
     Ok(tx.execute(FILE, [run.to_string()])? > 0)
 }
@@ -58,16 +67,7 @@ fn read(row: &Row<'_>) -> rusqlite::Result<Result<(Card, String), StoreError>> {
 impl Store {
     pub fn recall(&self, group: GroupId, query: &str, limit: u32) -> Result<Vec<Card>, StoreError> {
         let conn = self.conn()?;
-        let mut stmt = conn.prepare_cached(
-            "SELECT c.run_id, c.agent_id, c.message_id, c.said, c.headline, c.said_at,
-                    snippet(recall_index, 0, '', '', ?4, ?5)
-               FROM recall_index
-               JOIN recall_cards c ON c.id = recall_index.rowid
-              WHERE recall_index MATCH ?1 AND c.group_id = ?2
-                AND c.agent_id IN (SELECT id FROM agents WHERE lifecycle <> 'terminated')
-              ORDER BY rank, c.said_at DESC
-              LIMIT ?3",
-        )?;
+        let mut stmt = conn.prepare_cached(SEARCH)?;
         let rows = stmt
             .query_map(params![query, group.to_string(), limit, ELLIPSIS, EXCERPT_TOKENS], read)?;
         let mut cards = Vec::new();
@@ -397,17 +397,18 @@ mod tests {
 
 #[cfg(test)]
 mod speed {
-    use std::time::{Duration, Instant};
+    use rusqlite::StatementStatus;
 
     use super::*;
     use crate::domain::agent::CleanDraft;
     use crate::domain::recall::{query, CANDIDATES};
 
     const CARDS: usize = 100_000;
-    const QUERIES: usize = 400;
+    const FEW_CARDS: usize = 1_000;
+    const NEEDLES: usize = 5;
     const VOCABULARY: usize = 6_000;
     const WORDS_PER_CARD: usize = 40;
-    const P95_LIMIT: Duration = Duration::from_millis(100);
+    const ASKED: &str = "boathouse";
 
     struct Dice(u64);
 
@@ -427,8 +428,7 @@ mod speed {
         }
     }
 
-    #[test]
-    fn a_search_over_a_hundred_thousand_cards_stays_under_the_limit_at_the_95th_percentile() {
+    fn filled(cards: usize) -> (tempfile::TempDir, Store, GroupId) {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("guac.db")).unwrap();
         let card = store
@@ -456,8 +456,11 @@ mod speed {
                          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                     )
                     .unwrap();
-                for at in 0..CARDS {
-                    let said: Vec<String> = (0..WORDS_PER_CARD).map(|_| dice.word()).collect();
+                for at in 0..cards {
+                    let mut said: Vec<String> = (0..WORDS_PER_CARD).map(|_| dice.word()).collect();
+                    if at % (cards / NEEDLES) == 0 {
+                        said.push(ASKED.into());
+                    }
                     let headline: Vec<String> = (0..8).map(|_| dice.word()).collect();
                     insert
                         .execute(params![
@@ -474,23 +477,66 @@ mod speed {
             }
             tx.commit().unwrap();
         }
+        (dir, store, card.group_id)
+    }
 
-        let mut took = Vec::with_capacity(QUERIES);
-        for _ in 0..QUERIES {
-            let asked: Vec<String> = (0..(4 + dice.next() % 9)).map(|_| dice.word()).collect();
-            let asked = asked.join(" ");
-            let started = Instant::now();
-            let hits = store.recall(card.group_id, &query(&[&asked]).unwrap(), CANDIDATES).unwrap();
-            took.push(started.elapsed());
-            assert!(hits.len() <= CANDIDATES as usize);
-        }
-        took.sort();
-        let p50 = took[QUERIES / 2];
-        let p95 = took[QUERIES * 95 / 100];
-        println!(
-            "recall over {CARDS} cards: p50 {p50:?}, p95 {p95:?}, max {:?}",
-            took[QUERIES - 1]
+    fn searched(store: &Store, group: GroupId) -> (usize, i32) {
+        let conn = store.conn().unwrap();
+        let mut stmt = conn.prepare(SEARCH).unwrap();
+        let asked = query(&[ASKED]).unwrap();
+        let found = stmt
+            .query_map(
+                params![asked, group.to_string(), CANDIDATES, ELLIPSIS, EXCERPT_TOKENS],
+                |_| Ok(()),
+            )
+            .unwrap()
+            .count();
+        (found, stmt.get_status(StatementStatus::VmStep))
+    }
+
+    fn plan(store: &Store, group: GroupId) -> Vec<String> {
+        let conn = store.conn().unwrap();
+        let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {SEARCH}")).unwrap();
+        let asked = query(&[ASKED]).unwrap();
+        stmt.query_map(
+            params![asked, group.to_string(), CANDIDATES, ELLIPSIS, EXCERPT_TOKENS],
+            |row| row.get::<_, String>(3),
+        )
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+    }
+
+    #[test]
+    fn a_search_reads_the_index_and_does_no_more_work_over_a_hundred_thousand_cards_than_over_a_thousand(
+    ) {
+        let (_few_dir, few, few_group) = filled(FEW_CARDS);
+        let (_many_dir, many, many_group) = filled(CARDS);
+
+        let plan = plan(&many, many_group);
+        println!("recall plan: {plan:?}");
+        assert!(
+            plan.iter().any(|step| step.starts_with("SCAN recall_index VIRTUAL TABLE INDEX")),
+            "the search does not read the full-text index: {plan:?}"
         );
-        assert!(p95 < P95_LIMIT, "p95 {p95:?} is over {P95_LIMIT:?} (p50 {p50:?})");
+        assert!(
+            plan.iter().any(|step| step.starts_with("SEARCH c USING INTEGER PRIMARY KEY")),
+            "the search does not reach cards by their id: {plan:?}"
+        );
+        assert!(
+            !plan.iter().any(|step| step.starts_with("SCAN c")),
+            "the search reads every card: {plan:?}"
+        );
+
+        let (found_few, steps_few) = searched(&few, few_group);
+        let (found_many, steps_many) = searched(&many, many_group);
+        println!(
+            "recall steps: {steps_few} over {FEW_CARDS} cards, {steps_many} over {CARDS} cards"
+        );
+        assert_eq!((found_few, found_many), (NEEDLES, NEEDLES));
+        assert!(
+            steps_many <= steps_few * 2,
+            "a search over {CARDS} cards took {steps_many} steps, {steps_few} over {FEW_CARDS}"
+        );
     }
 }
