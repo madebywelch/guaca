@@ -6,11 +6,20 @@ import { type Context, Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { csrf } from "hono/csrf";
 import { HTTPException } from "hono/http-exception";
+import { serializeSigned } from "hono/utils/cookie";
 import type { ReactNode } from "react";
 
 import { renderDocument } from "../src/account/document";
 import * as pages from "../src/account/pages";
-import { type Auth, CONNECTORS_SCOPE, getAuth, MCP_SCOPES, SERVED_AUTH_PATHS } from "./auth";
+import {
+  type Auth,
+  CONNECTORS_SCOPE,
+  getAuth,
+  MCP_SCOPES,
+  REMOTE_CLIENT_ID,
+  REMOTE_PATH,
+  SERVED_AUTH_PATHS,
+} from "./auth";
 import { codeAlreadySent } from "./codes";
 import { readConnection, readConnections } from "./connections";
 import {
@@ -28,26 +37,29 @@ import * as mcp from "./mcp";
 import { consumeHandoff, createHandoff, matchesBearer, SELFHOST_USER } from "./selfhost";
 import { stylesheetHref } from "./stylesheet";
 
-type AppEnv = { Bindings: Env; Variables: { auth: Auth } };
+type AppEnv = { Bindings: Env; Variables: { auth: Auth; formAction?: string } };
 type Ctx = Context<AppEnv>;
 
 const app = new Hono<AppEnv>({ strict: false });
 
 const LOOPBACK = "http://127.0.0.1:* http://[::1]:*";
 
-const CSP = [
-  "default-src 'none'",
-  "img-src 'self'",
-  "style-src 'self' 'unsafe-inline'",
-  "font-src 'self'",
-  "base-uri 'none'",
-  `form-action 'self' ${LOOPBACK} ${PROVIDERS.map((p) => p.consentOrigin).join(" ")}`,
-  "frame-ancestors 'none'",
-].join("; ");
+function policy(formAction?: string) {
+  const providers = PROVIDERS.map((p) => p.consentOrigin).join(" ");
+  return [
+    "default-src 'none'",
+    "img-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "font-src 'self'",
+    "base-uri 'none'",
+    `form-action 'self' ${LOOPBACK} ${providers}${formAction ? ` ${formAction}` : ""}`,
+    "frame-ancestors 'none'",
+  ].join("; ");
+}
 
 app.use("*", async (c, next) => {
   await next();
-  c.res.headers.set("Content-Security-Policy", CSP);
+  c.res.headers.set("Content-Security-Policy", policy(c.get("formAction")));
   c.res.headers.set("X-Content-Type-Options", "nosniff");
   c.res.headers.set("Referrer-Policy", c.req.path === "/enter" ? "no-referrer" : "strict-origin-when-cross-origin");
   if (!c.res.headers.has("Cache-Control")) {
@@ -62,6 +74,7 @@ app.use("/signin/*", formCsrf);
 app.use("/signout", formCsrf);
 app.use("/app/*", formCsrf);
 app.use("/consent", formCsrf);
+app.use(REMOTE_PATH, formCsrf);
 
 app.use("/api/connectors/*", requireBearer);
 app.use("/api/connectors", requireBearer);
@@ -187,6 +200,148 @@ app.get("/api/auth/.well-known/oauth-authorization-server", async (c) =>
 app.get("/api/auth/.well-known/openid-configuration", async (c) =>
   withPublicClientCorrections(await c.var.auth.handler(c.req.raw)),
 );
+
+const REMOTE = "guaca_remote";
+
+const REMOTE_CALLBACK_PATH = "/v1/oauth/callback";
+
+const REMOTE_TTL_SECONDS = 10 * 60;
+
+const REMOTE_HOSTNAME = /^(?:[a-z0-9-]+\.)*[a-z0-9-]+$|^\[[0-9a-f:.]+\]$/;
+
+interface RemoteRequest {
+  to: string;
+  state: string;
+  scope: string;
+}
+
+export function remoteCallback(value: string | null | undefined): string | null {
+  if (!value) return null;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+  if (url.username || url.password || url.search || url.hash) return null;
+  if (!REMOTE_HOSTNAME.test(url.hostname)) return null;
+  if (url.pathname !== REMOTE_CALLBACK_PATH || url.href !== value) return null;
+  return url.href;
+}
+
+function remoteCookie(env: Env) {
+  return {
+    path: REMOTE_PATH,
+    httpOnly: true,
+    secure: env.BETTER_AUTH_URL.startsWith("https://"),
+    sameSite: "Lax" as const,
+    maxAge: REMOTE_TTL_SECONDS,
+  };
+}
+
+async function remoteRequest(c: Ctx, state: string | undefined): Promise<RemoteRequest | null> {
+  const raw = await getSignedCookie(c, c.env.BETTER_AUTH_SECRET, REMOTE);
+  if (!raw || !state) return null;
+  try {
+    const held = JSON.parse(raw) as Partial<RemoteRequest>;
+    const to = remoteCallback(held.to);
+    if (!to || held.state !== state) return null;
+    return { to, state, scope: typeof held.scope === "string" ? held.scope : "" };
+  } catch {
+    return null;
+  }
+}
+
+function remoteRefused(c: Ctx, status: 400 | 200 = 200) {
+  return page(
+    c,
+    pages.notice({
+      heading: "This sign-in cannot continue.",
+      body: "It has expired, it was started in another browser, or it names an address Guaca cannot send you back to. Start the sign-in again from the Guaca you are using. Nothing was connected.",
+      bad: true,
+    }),
+    "Connect a Guaca",
+  ).then((res) => new Response(res.body, { status, headers: res.headers }));
+}
+
+app.get("/api/auth/oauth2/authorize", async (c, next) => {
+  const url = new URL(c.req.url);
+  if (
+    url.searchParams.get("client_id") !== REMOTE_CLIENT_ID ||
+    !url.searchParams.has("return_to")
+  ) {
+    return next();
+  }
+  if (c.env.SELFHOST_BEARER) return c.notFound();
+  const to = remoteCallback(url.searchParams.get("return_to"));
+  const state = url.searchParams.get("state") ?? "";
+  if (!to || !state) return remoteRefused(c, 400);
+
+  url.searchParams.delete("return_to");
+  const held: RemoteRequest = { to, state, scope: url.searchParams.get("scope") ?? "" };
+  const answered = await c.var.auth.handler(new Request(url, c.req.raw));
+  const out = new Response(answered.body, answered);
+  out.headers.append(
+    "Set-Cookie",
+    await serializeSigned(
+      REMOTE,
+      JSON.stringify(held),
+      c.env.BETTER_AUTH_SECRET,
+      remoteCookie(c.env),
+    ),
+  );
+  return out;
+});
+
+app.get(REMOTE_PATH, async (c) => {
+  if (c.env.SELFHOST_BEARER) return c.notFound();
+  const session = await c.var.auth.api.getSession({ headers: c.req.raw.headers });
+  if (!session) return c.redirect("/signin?error=required&next=%2Fapp", 302);
+
+  const code = c.req.query("code");
+  const asked = await remoteRequest(c, c.req.query("state"));
+  if (!asked || !code || c.req.query("error")) return remoteRefused(c);
+
+  c.set("formAction", new URL(asked.to).origin);
+  return page(
+    c,
+    pages.remoteConsent({
+      email: session.user.email,
+      host: new URL(asked.to).origin,
+      scopes: describeScopes(asked.scope),
+      code,
+      state: asked.state,
+      iss: c.req.query("iss") ?? "",
+    }),
+    "Connect a Guaca",
+    pages.signedInNav(session.user.email),
+  );
+});
+
+app.post(REMOTE_PATH, async (c) => {
+  if (c.env.SELFHOST_BEARER) return c.notFound();
+  const session = await c.var.auth.api.getSession({ headers: c.req.raw.headers });
+  if (!session) return c.redirect("/signin?error=required&next=%2Fapp", 302);
+
+  const form = await formOf(c);
+  const asked = await remoteRequest(c, form.get("state")?.toString());
+  const code = form.get("code")?.toString();
+  if (!asked || !code) return remoteRefused(c);
+  deleteCookie(c, REMOTE, remoteCookie(c.env));
+
+  const back = new URL(asked.to);
+  if (form.get("decision") === "allow") {
+    back.searchParams.set("code", code);
+  } else {
+    back.searchParams.set("error", "access_denied");
+  }
+  back.searchParams.set("state", asked.state);
+  const iss = form.get("iss")?.toString();
+  if (iss) back.searchParams.set("iss", iss);
+  c.set("formAction", back.origin);
+  return c.redirect(back.href, 302);
+});
 
 for (const path of SERVED_AUTH_PATHS) {
   app.all(`/api/auth${path}`, (c) => {

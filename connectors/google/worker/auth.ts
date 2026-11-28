@@ -118,6 +118,10 @@ export const REFUSED_AUTH_PATHS = [
 
 export const DESKTOP_CLIENT_ID = "guaca-desktop";
 
+export const REMOTE_CLIENT_ID = "guaca-remote";
+
+export const REMOTE_PATH = "/remote";
+
 export const SCOPES = ["openid", "email", "offline_access", "connectors"] as const;
 
 export const CONNECTORS_SCOPE = "connectors";
@@ -138,7 +142,7 @@ export function authPlugins(env?: Env) {
       consentPage: "/consent",
       allowDynamicClientRegistration: false,
       allowUnauthenticatedClientRegistration: false,
-      cachedTrustedClients: new Set([DESKTOP_CLIENT_ID]),
+      cachedTrustedClients: new Set([DESKTOP_CLIENT_ID, REMOTE_CLIENT_ID]),
       accessTokenExpiresIn: 60 * 60,
       refreshTokenExpiresIn: REFRESH_TOKEN_TTL_SECONDS,
       refreshTokenReuseInterval: REFRESH_TOKEN_TTL_SECONDS,

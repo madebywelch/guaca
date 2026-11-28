@@ -7,8 +7,8 @@ use axum::{Json, Router};
 use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
 
-use guac_lib::account::{Account, AccountError, CLIENT_ID};
-use guac_lib::oauth::Landing;
+use guac_lib::account::{Account, AccountError, CLIENT_ID, REMOTE_CLIENT_ID, REMOTE_RETURN_PATH};
+use guac_lib::oauth::{Callbacks, Landing};
 
 #[tokio::test]
 async fn broker_handoff_and_status_use_the_configured_bearer() {
@@ -127,6 +127,16 @@ struct Asked {
     state: String,
     challenge: String,
     method: String,
+    return_to: Option<String>,
+}
+
+#[derive(Clone)]
+struct Served(Landing);
+
+impl std::fmt::Debug for Served {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Served")
+    }
 }
 
 type Form = Vec<(String, String)>;
@@ -158,6 +168,8 @@ struct Script {
     wrong_iss: bool,
     refuse_refresh: bool,
     slow_refresh: bool,
+    served: Option<Served>,
+    secret_tokens: bool,
 }
 
 fn base64url(raw: &[u8]) -> String {
@@ -226,9 +238,10 @@ async fn serve(script: Script) -> Stub {
                 let asked = asked.clone();
                 let script = script.clone();
                 let issued_by = issued_by.clone();
+                let back_to = format!("{origin}{REMOTE_RETURN_PATH}");
                 move |Query(query): Query<std::collections::HashMap<String, String>>| {
-                    let (asked, script, issued_by) =
-                        (asked.clone(), script.clone(), issued_by.clone());
+                    let (asked, script, issued_by, back_to) =
+                        (asked.clone(), script.clone(), issued_by.clone(), back_to.clone());
                     async move {
                         let seen = Asked {
                             client_id: query.get("client_id").cloned().unwrap_or_default(),
@@ -237,15 +250,34 @@ async fn serve(script: Script) -> Stub {
                             state: query.get("state").cloned().unwrap_or_default(),
                             challenge: query.get("code_challenge").cloned().unwrap_or_default(),
                             method: query.get("code_challenge_method").cloned().unwrap_or_default(),
+                            return_to: query.get("return_to").cloned(),
                         };
 
                         assert_eq!(seen.method, "S256", "only S256 is sent");
                         assert!(!seen.challenge.is_empty(), "a challenge is always sent");
+                        if seen.client_id == REMOTE_CLIENT_ID {
+                            assert_eq!(
+                                seen.redirect_uri, back_to,
+                                "a remote sign-in returns to the service's own page"
+                            );
+                            let Some(Served(landing)) = script.served.clone() else {
+                                panic!("a remote sign-in with no served landing");
+                            };
+                            let fields = vec![
+                                ("code".to_string(), "the-code".to_string()),
+                                ("state".to_string(), seen.state.clone()),
+                                ("iss".to_string(), issued_by.clone()),
+                            ];
+                            *asked.lock() = Some(seen);
+                            tokio::spawn(async move { landing.deliver(fields).await });
+                            return "approved on the service's page".into_response();
+                        }
                         assert!(
                             seen.redirect_uri.starts_with("http://127.0.0.1:"),
                             "the redirect must be a loopback port: {}",
                             seen.redirect_uri
                         );
+                        assert_eq!(seen.return_to, None, "a loopback sign-in names no host");
 
                         let back = seen.redirect_uri.clone();
                         let state = if script.wrong_state {
@@ -261,6 +293,16 @@ async fn serve(script: Script) -> Stub {
                             &issued_by
                         });
 
+                        if let Some(Served(landing @ Landing::Served { .. })) = script.served {
+                            let fields = vec![
+                                ("code".to_string(), "the-code".to_string()),
+                                ("state".to_string(), state),
+                                ("iss".to_string(), issued_by.clone()),
+                            ];
+                            tokio::spawn(async move { landing.deliver(fields).await });
+                            return "answered at the workspace".into_response();
+                        }
+
                         let to = if script.deny {
                             format!(
                                 "{back}?error=access_denied&error_description=Nope\
@@ -269,7 +311,7 @@ async fn serve(script: Script) -> Stub {
                         } else {
                             format!("{back}?code=the-code&state={state}&iss={iss}")
                         };
-                        Redirect::temporary(&to)
+                        Redirect::temporary(&to).into_response()
                     }
                 }
             }),
@@ -298,12 +340,17 @@ async fn serve(script: Script) -> Stub {
                         };
 
                         let refreshing = get("grant_type") == "refresh_token";
+                        let signed_in_as = asked.lock().as_ref().map(|a| a.client_id.clone());
+                        if let Some(client) = &signed_in_as {
+                            assert_eq!(&get("client_id"), client, "one client from start to renew");
+                        }
                         if get("grant_type") == "authorization_code" {
-                            let challenge = asked
+                            let (challenge, redirect_uri) = asked
                                 .lock()
                                 .as_ref()
-                                .map(|a| a.challenge.clone())
+                                .map(|a| (a.challenge.clone(), a.redirect_uri.clone()))
                                 .unwrap_or_default();
+                            assert_eq!(get("redirect_uri"), redirect_uri);
                             let verifier = get("code_verifier");
                             assert!(!verifier.is_empty(), "a verifier is always presented");
                             assert_eq!(
@@ -311,7 +358,6 @@ async fn serve(script: Script) -> Stub {
                                 challenge,
                                 "the verifier must hash to the challenge that was sent"
                             );
-                            assert_eq!(get("client_id"), CLIENT_ID);
                         }
 
                         exchanges.lock().push(fields);
@@ -341,9 +387,15 @@ async fn serve(script: Script) -> Stub {
                                 .into_response();
                         }
 
+                        let (access, refresh) = match (script.secret_tokens, refreshing) {
+                            (true, false) => (SECRET_ACCESS, SECRET_REFRESH),
+                            (true, true) => (SECRET_ACCESS_2, SECRET_REFRESH_2),
+                            (false, false) => ("at-1", "rt-1"),
+                            (false, true) => ("at-2", "rt-2"),
+                        };
                         let mut answer = serde_json::json!({
-                            "access_token": if refreshing { "at-2" } else { "at-1" },
-                            "refresh_token": if refreshing { "rt-2" } else { "rt-1" },
+                            "access_token": access,
+                            "refresh_token": refresh,
                             "token_type": "Bearer",
                         });
                         if let Some(secs) = script.expires_in {
@@ -803,6 +855,225 @@ async fn newer_sign_in_wins_over_blocked_refresh() {
     assert_eq!(serde_json::from_str::<serde_json::Value>(&stored).unwrap()["access_token"], "at-1");
 }
 
+const SECRET_ACCESS: &str = "remote-access-6f1c0e";
+const SECRET_REFRESH: &str = "remote-refresh-9b27d4";
+const SECRET_ACCESS_2: &str = "remote-access-renewed-41aa";
+const SECRET_REFRESH_2: &str = "remote-refresh-renewed-07ce";
+
+const SPACE: &str = "https://my-space.fly.dev";
+
+fn served(origin: &str) -> Landing {
+    let callbacks: Callbacks = Default::default();
+    Landing::Served { origin: origin.to_string(), callbacks }
+}
+
+fn field(fields: &[(String, String)], name: &str) -> String {
+    fields.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone()).unwrap_or_default()
+}
+
+static LOGS: std::sync::OnceLock<Arc<std::sync::Mutex<Vec<u8>>>> = std::sync::OnceLock::new();
+
+fn logs() -> Arc<std::sync::Mutex<Vec<u8>>> {
+    LOGS.get_or_init(|| {
+        let buffer = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let writer = buffer.clone();
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::new("trace"))
+            .with_ansi(false)
+            .with_writer(move || Lines(writer.clone()))
+            .try_init();
+        buffer
+    })
+    .clone()
+}
+
+struct Lines(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Lines {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn a_host_reached_over_the_network_signs_in_through_the_services_own_page() {
+    let landing = served(SPACE);
+    let stub = serve(Script {
+        expires_in: Some(3600),
+        served: Some(Served(landing.clone())),
+        ..Script::default()
+    })
+    .await;
+    let account = Account::open_at(scratch(), &stub.origin);
+
+    let status = account.sign_in(browse, &landing).await.expect("the sign-in should complete");
+
+    assert!(status.signed_in);
+    assert_eq!(status.email, "robert@example.com");
+    let asked = stub.asked.lock().clone().expect("the browser was sent somewhere");
+    assert_eq!(asked.client_id, REMOTE_CLIENT_ID);
+    assert_eq!(asked.redirect_uri, format!("{}{REMOTE_RETURN_PATH}", stub.origin));
+    assert_eq!(asked.return_to.as_deref(), Some("https://my-space.fly.dev/v1/oauth/callback"));
+    let exchanges = stub.exchanges.lock().clone();
+    assert_eq!(field(&exchanges[0], "client_id"), REMOTE_CLIENT_ID);
+    assert_eq!(field(&exchanges[0], "redirect_uri"), asked.redirect_uri);
+}
+
+#[tokio::test]
+async fn a_remote_sign_in_renews_as_the_client_it_signed_in_as_after_a_restart() {
+    let landing = served(SPACE);
+    let stub = serve(Script {
+        expires_in: Some(1),
+        served: Some(Served(landing.clone())),
+        ..Script::default()
+    })
+    .await;
+    let path = scratch();
+    Account::open_at(path.clone(), &stub.origin).sign_in(browse, &landing).await.unwrap();
+
+    let reopened = Account::open_at(path, &stub.origin);
+    assert_eq!(reopened.access().await.unwrap().expose(), "at-2");
+    let exchanges = stub.exchanges.lock().clone();
+    assert_eq!(field(&exchanges[1], "grant_type"), "refresh_token");
+    assert_eq!(field(&exchanges[1], "client_id"), REMOTE_CLIENT_ID);
+}
+
+#[tokio::test]
+async fn a_loopback_sign_in_asks_and_stores_exactly_as_before() {
+    for landing in [Landing::Loopback, served("http://localhost:8788")] {
+        let stub = serve(Script {
+            expires_in: Some(1),
+            served: Some(Served(landing.clone())),
+            ..Script::default()
+        })
+        .await;
+        let path = scratch();
+        let account = Account::open_at(path.clone(), &stub.origin);
+        let opened = Arc::new(Mutex::new(String::new()));
+        let seen = opened.clone();
+        account
+            .sign_in(
+                move |url| {
+                    *seen.lock() = url.to_string();
+                    browse(url)
+                },
+                &landing,
+            )
+            .await
+            .unwrap();
+        if matches!(landing, Landing::Served { .. }) {
+            let callback =
+                reqwest::Url::parse(&stub.asked.lock().clone().unwrap().redirect_uri).unwrap();
+            assert_eq!(callback.host_str(), Some("127.0.0.1"));
+            assert_eq!(callback.path(), "/v1/oauth/callback");
+        }
+        account.access().await.unwrap();
+
+        let asked = stub.asked.lock().clone().unwrap();
+        assert_eq!(asked.client_id, CLIENT_ID);
+        assert!(!opened.lock().contains("return_to"), "{}", opened.lock());
+        let exchanges = stub.exchanges.lock().clone();
+        assert_eq!(field(&exchanges[0], "client_id"), CLIENT_ID);
+        assert_eq!(field(&exchanges[1], "client_id"), CLIENT_ID);
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let keys: Vec<&String> = written.as_object().unwrap().keys().collect();
+        assert_eq!(
+            keys,
+            ["access_token", "email", "expires_at", "origin", "refresh_token", "token_endpoint"]
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_remote_sign_in_is_kept_where_a_loopback_one_is_and_shown_nowhere() {
+    let logs = logs();
+    let landing = served(SPACE);
+    let stub = serve(Script {
+        expires_in: Some(1),
+        secret_tokens: true,
+        served: Some(Served(landing.clone())),
+        ..Script::default()
+    })
+    .await;
+    let path = scratch();
+    let account = Account::open_at(path.clone(), &stub.origin);
+    let opened = Arc::new(Mutex::new(String::new()));
+    let seen = opened.clone();
+    let status = account
+        .sign_in(
+            move |url| {
+                *seen.lock() = url.to_string();
+                browse(url)
+            },
+            &landing,
+        )
+        .await
+        .unwrap();
+    account.connectors().await.unwrap();
+
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains(SECRET_ACCESS_2) && written.contains(SECRET_REFRESH_2));
+    assert!(written.contains(&format!("\"client_id\": \"{REMOTE_CLIENT_ID}\"")));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    let verifier = field(&stub.exchanges.lock()[0], "code_verifier");
+    let shown = [
+        serde_json::to_string(&status).unwrap(),
+        serde_json::to_string(&account.status()).unwrap(),
+        opened.lock().clone(),
+        String::from_utf8_lossy(&logs.lock().unwrap()).into_owned(),
+    ];
+    for (place, text) in ["status", "settings read", "opened page", "log"].iter().zip(&shown) {
+        for secret in [SECRET_ACCESS, SECRET_REFRESH, SECRET_ACCESS_2, SECRET_REFRESH_2, &verifier]
+        {
+            assert!(!text.contains(secret), "{place} carries a secret: {text}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_answer_for_a_sign_in_this_host_did_not_start_is_not_taken() {
+    let landing = served(SPACE);
+    let forged = vec![
+        ("code".to_string(), "someone-elses-code".to_string()),
+        ("state".to_string(), "never-started-here".to_string()),
+    ];
+    assert_eq!(landing.deliver(forged.clone()).await, None, "nothing is waiting");
+
+    let stub = serve(Script { served: Some(Served(landing.clone())), ..Script::default() }).await;
+    let account = Account::open_at(scratch(), &stub.origin);
+    let forger = landing.clone();
+    let status = account
+        .sign_in(
+            move |url| {
+                let url = url.to_string();
+                tokio::spawn(async move {
+                    assert_eq!(forger.deliver(forged).await, None, "a stranger's state is unknown");
+                    let _ = browse(&url);
+                });
+                Ok(())
+            },
+            &landing,
+        )
+        .await
+        .unwrap();
+    assert!(status.signed_in);
+    let exchanges = stub.exchanges.lock().clone();
+    assert_eq!(exchanges.len(), 1);
+    assert_eq!(field(&exchanges[0], "code"), "the-code");
+}
+
 #[tokio::test]
 #[ignore = "reaches the internet"]
 async fn the_real_service_still_publishes_where_to_sign_in() {
@@ -870,4 +1141,21 @@ fn the_service_trusts_the_client_the_app_signs_in_as() {
         format!("\"{CLIENT_ID}\";"),
         "the service holds DESKTOP_CLIENT_ID as its trusted client, and it has to be the client the app asks as"
     );
+}
+
+#[test]
+fn the_service_names_the_remote_client_and_its_page_as_the_app_does() {
+    let auth = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../connectors/google/worker/auth.ts"
+    ))
+    .unwrap();
+    let declared = |name: &str| {
+        auth.lines()
+            .find_map(|line| line.trim().strip_prefix(&format!("export const {name} = ")))
+            .map(str::to_string)
+            .unwrap_or_else(|| panic!("auth.ts declares {name} on one line"))
+    };
+    assert_eq!(declared("REMOTE_CLIENT_ID"), format!("\"{REMOTE_CLIENT_ID}\";"));
+    assert_eq!(declared("REMOTE_PATH"), format!("\"{REMOTE_RETURN_PATH}\";"));
 }

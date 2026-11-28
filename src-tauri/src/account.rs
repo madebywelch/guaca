@@ -13,6 +13,10 @@ pub const DEFAULT_ORIGIN: &str = "https://guaca.bot";
 
 pub const CLIENT_ID: &str = "guaca-desktop";
 
+pub const REMOTE_CLIENT_ID: &str = "guaca-remote";
+
+pub const REMOTE_RETURN_PATH: &str = "/remote";
+
 pub const SCOPE: &str = "openid email offline_access connectors";
 
 const REFRESH_SKEW_MS: i64 = 5 * 60 * 1000;
@@ -121,6 +125,8 @@ struct Stored {
     token_endpoint: String,
     #[serde(default)]
     origin: String,
+    #[serde(default)]
+    client_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -131,12 +137,21 @@ struct OnDisk<'a> {
     email: &'a str,
     token_endpoint: &'a str,
     origin: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client_id: Option<&'a str>,
 }
 
 impl Stored {
     fn on_disk(&self) -> OnDisk<'_> {
-        let Stored { access_token, refresh_token, expires_at, email, token_endpoint, origin } =
-            self;
+        let Stored {
+            access_token,
+            refresh_token,
+            expires_at,
+            email,
+            token_endpoint,
+            origin,
+            client_id,
+        } = self;
         OnDisk {
             access_token: access_token.expose(),
             refresh_token: refresh_token.as_ref().map(Secret::expose),
@@ -144,7 +159,12 @@ impl Stored {
             email,
             token_endpoint,
             origin,
+            client_id: client_id.as_deref(),
         }
+    }
+
+    fn client_id(&self) -> &str {
+        self.client_id.as_deref().unwrap_or(CLIENT_ID)
     }
 
     fn expiring(&self) -> bool {
@@ -425,18 +445,27 @@ impl Account {
         let state = oauth::secret();
 
         let opened = landing.open(&state).await?;
-        let redirect_uri = opened.redirect_uri.clone();
+        let back = opened.redirect_uri.clone();
+        let remote = !is_loopback(&back);
+        let (client_id, redirect_uri) = if remote {
+            (REMOTE_CLIENT_ID, format!("{}{REMOTE_RETURN_PATH}", self.origin))
+        } else {
+            (CLIENT_ID, back.clone())
+        };
 
-        let url = format!(
+        let mut url = format!(
             "{}?response_type=code&client_id={}&redirect_uri={}&scope={}&state={}\
              &code_challenge={}&code_challenge_method=S256",
             server.authorization_endpoint,
-            oauth::encode(CLIENT_ID),
+            oauth::encode(client_id),
             oauth::encode(&redirect_uri),
             oauth::encode(SCOPE),
             oauth::encode(&state),
             oauth::encode(&challenge),
         );
+        if remote {
+            url.push_str(&format!("&return_to={}", oauth::encode(&back)));
+        }
 
         open(&url).map_err(|detail| AccountError::NoBrowser { detail })?;
 
@@ -449,7 +478,7 @@ impl Account {
                 ("grant_type".to_string(), "authorization_code".to_string()),
                 ("code".to_string(), code),
                 ("redirect_uri".to_string(), redirect_uri),
-                ("client_id".to_string(), CLIENT_ID.to_string()),
+                ("client_id".to_string(), client_id.to_string()),
                 ("code_verifier".to_string(), verifier),
             ],
             &oauth::Gate::none(),
@@ -463,6 +492,7 @@ impl Account {
             email: String::new(),
             token_endpoint: server.token_endpoint,
             origin: self.origin.clone(),
+            client_id: remote.then(|| REMOTE_CLIENT_ID.to_string()),
         };
 
         let held = self.fetch_connectors(stored.access_token.expose()).await?;
@@ -538,7 +568,7 @@ impl Account {
             &[
                 ("grant_type".to_string(), "refresh_token".to_string()),
                 ("refresh_token".to_string(), refresh_token.to_string()),
-                ("client_id".to_string(), CLIENT_ID.to_string()),
+                ("client_id".to_string(), stored.client_id().to_string()),
             ],
             &oauth::Gate::none(),
         )
@@ -555,6 +585,7 @@ impl Account {
                 email: stored.email.clone(),
                 token_endpoint: stored.token_endpoint.clone(),
                 origin: self.origin.clone(),
+                client_id: stored.client_id.clone(),
             },
         )?;
         Ok(access_token)
@@ -699,6 +730,21 @@ impl Account {
     }
 }
 
+fn is_loopback(redirect_uri: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(redirect_uri) else {
+        return false;
+    };
+    match url.host_str() {
+        Some("localhost") => true,
+        Some(host) => host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback()),
+        None => false,
+    }
+}
+
 fn belongs_to(stored: &Stored, origin: &str) -> bool {
     if stored.origin.is_empty() {
         return origin == DEFAULT_ORIGIN;
@@ -771,6 +817,7 @@ mod tests {
             email: "ada@example.com".into(),
             token_endpoint: "https://guaca.bot/api/auth/oauth2/token".into(),
             origin: "https://guaca.bot".into(),
+            client_id: None,
         }
     }
 
@@ -828,6 +875,7 @@ mod tests {
             email: "a@b.com".to_string(),
             token_endpoint: format!("{origin}/api/auth/oauth2/token"),
             origin: origin.to_string(),
+            client_id: None,
         };
         fs::write(&path, serde_json::to_string(&stored.on_disk()).unwrap()).unwrap();
         path

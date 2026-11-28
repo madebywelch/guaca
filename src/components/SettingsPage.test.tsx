@@ -1613,6 +1613,21 @@ describe("the Guaca account", () => {
     await waitFor(() => expect(row().textContent).toContain("robert@example.com"));
   });
 
+  it("tells a browser on another computer that guaca.bot will name this address", async () => {
+    platform.desktop = false;
+    signInAccount.mockReturnValue(new Promise<AccountStatus>(() => {}));
+    open(stored(), DEFAULT_PREFS, "account");
+    await waitFor(() => expect(accountStatus).toHaveBeenCalled());
+    fireEvent.click(button("Sign in"));
+
+    await waitFor(() => expect(screen.getByRole("status")).toBeTruthy());
+    const said = screen.getByRole("status").textContent ?? "";
+    expect(said).toContain(
+      `guaca.bot will name the address of this Guaca, ${window.location.origin},`,
+    );
+    expect(said).not.toContain("listening on a port on this machine");
+  });
+
   it("keeps a sign-in in flight across a glance at another section", async () => {
     signInAccount.mockReturnValue(new Promise<AccountStatus>(() => {}));
     open(stored(), DEFAULT_PREFS, "account");

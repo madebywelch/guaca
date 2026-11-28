@@ -1411,7 +1411,9 @@ export function SettingsPage({ request, onSection, notices }: Props) {
                     <p className="devicecode__lede">
                       {account?.broker
                         ? "Finish in the browser window that just opened."
-                        : "Finish in the browser window that just opened. Guaca is listening on a port on this machine for the answer, and gives up after five minutes."}
+                        : place === "thisMac"
+                          ? "Finish in the browser window that just opened. Guaca is listening on a port on this machine for the answer, and gives up after five minutes."
+                          : `Finish in the browser tab that just opened. guaca.bot will name the address of this Guaca${place === "browser" ? `, ${window.location.origin},` : ""} and ask before it connects anything. Guaca gives up after five minutes.`}
                     </p>
                     <p className="hint">
                       Only continue if you started this here. Nothing else can have opened it.
