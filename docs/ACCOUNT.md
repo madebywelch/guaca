@@ -52,7 +52,7 @@ account flow returns to the workspace through `oauth::Landing`:
 |---|---|---|
 | `subscription.rs` | Device code | OpenAI operates the client; the device flow is what they publish |
 | `oauth.rs` | Code + PKCE, served callback or legacy loopback | MCP clients register the callback when connecting |
-| `account.rs` | Code + PKCE, served callback or legacy loopback | Fixed public client at guaca.bot; accepted callbacks must be registered |
+| `account.rs` | Code + PKCE, served callback or legacy loopback | Fixed public clients at guaca.bot; a remote host returns through guaca.bot's approval page |
 
 The original embedded runtime used a loopback listener. `subscription.rs`
 argues against a loopback redirect: a fixed port may already
@@ -68,15 +68,44 @@ that redirect; its machine must be able to reach the workspace.
 The fixed `guaca-desktop` registration accepts the legacy loopback callback
 and, through guaca-bot migration 0005, the loopback `/v1/oauth/callback` path
 with varying ports. This supports local Docker and a VPS accessed through a
-local SSH port forward. It does not accept arbitrary HTTPS or Tailnet hosts.
-At an unregistered host, Settings → Account sign-in is refused, typically
-with `invalid_redirect`. This is a callback-registration limitation, not a
-failure of the VPS runtime. The served route is already implemented.
+local SSH port forward. Any other callback takes the path below.
+
+### A host on another computer
+
+A space, a home server or a VPS reached by its own address is a host guaca.bot
+has never heard of, and that address is whatever the host says it is. So it is
+never a place guaca.bot redirects a code to on its own, and nothing about it
+is registered: no wildcard, no `fly.dev` suffix, no per-host row.
+
+1. The host keeps a PKCE verifier and a state, as on loopback, and opens the
+   authorization endpoint as `guaca-remote`. Its `redirect_uri` is
+   `<origin>/remote` on guaca.bot itself, the client's only registered
+   callback, and `return_to` names the host's own `/v1/oauth/callback`.
+2. guaca.bot checks `return_to` is exactly an `http` or `https` origin plus
+   that path, and keeps it with the state in a signed, ten-minute cookie on
+   the browser that started. The person signs in if they have to.
+3. The code lands on `/remote`, which says in plain words which address is
+   asking and for which account, and offers Connect it or Do not connect.
+   This page is never skipped, which is why `guaca-remote` skips Better Auth's
+   own consent screen: one question, and it is the one that names the host.
+4. Only the press of Connect sends the browser to the host's callback, and only
+   for the state that cookie holds. The code is single use, expires with the
+   authorization request, and is worthless without the verifier, so a host
+   that did not start the sign-in cannot finish it.
+5. The host exchanges the code with the verifier and `redirect_uri` from step
+   1, and from then on refreshes as `guaca-remote`, which it records in
+   `account.json` as `client_id`. A loopback sign-in writes no such field, so
+   that file is byte for byte what it was.
+
+The device grant was the other shape that fits, and the argument below still
+holds against it. Here the only short code a person handles is the six-digit
+email code, limited to three tries; the authorization code is 32 random
+characters bound to a verifier, so there is nothing a rate limit would protect.
+What remains is the case where someone talks a person into approving their
+host. The approval page is where that is answered: it names the address, and
+says not to connect it if someone sent the link.
 
 Google's callback to guaca.bot is unaffected by changing the workspace URL.
-The callback requiring acceptance here is the separate return from guaca.bot
-to the workspace. This host-dependent account flow is current behavior, not
-the intended managed onboarding contract.
 
 ### Why not the device grant, given one was already built
 

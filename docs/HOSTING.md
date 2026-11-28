@@ -418,12 +418,16 @@ Plugin sign-in registers its callback dynamically, subject to the vendor's
 redirect rules. HTTPS reverse proxies provide an HTTPS callback; an SSH port
 forward provides the local HTTP callback described below.
 
-Account sign-in uses the fixed `guaca-desktop` client at guaca.bot. Its current
-registrations allow the loopback paths, not arbitrary remote hostnames. A
-reachable `/v1/oauth/callback` route does not itself authorize that URL with
-guaca.bot. The service must accept it before sign-in can complete.
-`tests/account.rs` checks the served flow against a scripted service; it does
-not establish acceptance of a production hostname.
+Account sign-in from a loopback callback uses the fixed `guaca-desktop`
+client at guaca.bot, as it always has. A host whose callback is anywhere else
+signs in as `guaca-remote`, whose only registered callback is guaca.bot's own
+`/remote` page. That page names the host's address, and only when the person
+presses Connect does it send the browser on to `/v1/oauth/callback` with the
+code, which is worthless without the verifier the host kept. No host address
+is ever registered with guaca.bot. [The account](ACCOUNT.md#a-host-on-another-computer)
+has the reasoning; `tests/account.rs` checks the host half against a scripted
+service, and guaca-bot's `scripts/remote-signin.mjs` runs the whole flow
+against a real `guacad` and the Worker in wrangler's local mode.
 
 ## The desktop app can show a box, and the menu bar follows
 
@@ -568,18 +572,6 @@ runtime, every command, the transcript, the desk, the flow board, the
 schedule, the compost and the plugins that were signed in before the move.
 What it does not have yet:
 
-- **Account sign-in at an unregistered remote hostname.** Settings → Account
-  cannot complete sign-in when guaca.bot rejects the host's callback, typically
-  with `invalid_redirect`. This also prevents connecting account-backed Google
-  tools there; conversations and device-code sign-ins remain usable.
-  The exact HTTPS callback must be accepted by the account service. Local
-  Docker callbacks use
-  `http://127.0.0.1:<port>/v1/oauth/callback`; guaca-bot migration 0005 registers
-  that path with native loopback port matching. A browser using `localhost`
-  returns to `127.0.0.1` for OAuth. A VPS reached through a local SSH forward
-  can use that same registered pattern while the tunnel is open, provided
-  `GUACA_ORIGIN` does not override it with another origin. VPS hosting alone
-  does not make the callback fail.
 - **Managed compute spaces.** Provisioning, billing, ownership, automatic
   connection discovery, and account-to-workspace authorization are next-phase
   work. Registering individual VPS or Tailnet callbacks is not the planned
@@ -1203,8 +1195,9 @@ it a hosted browser, and an E2B key a computer, as on any box. A browser of its
 own would be a second Machine running `deploy/browser` in the same app, so on
 the same private network, named in `GUACA_BROWSER`; its isolation is proven
 with Docker's seccomp profile and network rules today, and has not been
-rebuilt for a Fly Machine. Account sign-in at a `fly.dev` address is refused by
-guaca.bot until that callback is registered (*What is not built*, above).
+rebuilt for a Fly Machine. Account sign-in works from a space as from any host
+reached over the network: guaca.bot shows the space's `fly.dev` address on its
+approval page and sends the browser back only after the person agrees.
 
 ### Measured, and the size chosen
 

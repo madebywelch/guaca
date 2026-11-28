@@ -331,6 +331,64 @@ export function consent(input: { email: string; scopes: readonly string[]; query
   );
 }
 
+export function remoteConsent(input: {
+  email: string;
+  host: string;
+  scopes: readonly string[];
+  code: string;
+  state: string;
+  iss: string;
+}) {
+  const plain = input.host.startsWith("http://");
+  const fields = (decision: "allow" | "deny") => (
+    <>
+      <input type="hidden" name="code" value={input.code} />
+      <input type="hidden" name="state" value={input.state} />
+      <input type="hidden" name="iss" value={input.iss} />
+      <input type="hidden" name="decision" value={decision} />
+    </>
+  );
+  return (
+    <div className="grid gap-5">
+      <p className="label m-0">Connect a Guaca</p>
+      <h1 className="display m-0 text-head">Connect this Guaca to your account?</h1>
+      <p className="lede m-0">
+        The Guaca at <span className="font-medium">{input.host}</span> is asking to use{" "}
+        <span className="font-medium">{input.email}</span>. It stays connected until you sign it
+        out there.
+      </p>
+      {input.scopes.length > 0 ? (
+        <ul className="m-0 grid list-none gap-3.5 p-0">
+          {input.scopes.map((line) => (
+            <li key={line} className="text-body text-muted">
+              {line}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <Note>
+        Only connect it if you started this sign-in yourself, from {input.host}. If someone sent
+        you a link, or you do not know that address, do not connect it.
+        {plain ? " That address does not use HTTPS, so the connection to it is not encrypted." : ""}
+      </Note>
+      <div className="flex flex-wrap items-center gap-3">
+        <form method="post" action="/remote">
+          {fields("allow")}
+          <button className="btn btn--primary" type="submit">
+            Connect it
+          </button>
+        </form>
+        <form method="post" action="/remote">
+          {fields("deny")}
+          <button className="btn btn--quiet" type="submit">
+            Do not connect
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export function notice(input: { heading: string; body: string; bad?: boolean; back?: string }) {
   return (
     <div className="grid gap-5">
