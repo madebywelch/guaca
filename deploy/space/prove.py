@@ -24,6 +24,18 @@ and an agent that tries one is told so and its turn ends; the token can be read
 and checked from inside the machine the way space.sh does it; and after the
 container is replaced on the same volume, as update does, the work is still
 there. Evidence goes to src-tauri/target/verify/evidence/space/.
+
+    FLY_API_TOKEN=... deploy/space/prove.py --live <name>
+
+proves a space running on Fly instead, through its public address and the
+Machines API: the certificate, /health through Fly's proxy and Fly's own check,
+http sent to https, guacad running as guaca, a wrong token refused and the
+space's own admitted, the event socket over wss, the volume mounted and owned
+by guaca, data kept through a restart and an update --force to the same image,
+no token in Fly's logs, and no reach to or from another app in the
+organization, tested with a throwaway app it destroys at once (--skip-probe
+leaves that out). It reads the
+machine's memory from Fly's metrics, and leaves the workspace as it found it.
 """
 
 import json
@@ -488,10 +500,323 @@ def cleanup(world: SpaceWorld | None) -> None:
     docker("network", "rm", f"{RUN}-net", check=False)
 
 
+LIVE_MARK_DIR = "/var/lib/guaca"
+AS_GUACA = ["setpriv", "--reuid=guaca", "--regid=guaca", "--init-groups", "/bin/sh", "-c"]
+CONNECTS = ("import socket, sys\n"
+            "try:\n"
+            "    socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=5).close(); print('open')\n"
+            "except Exception as e:\n"
+            "    print('closed', type(e).__name__)\n")
+RESOLVES = ("import socket, sys\n"
+            "try:\n"
+            "    print('resolves', socket.getaddrinfo(sys.argv[1], 80)[0][4][0])\n"
+            "except Exception as e:\n"
+            "    print('unknown', type(e).__name__)\n")
+
+
+class LiveFly:
+
+    def __init__(self, app: str) -> None:
+        self.app = app
+        self.api = os.environ.get("FLY_API_HOSTNAME", "https://api.machines.dev").rstrip("/")
+        token = os.environ.get("FLY_API_TOKEN", "").strip()
+        if not token:
+            flyctl = next((t for t in ("flyctl", "fly") if subprocess.run(["sh", "-c", f"command -v {t}"],
+                                                                           capture_output=True).returncode == 0), "")
+            if flyctl:
+                token = subprocess.run([flyctl, "auth", "token"], capture_output=True, text=True).stdout.strip()
+        if not token:
+            raise Failed("Set FLY_API_TOKEN to a token for the space's organization, or log in with 'fly auth login'.")
+        self.auth = token if token.startswith("FlyV1 ") else f"Bearer {token}"
+        self.secrets = [token, *token.removeprefix("FlyV1 ").split(",")]
+
+    def request(self, method: str, url: str, body: object = None, timeout: float = 60) -> tuple[int, object]:
+        import urllib.error
+        import urllib.request
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(url if url.startswith("http") else self.api + url, data=data, method=method,
+                                     headers={"Authorization": self.auth, "Accept": "application/json",
+                                              **({"Content-Type": "application/json"} if data else {})})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as answer:
+                raw = answer.read()
+                status = answer.status
+        except urllib.error.HTTPError as error:
+            raw, status = error.read(), error.code
+        except (OSError, ValueError) as error:
+            raise Failed(f"could not reach Fly for {method} {url.split('?')[0]}: {type(error).__name__}") from None
+        try:
+            return status, json.loads(raw) if raw else None
+        except ValueError:
+            return status, raw.decode(errors="replace")[:300]
+
+    def ok(self, method: str, url: str, body: object = None, timeout: float = 60) -> object:
+        status, answer = self.request(method, url, body, timeout)
+        if not 200 <= status < 300:
+            raise Failed(f"Fly answered {method} {url.split('?')[0]} with {status}: {str(answer)[:200]}")
+        return answer
+
+    def machines(self, app: str | None = None) -> list[dict]:
+        return [m for m in self.ok("GET", f"/v1/apps/{app or self.app}/machines") if m.get("state") != "destroyed"]
+
+    def exec(self, machine: str, command: list[str], app: str | None = None) -> str:
+        answer = self.ok("POST", f"/v1/apps/{app or self.app}/machines/{machine}/exec",
+                         {"command": command, "timeout": 30}, timeout=60)
+        return (answer.get("stdout") or "").strip()
+
+
+def tls_answer(hostname: str, request: str) -> tuple[str, dict]:
+    context = ssl.create_default_context()
+    with socket.create_connection((hostname, 443), timeout=15) as plain:
+        with context.wrap_socket(plain, server_hostname=hostname) as tls:
+            cert = tls.getpeercert()
+            tls.sendall(request.encode())
+            head = b""
+            while b"\r\n\r\n" not in head:
+                chunk = tls.recv(4096)
+                if not chunk:
+                    break
+                head += chunk
+    return head.split(b"\r\n\r\n", 1)[0].decode(errors="replace"), cert
+
+
+def https(hostname: str, method: str, path: str, token: str = "", body: str = "") -> tuple[int, str, dict]:
+    import urllib.error
+    import urllib.request
+    headers = {"content-type": "application/json"}
+    if token:
+        headers["authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(f"https://{hostname}{path}", data=body.encode() if body else None, method=method,
+                                 headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as answer:
+            return answer.status, answer.read().decode(errors="replace"), dict(answer.headers)
+    except urllib.error.HTTPError as error:
+        return error.code, error.read().decode(errors="replace"), dict(error.headers)
+
+
+def live_healthy(hostname: str, within: float = 120) -> float:
+    began = time.monotonic()
+
+    def answers() -> bool:
+        code, said, _ = https(hostname, "GET", "/health")
+        return code == 200 and '"status":"ok"' in said
+
+    until(f"https://{hostname}/health answers", answers, within, every=1)
+    return time.monotonic() - began
+
+
+def live_started(fly: LiveFly, machine: str, app: str | None = None, within: float = 180) -> None:
+    until(f"the machine {machine} is started",
+          lambda: fly.ok("GET", f"/v1/apps/{app or fly.app}/machines/{machine}").get("state") == "started",
+          within, every=2)
+
+
+def live_network(fly: LiveFly, org: str, region: str | None, image: str, mid: str, check) -> None:
+    probe = f"{fly.app}-probe-{secrets.token_hex(3)}"
+    try:
+        fly.ok("POST", "/v1/apps", {"name": probe, "org_slug": org})
+        made = fly.ok("POST", f"/v1/apps/{probe}/machines", {"name": "probe", "region": region, "config": {
+            "image": image, "guest": {"cpu_kind": "shared", "cpus": 1, "memory_mb": 256}, "auto_destroy": True,
+            "restart": {"policy": "no"},
+            "processes": [{"name": "probe", "exec": ["python3", "-m", "http.server", "--bind", "::", "8080"]}]}})
+        live_started(fly, made["id"], probe)
+        probe_ip = fly.ok("GET", f"/v1/apps/{probe}/machines/{made['id']}")["private_ip"]
+        space_ip = fly.ok("GET", f"/v1/apps/{fly.app}/machines/{mid}")["private_ip"]
+        listening = until("the probe listens on its private address", lambda: "open" in fly.exec(
+            made["id"], ["python3", "-c", CONNECTS, probe_ip, "8080"], probe), 30, every=1)
+        own = fly.exec(mid, ["python3", "-c", CONNECTS, space_ip, "22"])
+        to_probe = fly.exec(mid, ["python3", "-c", CONNECTS, probe_ip, "8080"])
+        by_name = fly.exec(mid, ["python3", "-c", RESOLVES, f"{probe}.internal"])
+        to_space = fly.exec(made["id"], ["python3", "-c", CONNECTS, space_ip, "22"], probe)
+        check("from inside the space, another app in the organization cannot be reached, nor reach it",
+              bool(listening) and own.startswith("open") and to_probe.startswith("closed")
+              and by_name.startswith("unknown") and to_space.startswith("closed"),
+              {"otherAppToItself": listening, "spaceToItself": own, "spaceToOtherApp": to_probe,
+               "otherAppByName": by_name, "otherAppToSpace": to_space})
+    finally:
+        fly.request("DELETE", f"/v1/apps/{probe}?force=true")
+        gone = fly.request("GET", f"/v1/apps/{probe}")[0]
+        check(f"the throwaway app {probe} was destroyed", gone == 404, gone)
+
+
+def prove_live(name: str, probe_network: bool = True) -> tuple[list[dict], list[str]]:
+    fly = LiveFly(name)
+    hostname = f"{name}.fly.dev"
+    steps: list[dict] = []
+    hidden = list(fly.secrets)
+
+    def check(what: str, holds: bool, observed: object = "") -> None:
+        steps.append({"step": what, "pass": bool(holds), "observed": observed})
+        print(redact(f"{'PASS' if holds else 'FAIL'}  {what}  {json.dumps(observed)}", hidden), flush=True)
+
+    status, app = fly.request("GET", f"/v1/apps/{name}")
+    if status != 200:
+        raise Failed(f"there is no space named {name} this token can see (HTTP {status})")
+    org = app.get("organization", {}).get("slug", "")
+    machines = fly.machines()
+    check("the space has one machine, and it is started", len(machines) == 1 and machines[0]["state"] == "started",
+          [{"id": m["id"], "state": m["state"], "region": m.get("region")} for m in machines])
+    machine = machines[0]
+    mid = machine["id"]
+    image = machine["config"]["image"]
+
+    head, cert = tls_answer(hostname, f"HEAD /health HTTP/1.1\r\nHost: {hostname}\r\nConnection: close\r\n\r\n")
+    expires = ssl.cert_time_to_seconds(cert["notAfter"])
+    issuer = dict(x[0] for x in cert.get("issuer", ()))
+    check("the HTTPS certificate is valid for the address, and not about to expire",
+          expires - time.time() > 7 * 86400,
+          {"issuer": issuer.get("organizationName"), "notAfter": cert["notAfter"]})
+    code, said, headers = https(hostname, "GET", "/health")
+    check("/health passes through Fly's proxy", code == 200 and '"status":"ok"' in said
+          and "fly-request-id" in {k.lower() for k in headers}, {"status": code, "health": said[:200]})
+    checks = machine.get("checks") or []
+    check("Fly's own health check passes", bool(checks) and all(c.get("status") == "passing" for c in checks),
+          [{k: c.get(k) for k in ("name", "status")} for c in checks])
+    redirect = subprocess.run(["curl", "-sS", "-o", "/dev/null", "-w", "%{http_code} %{redirect_url}",
+                               "--max-time", "15", f"http://{hostname}/health"], capture_output=True, text=True).stdout
+    check("plain http is sent to https", redirect.split(" ")[0] in ("301", "302", "307", "308")
+          and f"https://{hostname}" in redirect, redirect)
+
+    who = fly.exec(mid, ["/bin/sh", "-c", "for p in /proc/[0-9]*; do [ \"$(cat $p/comm 2>/dev/null)\" = guacad ] "
+                                          "&& stat -c %U $p && break; done"])
+    check("guacad runs as guaca, the way processes[].user and exec say", who == "guaca", who)
+
+    token = fly.exec(mid, [*AS_GUACA, shell_snippet("TOKEN_FROM_HOST")])
+    hidden.append(token)
+    check("the space's token can be read from inside the machine, and is strong",
+          len(token) == 64 and all(c in "0123456789abcdef" for c in token), {"length": len(token)})
+    capabilities = json.dumps({"name": "capabilities"})
+    wrong, _, _ = https(hostname, "POST", "/v1/call", "not-" + secrets.token_hex(8), capabilities)
+    session, _, _ = https(hostname, "POST", "/v1/auth/session", "not-" + secrets.token_hex(8), "{}")
+    check("a wrong token is refused through Fly's proxy", wrong == 401 and session in (401, 403),
+          {"call": wrong, "session": session})
+    right, said, _ = https(hostname, "POST", "/v1/call", token, capabilities)
+    check("the space's own token is admitted through Fly's proxy", right == 200 and '"ok"' in said, right)
+    shaking = ("GET /v1/events?token={} HTTP/1.1\r\nHost: " + hostname + "\r\nOrigin: {}\r\nUpgrade: websocket\r\n"
+               "Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n")
+    page = tls_answer(hostname, shaking.format(token, f"https://{hostname}"))[0].split("\r\n", 1)[0]
+    app_socket = tls_answer(hostname, shaking.format(token, "tauri://localhost"))[0].split("\r\n", 1)[0]
+    refused = tls_answer(hostname, shaking.format("not-" + secrets.token_hex(8), f"https://{hostname}"))[0]
+    check("the event WebSocket connects over wss, from the page and from the Mac app, and not with a wrong token",
+          " 101" in page and " 101" in app_socket and " 101" not in refused.split("\r\n", 1)[0],
+          {"page": page, "macApp": app_socket, "wrongToken": refused.split("\r\n", 1)[0]})
+
+    volume = machine["config"]["mounts"][0]
+    mounted = fly.exec(mid, ["/bin/sh", "-c", f"grep ' {volume['path']} ' /proc/mounts | cut -d' ' -f1,3; "
+                                              f"stat -c '%U:%G' {volume['path']} {volume['path']}/data"])
+    check("the volume is mounted at its path and owned by guaca",
+          mounted.count("guaca:guaca") == 2 and "ext4" in mounted, {"volume": volume["volume"], "seen": mounted})
+
+    mark = f"{LIVE_MARK_DIR}/.prove-{secrets.token_hex(4)}"
+    stamp = secrets.token_hex(8)
+    fly.exec(mid, [*AS_GUACA, f"printf %s {stamp} > {mark}"])
+
+    def current() -> str:
+        return fly.machines()[0]["id"]
+
+    def marked() -> str:
+        return fly.exec(current(), ["/bin/sh", "-c", f"cat {mark} 2>/dev/null; true"])
+
+    try:
+        def uptime() -> float:
+            try:
+                return float(fly.exec(mid, ["cat", "/proc/uptime"]).split()[0])
+            except (Failed, ValueError, IndexError):
+                return float("inf")
+
+        before = uptime()
+        fly.ok("POST", f"/v1/apps/{name}/machines/{mid}/restart", timeout=120)
+        until("the machine has booted again", lambda: uptime() < before, 180, every=2)
+        live_started(fly, mid)
+        took = live_healthy(hostname)
+        check("data on the volume survives a machine restart, and the space answers again",
+              marked() == stamp, {"upBefore": round(before), "upAfter": round(uptime()),
+                                  "healthyAfterSeconds": round(took, 1)})
+
+        snapshots_before = len(fly.ok("GET", f"/v1/apps/{name}/volumes/{volume['volume']}/snapshots") or [])
+        done = subprocess.run(["bash", str(HERE / "space.sh"), "update", name, image, "--force"],
+                              capture_output=True, text=True, stdin=subprocess.DEVNULL, start_new_session=True,
+                              env={**os.environ, "FLY_API_TOKEN": fly.secrets[0]}, timeout=1200)
+        said = redact(done.stdout + done.stderr, hidden)
+        after = fly.machines()
+        snapshots_after = len(fly.ok("GET", f"/v1/apps/{name}/volumes/{volume['volume']}/snapshots") or [])
+        check("update to the same digest snapshots, swaps and passes its health check, on the same machine and volume",
+              done.returncode == 0 and "now runs" in said and len(after) == 1 and after[0]["id"] == mid
+              and after[0]["config"]["mounts"][0]["volume"] == volume["volume"]
+              and snapshots_after > snapshots_before,
+              {"said": said.strip().splitlines()[-1:], "snapshots": [snapshots_before, snapshots_after]})
+        check("data on the volume survives the update", marked() == stamp)
+    finally:
+        fly.exec(current(), ["/bin/sh", "-c", f"rm -f {mark}"])
+    check("the proof's mark is gone from the volume", marked() == "")
+    mid = current()
+
+    lines: list[str] = []
+    cursor = ""
+    for _ in range(30):
+        _, page_ = fly.request("GET", f"https://api.fly.io/api/v1/apps/{name}/logs"
+                                      + (f"?next_token={cursor}" if cursor else ""))
+        if not isinstance(page_, dict):
+            break
+        batch = [str((entry.get("attributes") or {}).get("message", "")) for entry in page_.get("data") or []]
+        lines += batch
+        following = (page_.get("meta") or {}).get("next_token") or ""
+        if not batch or following == cursor:
+            break
+        cursor = following
+    text = "\n".join(lines)
+    check("Fly's logs for the app hold no token and no invitation", len(lines) > 0 and token not in text
+          and "#token=" not in text and not any(part and part in text for part in fly.secrets),
+          {"linesRead": len(lines), "guacadStarts": text.count("keeping local time")})
+
+    if probe_network:
+        live_network(fly, org, machine.get("region"), image, mid, check)
+    else:
+        print("SKIP  the private network, as --skip-probe asks", flush=True)
+
+    query = "https://api.fly.io/prometheus/" + org + "/api/v1/query?query="
+    import urllib.parse
+
+    def metric(expr: str) -> float:
+        answer = fly.ok("GET", query + urllib.parse.quote(expr))
+        found = (answer.get("data") or {}).get("result") or []
+        return float(found[0]["value"][1]) if found else 0.0
+
+    total = metric(f'fly_instance_memory_mem_total{{app="{name}"}}')
+    available = metric(f'avg_over_time(fly_instance_memory_mem_available{{app="{name}"}}[10m])')
+    rss = fly.exec(mid, ["/bin/sh", "-c", "for p in /proc/[0-9]*; do [ \"$(cat $p/comm 2>/dev/null)\" = guacad ] "
+                                          "&& sed -n 's/^VmRSS: *//p' $p/status && break; done"])
+    check("memory in use, read from Fly's metrics", total > 0,
+          {"totalMiB": round(total / 2**20), "usedMiB": round((total - available) / 2**20),
+           "guacadResident": rss})
+    steps.append({"step": "a first task with the scripted model", "pass": True,
+                  "observed": "skipped: the scripted model runs on this machine, which a space cannot reach, and a "
+                              "task would hire agents into the owner's workspace"})
+    print("SKIP  a first task with the scripted model", flush=True)
+    return steps, hidden
+
+
+def live_main(name: str, probe_network: bool = True) -> int:
+    try:
+        steps, hidden = prove_live(name, probe_network)
+    except Failed as error:
+        print(f"FAILED: {error}", file=sys.stderr)
+        return 1
+    print(f"\n{sum(not s['pass'] for s in steps)} failed of {len(steps)}")
+    return 0 if all(step["pass"] for step in steps) else 1
+
+
 def main() -> int:
     if "-h" in sys.argv or "--help" in sys.argv:
         print(USAGE)
         return 0
+    if "--live" in sys.argv:
+        at = sys.argv.index("--live") + 1
+        if at >= len(sys.argv):
+            print("Name the space: deploy/space/prove.py --live <name>.", file=sys.stderr)
+            return 2
+        return live_main(sys.argv[at], "--skip-probe" not in sys.argv)
     image = os.environ.get("IMAGE", "")
     if not image:
         print("Set IMAGE to the guacad image to prove, such as IMAGE=guacad:abc1234.", file=sys.stderr)
