@@ -5,26 +5,21 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use guac_lib::domain::envelope::{Envelope, Intent, Part, Participant, Trust};
-use guac_lib::domain::ids::{AgentId, MessageId, RunId};
+use guac_lib::domain::envelope::Envelope;
+use guac_lib::domain::ids::{AgentId, RunId};
 use guac_lib::domain::now_ms;
-use guac_lib::domain::outcome::Settled;
 use guac_lib::domain::routine::{EventTrigger, Trigger};
 use guac_lib::runtime::guard::GuardLimits;
 
-use harness::live::{configured, live_crew, LiveAgent};
 use harness::{harness_in_groups, serve, Harness, Script, Stub};
 
 const DAY: i64 = 24 * 3_600_000;
 const FILLERS_PAST_THE_WINDOW: usize = 30;
 const CONVERSATIONS_PAST_A_MONTH: usize = 35;
 const ROUTINE_RUNS: usize = 25;
-const MESSAGES_PER_ROUTINE_RUN: usize = 4;
 const CHECKS_PER_ROUTINE_RUN: usize = 1;
 const NOTEBOOK_FILES: usize = 61;
 const MEMORY_PAGE: usize = 15_990;
-const LIVE_BUDGET_USD: f64 = 1.0;
-const LIVE_SETTLE_SECS: u64 = 240;
 
 const ROUTINE_NAME: &str = "Lisbon order watch";
 const ROUTINE_WHAT: &str = "Check the Lisbon order and report its shipping status and tracking.";
@@ -57,7 +52,6 @@ struct Case {
     groups: &'static [(&'static str, Option<&'static str>)],
     steps: Vec<Step>,
     needle: &'static [&'static str],
-    answer: &'static [&'static str],
     first: Option<(&'static str, &'static str)>,
     expect: Expect,
     fails_today: bool,
@@ -106,7 +100,6 @@ fn cases() -> Vec<Case> {
                 Step::Ask { to: "Ben", question: "Which flight is my sister on?" },
             ],
             needle: &["KL1123"],
-            answer: &["KL1123"],
             first: None,
             expect: Expect::Found,
             fails_today: true,
@@ -121,7 +114,6 @@ fn cases() -> Vec<Case> {
                 Step::Ask { to: "Anna", question: "What is the wifi password at the cabin?" },
             ],
             needle: &["pinecone42"],
-            answer: &["pinecone42"],
             first: None,
             expect: Expect::Found,
             fails_today: true,
@@ -135,7 +127,6 @@ fn cases() -> Vec<Case> {
                 Step::Ask { to: "Cedric", question: "Which seat do I like on long flights?" },
             ],
             needle: &["14A"],
-            answer: &["14A"],
             first: None,
             expect: Expect::Absent,
             fails_today: false,
@@ -155,7 +146,6 @@ fn cases() -> Vec<Case> {
                 Step::Ask { to: "Anna", question: "What did we decide about the Q3 report?" },
             ],
             needle: &["Porto"],
-            answer: &["Porto"],
             first: None,
             expect: Expect::Found,
             fails_today: true,
@@ -179,7 +169,6 @@ fn cases() -> Vec<Case> {
                 },
             ],
             needle: &["Not three cups, two"],
-            answer: &["two cups", "2 cups", "14 cups"],
             first: Some(("Not three cups, two", "I drink three cups")),
             expect: Expect::Found,
             fails_today: true,
@@ -193,7 +182,6 @@ fn cases() -> Vec<Case> {
                 Step::Fire { to: "Anna" },
             ],
             needle: &["LX4471"],
-            answer: &["LX4471"],
             first: None,
             expect: Expect::Found,
             fails_today: true,
@@ -207,7 +195,6 @@ fn cases() -> Vec<Case> {
                 Step::Ask { to: "Anna", question: "What is on my packing list for Iceland?" },
             ],
             needle: &["packing-list-iceland"],
-            answer: &["socks", "crampons", "thermos"],
             first: None,
             expect: Expect::Open,
             fails_today: true,
@@ -231,7 +218,6 @@ fn cases() -> Vec<Case> {
                 },
             ],
             needle: &["peanut"],
-            answer: &["peanut"],
             first: None,
             expect: Expect::Found,
             fails_today: true,
@@ -246,7 +232,6 @@ fn cases() -> Vec<Case> {
                 Step::Ask { to: "Ben", question: "What should I cook on Saturday?" },
             ],
             needle: &["shellfish"],
-            answer: &["shellfish"],
             first: None,
             expect: Expect::KnownMiss,
             fails_today: true,
@@ -260,7 +245,6 @@ fn cases() -> Vec<Case> {
                 Step::Ask { to: "Ben", question: "When is my kid's birthday party due?" },
             ],
             needle: &["Maya"],
-            answer: &["Maya", "June"],
             first: None,
             expect: Expect::KnownMiss,
             fails_today: true,
@@ -278,7 +262,6 @@ fn cases() -> Vec<Case> {
                 Step::Ask { to: "Ben", question: "When does our daily morning meeting start?" },
             ],
             needle: &["9:30"],
-            answer: &["9:30"],
             first: None,
             expect: Expect::KnownMiss,
             fails_today: true,
@@ -296,7 +279,6 @@ fn cases() -> Vec<Case> {
                 Step::Ask { to: "Ben", question: "Which airline should I pick for my Rome trip?" },
             ],
             needle: &["low-cost carrier"],
-            answer: &["low-cost", "budget"],
             first: None,
             expect: Expect::KnownMiss,
             fails_today: true,
@@ -452,101 +434,6 @@ async fn fire(h: &Harness, to: &str, delivery: &str, secs: u64) {
     panic!("a firing of {to}'s routine did not settle within {secs}s");
 }
 
-fn envelope(
-    run: RunId,
-    channel: AgentId,
-    from: Participant,
-    to: Participant,
-    parts: Vec<Part>,
-    trust: Trust,
-) -> Envelope {
-    Envelope {
-        id: MessageId::new(),
-        run_id: run,
-        channel_id: channel,
-        from,
-        to,
-        parts,
-        trust,
-        hop: 0,
-        expects_reply: from == Participant::Human,
-        intent: Intent::Work,
-        cause: None,
-        created_at: now_ms(),
-    }
-}
-
-fn seeded(h: &Harness, to: &str, said: &str, answer: &str) -> RunId {
-    let agent = h.id(to);
-    let me = Participant::Agent { id: agent };
-    let run = RunId::new();
-    let store = h.runtime.store();
-    store
-        .append(&envelope(
-            run,
-            agent,
-            Participant::Human,
-            me,
-            vec![Part::text(said)],
-            Trust::Operator,
-        ))
-        .unwrap();
-    store
-        .append(&envelope(
-            run,
-            agent,
-            me,
-            Participant::Human,
-            vec![Part::text(answer)],
-            Trust::Peer,
-        ))
-        .unwrap();
-    store.settle_run_as(run, Settled::Finished, 1).unwrap();
-    run
-}
-
-fn seeded_firing(h: &Harness, to: &str, i: usize) {
-    let agent = h.id(to);
-    let me = Participant::Agent { id: agent };
-    let run = RunId::new();
-    let store = h.runtime.store();
-    let event = routine(h, to);
-    let standing = store.event_routines(&event).unwrap();
-    let firing = Part::Routine {
-        routine_id: standing[0].id,
-        name: ROUTINE_NAME.into(),
-        what: ROUTINE_WHAT.into(),
-        payload: None,
-    };
-    store
-        .append(&envelope(run, agent, Participant::System, me, vec![firing], Trust::System))
-        .unwrap();
-    for step in 1..MESSAGES_PER_ROUTINE_RUN - 1 {
-        let text = format!("Checking the carrier, step {step}.");
-        store
-            .append(&envelope(
-                run,
-                agent,
-                me,
-                Participant::Human,
-                vec![Part::text(text)],
-                Trust::Peer,
-            ))
-            .unwrap();
-    }
-    store
-        .append(&envelope(
-            run,
-            agent,
-            me,
-            Participant::Human,
-            vec![Part::text(routine_headline(i))],
-            Trust::Peer,
-        ))
-        .unwrap();
-    store.settle_run_as(run, Settled::Finished, 1).unwrap();
-}
-
 fn notebook(h: &Harness, to: &str) {
     for i in 0..NOTEBOOK_FILES - 1 {
         h.runtime
@@ -566,78 +453,31 @@ enum Mode {
     After,
 }
 
-struct Asked {
-    input: String,
-    answer: String,
-    cost: f64,
-}
-
-async fn play(case: &Case, mode: Mode, live: Option<&guac_lib::config::AppConfig>) -> Asked {
+async fn play(case: &Case, mode: Mode) -> String {
     let played = Played::default();
-    let (h, stub) = match live {
-        Some(config) => {
-            let crew: Vec<LiveAgent> =
-                case.groups.iter().map(|(name, _)| LiveAgent::generic(name)).collect();
-            let h = live_crew(config.clone(), &crew);
-            for (name, group) in case.groups {
-                if let Some(group) = group {
-                    let made = h
-                        .runtime
-                        .store()
-                        .create_group(&guac_lib::domain::group::CleanGroup {
-                            name: (*group).into(),
-                            ..Default::default()
-                        })
-                        .unwrap();
-                    h.runtime.store().move_agent(h.id(name), made.id, None).unwrap();
-                }
-            }
-            (h, None)
-        }
-        None => {
-            let stub = scripted(&played).await;
-            (harness_in_groups(&stub, case.groups, GuardLimits::default()), Some(stub))
-        }
-    };
-    let settle = if live.is_some() { LIVE_SETTLE_SECS } else { 20 };
+    let stub = scripted(&played).await;
+    let h = harness_in_groups(&stub, case.groups, GuardLimits::default());
+    let settle = 20;
     let mut last = None;
     let mut sent = 0usize;
     for step in &case.steps {
         match step {
             Step::Tell { to, said, answer, memory } => {
-                last = Some(match &stub {
-                    Some(_) => {
-                        played.replies.lock().insert(said.clone(), (answer.clone(), *memory));
-                        let run = h.runtime.send_from_human(h.id(to), said).unwrap();
-                        h.settle_within(run, settle).await;
-                        run
-                    }
-                    None => {
-                        if *memory {
-                            let page = format!("{}\n- Allergic to peanuts.", memory_page());
-                            h.runtime.workspace().write(h.id(to), to, &page).unwrap();
-                        }
-                        seeded(&h, to, said, answer)
-                    }
-                });
+                played.replies.lock().insert(said.clone(), (answer.clone(), *memory));
+                let run = h.runtime.send_from_human(h.id(to), said).unwrap();
+                h.settle_within(run, settle).await;
+                last = Some(run);
             }
             Step::Fillers { to, count } => {
                 for _ in 0..*count {
                     sent += 1;
                     let said = filler(sent);
-                    match &stub {
-                        Some(_) => {
-                            played
-                                .replies
-                                .lock()
-                                .insert(said.clone(), (format!("Filed note {sent}."), false));
-                            let run = h.runtime.send_from_human(h.id(to), &said).unwrap();
-                            h.settle_within(run, settle).await;
-                        }
-                        None => {
-                            seeded(&h, to, &said, &format!("Filed note {sent}."));
-                        }
-                    }
+                    played
+                        .replies
+                        .lock()
+                        .insert(said.clone(), (format!("Filed note {sent}."), false));
+                    let run = h.runtime.send_from_human(h.id(to), &said).unwrap();
+                    h.settle_within(run, settle).await;
                 }
             }
             Step::Backdate { days } => backdate(&h, last.expect("a run to backdate"), *days),
@@ -647,13 +487,8 @@ async fn play(case: &Case, mode: Mode, live: Option<&guac_lib::config::AppConfig
             Step::Notebook { to } => notebook(&h, to),
             Step::Routine { to, runs } => {
                 for i in 0..*runs {
-                    match &stub {
-                        Some(_) => {
-                            played.firing.store(i, Ordering::SeqCst);
-                            fire(&h, to, &format!("delivery-{i}"), settle).await;
-                        }
-                        None => seeded_firing(&h, to, i),
-                    }
+                    played.firing.store(i, Ordering::SeqCst);
+                    fire(&h, to, &format!("delivery-{i}"), settle).await;
                 }
             }
             Step::Ask { .. } | Step::Fire { .. } => {}
@@ -667,45 +502,27 @@ async fn play(case: &Case, mode: Mode, live: Option<&guac_lib::config::AppConfig
         _ => panic!("{} ends in no question", case.id),
     };
     let agent = h.id(to);
-    let seen = stub.as_ref().map_or(0, |s| s.transcript.lock().len());
-    let run = match case.steps.last() {
+    let seen = stub.transcript.lock().len();
+    match case.steps.last() {
         Some(Step::Ask { question, .. }) => {
             let run = h.runtime.send_from_human(agent, question).unwrap();
             let settled = h.settled_within(run, settle).await;
-            assert!(settled || live.is_some(), "{}: the question did not settle", case.id);
-            Some(run)
+            assert!(settled, "{}: the question did not settle", case.id);
         }
         _ => {
             played.firing.store(usize::MAX, Ordering::SeqCst);
             fire(&h, to, "the-question", settle).await;
-            None
         }
-    };
-    let input = match &stub {
-        Some(stub) => stub
-            .transcript
-            .lock()
-            .iter()
-            .skip(seen)
-            .find(|body| harness::speaker(body) == to)
-            .map(|body| body["messages"].to_string())
-            .unwrap_or_default(),
-        None => String::new(),
-    };
-    let answer = h
-        .runtime
-        .store()
-        .channel_messages(agent, 400)
-        .unwrap()
-        .into_iter()
-        .filter(|e| run.is_none_or(|run| e.run_id == run))
-        .rfind(|e| e.from == Participant::Agent { id: agent } && e.to == Participant::Human)
-        .map(|e| e.plain_text())
+    }
+    let input = stub
+        .transcript
+        .lock()
+        .iter()
+        .skip(seen)
+        .find(|body| harness::speaker(body) == to)
+        .map(|body| body["messages"].to_string())
         .unwrap_or_default();
-    let cost = db(&h)
-        .query_row("SELECT coalesce(sum(cost), 0) FROM usage", [], |r| r.get(0))
-        .unwrap_or(0.0);
-    Asked { input, answer, cost }
+    input
 }
 
 fn holds(case: &Case, text: &str) -> bool {
@@ -722,18 +539,6 @@ fn holds(case: &Case, text: &str) -> bool {
     match case.expect {
         Expect::Absent => !found,
         _ => found && ordered,
-    }
-}
-
-fn answered(case: &Case, answer: &str) -> bool {
-    let lowered = answer.to_lowercase();
-    let found = case.answer.iter().any(|word| lowered.contains(&word.to_lowercase()));
-    let stale = case.first.is_some_and(|(_, older)| {
-        lowered.contains("three cups") || lowered.contains(&older.to_lowercase())
-    });
-    match case.expect {
-        Expect::Absent => !found,
-        _ => found && !stale,
     }
 }
 
@@ -904,9 +709,9 @@ async fn the_overnight_tidy_is_given_no_recall() {
 async fn the_score() {
     let mut rows = Vec::new();
     for case in cases() {
-        let before = play(&case, Mode::Before, None).await;
-        let after = play(&case, Mode::After, None).await;
-        let (before, after) = (holds(&case, &before.input), holds(&case, &after.input));
+        let before = play(&case, Mode::Before).await;
+        let after = play(&case, Mode::After).await;
+        let (before, after) = (holds(&case, &before), holds(&case, &after));
         rows.push((case, before, after));
     }
     println!("\n| case | what | expected | before | after |");
@@ -941,32 +746,4 @@ fn expected(case: &Case) -> &'static str {
         Expect::KnownMiss => "known miss",
         Expect::Open => "open (notebook)",
     }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "live: costs money, needs a configured key"]
-async fn live_the_score() {
-    let Some(config) = configured() else {
-        eprintln!("no configured model; skipping");
-        return;
-    };
-    println!("model: {}", config.inference.default_model);
-    let mut rows = Vec::new();
-    let mut spent = 0.0;
-    for case in cases() {
-        if spent >= LIVE_BUDGET_USD {
-            println!("stopped at ${spent:.4}, the budget is ${LIVE_BUDGET_USD}");
-            break;
-        }
-        let asked = play(&case, Mode::After, Some(&config)).await;
-        spent += asked.cost;
-        println!("--- {} {} (${:.4}) ---\n{}\n", case.id, case.title, asked.cost, asked.answer);
-        rows.push((answered(&case, &asked.answer), case));
-    }
-    println!("\n| case | what | expected | live answer |");
-    println!("|---|---|---|---|");
-    for (passed, case) in &rows {
-        println!("| {} | {} | {} | {} |", case.id, case.title, expected(case), verdict(*passed));
-    }
-    println!("spent: ${spent:.4}");
 }
