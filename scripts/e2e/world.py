@@ -66,6 +66,15 @@ def redact(text: str, secrets_: list[str]) -> str:
     return re.sub(r"#token=[^\s\"']+", "#token=<redacted>", text)
 
 
+def scrub(directory: Path, secrets_: list[str]) -> None:
+    for path in directory.rglob("*"):
+        if path.is_file() and path.suffix != ".png":
+            raw = path.read_bytes().decode("utf-8", "surrogateescape")
+            clean = redact(raw, secrets_)
+            if clean != raw:
+                path.write_bytes(clean.encode("utf-8", "surrogateescape"))
+
+
 @dataclass
 class Call:
 
@@ -582,9 +591,7 @@ class World:
         browser_log = self.scratch / f"browser-{self.host.starts}/chromium.log"
         if browser_log.exists():
             shutil.copy(browser_log, self.evidence / "chromium.log")
-        log = self.host.log
-        if log.exists():
-            log.write_text(redact(log.read_text(errors="replace"), self.hidden))
+        scrub(self.evidence, self.hidden)
         shutil.rmtree(self.scratch, ignore_errors=True)
 
 
@@ -607,7 +614,7 @@ class World:
         slug = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")[:48]
         stem = f"{self.shots:02}-{slug}"
         try:
-            if any(secret in self.ui.text() for secret in self.secrets):
+            if any(secret in self.ui.text() for secret in self.hidden):
                 (self.evidence / f"{stem}.png.withheld").write_text("a secret was on screen\n")
             else:
                 self.ui.screenshot(self.evidence / f"{stem}.png")
