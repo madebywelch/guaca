@@ -68,11 +68,13 @@ removing the worktree does not delete them.
 
 Use `gh` for the current GitHub origin. Re-read release state before mutating it.
 Check existing tags resolve to the built SHA; `--target` does not retarget a tag.
-Preserve previous draft assets before replacement. Upload only the verified DMG
-and checksum; write notes from a file with the source, changes, backend image,
+Preserve previous draft assets before replacement. Upload only the verified DMG,
+its checksum and the signed `guaca-release.json` pair, all made from the same
+worktree; write notes from a file with the source, changes, backend image,
 installation requirements, migration steps, and actual validation results.
 
-Verify the remote state, source, notes, and both asset digests after upload.
+Verify the remote state, source, notes, and all four asset digests after upload.
+Before any publish, `node scripts/release-manifest.mjs --check <tag>` must pass.
 Recheck `main` if the operator requested the latest commit. Report the release
 URL, built SHA, absolute artifact directory, publication state, and any material
 installation gaps. A rebase or edited release description does not update a binary.
