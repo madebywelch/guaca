@@ -163,9 +163,28 @@ jobs:
           path: src-tauri/target/verify/evidence
           retention-days: 7
 
+  space:
+    name: space (the daemon image run as a Fly space, in Docker)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Let Chromium sandbox itself under Ubuntu's AppArmor user namespace rule
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - run: ./scripts/ci.sh space
+      - name: Keep the space proof's evidence of a failed run
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: space-evidence
+          path: src-tauri/target/verify/evidence/space
+          retention-days: 7
+
   gate:
     if: always()
-    needs: [grants, web, desktop, daemon, formal, image, e2e]
+    needs: [grants, web, desktop, daemon, formal, image, e2e, space]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

@@ -1247,11 +1247,14 @@ in headless Chromium with a Secure cookie and a live event socket, the Mac
 app's calls and event socket from `tauri://localhost`, a first task finished
 under For you, a log with no token, the Host panel, the missing
 browser, and the work still there after the container is replaced. It needs
-Docker and Chromium, spends nothing, and is not in CI: the images job would
-need the AppArmor setting the end-to-end job sets for Chromium, and a change
-to the workflows waits for the owner.
+Docker and Chromium and spends nothing. CI runs it as its own job, the space
+job, against the daemon image built from the commit under test:
+`./scripts/ci.sh space` builds the image with `scripts/image.sh build` and then
+runs the proof. It is not in `ci.sh` with no argument, which runs inside a
+container that has no daemon to hand.
 
 ```sh
+./scripts/ci.sh space
 IMAGE=guacad:$(git rev-parse --short=7 HEAD) deploy/space/prove.py
 ```
 

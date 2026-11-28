@@ -16,8 +16,8 @@ from pathlib import Path
 
 from e2e.browser import Browser, BrowserError, split_frames
 from e2e.scenarios import SCENARIOS, unproved
-from e2e.world import (UNSCRIPTED, Call, Egress, Failed, Model, Updater, call, held, redact, refuse, say,
-                       stream, until)
+from e2e.world import (UNSCRIPTED, Call, Egress, Failed, Model, Updater, World, call, held, redact, refuse,
+                       say, stream, until)
 
 
 def post(base: str, body: dict, key: str = "k") -> tuple[int, bytes]:
@@ -358,6 +358,53 @@ class Evidence(unittest.TestCase):
         text = redact("token abc123 at http://h/#token=abc123 and key s3cret", ["abc123", "s3cret"])
         self.assertNotIn("abc123", text)
         self.assertNotIn("s3cret", text)
+
+    def test_no_file_a_run_leaves_holds_the_token_or_the_invitation(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            world = World("probe", 1, Path(root))
+            token = world.host.token
+            invitation = f"https://space-proof.fly.dev/#token={token}"
+            browser_log = world.scratch / f"browser-{world.host.starts}/chromium.log"
+            browser_log.parent.mkdir(parents=True)
+            browser_log.write_text(f"navigating to {invitation}\n")
+            world.host.log.write_text(f"open this: {invitation}\n")
+            (world.evidence / "model" / "001.json").write_text(json.dumps({"asked": token}))
+            (world.evidence / "page.html").write_bytes(b"\xff\xfe " + token.encode() + b" \xff")
+            world.close()
+            left = [path for path in world.evidence.rglob("*") if path.is_file()]
+            self.assertGreaterEqual(len(left), 4)
+            for path in left:
+                self.assertNotIn(token.encode(), path.read_bytes(), path.name)
+            self.assertIn(b"\xff\xfe <redacted> \xff", (world.evidence / "page.html").read_bytes())
+
+    def test_a_screenshot_is_withheld_while_the_host_token_is_on_screen(self) -> None:
+        class Screen:
+            def __init__(self, text: str) -> None:
+                self.shown = text
+
+            def text(self) -> str:
+                return self.shown
+
+            def screenshot(self, path: Path) -> None:
+                path.write_bytes(b"png")
+
+            def snapshot(self) -> str:
+                return self.shown
+
+            def close(self) -> None:
+                pass
+
+        with tempfile.TemporaryDirectory() as root:
+            world = World("probe", 1, Path(root))
+            world.browser = Screen(f"the token is {world.host.token}")
+            self.assertEqual(world.capture("on screen"), ["01-on-screen.png", "01-on-screen.ax.txt"])
+            self.assertFalse((world.evidence / "01-on-screen.png").exists())
+            self.assertTrue((world.evidence / "01-on-screen.png.withheld").exists())
+            world.browser = Screen("nothing secret here")
+            world.capture("clear")
+            self.assertTrue((world.evidence / "02-clear.png").exists())
+            world.close()
+            self.assertNotIn(world.host.token, (world.evidence / "01-on-screen.ax.txt").read_text())
 
     def test_a_claim_no_passing_step_made_is_unproved(self) -> None:
         steps = [{"step": "the reply arrives", "pass": True}, {"step": "the key is kept", "pass": False}]
