@@ -123,6 +123,23 @@ and `components/WorkingNotes.tsx` are the code.
   draws as a page that is all new. A truthiness check collapses the first two
   and loses the only write where the whole page is the news. `Part::ToolCall`
   in `domain/envelope.rs`, then `trailStep`.
+- **Recall files raw words and consolidates nothing.** A card is the operator's
+  text that started a run and the agent's own headline, appended when the run
+  settles and never rewritten, so it is the opposite of the after-every-turn
+  rewrite the first bullet warns about. Only the operator's own words and the
+  headline are filed: a peer's message, a tool result, a page or a webhook body
+  starting a run files the headline and nothing else, because a recalled line is
+  put in front of every agent in the group. *What the operator said is recalled
+  word for word* in `docs/WORKSPACE.md`, then `db/recall.rs`.
+- **A recalled card already in front of the agent is skipped, by its message,
+  not its run.** A card whose message is in the window is left out. One whose
+  run is only in *What you have already reported* is left out only when it has
+  no words of the operator's, because that section shows the headline and never
+  what was asked. Skipping by run hid the fact the card exists to keep.
+- **The backfill and a settling run file through the same statement.** Migration
+  82 copies the filing query rather than calling it, since a migration is frozen
+  text, and a test in `db/migrations.rs` deletes every backfilled card, files
+  each run again live and requires the same rows.
 - **The notebook's index is appended after assembly, and only when it has
   something in it.** `prompt::add_notebook` follows `add_skills`; an empty
   notebook adds nothing, so a group that never uses one sees no prompt change.

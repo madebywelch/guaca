@@ -162,6 +162,19 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib \
   llm::modality::tests::openrouter_still -- --ignored --nocapture
 ```
 
+`tests/recall.rs` is the score for recall: each case from the memory
+investigation played as a conversation on the scripted model, ending in a
+question, and passing when the fact the question needs is in what the model was
+sent (the case in another group passes when it is not). Every case is played
+twice, once with the recall cards deleted before the question, which is what a
+turn saw before recall existed, and the table it prints shows both. The cases
+with different words for the same thing are reported and never fail the gate,
+because their count is what decides whether search by meaning is worth adding.
+
+```sh
+cargo test --manifest-path src-tauri/Cargo.toml --test recall -- --nocapture
+```
+
 ## Verify
 
 ```sh

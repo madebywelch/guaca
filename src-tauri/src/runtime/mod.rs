@@ -1317,6 +1317,7 @@ impl Runtime {
         self.inner.notebooks.remove_all(id)?;
         self.inner.store.delete_agent_routines(id)?;
         self.inner.store.clear_working_notes(id)?;
+        self.inner.store.forget_recall(id)?;
         self.inner.store.delete_agent_signins(id)?;
         self.inner.store.delete_agent_approvals(id)?;
         self.inner.store.delete_agent_plugin_access(id)?;
@@ -3052,13 +3053,26 @@ impl Runtime {
             }
             Err(err) => tracing::warn!(%err, "could not read the crew's artifacts for this prompt"),
         }
+        let mut reported = Vec::new();
         if let Some(oldest) = history.iter().chain(&batch).map(|e| e.created_at).min() {
             match self.inner.store.reported(card.id, card.group_id, oldest, prompt::MAX_REPORTED) {
-                Ok(reported) => prompt::add_reported(&mut messages, &reported, now_ms()),
+                Ok(read) => {
+                    prompt::add_reported(&mut messages, &read, now_ms());
+                    reported = read;
+                }
                 Err(err) => tracing::warn!(%err, "could not read what this agent already reported"),
             }
         }
         if !tidying {
+            let incoming: Vec<&Envelope> = batch.iter().chain(&absorbed).chain(&carried).collect();
+            let shown: HashSet<MessageId> = history
+                .iter()
+                .chain(incoming.iter().copied())
+                .map(|e| e.id)
+                .chain(rendered.iter().copied())
+                .collect();
+            let recalled = self.recall(&card, &incoming, &shown, &reported);
+            prompt::add_recall(&mut messages, &recalled, &names, card.id, now_ms());
             let (presence, last_window) = self.presence();
             prompt::add_presence(&mut messages, &presence, last_window, card.id, now_ms());
             match self.inner.store.decisions(Some(card.id)) {
@@ -3608,6 +3622,37 @@ impl Runtime {
             tokio::select! {
                 done = &mut work => return Some(done),
                 () = watch.woken() => {}
+            }
+        }
+    }
+
+    fn recall(
+        &self,
+        card: &AgentCard,
+        incoming: &[&Envelope],
+        shown: &HashSet<MessageId>,
+        reported: &[crate::domain::outcome::Outcome],
+    ) -> Vec<crate::domain::recall::Card> {
+        use crate::domain::recall;
+        let asked: Vec<String> = incoming.iter().flat_map(|e| recall::asked(e)).collect();
+        let Some(query) = recall::query(&asked.iter().map(String::as_str).collect::<Vec<_>>())
+        else {
+            return Vec::new();
+        };
+        let routine = incoming.iter().any(|e| e.is_routine());
+        match self.inner.store.recall(card.group_id, &query, recall::CANDIDATES) {
+            Ok(ranked) => recall::pick(
+                ranked,
+                |found| {
+                    shown.contains(&found.message_id)
+                        || (found.said.is_empty()
+                            && reported.iter().any(|one| one.run_id == found.run_id))
+                },
+                recall::shown_for(routine),
+            ),
+            Err(err) => {
+                tracing::warn!(%err, "could not search what the operator said before");
+                Vec::new()
             }
         }
     }

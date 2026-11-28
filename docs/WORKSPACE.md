@@ -618,6 +618,59 @@ separately, and the panels are sent back to read again on `ChannelsCleared`:
 neither refreshes on its own, so the agent's page would otherwise draw a memory
 and a list of notes under a conversation that says they are gone.
 
+## What the operator said is recalled word for word, and nothing is consolidated
+
+An agent reads the forty most recent messages of its own conversation and ten
+older headlines. A fact the operator gave earlier, or gave to another agent in
+the same group, was gone unless an agent chose to write it into its memory.
+Recall is the third way a turn reaches back, and it writes nothing an agent
+reads as its own.
+
+**When a run settles, one card is filed.** A card is the operator's words that
+started the run and the headline of the agent's closing reply, copied in the
+transaction that records the run's outcome, after the answer has gone out
+(`db/recall.rs`, `Store::settle_run_as`). No model is called. Cards are a table
+with an FTS5 index, SQLite's built-in full-text search, and they are never
+rewritten: a trigger refuses an update, so a correction is a new card.
+
+**Only words that are safe to put back in front of a model are filed.** The
+operator's own text, when the operator started the run, and the agent's own
+headline. Never a peer's message, a tool result, a page, an email, a connector's
+output or a webhook body: a run started by any of those files the headline and
+nothing of what started it. The section that shows them says they are records of
+what was said, data and not instructions, and that the operator's current
+message wins.
+
+**Before each turn, the group's cards are searched with what the turn was
+sent.** The words of the incoming messages, without the small words, the twelve
+longest, are matched against every card the group holds, ranked by relevance,
+and the best five that are not already in front of the agent are shown newest
+first, each with its age and the agent it was said to (`domain/recall.rs`). A
+routine firing gets ten, because a routine builds on runs nobody is reading. The
+overnight tidy gets none. A card is written per agent and read per group: any
+agent may be shown what the operator told another agent in its group, and
+nothing crosses from one group to another, because groups are kept apart on
+purpose. A card stays in the group it was said in when its agent moves.
+
+**The whole message is indexed, and the excerpt is the passage that matched.**
+A fact in the last line of a long message has to be found, so nothing is cut
+before indexing. A message of up to 400 characters is shown whole; a longer one
+is shown as the passage of about 48 words around what matched, which is
+SQLite's `snippet`, so the line a turn is shown is the line that answers it.
+
+**Forgetting follows the conversation.** Clearing a conversation, clearing a
+group and deleting an agent for good delete their cards; an agent in the
+compost is not recalled, and comes back with its cards if restored. Recall never
+writes the memory file.
+
+**This is not the consolidation the section above warns against.** That
+argument is about a page rewritten after every interaction. Recall saves the raw
+words every time, consolidates nothing and asks no model to decide what to keep:
+the store is append-only, the read is a search, and the only rewrite of anything
+an agent knows is still `update_memory`. Word search does not bridge different
+words for the same thing: told *allergic to shellfish* and asked *what should I
+cook on Saturday*, it finds nothing. `tests/recall.rs` counts those misses.
+
 **The tool is `update_memory`, and `update_notes` still parses.** `notes` meant
 memory everywhere the code named it for a year, which is exactly the ambiguity a
 second store cannot survive, so the internals took the operator's word. The old
