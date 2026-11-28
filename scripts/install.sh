@@ -105,6 +105,7 @@ pnpm install --frozen-lockfile
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   step "Building the local host"
   install_host || exit 1
+  install_browser || exit 1
 else
   note "Docker is not ready; installing the desktop client for a remote host."
   note "For a local source build, start Docker and run this installer again."

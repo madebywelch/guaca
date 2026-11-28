@@ -23,3 +23,23 @@ install_host() {
   export GUACA_BACKEND_IMAGE="$tag"
   docker build --build-arg "GUACA_VERSION=$(node -p 'require("./package.json").version')" --build-arg "GUACA_COMMIT=$COMMIT" -t "$GUACA_BACKEND_IMAGE" .
 }
+
+install_browser() {
+  local tag
+  case "${GUACA_BROWSER_IMAGE:-}" in
+    "") ;;
+    ghcr.io/madebywelch/guaca/browser@sha256:*)
+      note "pulling the browser pinned by GUACA_BROWSER_IMAGE"
+      docker pull "$GUACA_BROWSER_IMAGE" || { echo "Could not pull the pinned browser; check Docker and try again." >&2; return 1; }
+      return
+      ;;
+    *)
+      echo "GUACA_BROWSER_IMAGE must name the published browser by digest, as the release run does; unset it to build the browser here." >&2
+      return 1
+      ;;
+  esac
+  tag="guaca-browser:$(git rev-parse --short=12 HEAD)" || return 1
+  note "building the local browser"
+  export GUACA_BROWSER_IMAGE="$tag"
+  docker build --build-arg "GUACA_VERSION=$(node -p 'require("./package.json").version')" --build-arg "GUACA_COMMIT=$COMMIT" -t "$GUACA_BROWSER_IMAGE" deploy/browser
+}
