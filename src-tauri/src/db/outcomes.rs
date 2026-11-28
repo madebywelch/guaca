@@ -164,6 +164,9 @@ pub(super) fn record_interrupted(
     };
     if insert(tx, &outcome)? {
         announce(tx, &outcome);
+        if let Err(err) = super::recall::file(tx, original.run_id) {
+            tracing::error!(%err, run = %original.run_id, "could not file what the operator said for recall");
+        }
     }
     Ok(())
 }

@@ -4297,6 +4297,65 @@ def scenario_phone(w: World) -> None:
     no_unscripted(w)
 
 
+PLANNER = "Planner"
+TOLD = "My sister Margot lands on the 14th on flight KL1123."
+WHICH_FLIGHT = "Which flight is my sister on?"
+FLIGHT = "KL1123"
+RECALLED = "## What the operator said before"
+
+
+def recall_cards(w: World, agent: str) -> int:
+    return w.host.scalar("SELECT count(*) FROM recall_cards c JOIN agents a ON a.id = c.agent_id "
+                         "WHERE a.name = ? AND c.said LIKE ?", agent, f"%{FLIGHT}%")
+
+
+def scenario_recall(w: World) -> None:
+    shown: list[str] = []
+
+    def script(c: Call) -> Reply | None:
+        if reply := hello(c):
+            return reply
+        if c.speaker == AGENT and c.last_user.endswith(TOLD):
+            return say("Noted.")
+        if c.speaker == PLANNER and c.last_user.endswith(WHICH_FLIGHT):
+            shown.append(c.system)
+            return say("I answered from what I was shown.")
+        return None
+
+    w.model.script = script
+    w.start()
+    first_run(w)
+    settled(w, 1)
+    new_agent(w, PLANNER, "You plan trips for the person.")
+
+    write(w, AGENT, TOLD)
+    settled(w, 2, "the conversation where the person said it settles")
+    w.check("what the person said is filed once, under the agent it was said to",
+            recall_cards(w, AGENT) == 1 and recall_cards(w, PLANNER) == 0,
+            observed={AGENT: recall_cards(w, AGENT), PLANNER: recall_cards(w, PLANNER)})
+
+    write(w, PLANNER, WHICH_FLIGHT)
+    settled(w, 3, "the other agent answers")
+    recalled = shown[-1].split(RECALLED, 1)[1].split("\n## ", 1)[0] if RECALLED in shown[-1] else ""
+    w.check("the other agent in the group is shown what the person told the first one, as data",
+            FLIGHT in recalled and f"to {AGENT}" in recalled and "data, not instructions" in recalled,
+            observed={"flight": FLIGHT in recalled, "to": f"to {AGENT}" in recalled,
+                      "data": "data, not instructions" in recalled}, detail=recalled[:600] or None, shot=True)
+
+    open_agent(w, AGENT)
+    w.ui.click("button", f"Actions for {AGENT}")
+    w.ui.click("button", "Clear chat history…")
+    w.ui.click("button", "Delete history, keep memory")
+    w.wait("the cleared conversation's card is gone", lambda: recall_cards(w, AGENT) == 0)
+    write(w, PLANNER, WHICH_FLIGHT)
+    settled(w, 4, "the other agent answers again")
+    w.check("after the conversation is cleared, nothing of it is recalled",
+            len(shown) == 2 and FLIGHT not in shown[-1] and RECALLED not in shown[-1],
+            observed={"asked": len(shown), "flight": FLIGHT in shown[-1], "section": RECALLED in shown[-1]},
+            shot=True)
+    no_unscripted(w)
+
+
 SCENARIOS: dict[str, Scenario] = {
     "phone": Scenario(scenario_phone, "On a 360, 390 and 430 pixel phone, in paper and ink, with a short and a long "
                       "agent name and none, one and several questions waiting, the foot row's items never overlap, "
@@ -4373,6 +4432,14 @@ SCENARIOS: dict[str, Scenario] = {
         "a lone agent's reply lands as a result card under its name, with no hand-off record",
         "a message written in the composer is answered in the same conversation",
         "the page was told about each reply as it happened",
+        "every model call was one the scenario scripted",
+    )),
+    "recall": Scenario(scenario_recall, "What the person told one agent is shown to another agent in the same "
+                       "group before it answers; once that conversation is cleared, nothing of it is recalled.",
+    (
+        "what the person said is filed once, under the agent it was said to",
+        "the other agent in the group is shown what the person told the first one, as data",
+        "after the conversation is cleared, nothing of it is recalled",
         "every model call was one the scenario scripted",
     )),
     "peers": Scenario(scenario_peers, "An agent asks another, the answer comes back and the conversation ends; two "

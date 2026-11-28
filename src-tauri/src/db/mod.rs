@@ -5,6 +5,7 @@ mod outbox;
 mod outcomes;
 mod policy;
 mod put_down;
+mod recall;
 mod run_lock;
 pub mod store;
 
